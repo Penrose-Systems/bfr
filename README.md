@@ -2,7 +2,7 @@
 
 Babel Fish RHI: one C++ GPU API over Vulkan, D3D12 and Metal.
 
-## Status
+## Status (2026-10-25)
 
 Early. Today: a Vulkan base, tested on Linux. It has adapters, a device and
 swapchains, plus SDL3 windows and input, config and logging.
