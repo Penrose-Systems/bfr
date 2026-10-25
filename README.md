@@ -65,6 +65,9 @@ To build: CMake 3.28, Ninja, GCC 13 or Clang 19, and a
 [vcpkg](https://github.com/microsoft/vcpkg) checkout in `VCPKG_ROOT`. On
 macOS, Vulkan also needs MoltenVK, from the LunarG SDK or Homebrew.
 
+To check changes: clang-format 19, clang-tidy 19 and Python 3. On Ubuntu
+24.04: `sudo apt-get install clang-format-19 clang-tidy-19`.
+
 ## Using BFR in your project
 
 Add BFR to your CMake build and link the `bfr` target:
@@ -90,8 +93,13 @@ ctest --preset debug
 ```
 
 Debug builds run the address, undefined-behaviour and leak sanitizers;
-`-DBFR_SANITIZE=none` turns them off. Tests that need a GPU are labelled
-`gpu`; `ctest --preset debug -LE gpu` skips them.
+`-DBFR_SANITIZE=none` turns them off, and the `tsan` preset runs the thread
+sanitizer instead. Tests that need a GPU are labelled `gpu`;
+`ctest --preset debug -LE gpu` skips them.
+
+`-DBFR_CLANG_TIDY=ON` compiles BFR and its tests through clang-tidy.
+`python3 tools/check_format.py` checks every source file against
+`.clang-format`.
 
 ## License
 
