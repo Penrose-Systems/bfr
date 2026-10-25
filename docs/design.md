@@ -1,0 +1,232 @@
+# BFR design
+
+Ground-up design, started 2026-10-24. Nothing here is final. Every entry is
+the current choice and its reason; when a later question exposes a problem,
+the earlier choice is reopened. `respec.md` and earlier proposals are input
+like everything else.
+
+## Requirements
+
+- Standalone library first. Any C++ renderer is a first-class consumer;
+  Vesper is one of them.
+- Hardware floor: modern desktop and recent mobile. Vulkan 1.3 with
+  descriptor indexing, D3D12 Shader Model 6.6, Metal 3 (Apple GPU family 7+).
+  Bindless is available everywhere; no non-bindless binding path.
+- OS floor: macOS/iOS 26+ (Metal 4). Windows 10 1909+ with D3D12 enhanced
+  barriers in the driver.
+- Workloads: real-time 3D games, GPU-driven rendering (indirect, compute
+  culling, mesh shaders), ray tracing, tools and editors (many swapchains,
+  offscreen rendering, readback).
+
+## Current choices
+
+- Language: C++23 for public headers and implementation. A C++26 feature is
+  adopted only once MSVC, Apple Clang and the Android NDK all ship it.
+  Reason: MSVC and Apple Clang are required for D3D12 and Metal; C++26
+  reflection is GCC-only as of 2026-10.
+- Other languages: not a v1 requirement, but the door stays open. The public
+  API keeps a C-compatible shape so a C header can be generated later:
+  plain structs for descriptions, integer handles, no exceptions or standard
+  containers in signatures, errors as plain values. Reason: C++ has no stable
+  ABI; every FFI speaks the C calling convention.
+
+- Layering: two layers in one library. The core exposes explicit barriers
+  (caller states access before and after) and owns GPU lifetime (resources
+  retire against completion tokens, never on CPU release). The render graph
+  always ships and is the primary path; it uses only the public core API.
+  Users may bypass it with their own graph on the core. Reason: standalone
+  consumers with their own graph need barriers nothing guesses under; bindless
+  and GPU-driven work hide accesses from inference, so access is declared
+  either way; backends implement only the core.
+- One authority per resource at a time. A resource the graph did not create
+  is imported with its current state and exported with its final state.
+- No automatic barrier tracker. Reason: the graph already holds every access
+  a tracker would infer; a second convenience path doubles the sync code to
+  test. Upload and readback helpers issue their own barriers in the core.
+
+## Core RHI (draft)
+
+First pass at the base layer. Objects, ownership and contracts only; no
+signatures yet.
+
+### Object map
+
+```
+Instance ──> Adapter (value: info, limits, features)
+   │
+   └──> Device ──> Queue (graphics | compute | copy)
+          ├──> Swapchain
+          ├──> Buffer, Texture, Sampler, AccelerationStructure
+          ├──> TextureView, BufferView   (each owns a bindless slot)
+          ├──> Heap                      (placed resources, graph aliasing)
+          ├──> Pipeline (graphics | mesh | compute)
+          ├──> CommandPool ──> CommandList
+          └──> Timeline                  (queue progress, CPU waits)
+```
+
+Ownership points down. A child never holds its parent; what it needs is
+copied in at creation.
+
+### Backend selection
+
+Runtime, chosen at `Instance` creation; each backend compiled in by build
+option. Several instances of different backends may coexist in one process.
+Reason: Windows has two backends and tools may want both; one indirect call
+per command is small next to driver cost.
+
+Commands are translated to native calls as they are recorded, not buffered
+and replayed. Reason: avoids recording everything twice. Revisit if Metal
+encoder switching needs lookahead.
+
+### Device and queues
+
+- The device is created from an adapter with the queues and optional
+  features it wants. Missing floor features fail creation; optional ones
+  are negotiated and queryable.
+- Queue types: graphics, compute, copy. Start with one graphics queue in the
+  first backend; async compute and copy queues come later on the same model.
+
+### Synchronization
+
+- One primitive for all queue progress: a timeline (Vulkan timeline
+  semaphore, D3D12 fence, Metal shared event). A completion token is
+  `{queue, value}`. Submissions wait on and signal tokens; the CPU waits on
+  or polls them. Binary semaphores exist only inside the swapchain.
+- Barriers are explicit and batched: per resource (with subresource range)
+  and global memory barriers, each with stage and access before and after,
+  plus a texture layout. Shaped after Vulkan synchronization 2 and D3D12
+  enhanced barriers, which map almost one to one.
+- D3D12 requires enhanced barriers; adapters without them are
+  rejected. Reason: a legacy-barrier path doubles the sync code.
+  Enhanced barriers are an optional driver feature checked at runtime; the
+  Agility SDK reaches Windows 10 1909+.
+- Metal backend targets Metal 4 (macOS/iOS 26+). Reason: Metal 4
+  has explicit barriers, residency sets and command allocators, which match
+  this core directly, and runs on Apple GPU family 7+ (A14, M1), the same
+  hardware as our floor. On Metal 3 explicit barriers would be emulated with
+  untracked heaps, fences and memory barriers.
+
+### Lifetime and residency
+
+- `destroy(handle)` is deferred: the object is freed once every queue has
+  passed the values submitted before the call. The handle is invalid at once.
+- Destroying an object an unsubmitted command list references is a usage
+  error, caught by validation.
+- Residency is part of the core contract, not a backend detail. Bindless
+  means shaders reach resources the API never sees per draw; Metal 4 needs
+  them in a residency set. The device keeps a residency set of all live
+  bindless resources; deferred destruction and graph aliasing update it.
+
+### Resources and memory
+
+- Buffer, Texture, Sampler, AccelerationStructure. Default allocation goes
+  through an internal allocator (VMA, D3D12MA, Metal heaps).
+- `Heap` plus placed resources for explicit memory control. The graph's
+  transient aliasing is built on this, so it stays public.
+- Upload and readback helpers live in the core and issue their own barriers.
+  Readback returns a completion token; blocking waits are explicit.
+
+### Binding model
+
+- One global layout for every pipeline: a bindless table of texture and
+  buffer views, a sampler table, and a small push-constant block. No
+  per-pipeline layouts or descriptor sets.
+- Shaders reach buffers and textures by descriptor index. Reason: HLSL on
+  D3D12 has no pointer dereference; indices work on all three backends. GPU
+  addresses appear only where the native APIs require them (ray tracing
+  build inputs, indirect arguments).
+- Metal 4 has no push constants and no `setBytes` on its encoders; resources
+  bind only through `MTL4ArgumentTable`, which Metal snapshots at each draw
+  or dispatch. The Metal backend copies push-constant data into a linear
+  upload ring owned by the command pool and binds that address with
+  `setAddress` before the draw. The ring is recycled with the pool and kept
+  resident.
+- Creating a view allocates its bindless slot; destroying it retires the
+  slot through deferred destruction.
+- Limits set the sizes: push constants at most 128 bytes (Vulkan guarantee,
+  within the D3D12 64-DWORD root signature); samplers at most 2048 (D3D12
+  shader-visible sampler heap). Mobile descriptor limits still to check.
+
+### Pipelines
+
+- Graphics, mesh and compute pipelines take per-backend shader bytecode plus
+  fixed state and attachment formats. No render pass objects (dynamic
+  rendering).
+- With one global layout, BFR needs almost no reflection: push-constant size
+  and workgroup size.
+- Creation is asynchronous. A pipeline is pending, ready or failed; recording
+  with a pipeline that is not ready is a usage error. Fallback choice belongs
+  to the renderer.
+- Pipeline cache: load and store as blobs through a host hook.
+- Vertex input: vertex pulling only; shaders fetch vertices by index.
+  Reason: simplest core, fits GPU-driven work. Revisit if measurements on
+  tile-based mobile GPUs show fixed-function fetch winning for position-only
+  shading.
+
+### Command recording
+
+- A `CommandPool` belongs to one thread and one frame slot; it is reset once
+  its work completes. `CommandList`s from it are recorded by that thread only.
+- Lists recorded on many threads are submitted in the order given to
+  `submit`; recording order across threads means nothing.
+- Rendering scopes carry attachments and load and store actions explicitly.
+  Reason: tile-based GPUs depend on them.
+- Commands: barriers, copies, clears, draw (direct, indexed, indirect,
+  indirect count), mesh dispatch, compute dispatch (direct, indirect),
+  acceleration structure builds, push constants, pipeline bind, viewport and
+  scissor, timestamps and queries, debug markers.
+
+### Swapchain
+
+- Created from a device, a native window handle and a presenting queue. Any
+  number per device (tools).
+- Acquire returns the image's texture and an internal wait; present waits on
+  a render token.
+- Vulkan: one present semaphore per image, so binary semaphores are never
+  reused while the presentation engine holds them; use swapchain
+  maintenance extensions where present.
+- Resize and surface loss are reported as results, not fatal errors.
+
+### Ray tracing
+
+- Core: acceleration structures and inline ray queries from any shader
+  stage. All three backends support them.
+- Ray-tracing pipelines with shader binding tables sit behind a capability
+  and stay out of the first cut. Open: how Metal's intersection and visible
+  function tables map to a binding table.
+
+### Handles
+
+Generational integer handles: slot index, generation, type tag. Scoped to
+one device; every call names the device, so a handle needs no device ID.
+Reason: C-compatible, safe against stale use, no reference counts.
+
+### Threading
+
+- Creation and destruction on a device are safe from any thread.
+- A command list is used by one thread at a time.
+- Submission to one queue is externally synchronized; different queues may
+  submit concurrently.
+- A swapchain is externally synchronized.
+
+### Failure
+
+- Creation returns `std::expected<Handle, Error>`. Recording calls return
+  nothing; misuse is caught by validation.
+- Device loss is sticky: every later call reports it, and a host callback
+  fires once.
+- Validation is configured at instance creation; messages go to a host
+  callback.
+
+## Open questions (rough order)
+
+1. Mobile descriptor and update-after-bind limits (Mali, Adreno) to size the
+   bindless tables.
+2. Render graph scope: which of dependencies, barriers, transient pooling,
+   aliasing, async compute and pass culling ship first; graph lifetime
+   (rebuilt per frame or cached); how pass callbacks record.
+3. Shader contract: source language and compiler (Slang is the candidate),
+   per-backend bytecode packaging.
+4. Ray-tracing pipelines on Metal.
+5. Host hooks: logging, allocators, pipeline cache, imports, diagnostics.
+6. Repo, build, tests, first backend, CI.
