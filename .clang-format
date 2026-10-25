@@ -1,0 +1,87 @@
+# clang-format 19. Layout only; everything else is in .clang-tidy.
+Language: Cpp
+Standard: Latest
+
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+IndentCaseLabels: true
+IndentPPDirectives: BeforeHash
+NamespaceIndentation: None
+AccessModifierOffset: -4
+ConstructorInitializerIndentWidth: 4
+ColumnLimit: 120
+
+# K&R: the opening brace stays on its line; else on its own line.
+BreakBeforeBraces: Custom
+BraceWrapping:
+    AfterClass: false
+    AfterControlStatement: Never
+    AfterEnum: false
+    AfterFunction: false
+    AfterNamespace: false
+    AfterStruct: false
+    AfterUnion: false
+    BeforeCatch: false
+    BeforeElse: true
+    IndentBraces: false
+    SplitEmptyFunction: false
+    SplitEmptyRecord: false
+    SplitEmptyNamespace: false
+
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignConsecutiveMacros: None
+AlignConsecutiveBitFields: None
+AlignTrailingComments: false
+
+SpaceBeforeParens: ControlStatements
+SpacesInSquareBrackets: false
+SpaceAfterCStyleCast: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeRangeBasedForLoopColon: true
+SpaceInEmptyBlock: false
+SpaceAfterTemplateKeyword: true
+
+PointerAlignment: Left
+ReferenceAlignment: Left
+DerivePointerAlignment: false
+
+# Own headers (quoted), then third-party, then the standard library.
+SortIncludes: CaseInsensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+    - Regex: '^"'
+      Priority: 1
+    - Regex: '^<[a-z_0-9]+>$'
+      Priority: 3
+    - Regex: '.*'
+      Priority: 2
+
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Empty
+AllowShortEnumsOnASingleLine: false
+AllowShortLambdasOnASingleLine: Inline
+BreakBeforeBinaryOperators: None
+BreakBeforeTernaryOperators: true
+BreakConstructorInitializers: BeforeColon
+BreakInheritanceList: BeforeColon
+BreakStringLiterals: true
+PackConstructorInitializers: NextLine
+AlwaysBreakTemplateDeclarations: Yes
+InsertTrailingCommas: None
+
+PenaltyBreakAssignment: 100
+PenaltyBreakBeforeFirstCallParameter: 100
+PenaltyBreakComment: 300
+PenaltyBreakFirstLessLess: 120
+PenaltyBreakString: 1000
+PenaltyExcessCharacter: 1000000
+PenaltyReturnTypeOnItsOwnLine: 200
+
+Cpp11BracedListStyle: true
+FixNamespaceComments: true
+ReflowComments: true
+SortUsingDeclarations: true

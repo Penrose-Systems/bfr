@@ -1,0 +1,93 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "debug",
+      "inherits": "base",
+      "displayName": "Debug with AddressSanitizer, UndefinedBehaviorSanitizer and LeakSanitizer",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BFR_SANITIZE": "address"
+      }
+    },
+    {
+      "name": "releasedebinfo",
+      "inherits": "base",
+      "displayName": "Release (Debug info)",
+      "description": "Optimised build with debug info and tests, for profiling and release-speed issues",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "displayName": "Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BFR_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "tsan",
+      "inherits": "base",
+      "displayName": "ThreadSanitizer",
+      "description": "Debug build under ThreadSanitizer, which cannot share a build with AddressSanitizer",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BFR_SANITIZE": "thread"
+      }
+    },
+    {
+      "name": "ci",
+      "inherits": "base",
+      "displayName": "CI",
+      "description": "Release build with tests, the configuration CI lints and tests",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug", "configurePreset": "debug" },
+    { "name": "releasedebinfo", "configurePreset": "releasedebinfo" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "tsan", "configurePreset": "tsan" },
+    { "name": "ci", "configurePreset": "ci" }
+  ],
+  "testPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": { "outputOnFailure": true },
+      "execution": { "timeout": 60 }
+    },
+    {
+      "name": "releasedebinfo",
+      "configurePreset": "releasedebinfo",
+      "output": { "outputOnFailure": true },
+      "execution": { "timeout": 60 }
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "output": { "outputOnFailure": true },
+      "execution": { "timeout": 300 }
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci",
+      "output": { "outputOnFailure": true },
+      "execution": { "timeout": 60 }
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+# Stand-ins for the Vulkan loader and a layer, which need two things the parent
+# config forbids.
+InheritParentConfig: true
+# The loader passes a layer the create info as const, and the layer must
+# advance the link info inside it for the next layer.
+Checks: '-cppcoreguidelines-pro-type-const-cast'
+CheckOptions:
+    # Their callers pass no state back to them, so their state lives in
+    # file-local globals.
+    - key: cppcoreguidelines-avoid-non-const-global-variables.AllowInternalLinkage
+      value: true

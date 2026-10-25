@@ -1,0 +1,70 @@
+# clang-tidy 19. Every finding is an error; a check is turned off here, with
+# its reason, never silenced in code.
+Checks: >
+    -*,
+    bugprone-*,
+    -bugprone-easily-swappable-parameters,
+    cert-*,
+    -cert-err58-cpp,
+    clang-analyzer-*,
+    cppcoreguidelines-*,
+    -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+    -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+    -cppcoreguidelines-pro-type-union-access,
+    misc-*,
+    -misc-non-private-member-variables-in-classes,
+    modernize-*,
+    -modernize-use-trailing-return-type,
+    performance-*,
+    readability-*,
+    -readability-identifier-length,
+    -readability-named-parameter,
+    -readability-uppercase-literal-suffix,
+
+WarningsAsErrors: '*'
+
+HeaderFilterRegex: '.*/(include/bfr|src|tests)/.*'
+
+FormatStyle: file
+
+CheckOptions:
+    - key: readability-identifier-naming.NamespaceCase
+      value: lower_case
+    - key: readability-identifier-naming.ClassCase
+      value: CamelCase
+    - key: readability-identifier-naming.StructCase
+      value: CamelCase
+    - key: readability-identifier-naming.EnumCase
+      value: CamelCase
+    - key: readability-identifier-naming.EnumConstantCase
+      value: CamelCase
+    - key: readability-identifier-naming.FunctionCase
+      value: camelBack
+    - key: readability-identifier-naming.MethodCase
+      value: camelBack
+    - key: readability-identifier-naming.VariableCase
+      value: camelBack
+    - key: readability-identifier-naming.ParameterCase
+      value: camelBack
+    - key: readability-identifier-naming.PrivateMemberSuffix
+      value: '_'
+    - key: readability-identifier-naming.ConstexprVariableCase
+      value: CamelCase
+    - key: readability-identifier-naming.ConstexprVariablePrefix
+      value: 'k'
+    - key: readability-identifier-naming.MacroDefinitionCase
+      value: UPPER_CASE
+    # The log macros drop a call and its arguments' evaluation when logging is
+    # off, which no function can do; every other macro is still reported.
+    - key: cppcoreguidelines-macro-usage.AllowedRegexp
+      value: '^BFR_LOG_'
+    - key: modernize-use-default-member-init.UseAssignment
+      value: true
+    - key: performance-for-range-copy.WarnOnAllAutoCopies
+      value: true
+    - key: readability-function-cognitive-complexity.Threshold
+      value: '25'
+    - key: readability-function-size.LineThreshold
+      value: '80'
+    - key: readability-function-size.StatementThreshold
+      value: '50'

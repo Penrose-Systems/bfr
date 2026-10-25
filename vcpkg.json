@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "bfr",
+  "version": "0.1.0",
+  "dependencies": [
+    {
+      "name": "sdl3",
+      "default-features": false,
+      "features": [
+        "vulkan",
+        { "name": "x11", "platform": "linux" },
+        { "name": "wayland", "platform": "linux" }
+      ]
+    },
+    "catch2",
+    "nlohmann-json",
+    {
+      "name": "spdlog",
+      "default-features": false,
+      "features": ["tz-offset"]
+    },
+    "volk",
+    "vulkan-utility-libraries",
+    "vulkan-validationlayers"
+  ]
+}

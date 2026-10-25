@@ -1,0 +1,24 @@
+# Test code runs under the repository .clang-tidy, with these changes.
+InheritParentConfig: true
+# Two checks misread Catch2:
+# - clang-analyzer-optin.core.EnumCastOutOfRange: REQUIRE_FALSE combines
+#   Catch2's result flags into a value that is not one of its enumerators, which
+#   it reports inside Catch2's own header.
+# - bugprone-unchecked-optional-access: REQUIRE ends the case when it fails,
+#   which it can't see, so it reports every access to an optional after one.
+Checks: '-clang-analyzer-optin.core.EnumCastOutOfRange,-bugprone-unchecked-optional-access'
+CheckOptions:
+    # The sanitizer runtimes look up their default options and suppressions by
+    # these reserved names (sanitizer_options.cpp).
+    - key: bugprone-reserved-identifier.AllowedIdentifiers
+      value: '__asan_default_options;__ubsan_default_options;__tsan_default_options;__lsan_default_suppressions'
+    - key: cert-dcl37-c.AllowedIdentifiers
+      value: '__asan_default_options;__ubsan_default_options;__tsan_default_options;__lsan_default_suppressions'
+    - key: cert-dcl51-cpp.AllowedIdentifiers
+      value: '__asan_default_options;__ubsan_default_options;__tsan_default_options;__lsan_default_suppressions'
+    - key: readability-identifier-naming.FunctionIgnoredRegexp
+      value: '^__((a|ub|t)san_default_options|lsan_default_suppressions)$'
+    # setenv and unsetenv are POSIX, declared in stdlib.h, which
+    # modernize-deprecated-headers rejects for cstdlib; cstdlib declares them too.
+    - key: misc-include-cleaner.IgnoreHeaders
+      value: 'stdlib\.h'

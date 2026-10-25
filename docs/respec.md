@@ -12,8 +12,8 @@ into its owning doc when it lands; this file is deleted when it is empty.
 - Ownership points down only: an object never holds a pointer or reference to
   its owner or creator. What it needs from above is given at creation, by
   value.
-- Namespaces: `bfr` for the API, `bfr_core` for the base (result, handle,
-  pool, allocator, log hook, window handles). No nested namespaces.
+- Namespaces: `bfr` for the API, `bfr::core` for the base (result, handle,
+  pool, allocator, log hook, window handles).
 
 ## Decision order
 
