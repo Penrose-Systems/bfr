@@ -294,8 +294,9 @@ BFR_API bfr_result bfr_device_resize_swapchain(
     uint32_t height,
     bfr_swapchain_images* images);
 
-// Destroys a swapchain once the GPU has finished with it. A handle that is already destroyed does
-// nothing. Not while another thread is using the swapchain.
+// Waits for the GPU to finish with a swapchain and destroys it; when this returns, its window is no
+// longer used. A handle that is already destroyed does nothing. Not while another thread is using
+// the swapchain.
 BFR_API void bfr_device_destroy_swapchain(bfr_device* device, bfr_swapchain swapchain);
 
 #ifdef __cplusplus

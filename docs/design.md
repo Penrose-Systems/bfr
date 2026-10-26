@@ -111,6 +111,12 @@ encoder switching needs lookahead.
   Each handle table retires an object against the last submitted value and
   frees it when that value completes. Until queues submit, every value has
   completed, so objects are freed during the destroy call.
+- Swapchains are the exception: destroying one waits for the GPU's use of
+  it and destroys it before returning. Reason: its window belongs to the
+  application, which closes it once the destroy call returns; a deferred
+  destruction would need the window kept open until a moment the
+  application cannot observe. Destroying a swapchain is rare, so the wait
+  costs nothing that matters.
 - Destroying an object an unsubmitted command list references is a usage
   error, caught by validation.
 - Residency is part of the core contract, not a backend detail. Bindless

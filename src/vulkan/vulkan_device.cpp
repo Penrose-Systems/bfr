@@ -17,17 +17,6 @@
 
 namespace bfr::rhi::vulkan {
 
-namespace {
-
-// The GPU progress objects retire against. No queue submits yet, so nothing
-// retired can still be in use and token 0 has always completed; once queues
-// submit, a retire takes the last value submitted and a collect what has
-// completed. Whatever is still retired when the device goes, the destructor
-// collects once the GPU is idle.
-constexpr std::uint64_t kNothingSubmitted = 0;
-
-} // namespace
-
 VulkanDevice::VulkanDevice(VulkanRhi& rhi, VkPhysicalDevice adapter, VkDevice device, std::uint32_t presentFamily)
     : rhi_(&rhi), adapter_(adapter), device_(device), presentFamily_(presentFamily) {
     volkLoadDeviceTable(&table_, device_);
@@ -65,8 +54,10 @@ core::Result<void> VulkanDevice::destroySwapchain(SwapchainHandle swapchain) {
     if (swapchain.isNull()) {
         return {};
     }
-    if (swapchains_.retire(swapchain, kNothingSubmitted)) {
-        swapchains_.collect(kNothingSubmitted);
+    // Destroyed at once, not retired against GPU progress: its window is the
+    // caller's to close once this returns. Once queues submit, a wait on the
+    // swapchain's last use goes first.
+    if (swapchains_.erase(swapchain)) {
         return {};
     }
     return core::failure(core::ErrorCode::RhiInvalidHandle, "the swapchain handle is stale");
@@ -75,8 +66,7 @@ core::Result<void> VulkanDevice::destroySwapchain(SwapchainHandle swapchain) {
 VulkanDevice::~VulkanDevice() {
     // A failed wait leaves nothing to do but release.
     static_cast<void>(table_.vkDeviceWaitIdle(device_));
-    // Swapchains are the device's children, so they go first: those still
-    // live, and those retired but not yet collected.
+    // Swapchains are the device's children, so they go first.
     if (swapchains_.size() != 0) {
         BFR_LOG_WARN("{} Vulkan swapchains were left when the device went", swapchains_.size());
     }

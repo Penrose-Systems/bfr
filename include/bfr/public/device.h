@@ -35,9 +35,10 @@ public:
     [[nodiscard]] virtual core::Result<SwapchainImages> resizeSwapchain(SwapchainHandle swapchain, std::uint32_t width,
                                                                         std::uint32_t height) = 0;
 
-    /// Destroys the swapchain, whose images nothing may still be using; a null
-    /// handle does nothing. Fails with RhiInvalidHandle when the swapchain is
-    /// already destroyed.
+    /// Destroys the swapchain, whose images nothing may still be using, before
+    /// returning: its window is then free to close. A null handle does
+    /// nothing. Fails with RhiInvalidHandle when the swapchain is already
+    /// destroyed.
     [[nodiscard]] virtual core::Result<void> destroySwapchain(SwapchainHandle swapchain) = 0;
 
 protected:
