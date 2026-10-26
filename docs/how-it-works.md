@@ -45,9 +45,10 @@ flowchart TB
 4. **Create a swapchain** per window from a native window handle and the
    queue that presents. Tools can have as many as they like.
 
-Every object comes back as a small integer handle (slot, generation, type).
-Handles belong to one device, and every call names the device, so a stale
-or wrong-type handle is caught rather than dereferenced.
+The instance, device and command lists are pointers. Everything else comes
+back as a small integer handle (slot, generation, type). Handles belong to
+one device, and every call names the device, so a stale or wrong-type handle
+is caught rather than dereferenced.
 
 ## Making things
 

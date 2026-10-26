@@ -19,7 +19,7 @@ API, and Rust, Python and C# bindings.
 - **Bindless**: one layout for every pipeline. Shaders index resource tables
   and pull vertices.
 - **Timelines**: each submission returns a `{queue, value}` token to wait on.
-- **Handles**: small integers, so stale handles are caught.
+- **Handles**: resources are small integers, so stale handles are caught.
 
 Details: [`docs/how-it-works.md`](docs/how-it-works.md).
 

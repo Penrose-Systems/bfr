@@ -20,15 +20,13 @@ like everything else.
 
 ## Current choices
 
-- Language: C++23 for public headers and implementation. A C++26 feature is
-  adopted only once MSVC, Apple Clang and the Android NDK all ship it.
-  Reason: MSVC and Apple Clang are required for D3D12 and Metal; C++26
-  reflection is GCC-only as of 2026-10.
-- Other languages: not a v1 requirement, but the door stays open. The public
-  API keeps a C-compatible shape so a C header can be generated later:
-  plain structs for descriptions, integer handles, no exceptions or standard
-  containers in signatures, errors as plain values. Reason: C++ has no stable
-  ABI; every FFI speaks the C calling convention.
+- Language: C++23 for the implementation. A C++26 feature is adopted only
+  once MSVC, Apple Clang and the Android NDK all ship it. Reason: MSVC and
+  Apple Clang are required for D3D12 and Metal; C++26 reflection is GCC-only
+  as of 2026-10.
+- Public API: C. Wrappers for C++, C#, Rust and Python are part of the
+  project. See [C API and wrappers](#c-api-and-wrappers). Reason: C++ has no
+  stable ABI; every FFI speaks the C calling convention.
 
 - Layering: two layers in one library. The core exposes explicit barriers
   (caller states access before and after) and owns GPU lifetime (resources
@@ -197,13 +195,19 @@ encoder switching needs lookahead.
 
 ### Handles
 
-Generational integer handles: slot index, generation, type tag. Scoped to
-one device; every call names the device, so a handle needs no device ID.
-Reason: C-compatible, safe against stale use, no reference counts.
+- Instance, device and command list are opaque pointers. Reason: recording
+  is the hot path and a pointer needs no lookup.
+- Everything else is a generational 64-bit handle: slot index, generation,
+  type tag. Each type is its own struct, so the C compiler rejects a buffer
+  where a texture is expected. Scoped to one device; every call names the
+  device, so a handle needs no device ID. Reason: C-compatible, safe against
+  stale use, no reference counts.
 
 ### Threading
 
 - Creation and destruction on a device are safe from any thread.
+  Destroying a handle that is already gone does nothing. Reason: C# and
+  Python wrappers destroy from garbage-collector finalizers.
 - A command list is used by one thread at a time.
 - Submission to one queue is externally synchronized; different queues may
   submit concurrently.
@@ -211,12 +215,64 @@ Reason: C-compatible, safe against stale use, no reference counts.
 
 ### Failure
 
-- Creation returns `std::expected<Handle, Error>`. Recording calls return
-  nothing; misuse is caught by validation.
+- Creation returns a `bfr_result` and writes the object through an out
+  parameter; `bfr_get_last_error` gives the calling thread's message for its
+  last failure. Recording calls return nothing; misuse is caught by
+  validation. Wrappers turn failures into their language's errors.
 - Device loss is sticky: every later call reports it, and a host callback
   fires once.
 - Validation is configured at instance creation; messages go to a host
   callback.
+
+## C API and wrappers
+
+The C API is mostly a target for wrappers, all of which this project writes.
+Direct use from C works but is not the main case.
+
+### Source of truth
+
+A YAML description of the API generates `bfr.h` and the bulk of every
+wrapper. It records what a C header cannot: which pointer is an array and
+which field is its count, what may be null, what owns what, which thread a
+callback runs on. Reason: one description keeps four languages from drifting;
+hand-written wrappers would each drift from the header.
+
+### C rules
+
+- Names: `bfr_` prefix, snake_case: `bfr_device_create_buffer`,
+  `bfr_buffer_desc`, `BFR_FORMAT_RGBA8_UNORM`.
+- Description structs start with `const bfr_chain* next`. After 1.0 a struct
+  never changes; new fields arrive as chained structs. Before 1.0 anything
+  may break.
+- Enums are C enums with a `_FORCE32 = 0x7FFFFFFF` member, so they are 32
+  bits on every compiler and generators keep their type. Flags are
+  `uint64_t`. `bfr_bool` is `uint32_t`. Reason: P/Invoke marshals `bool` as
+  4 bytes by default.
+- Strings are `{data, length}`; arrays are a pointer and a count.
+- The caller owns what it passes; BFR copies what it keeps. Lists BFR
+  returns use two calls: one for the count, one to fill the caller's array.
+- No function-like macros, unions, bitfields, anonymous structs or flexible
+  array members. Reason: bindgen, ClangSharp and cffi handle them badly.
+- Callbacks are a function pointer and `void* user_data`, kept to the
+  message callback. Everything else is polled: pipeline readiness by query,
+  device loss by result. Reason: calling into C# or Python from a driver
+  thread is costly and easy to get wrong.
+- Calls that would be made once per item take arrays. Reason: a call from
+  Python costs microseconds.
+- `bfr.h` compiles as C11 and C++. The shared library exports only `bfr_*`
+  symbols; nothing else is visible, and no exception crosses the boundary.
+
+### Wrappers
+
+- Generated from the description: raw bindings, enums, flags, scoped
+  ownership (RAII in C++, `IDisposable` in C#, `Drop` in Rust, context
+  managers in Python), errors as exceptions or results. Hand-written only
+  where a language deserves its own shape, such as command recording.
+- In `bindings/<language>`, each tested through the real library.
+- Order: C++ first, which the tests and Vesper use; then C#; then Rust and
+  Python.
+- No package publishing (NuGet, crates.io, PyPI) until the API settles.
+  Reason: each needs prebuilt libraries and CI on every platform.
 
 ## Open questions (rough order)
 
