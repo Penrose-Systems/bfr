@@ -203,7 +203,9 @@ functions:
       - {name: device, type: device, optional: true}
 
   device_create_swapchain:
-    doc: Creates a swapchain for the window chained to desc.
+    doc: >-
+      Creates a swapchain for the window chained to desc. It has no images
+      until the first bfr_device_resize_swapchain gives it a size.
     returns: result
     params:
       - {name: device, type: device}

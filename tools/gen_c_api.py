@@ -3,6 +3,7 @@
 
     python3 tools/gen_c_api.py           # write include/bfr/public/bfr.h
     python3 tools/gen_c_api.py --check   # fail if bfr.h is out of date
+    python3 tools/gen_c_api.py --functions   # list the C functions, one a line
 
 api/bfr.yaml explains the description's format. The output depends only on
 the description, so it is the same on every machine.
@@ -342,12 +343,17 @@ def load(path: pathlib.Path) -> Api:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--check", action="store_true", help="fail if the header is out of date")
+    parser.add_argument("--functions", action="store_true", help="list the C functions, one a line")
     args = parser.parse_args(argv)
     try:
-        header = render(load(SOURCE))
+        api = load(SOURCE)
+        header = render(api)
     except SpecError as error:
         print(f"gen_c_api: {SOURCE.relative_to(REPO_ROOT)}: {error}", file=sys.stderr)
         return 1
+    if args.functions:
+        print("\n".join(c_name(name) for name in api.functions))
+        return 0
     if args.check:
         if not HEADER.exists() or HEADER.read_text(encoding="utf-8") != header:
             print(f"gen_c_api: {HEADER.relative_to(REPO_ROOT)} is out of date", file=sys.stderr)

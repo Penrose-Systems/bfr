@@ -269,7 +269,8 @@ BFR_API bfr_result bfr_instance_create_device(
 // device: May be null.
 BFR_API void bfr_destroy_device(bfr_device* device);
 
-// Creates a swapchain for the window chained to desc.
+// Creates a swapchain for the window chained to desc. It has no images until the first
+// bfr_device_resize_swapchain gives it a size.
 BFR_API bfr_result bfr_device_create_swapchain(
     bfr_device* device,
     const bfr_swapchain_desc* desc,
