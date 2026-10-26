@@ -231,6 +231,15 @@ encoder switching needs lookahead.
 - Submission to one queue is externally synchronized; different queues may
   submit concurrently.
 - A swapchain is externally synchronized.
+- A handle's calls name its device, and destroying the device destroys its
+  handles, so nothing may be called on a handle once its device is
+  destroyed. The device and handle objects of a garbage-collected wrapper
+  may be finalized in either order, so the wrapper keeps the order itself:
+  its device destroys the handles it still tracks, under a lock, and a
+  handle finalizer that finds its device gone does nothing. In C# the
+  device is a `SafeHandle` each handle wrapper adds a reference to, so the
+  device is released last whatever order the finalizers run; in Python
+  each handle holds its device; Rust and C++ borrow it.
 
 ### Failure
 
