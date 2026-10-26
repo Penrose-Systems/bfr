@@ -198,14 +198,11 @@ TEST_CASE("Device fails with RhiPresentUnsupported when it can't present to the 
     const auto device = (*rhi)->createDevice(headlessAdapter(**rhi), kNoWindow);
     INFO(failureOf(device));
     REQUIRE(device.has_value());
+
     const auto swapchain = (*device)->createSwapchain(kHeadless, kSwapchainImages);
-    INFO(failureOf(swapchain));
-    REQUIRE(swapchain.has_value());
 
-    const auto images = (*device)->resizeSwapchain(*swapchain, kWidth, kHeight);
-
-    REQUIRE_FALSE(images.has_value());
-    CHECK(images.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
+    REQUIRE_FALSE(swapchain.has_value());
+    CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
 }
 
 TEST_CASE("Device reports each swapchain call the API fails and leaves nothing behind", "[rhi][gpu]") {
@@ -253,7 +250,7 @@ TEST_CASE("Device fails with RhiSwapchainFailed for a surface that lists no form
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Device treats a failed present query as no and empties the swapchain", "[rhi][gpu]") {
+TEST_CASE("Device treats a failed present query as no", "[rhi][gpu]") {
     // The failing query leaves VK_TRUE behind, which must not be believed.
     const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
     const ScopedEnv failing("BFR_FAIL", "vkGetPhysicalDeviceSurfaceSupportKHR");
@@ -265,14 +262,11 @@ TEST_CASE("Device treats a failed present query as no and empties the swapchain"
         const auto device = (*rhi)->createDevice(headlessAdapter(**rhi), kNoWindow);
         INFO(failureOf(device));
         REQUIRE(device.has_value());
+
         const auto swapchain = (*device)->createSwapchain(kHeadless, kSwapchainImages);
-        INFO(failureOf(swapchain));
-        REQUIRE(swapchain.has_value());
 
-        const auto images = (*device)->resizeSwapchain(*swapchain, kWidth, kHeight);
-
-        REQUIRE_FALSE(images.has_value());
-        CHECK(images.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
+        REQUIRE_FALSE(swapchain.has_value());
+        CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
     }
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }

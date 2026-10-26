@@ -28,6 +28,11 @@ core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::
     if (!surface) {
         return std::unexpected(std::move(surface.error()));
     }
+    // Fixed for the surface, so asked once.
+    if (!rhi_->presents(adapter_, presentFamily_, *surface)) {
+        return core::failure(core::ErrorCode::RhiPresentUnsupported,
+                             "the device's present queue doesn't present to the window");
+    }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, std::move(*surface), imageCount);
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
@@ -41,11 +46,6 @@ core::Result<SwapchainImages> VulkanDevice::resizeSwapchain(SwapchainHandle swap
     VulkanSwapchain* found = swapchains_.find(swapchain);
     if (found == nullptr) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the swapchain handle is stale");
-    }
-    if (!rhi_->presents(adapter_, presentFamily_, found->surface())) {
-        found->release();
-        return core::failure(core::ErrorCode::RhiPresentUnsupported,
-                             "the device's present queue doesn't present to the window");
     }
     return found->build(adapter_, {.width = width, .height = height});
 }
