@@ -113,14 +113,18 @@ bfr_result guarded(Body&& body) noexcept {
     }
 }
 
-// Runs body, which returns nothing, dropping any exception: the destroy calls
-// have no result to report one through.
+// Runs body, which returns nothing. The destroy calls have no result to
+// report an exception through, so it is recorded as the last error only.
 template <class Body>
 void quietly(Body&& body) noexcept {
     try {
         std::forward<Body>(body)();
+    } catch (const std::bad_alloc&) {
+        fail(BFR_RESULT_ERROR_OUT_OF_MEMORY, "out of memory");
+    } catch (const std::exception& exception) {
+        fail(BFR_RESULT_ERROR_INTERNAL, exception.what());
     } catch (...) {
-        lastError().clear();
+        fail(BFR_RESULT_ERROR_INTERNAL, "an unknown exception");
     }
 }
 
