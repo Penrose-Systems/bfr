@@ -27,6 +27,9 @@ inline const RhiConfig kValidation{.validation = true};
 /// For a device that presents to no window yet.
 inline const core::window::NativeWindow kNoWindow{};
 
+/// The images a test swapchain asks for.
+inline constexpr std::uint32_t kSwapchainImages = 3;
+
 /// A description that records every validation message the Rhi reports.
 inline RhiDesc recordingInto(std::vector<std::string>& messages) {
     return {.onValidationMessage = [&messages](bool, std::string_view message) {

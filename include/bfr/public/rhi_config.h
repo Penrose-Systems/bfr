@@ -14,9 +14,6 @@ struct RhiConfig {
 
     /// Runs the API's validation layer and reports its messages.
     bool validation = false;
-    /// The images a swapchain asks for, within what its surface allows and
-    /// never fewer than two.
-    std::uint32_t swapchainImages = 3;
 
     void set(const config::Config& config);
 };

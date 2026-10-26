@@ -15,19 +15,20 @@ namespace bfr::rhi::vulkan {
 /// until built.
 class VulkanSwapchain {
 public:
-    /// Builds on surface, which it takes over, through device's table.
-    VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, VulkanSurface surface);
+    /// Builds on surface, which it takes over, through device's table, asking
+    /// for imageCount images each time.
+    VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, VulkanSurface surface, std::uint32_t imageCount);
     ~VulkanSwapchain();
     VulkanSwapchain(const VulkanSwapchain&) = delete;
     VulkanSwapchain& operator=(const VulkanSwapchain&) = delete;
     VulkanSwapchain(VulkanSwapchain&&) = delete;
     VulkanSwapchain& operator=(VulkanSwapchain&&) = delete;
 
-    /// Builds images as the surface allows on adapter, at size in pixels and
-    /// with images asked for, replacing those it has; a window with no area
+    /// Builds images as the surface allows on adapter, at size in pixels,
+    /// replacing those it has; a window with no area
     /// leaves it empty. Fails with RhiSwapchainFailed, naming the call the API
     /// refused, and leaves it empty.
-    [[nodiscard]] core::Result<SwapchainImages> build(VkPhysicalDevice adapter, VkExtent2D size, std::uint32_t images);
+    [[nodiscard]] core::Result<SwapchainImages> build(VkPhysicalDevice adapter, VkExtent2D size);
 
     /// Destroys the swapchain and forgets its images, keeping their storage;
     /// the surface stays.
@@ -39,6 +40,7 @@ private:
     VkDevice device_;
     const VolkDeviceTable* table_;
     VulkanSurface surface_;
+    std::uint32_t imageCount_;
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
     // Refilled by each build, keeping their storage.
     std::vector<VkSurfaceFormatKHR> formats_;

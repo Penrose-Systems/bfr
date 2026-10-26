@@ -90,9 +90,10 @@ find_package(SDL3 CONFIG REQUIRED)
 find_package(volk CONFIG REQUIRED)
 find_package(VulkanUtilityLibraries CONFIG REQUIRED)
 
-# One library. Its public API is include/bfr/public; the rest of include/bfr is
-# its private headers.
-add_library(bfr STATIC
+# BFR's code, compiled once for both libraries below. Its public API is
+# include/bfr/public; the rest of include/bfr is its private headers.
+add_library(bfr_objects OBJECT
+    src/c_api.cpp
     src/config.cpp
     src/error.cpp
     src/log.cpp
@@ -106,16 +107,20 @@ add_library(bfr STATIC
     src/vulkan/vulkan_rhi.cpp
     src/vulkan/vulkan_surface.cpp
     src/vulkan/vulkan_swapchain.cpp)
-bfr_apply_compiler_flags(bfr)
-target_include_directories(bfr
+bfr_apply_compiler_flags(bfr_objects)
+target_include_directories(bfr_objects
     PUBLIC include/bfr/public
     PRIVATE include/bfr include/bfr/vulkan)
-target_link_libraries(bfr
+target_link_libraries(bfr_objects
     PUBLIC spdlog::spdlog
     PRIVATE nlohmann_json::nlohmann_json SDL3::SDL3 volk::volk_headers Vulkan::UtilityHeaders ${CMAKE_DL_LIBS})
-target_compile_definitions(bfr PUBLIC BFR_LOGGING_ENABLED=$<BOOL:${BFR_LOGGING}>)
-bfr_add_header_check(bfr ${CMAKE_CURRENT_SOURCE_DIR}/include/bfr/public)
-bfr_add_c_header_check(bfr bfr.h)
+target_compile_definitions(bfr_objects
+    PUBLIC BFR_LOGGING_ENABLED=$<BOOL:${BFR_LOGGING}>
+    PRIVATE BFR_BUILDING)
+# Position independent for the shared library, and hidden, so that it exports
+# only the BFR_API entry points.
+set_target_properties(bfr_objects PROPERTIES
+    POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 
 # The window systems the Vulkan backend makes surfaces on. Only volk and the
 # surface code see them: the Xlib and Windows headers they pull in define
@@ -134,7 +139,32 @@ set_source_files_properties(src/vulkan/vulkan_surface.cpp
 add_library(bfr_volk OBJECT src/vulkan/volk.cpp)
 target_link_libraries(bfr_volk PRIVATE volk::volk_headers)
 target_compile_definitions(bfr_volk PRIVATE ${bfr_vulkan_platforms})
-target_link_libraries(bfr PRIVATE bfr_volk)
+set_target_properties(bfr_volk PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
+
+# The static library: the C API, and the C++ classes behind it that the tests
+# use.
+add_library(bfr STATIC)
+target_link_libraries(bfr PUBLIC bfr_objects PRIVATE bfr_volk)
+target_compile_definitions(bfr INTERFACE BFR_STATIC)
+set_target_properties(bfr PROPERTIES OUTPUT_NAME bfr_static)
+bfr_add_header_check(bfr ${CMAKE_CURRENT_SOURCE_DIR}/include/bfr/public)
+bfr_add_c_header_check(bfr bfr.h)
+
+# The shared library the language bindings load. It exports only bfr_*.
+# Hidden visibility is not enough on its own: libstdc++ gives its templates
+# default visibility, so the linker is told the list too.
+add_library(bfr_shared SHARED)
+target_link_libraries(bfr_shared PRIVATE bfr_objects bfr_volk)
+# Its users see bfr.h and nothing of the C++ behind it.
+target_include_directories(bfr_shared INTERFACE include/bfr/public)
+set_target_properties(bfr_shared PROPERTIES OUTPUT_NAME bfr)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(exports ${CMAKE_CURRENT_SOURCE_DIR}/cmake/bfr_exports.map)
+    target_link_options(bfr_shared PRIVATE -Wl,--version-script=${exports} -Wl,--no-undefined)
+    set_property(TARGET bfr_shared APPEND PROPERTY LINK_DEPENDS ${exports})
+elseif(APPLE)
+    target_link_options(bfr_shared PRIVATE "LINKER:-exported_symbol,_bfr_*")
+endif()
 
 if(BFR_BUILD_TESTS)
     enable_testing()

@@ -7,8 +7,7 @@
 #include <filesystem>
 
 TEST_CASE("RhiConfig takes each value its section sets", "[rhi][unit]") {
-    const auto path = writeConfig("bfr_rhi_config.json",
-                                  R"({"rhi": {"version": 1, "validation": true, "swapchainImages": 4}})");
+    const auto path = writeConfig("bfr_rhi_config.json", R"({"rhi": {"version": 1, "validation": true}})");
     const auto config = bfr::config::Config::load(path);
     std::filesystem::remove(path);
     REQUIRE(config.has_value());
@@ -17,5 +16,4 @@ TEST_CASE("RhiConfig takes each value its section sets", "[rhi][unit]") {
     rhi.set(*config);
 
     CHECK(rhi.validation);
-    CHECK(rhi.swapchainImages == 4);
 }

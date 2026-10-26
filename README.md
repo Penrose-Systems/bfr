@@ -1,14 +1,16 @@
 # BFR
 
-Babel Fish RHI: one C++ GPU API over Vulkan, D3D12 and Metal.
+Babel Fish RHI: one GPU API over Vulkan, D3D12 and Metal, in C, with wrappers
+for C++, C#, Rust and Python.
 
 ## Status (2026-10-25)
 
-Early. Today: a Vulkan base, tested on Linux. It has adapters, a device and
-swapchains, plus SDL3 windows and input, config and logging.
+Early. Today: a C API, [`bfr.h`](include/bfr/public/bfr.h), over a Vulkan
+backend tested on Linux. It covers instances, adapters, devices and
+swapchains.
 
-Planned: the core API below, a render graph, D3D12 and Metal backends, a C
-API, and Rust, Python and C# bindings.
+Planned: the rest of the core API below, a render graph, D3D12 and Metal
+backends, and the C++, C#, Rust and Python wrappers.
 
 ## Design
 
@@ -36,10 +38,13 @@ Details: [`docs/how-it-works.md`](docs/how-it-works.md).
 
 ```cmake
 add_subdirectory(bfr)
-target_link_libraries(your_app PRIVATE bfr)
+target_link_libraries(your_app PRIVATE bfr)   # static
+# or bfr_shared: libbfr.so, exporting only the bfr_* functions
 ```
 
-Dependencies come from vcpkg; see [`vcpkg.json`](vcpkg.json).
+Include `bfr.h`. Dependencies come from vcpkg; see [`vcpkg.json`](vcpkg.json).
+The API itself is described in [`api/bfr.yaml`](api/bfr.yaml), which
+`bfr.h` is generated from.
 
 ## Build and test
 

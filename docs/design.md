@@ -260,7 +260,14 @@ hand-written wrappers would each drift from the header.
 - Calls that would be made once per item take arrays. Reason: a call from
   Python costs microseconds.
 - `bfr.h` compiles as C11 and C++. The shared library exports only `bfr_*`
-  symbols; nothing else is visible, and no exception crosses the boundary.
+  symbols, through a linker export list as well as hidden visibility
+  (libstdc++ gives its templates default visibility). No exception crosses
+  the boundary: each entry point turns one into a result.
+- Two libraries from one set of objects: static `bfr`, which also exposes
+  the C++ classes behind the C API to the tests, and shared `bfr_shared`
+  (`libbfr`), which exposes only the C API. The wrappers load the shared one.
+- Settings that belong to one object go on that object's desc, not the
+  instance: the swapchain's image count is on `bfr_swapchain_desc`.
 
 ### Wrappers
 

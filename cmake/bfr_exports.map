@@ -1,0 +1,5 @@
+/* The shared library exports the C API and nothing else. */
+{
+    global: bfr_*;
+    local: *;
+};

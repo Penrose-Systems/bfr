@@ -21,12 +21,13 @@ VulkanDevice::VulkanDevice(VulkanRhi& rhi, VkPhysicalDevice adapter, VkDevice de
     volkLoadDeviceTable(&table_, device_);
 }
 
-core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::NativeWindow& window) {
+core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::NativeWindow& window,
+                                                            std::uint32_t imageCount) {
     auto surface = rhi_->surfaceFor(window);
     if (!surface) {
         return std::unexpected(std::move(surface.error()));
     }
-    return swapchains_.emplace(device_, table_, std::move(*surface));
+    return swapchains_.emplace(device_, table_, std::move(*surface), imageCount);
 }
 
 core::Result<SwapchainImages> VulkanDevice::resizeSwapchain(SwapchainHandle swapchain, std::uint32_t width,
@@ -40,7 +41,7 @@ core::Result<SwapchainImages> VulkanDevice::resizeSwapchain(SwapchainHandle swap
         return core::failure(core::ErrorCode::RhiPresentUnsupported,
                              "the device's present queue doesn't present to the window");
     }
-    return found->build(adapter_, {.width = width, .height = height}, rhi_->config().swapchainImages);
+    return found->build(adapter_, {.width = width, .height = height});
 }
 
 core::Result<void> VulkanDevice::destroySwapchain(SwapchainHandle swapchain) {

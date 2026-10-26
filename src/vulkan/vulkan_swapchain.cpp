@@ -46,14 +46,15 @@ core::Result<SwapchainImages> refused(std::string_view function, VkResult result
 
 } // namespace
 
-VulkanSwapchain::VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, VulkanSurface surface)
-    : device_(device), table_(&table), surface_(std::move(surface)) {}
+VulkanSwapchain::VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, VulkanSurface surface,
+                                 std::uint32_t imageCount)
+    : device_(device), table_(&table), surface_(std::move(surface)), imageCount_(imageCount) {}
 
 VulkanSwapchain::~VulkanSwapchain() {
     release();
 }
 
-core::Result<SwapchainImages> VulkanSwapchain::build(VkPhysicalDevice adapter, VkExtent2D size, std::uint32_t images) {
+core::Result<SwapchainImages> VulkanSwapchain::build(VkPhysicalDevice adapter, VkExtent2D size) {
     release();
     VkSurfaceKHR surface = surface_.handle();
     VkSurfaceCapabilitiesKHR capabilities{};
@@ -71,7 +72,7 @@ core::Result<SwapchainImages> VulkanSwapchain::build(VkPhysicalDevice adapter, V
     if (formats_.empty()) {
         return core::failure(core::ErrorCode::RhiSwapchainFailed, "the surface lists no formats");
     }
-    const SwapchainSettings settings = chooseSwapchainSettings(capabilities, formats_, size, images);
+    const SwapchainSettings settings = chooseSwapchainSettings(capabilities, formats_, size, imageCount_);
     if (settings.extent.width == 0 || settings.extent.height == 0) {
         BFR_LOG_DEBUG("swapchain left empty: the window has no area");
         return SwapchainImages{};

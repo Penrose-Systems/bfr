@@ -74,6 +74,10 @@ typedef enum bfr_result {
     BFR_RESULT_ERROR_SWAPCHAIN_FAILED = -13,
     // The swapchain no longer matches the window; resize it.
     BFR_RESULT_ERROR_OUT_OF_DATE = -14,
+    // This build of BFR does not include the backend asked for.
+    BFR_RESULT_ERROR_BACKEND_UNAVAILABLE = -15,
+    // BFR failed in a way it does not expect; the message says how.
+    BFR_RESULT_ERROR_INTERNAL = -16,
     BFR_RESULT_FORCE32 = 0x7FFFFFFF
 } bfr_result;
 

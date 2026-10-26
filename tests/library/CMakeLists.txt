@@ -6,6 +6,7 @@ include(Catch)
 
 add_executable(bfr_tests
     test_main.cpp
+    c_api/test_c_api.cpp
     config/test_config.cpp
     core/test_error.cpp
     core/test_log.cpp

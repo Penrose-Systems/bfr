@@ -61,7 +61,7 @@ TEST_CASE("Device builds a swapchain at the window's size", "[rhi][gpu]") {
         INFO(failureOf(rhi));
         REQUIRE(rhi.has_value());
         const auto device = presentingDevice(**rhi, display->nativeWindow());
-        const auto swapchain = device->createSwapchain(display->nativeWindow());
+        const auto swapchain = device->createSwapchain(display->nativeWindow(), kSwapchainImages);
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 
@@ -81,7 +81,7 @@ TEST_CASE("Device rebuilds a swapchain at a new size", "[rhi][gpu]") {
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(messages)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless);
+        const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainImages);
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         const auto first = headless.device->resizeSwapchain(*swapchain, kWidth, kHeight);
@@ -103,7 +103,7 @@ TEST_CASE("Device destroys the swapchains left when it goes", "[rhi][gpu]") {
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(messages)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless);
+        const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainImages);
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         const auto images = headless.device->resizeSwapchain(*swapchain, kWidth, kHeight);
@@ -118,7 +118,7 @@ TEST_CASE("Device empties a swapchain for a window with no area", "[rhi][gpu]") 
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(messages)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless);
+        const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainImages);
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         const auto built = headless.device->resizeSwapchain(*swapchain, kWidth, kHeight);
@@ -139,7 +139,7 @@ TEST_CASE("Device empties a swapchain for a window with no area", "[rhi][gpu]") 
 TEST_CASE("Device fails with RhiInvalidHandle on a destroyed swapchain", "[rhi][gpu]") {
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(messages)};
-    const auto swapchain = headless.device->createSwapchain(kHeadless);
+    const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainImages);
     INFO(failureOf(swapchain));
     REQUIRE(swapchain.has_value());
     REQUIRE(headless.device->destroySwapchain(*swapchain).has_value());
@@ -164,7 +164,7 @@ TEST_CASE("Device fails with RhiSurfaceFailed for a swapchain without a window",
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(messages)};
 
-    const auto swapchain = headless.device->createSwapchain(kNoWindow);
+    const auto swapchain = headless.device->createSwapchain(kNoWindow, kSwapchainImages);
 
     REQUIRE_FALSE(swapchain.has_value());
     CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiSurfaceFailed);
@@ -181,7 +181,7 @@ TEST_CASE("Device fails with RhiSurfaceFailed when the API refuses a swapchain's
     INFO(failureOf(device));
     REQUIRE(device.has_value());
 
-    const auto swapchain = (*device)->createSwapchain(kHeadless);
+    const auto swapchain = (*device)->createSwapchain(kHeadless, kSwapchainImages);
 
     REQUIRE_FALSE(swapchain.has_value());
     CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiSurfaceFailed);
@@ -198,7 +198,7 @@ TEST_CASE("Device fails with RhiPresentUnsupported when it can't present to the 
     const auto device = (*rhi)->createDevice(headlessAdapter(**rhi), kNoWindow);
     INFO(failureOf(device));
     REQUIRE(device.has_value());
-    const auto swapchain = (*device)->createSwapchain(kHeadless);
+    const auto swapchain = (*device)->createSwapchain(kHeadless, kSwapchainImages);
     INFO(failureOf(swapchain));
     REQUIRE(swapchain.has_value());
 
@@ -220,7 +220,7 @@ TEST_CASE("Device reports each swapchain call the API fails and leaves nothing b
     std::vector<std::string> errors;
     {
         const HeadlessDevice headless{recordingErrorsInto(errors)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless);
+        const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainImages);
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 
@@ -240,7 +240,7 @@ TEST_CASE("Device fails with RhiSwapchainFailed for a surface that lists no form
     std::vector<std::string> errors;
     {
         const HeadlessDevice headless{recordingErrorsInto(errors)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless);
+        const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainImages);
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 
@@ -265,7 +265,7 @@ TEST_CASE("Device treats a failed present query as no and empties the swapchain"
         const auto device = (*rhi)->createDevice(headlessAdapter(**rhi), kNoWindow);
         INFO(failureOf(device));
         REQUIRE(device.has_value());
-        const auto swapchain = (*device)->createSwapchain(kHeadless);
+        const auto swapchain = (*device)->createSwapchain(kHeadless, kSwapchainImages);
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 
@@ -287,7 +287,7 @@ TEST_CASE("Device fails with RhiInvalidHandle for a forged swapchain handle", "[
     INFO("index " << forged.index << ", generation " << forged.generation);
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(messages)};
-    const auto swapchain = headless.device->createSwapchain(kHeadless);
+    const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainImages);
     INFO(failureOf(swapchain));
     REQUIRE(swapchain.has_value());
     REQUIRE(swapchain->index == 0);
@@ -302,14 +302,13 @@ TEST_CASE("Device fails with RhiInvalidHandle for a forged swapchain handle", "[
     CHECK(destroyed.error().code == bfr::core::ErrorCode::RhiInvalidHandle);
 }
 
-TEST_CASE("Device takes the swapchain's image count from the config", "[rhi][gpu]") {
+TEST_CASE("Device builds the image count its swapchain was created with", "[rhi][gpu]") {
     // More than the default and than lavapipe's minimum.
     constexpr std::uint32_t kImages = 6;
     std::vector<std::string> messages;
     {
-        const HeadlessDevice headless{recordingInto(messages),
-                                      RhiConfig{.validation = true, .swapchainImages = kImages}};
-        const auto swapchain = headless.device->createSwapchain(kHeadless);
+        const HeadlessDevice headless{recordingInto(messages), kValidation};
+        const auto swapchain = headless.device->createSwapchain(kHeadless, kImages);
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 
@@ -331,7 +330,7 @@ TEST_CASE("Device builds a swapchain once a call the API refused succeeds again"
     std::vector<std::string> errors;
     {
         const HeadlessDevice headless{recordingErrorsInto(errors)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless);
+        const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainImages);
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         {
@@ -364,7 +363,7 @@ TEST_CASE("Device presents from a queue family of its own when no graphics famil
         const auto device = (*rhi)->createDevice(headlessAdapter(**rhi), kHeadless);
         INFO(failureOf(device));
         REQUIRE(device.has_value());
-        const auto swapchain = (*device)->createSwapchain(kHeadless);
+        const auto swapchain = (*device)->createSwapchain(kHeadless, kSwapchainImages);
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 

@@ -39,6 +39,8 @@ enums:
       error_present_unsupported: {value: -12, doc: The device's queue cannot present to the window.}
       error_swapchain_failed: {value: -13, doc: The backend refused to create or resize the swapchain.}
       error_out_of_date: {value: -14, doc: The swapchain no longer matches the window; resize it.}
+      error_backend_unavailable: {value: -15, doc: This build of BFR does not include the backend asked for.}
+      error_internal: {value: -16, doc: BFR failed in a way it does not expect; the message says how.}
 
   backend:
     doc: The native API an instance runs on.
