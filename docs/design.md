@@ -268,7 +268,9 @@ hand-written wrappers would each drift from the header.
   thread is costly and easy to get wrong.
 - Destroy calls may come in any order: a device keeps its instance alive
   until the device is destroyed. Reason: garbage collectors finalize in no
-  fixed order.
+  fixed order. The instance's message callback and `user_data` must then
+  stay valid until its last device is destroyed, so a wrapper ties them to
+  the last device, not to the instance object.
 - Calls that would be made once per item take arrays. Reason: a call from
   Python costs microseconds.
 - `bfr.h` compiles as C11 and C++. The shared library exports only `bfr_*`

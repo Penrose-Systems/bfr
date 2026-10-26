@@ -88,7 +88,8 @@ callbacks:
   message_callback:
     doc: >-
       Receives validation and diagnostic messages. Called on any thread,
-      including threads BFR or the driver owns.
+      including threads BFR or the driver owns, until the instance and every
+      device made from it are destroyed.
     params:
       - {name: severity, type: message_severity}
       - {name: message, type: string, doc: Valid only during the call.}
@@ -102,7 +103,7 @@ structs:
       - {name: backend, type: backend}
       - {name: validation, type: bool, doc: Enable the backend's validation layer.}
       - {name: message_callback, type: message_callback, optional: true}
-      - {name: message_user_data, type: opaque, optional: true, doc: Passed to message_callback.}
+      - {name: message_user_data, type: opaque, optional: true, doc: "Passed to message_callback, which may still be called after bfr_destroy_instance while a device lives."}
 
   adapter_info:
     doc: An adapter, as an instance lists it. Nothing is opened.
@@ -184,8 +185,8 @@ functions:
   destroy_instance:
     doc: >-
       Destroys an instance. One with devices left lives on until the last of
-      them is destroyed, so they may be destroyed in any order. Null does
-      nothing.
+      them is destroyed, so they may be destroyed in any order; its message
+      callback may still be called until then. Null does nothing.
     params:
       - {name: instance, type: instance, optional: true}
 

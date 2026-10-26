@@ -154,7 +154,7 @@ typedef struct bfr_swapchain {
 } bfr_swapchain;
 
 // Receives validation and diagnostic messages. Called on any thread, including threads BFR or the
-// driver owns.
+// driver owns, until the instance and every device made from it are destroyed.
 // message: Valid only during the call.
 // user_data: May be null.
 typedef void (*bfr_message_callback)(
@@ -170,7 +170,8 @@ typedef struct bfr_instance_desc {
     bfr_bool validation;
     // May be null.
     bfr_message_callback message_callback;
-    // Passed to message_callback. May be null.
+    // Passed to message_callback, which may still be called after bfr_destroy_instance while a
+    // device lives. May be null.
     void* message_user_data;
 } bfr_instance_desc;
 
@@ -253,7 +254,8 @@ BFR_API bfr_string bfr_get_last_error(void);
 BFR_API bfr_result bfr_create_instance(const bfr_instance_desc* desc, bfr_instance** instance);
 
 // Destroys an instance. One with devices left lives on until the last of them is destroyed, so they
-// may be destroyed in any order. Null does nothing.
+// may be destroyed in any order; its message callback may still be called until then. Null does
+// nothing.
 // instance: May be null.
 BFR_API void bfr_destroy_instance(bfr_instance* instance);
 
