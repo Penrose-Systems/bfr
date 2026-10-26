@@ -22,7 +22,8 @@ namespace {
 // The GPU progress objects retire against. No queue submits yet, so nothing
 // retired can still be in use and token 0 has always completed; once queues
 // submit, a retire takes the last value submitted and a collect what has
-// completed.
+// completed. Whatever is still retired when the device goes, the destructor
+// collects once the GPU is idle.
 constexpr std::uint64_t kNothingSubmitted = 0;
 
 } // namespace
@@ -74,11 +75,12 @@ core::Result<void> VulkanDevice::destroySwapchain(SwapchainHandle swapchain) {
 VulkanDevice::~VulkanDevice() {
     // A failed wait leaves nothing to do but release.
     static_cast<void>(table_.vkDeviceWaitIdle(device_));
-    // Swapchains are the device's children, so they go first.
+    // Swapchains are the device's children, so they go first: those still
+    // live, and those retired but not yet collected.
     if (swapchains_.size() != 0) {
         BFR_LOG_WARN("{} Vulkan swapchains were left when the device went", swapchains_.size());
-        swapchains_.clear();
     }
+    swapchains_.clear();
     table_.vkDestroyDevice(device_, nullptr);
     BFR_LOG_DEBUG("Vulkan device destroyed");
 }
