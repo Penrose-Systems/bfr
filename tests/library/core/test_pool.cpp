@@ -61,6 +61,23 @@ TEST_CASE("Pool keeps a retired value until its token completes", "[core][unit]"
     CHECK(shared.use_count() == 1);
 }
 
+TEST_CASE("Pool erase destroys the value before it returns", "[core][unit]") {
+    const auto shared = std::make_shared<int>(0);
+    Pool<std::shared_ptr<int>> pool{"test", 1, 1};
+    const Handle<std::shared_ptr<int>> handle = pool.emplace(shared);
+
+    CHECK(pool.erase(handle));
+
+    CHECK(shared.use_count() == 1);
+    CHECK(pool.find(handle) == nullptr);
+    CHECK(pool.size() == 0);
+    CHECK_FALSE(pool.erase(handle));
+    CHECK_FALSE(pool.retire(handle, 0));
+    CHECK_FALSE(pool.erase(Handle<std::shared_ptr<int>>{}));
+    // Its slot is free again, so the maximum of one is not reached.
+    CHECK_FALSE(pool.emplace(shared).isNull());
+}
+
 TEST_CASE("Pool returns a null handle at its maximum, exactly", "[core][unit]") {
     // Not a whole number of pages, so rounding would show.
     constexpr std::uint32_t kMax = 3;
@@ -247,9 +264,9 @@ namespace {
 // Enough that the pool grows while several threads use it.
 constexpr std::uint32_t kEachThread = 3 * Pool<int>::kPageSize;
 
-// Emplaces kEachThread values from first on, finding each and retiring and
-// collecting every other one so that their slots are reused; returns how many
-// calls went wrong.
+// Emplaces kEachThread values from first on, finding each and ending every
+// other one, by retire and collect or by erase in turn, so that their slots
+// are reused; returns how many calls went wrong.
 std::uint32_t useFromOneThread(Pool<std::uint32_t>& pool, std::uint32_t first) {
     std::uint32_t wrong = 0;
     std::vector<Handle<std::uint32_t>> kept;
@@ -258,9 +275,12 @@ std::uint32_t useFromOneThread(Pool<std::uint32_t>& pool, std::uint32_t first) {
         const Handle<std::uint32_t> handle = pool.emplace(value);
         const std::uint32_t* found = pool.find(handle);
         wrong += (found == nullptr || *found != value) ? 1U : 0U;
-        if (value % 2 == 0) {
+        if (value % 4 == 0) {
             wrong += pool.retire(handle, 0) ? 0U : 1U;
             pool.collect(0);
+        }
+        else if (value % 2 == 0) {
+            wrong += pool.erase(handle) ? 0U : 1U;
         }
         else {
             kept.push_back(handle);
@@ -274,7 +294,7 @@ std::uint32_t useFromOneThread(Pool<std::uint32_t>& pool, std::uint32_t first) {
 
 } // namespace
 
-TEST_CASE("Pool takes emplace, find, retire and collect from many threads at once", "[core][unit]") {
+TEST_CASE("Pool takes emplace, find, retire, collect and erase from many threads at once", "[core][unit]") {
     constexpr std::uint32_t kThreads = 4;
     Pool<std::uint32_t> pool{"test", 1, kLimit};
     std::atomic<std::uint32_t> wrong{0};

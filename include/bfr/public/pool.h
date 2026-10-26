@@ -35,7 +35,8 @@ namespace bfr::core {
 /// Lifetime: retire ends a handle at once, so find stops finding it, but its
 /// value lives on until collect is told that the token it was retired with has
 /// completed. The device retires against GPU progress, so nothing the GPU may
-/// still use is destroyed.
+/// still use is destroyed. erase ends a handle and destroys its value at once,
+/// for a value the caller has already waited for.
 template <class T, class Tag = T>
 class Pool {
 public:
@@ -111,6 +112,23 @@ public:
             return false;
         }
         retireLocked(handle.index(), token);
+        return true;
+    }
+
+    /// Ends handle and destroys its value before returning, on this thread:
+    /// for a value nothing can still be using. False when handle is null or
+    /// already gone.
+    bool erase(Handle<Tag> handle) {
+        {
+            const std::scoped_lock lock{mutex_};
+            if (find(handle) == nullptr) {
+                return false;
+            }
+            endLocked(handle.index());
+        }
+        std::destroy_at(&entryAt(handle.index()).value);
+        const std::scoped_lock lock{mutex_};
+        give(handle.index());
         return true;
     }
 
@@ -233,13 +251,18 @@ private:
         free_ = index;
     }
 
-    // Moves a live slot to its next, even, generation and queues its value.
-    // Locked.
-    void retireLocked(std::uint32_t index, std::uint64_t token) {
+    // Moves a live slot to its next, even, generation, so find stops finding
+    // it. Locked.
+    void endLocked(std::uint32_t index) {
         std::atomic<std::uint64_t>& generation = generationAt(index);
         generation.store(generation.load(std::memory_order_relaxed) + 1, std::memory_order_release);
-        retired_.push_back({.index = index, .token = token});
         size_.fetch_sub(1, std::memory_order_relaxed);
+    }
+
+    // Ends a live slot and queues its value for collect. Locked.
+    void retireLocked(std::uint32_t index, std::uint64_t token) {
+        endLocked(index);
+        retired_.push_back({.index = index, .token = token});
     }
 
     // Adds count pages; their slots join the free list in index order. Locked.
