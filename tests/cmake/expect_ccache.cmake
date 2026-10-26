@@ -1,7 +1,7 @@
 # Configures the real project with fake launchers, then checks which one the
 # generated compile rules go through. The sanitizer tests supply the targets.
 # USE is BFR_USE_CCACHE, USER_LAUNCHER is ON when the user passes their own
-# CMAKE_CXX_COMPILER_LAUNCHER, and EXPECT is "ccache", "user" or "none".
+# C and C++ launchers, and EXPECT is "ccache", "user" or "none".
 set(tools ${BINARY_DIR}_tools)
 file(REMOVE_RECURSE ${BINARY_DIR} ${tools})
 foreach(tool ccache user)
@@ -12,7 +12,7 @@ endforeach()
 
 set(user_arg "")
 if(USER_LAUNCHER)
-    set(user_arg -DCMAKE_CXX_COMPILER_LAUNCHER=${tools}/user)
+    set(user_arg -DCMAKE_C_COMPILER_LAUNCHER=${tools}/user -DCMAKE_CXX_COMPILER_LAUNCHER=${tools}/user)
 endif()
 
 execute_process(

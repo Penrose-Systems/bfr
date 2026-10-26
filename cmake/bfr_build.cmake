@@ -34,3 +34,13 @@ function(bfr_add_header_check target public_dir)
     target_link_libraries(${target}_headers PRIVATE ${target})
     bfr_apply_compiler_flags(${target}_headers)
 endfunction()
+
+# A C header also compiles on its own as C: <target>_c_headers compiles one
+# generated .c source that includes only header, with the strict warnings.
+function(bfr_add_c_header_check target header)
+    set(check ${CMAKE_CURRENT_BINARY_DIR}/header_checks/${target}/${header}.c)
+    file(CONFIGURE OUTPUT ${check} CONTENT "#include \"${header}\"\n")
+    add_library(${target}_c_headers OBJECT ${check})
+    target_include_directories(${target}_c_headers PRIVATE $<TARGET_PROPERTY:${target},INTERFACE_INCLUDE_DIRECTORIES>)
+    bfr_apply_compiler_flags(${target}_c_headers)
+endfunction()

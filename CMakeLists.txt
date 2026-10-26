@@ -6,23 +6,30 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND NOT DEFINED CMAKE_TOOL
    AND DEFINED ENV{VCPKG_ROOT})
     set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE FILEPATH "")
 endif()
-project(bfr LANGUAGES CXX)
+project(bfr LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# C only for checking that the C API header compiles as C.
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
 # No C++ modules (code_style.md), so no dependency scan for them.
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 # Every build writes compile_commands.json for clangd and clang-tidy.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Compile through ccache when it is installed. A launcher the user sets wins.
+# Compile through ccache when it is installed. A launcher the user sets for a
+# language wins for that language.
 option(BFR_USE_CCACHE "Compile through ccache when it is installed" ON)
-if(BFR_USE_CCACHE AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
+if(BFR_USE_CCACHE)
     find_program(BFR_CCACHE ccache)
-    if(BFR_CCACHE)
-        set(CMAKE_CXX_COMPILER_LAUNCHER ${BFR_CCACHE})
-    endif()
+    foreach(language C CXX)
+        if(BFR_CCACHE AND NOT CMAKE_${language}_COMPILER_LAUNCHER)
+            set(CMAKE_${language}_COMPILER_LAUNCHER ${BFR_CCACHE})
+        endif()
+    endforeach()
 endif()
 
 option(BFR_LOGGING "Compile the BFR_LOG_* calls in" ON)
@@ -108,6 +115,7 @@ target_link_libraries(bfr
     PRIVATE nlohmann_json::nlohmann_json SDL3::SDL3 volk::volk_headers Vulkan::UtilityHeaders ${CMAKE_DL_LIBS})
 target_compile_definitions(bfr PUBLIC BFR_LOGGING_ENABLED=$<BOOL:${BFR_LOGGING}>)
 bfr_add_header_check(bfr ${CMAKE_CURRENT_SOURCE_DIR}/include/bfr/public)
+bfr_add_c_header_check(bfr bfr.h)
 
 # The window systems the Vulkan backend makes surfaces on. Only volk and the
 # surface code see them: the Xlib and Windows headers they pull in define

@@ -1,0 +1,227 @@
+# The BFR API. tools/gen_c_api.py generates include/bfr/public/bfr.h from this
+# file, and the wrappers are generated from it too.
+#
+# Names are snake_case without the bfr_ prefix; the generator adds it.
+#
+# Types: bool, u32, u64, i32, size, opaque (void*), string, or a name declared
+# here. An object type (instance, device) is already a pointer.
+#
+# Members and params may have:
+#   pointer: in | out | inout   passed by pointer; in is const
+#   array: <name>               a pointer to elements, counted by <name>
+#   optional: true              may be null
+#   lifetime: <object>          returned data stays valid while <object> lives
+#
+# Every enum value is explicit, so the ABI never depends on order. Quote a doc
+# that has a comma in it: in {...} a comma ends the value.
+
+version: {major: 0, minor: 1, patch: 0}
+
+enums:
+  result:
+    doc: >-
+      What a call did. Errors are negative. bfr_get_last_error gives the
+      message for the calling thread's last error.
+    values:
+      success: {value: 0, doc: The call did what was asked.}
+      incomplete: {value: 1, doc: The caller's array was too small; the count says how many were written.}
+      error_invalid_argument: {value: -1, doc: A required pointer was null or a value was out of range.}
+      error_out_of_memory: {value: -2, doc: An allocation failed.}
+      error_instance_failed: {value: -3, doc: The backend refused to create the instance.}
+      error_loader_failed: {value: -4, doc: The backend's library could not be loaded.}
+      error_validation_unavailable: {value: -5, doc: Validation was asked for but the layer is missing.}
+      error_no_adapter: {value: -6, doc: No adapter meets BFR's hardware floor.}
+      error_device_failed: {value: -7, doc: The backend refused to create the device.}
+      error_device_lost: {value: -8, doc: The device was lost. Every later call on it returns this.}
+      error_invalid_handle: {value: -9, doc: "A handle is stale, destroyed or from another device."}
+      error_surface_failed: {value: -10, doc: No surface could be made for the window.}
+      error_surface_lost: {value: -11, doc: The window's surface is gone; recreate the swapchain.}
+      error_present_unsupported: {value: -12, doc: The device's queue cannot present to the window.}
+      error_swapchain_failed: {value: -13, doc: The backend refused to create or resize the swapchain.}
+      error_out_of_date: {value: -14, doc: The swapchain no longer matches the window; resize it.}
+
+  backend:
+    doc: The native API an instance runs on.
+    values:
+      vulkan: {value: 1, doc: Vulkan 1.3.}
+      d3d12: {value: 2, doc: "D3D12, Shader Model 6.6 with enhanced barriers."}
+      metal: {value: 3, doc: Metal 4.}
+
+  adapter_type:
+    doc: What kind of GPU an adapter is.
+    values:
+      other: {value: 0, doc: None of the others.}
+      discrete: {value: 1, doc: A separate GPU.}
+      integrated: {value: 2, doc: A GPU sharing the CPU's memory.}
+      virtual: {value: 3, doc: A GPU in a virtual machine.}
+      cpu: {value: 4, doc: A software renderer.}
+
+  message_severity:
+    doc: How serious a message is.
+    values:
+      info: {value: 1, doc: For information.}
+      warning: {value: 2, doc: Likely a mistake.}
+      error: {value: 3, doc: Invalid use of the API; behaviour is undefined after it.}
+
+objects:
+  instance: {doc: One backend in this process. Several may exist at once.}
+  device: {doc: An open adapter. Creates and owns every handle.}
+
+handles:
+  swapchain: {doc: The images presented to one window.}
+
+callbacks:
+  message_callback:
+    doc: >-
+      Receives validation and diagnostic messages. Called on any thread,
+      including threads BFR or the driver owns.
+    params:
+      - {name: severity, type: message_severity}
+      - {name: message, type: string, doc: Valid only during the call.}
+      - {name: user_data, type: opaque, optional: true}
+
+structs:
+  instance_desc:
+    doc: How to create an instance.
+    extensible: true
+    members:
+      - {name: backend, type: backend}
+      - {name: validation, type: bool, doc: Enable the backend's validation layer.}
+      - {name: message_callback, type: message_callback, optional: true}
+      - {name: message_user_data, type: opaque, optional: true, doc: Passed to message_callback.}
+
+  adapter_info:
+    doc: An adapter, as an instance lists it. Nothing is opened.
+    members:
+      - {name: name, type: string, lifetime: instance}
+      - {name: type, type: adapter_type}
+
+  device_desc:
+    doc: How to open an adapter.
+    extensible: true
+    members:
+      - {name: adapter, type: u32, doc: Index into the instance's adapter list.}
+
+  swapchain_desc:
+    doc: How to create a swapchain. Chain exactly one window struct.
+    extensible: true
+    members:
+      - {name: image_count, type: u32, doc: Images to request; 0 asks for 3.}
+
+  swapchain_images:
+    doc: A swapchain's current images.
+    members:
+      - {name: width, type: u32}
+      - {name: height, type: u32}
+      - {name: count, type: u32}
+
+  window_xlib:
+    doc: An Xlib window.
+    extends: [device_desc, swapchain_desc]
+    struct_type: 1
+    members:
+      - {name: display, type: opaque, doc: The Display*.}
+      - {name: window, type: u64, doc: The Window XID.}
+
+  window_wayland:
+    doc: A Wayland surface.
+    extends: [device_desc, swapchain_desc]
+    struct_type: 2
+    members:
+      - {name: display, type: opaque, doc: The wl_display*.}
+      - {name: surface, type: opaque, doc: The wl_surface*.}
+
+  window_win32:
+    doc: A Win32 window.
+    extends: [device_desc, swapchain_desc]
+    struct_type: 3
+    members:
+      - {name: instance, type: opaque, doc: The HINSTANCE.}
+      - {name: window, type: opaque, doc: The HWND.}
+
+  window_metal:
+    doc: A Core Animation Metal layer.
+    extends: [device_desc, swapchain_desc]
+    struct_type: 4
+    members:
+      - {name: layer, type: opaque, doc: The CAMetalLayer*.}
+
+  window_headless:
+    doc: No window. Images are presented nowhere; for tests and offscreen tools.
+    extends: [device_desc, swapchain_desc]
+    struct_type: 5
+    members: []
+
+functions:
+  get_last_error:
+    doc: >-
+      The message for the calling thread's last error. Valid until that
+      thread's next BFR call.
+    returns: string
+    params: []
+
+  create_instance:
+    doc: Creates an instance and lists its adapters.
+    returns: result
+    params:
+      - {name: desc, type: instance_desc, pointer: in}
+      - {name: instance, type: instance, pointer: out}
+
+  destroy_instance:
+    doc: Destroys an instance. Its devices must be destroyed first. Null does nothing.
+    params:
+      - {name: instance, type: instance, optional: true}
+
+  instance_get_adapters:
+    doc: >-
+      Lists the instance's adapters. With adapters null, writes how many
+      there are to count. Otherwise writes up to count of them, sets count
+      to how many it wrote, and returns incomplete if there were more.
+    returns: result
+    params:
+      - {name: instance, type: instance}
+      - {name: count, type: u32, pointer: inout}
+      - {name: adapters, type: adapter_info, array: count, pointer: out, optional: true}
+
+  instance_create_device:
+    doc: >-
+      Opens an adapter. Chain a window struct to pick a queue that can
+      present to it.
+    returns: result
+    params:
+      - {name: instance, type: instance}
+      - {name: desc, type: device_desc, pointer: in}
+      - {name: device, type: device, pointer: out}
+
+  destroy_device:
+    doc: >-
+      Destroys a device once the GPU has finished with it, with every
+      handle it still owns. Null does nothing.
+    params:
+      - {name: device, type: device, optional: true}
+
+  device_create_swapchain:
+    doc: Creates a swapchain for the window chained to desc.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: swapchain_desc, pointer: in}
+      - {name: swapchain, type: swapchain, pointer: out}
+
+  device_resize_swapchain:
+    doc: Rebuilds a swapchain's images at a new size.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: swapchain, type: swapchain}
+      - {name: width, type: u32}
+      - {name: height, type: u32}
+      - {name: images, type: swapchain_images, pointer: out}
+
+  device_destroy_swapchain:
+    doc: >-
+      Destroys a swapchain once the GPU has finished with it. A handle that
+      is already destroyed does nothing.
+    params:
+      - {name: device, type: device}
+      - {name: swapchain, type: swapchain}
