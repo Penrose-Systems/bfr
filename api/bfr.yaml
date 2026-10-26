@@ -170,7 +170,10 @@ functions:
       - {name: instance, type: instance, pointer: out}
 
   destroy_instance:
-    doc: Destroys an instance. Its devices must be destroyed first. Null does nothing.
+    doc: >-
+      Destroys an instance. One with devices left lives on until the last of
+      them is destroyed, so they may be destroyed in any order. Null does
+      nothing.
     params:
       - {name: instance, type: instance, optional: true}
 

@@ -23,11 +23,15 @@
 #include <utility>
 #include <variant>
 
+// Shares the Rhi with its devices, which keep it alive: garbage-collected
+// wrappers destroy them in no fixed order.
 struct bfr_instance {
-    std::unique_ptr<bfr::rhi::Rhi> rhi;
+    std::shared_ptr<bfr::rhi::Rhi> rhi;
 };
 
+// The Rhi comes first so that it outlives the device it made.
 struct bfr_device {
+    std::shared_ptr<bfr::rhi::Rhi> rhi;
     std::unique_ptr<bfr::rhi::Device> device;
 };
 
@@ -280,7 +284,8 @@ bfr_result bfr_instance_create_device(bfr_instance* instance, const bfr_device_d
             return fail(created.error());
         }
         // The caller owns it until bfr_destroy_device.
-        *device = std::make_unique<bfr_device>(bfr_device{.device = std::move(*created)}).release();
+        *device =
+            std::make_unique<bfr_device>(bfr_device{.rhi = instance->rhi, .device = std::move(*created)}).release();
         return BFR_RESULT_SUCCESS;
     });
 }

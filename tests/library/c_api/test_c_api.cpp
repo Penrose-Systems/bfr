@@ -7,6 +7,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -175,6 +176,18 @@ TEST_CASE("C API reports a destroyed swapchain as invalid and destroys it again 
           BFR_RESULT_ERROR_INVALID_HANDLE);
     bfr_device_destroy_swapchain(device.device, swapchain);
     CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("stale"));
+}
+
+TEST_CASE("C API keeps an instance alive until its last device is destroyed", "[c_api][gpu]") {
+    std::vector<std::string> messages;
+    auto instance = std::make_unique<Instance>(messages);
+    const HeadlessDevice device{instance->instance};
+    instance.reset();
+    const bfr_swapchain_desc desc{.next = &kHeadless.chain, .image_count = 0};
+    bfr_swapchain swapchain{};
+
+    CHECK(bfr_device_create_swapchain(device.device, &desc, &swapchain) == BFR_RESULT_SUCCESS);
+    bfr_device_destroy_swapchain(device.device, swapchain);
 }
 
 TEST_CASE("C API needs exactly one window on a swapchain", "[c_api][gpu]") {

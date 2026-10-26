@@ -245,7 +245,8 @@ BFR_API bfr_string bfr_get_last_error(void);
 // Creates an instance and lists its adapters.
 BFR_API bfr_result bfr_create_instance(const bfr_instance_desc* desc, bfr_instance** instance);
 
-// Destroys an instance. Its devices must be destroyed first. Null does nothing.
+// Destroys an instance. One with devices left lives on until the last of them is destroyed, so they
+// may be destroyed in any order. Null does nothing.
 // instance: May be null.
 BFR_API void bfr_destroy_instance(bfr_instance* instance);
 

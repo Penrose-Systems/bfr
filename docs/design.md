@@ -257,6 +257,9 @@ hand-written wrappers would each drift from the header.
   message callback. Everything else is polled: pipeline readiness by query,
   device loss by result. Reason: calling into C# or Python from a driver
   thread is costly and easy to get wrong.
+- Destroy calls may come in any order: a device keeps its instance alive
+  until the device is destroyed. Reason: garbage collectors finalize in no
+  fixed order.
 - Calls that would be made once per item take arrays. Reason: a call from
   Python costs microseconds.
 - `bfr.h` compiles as C11 and C++. The shared library exports only `bfr_*`
