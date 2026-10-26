@@ -6,9 +6,11 @@
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -188,6 +190,62 @@ TEST_CASE("C API keeps an instance alive until its last device is destroyed", "[
 
     CHECK(bfr_device_create_swapchain(device.device, &desc, &swapchain) == BFR_RESULT_SUCCESS);
     bfr_device_destroy_swapchain(device.device, swapchain);
+}
+
+TEST_CASE("C API creates and destroys swapchains on one device from many threads", "[c_api][gpu]") {
+    constexpr int kThreads = 4;
+    constexpr int kEach = 8;
+    std::vector<std::string> messages;
+    const Instance instance{messages};
+    const HeadlessDevice device{instance.instance};
+    std::atomic<int> failed{0};
+    {
+        std::vector<std::jthread> threads;
+        threads.reserve(kThreads);
+        for (int thread = 0; thread < kThreads; ++thread) {
+            threads.emplace_back([&device, &failed] {
+                const bfr_swapchain_desc desc{.next = &kHeadless.chain, .image_count = 0};
+                for (int i = 0; i < kEach; ++i) {
+                    bfr_swapchain swapchain{};
+                    bfr_swapchain_images images{};
+                    if (bfr_device_create_swapchain(device.device, &desc, &swapchain) != BFR_RESULT_SUCCESS ||
+                        bfr_device_resize_swapchain(device.device, swapchain, kWidth, kHeight, &images) !=
+                            BFR_RESULT_SUCCESS) {
+                        ++failed;
+                    }
+                    bfr_device_destroy_swapchain(device.device, swapchain);
+                }
+            });
+        }
+    }
+
+    CHECK(failed == 0);
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C API reports when a device holds all the swapchains it can", "[c_api][gpu]") {
+    // Far past any limit a device sets, so the loop always ends.
+    constexpr int kTries = 4096;
+    std::vector<std::string> messages;
+    const Instance instance{messages};
+    const HeadlessDevice device{instance.instance};
+    const bfr_swapchain_desc desc{.next = &kHeadless.chain, .image_count = 0};
+    std::vector<bfr_swapchain> made;
+    bfr_result result = BFR_RESULT_SUCCESS;
+
+    for (int i = 0; i < kTries && result == BFR_RESULT_SUCCESS; ++i) {
+        bfr_swapchain swapchain{};
+        result = bfr_device_create_swapchain(device.device, &desc, &swapchain);
+        if (result == BFR_RESULT_SUCCESS) {
+            made.push_back(swapchain);
+        }
+    }
+
+    CHECK(result == BFR_RESULT_ERROR_LIMIT_REACHED);
+    CHECK_FALSE(made.empty());
+    for (const bfr_swapchain swapchain : made) {
+        bfr_device_destroy_swapchain(device.device, swapchain);
+    }
 }
 
 TEST_CASE("C API needs exactly one window on a swapchain", "[c_api][gpu]") {

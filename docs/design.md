@@ -108,6 +108,9 @@ encoder switching needs lookahead.
 
 - `destroy(handle)` is deferred: the object is freed once every queue has
   passed the values submitted before the call. The handle is invalid at once.
+  Each handle table retires an object against the last submitted value and
+  frees it when that value completes. Until queues submit, every value has
+  completed, so objects are freed during the destroy call.
 - Destroying an object an unsubmitted command list references is a usage
   error, caught by validation.
 - Residency is part of the core contract, not a backend detail. Bindless
@@ -208,6 +211,12 @@ encoder switching needs lookahead.
 - Creation and destruction on a device are safe from any thread.
   Destroying a handle that is already gone does nothing. Reason: C# and
   Python wrappers destroy from garbage-collector finalizers.
+- Looking up a handle takes no lock: recording resolves handles on every
+  command, from many threads. Creation and destruction lock only to take or
+  give back a slot; objects are built and destroyed outside the lock. Each
+  object type has a fixed maximum per device; past it creation fails with
+  `limit_reached`. Reason: the slot table is sized once, so lookups never see
+  it move.
 - A command list is used by one thread at a time.
 - Submission to one queue is externally synchronized; different queues may
   submit concurrently.

@@ -40,9 +40,11 @@ private:
     // device's functions, and two adapters can have different drivers.
     VolkDeviceTable table_{};
     std::uint32_t presentFamily_;
-    // Room for a few windows' swapchains before the pool grows.
+    // Room for a few windows' swapchains before the pool grows, and a limit no
+    // tool should reach.
     static constexpr std::uint32_t kSwapchainCapacity = 4;
-    core::Pool<VulkanSwapchain, Swapchain> swapchains_{"swapchains", kSwapchainCapacity};
+    static constexpr std::uint32_t kSwapchainLimit = 256;
+    core::Pool<VulkanSwapchain, Swapchain> swapchains_{"swapchains", kSwapchainCapacity, kSwapchainLimit};
 };
 
 } // namespace bfr::rhi::vulkan

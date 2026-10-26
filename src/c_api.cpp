@@ -81,6 +81,8 @@ bfr_result resultFor(ErrorCode code) {
             return BFR_RESULT_ERROR_PRESENT_UNSUPPORTED;
         case ErrorCode::RhiSwapchainFailed:
             return BFR_RESULT_ERROR_SWAPCHAIN_FAILED;
+        case ErrorCode::RhiLimitReached:
+            return BFR_RESULT_ERROR_LIMIT_REACHED;
         // The display and config are not behind the C API.
         case ErrorCode::DisplayAlreadyInitialised:
         case ErrorCode::DisplayNotInitialised:

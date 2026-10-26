@@ -3,11 +3,14 @@
 #include "handle.h"
 #include "log.h"
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -15,77 +18,149 @@
 
 namespace bfr::core {
 
-/// Owns values of T, each named by a Handle<Tag>. The capacity given at
-/// construction is allocated up front; past it the pool grows a page at a time
-/// and logs a warning with its new capacity, a sign that capacity should be
-/// larger. Values never move while they live. Erasing a value moves its slot to
-/// the next generation, so the value's handles stop finding anything.
+/// Owns values of T, each named by a Handle<Tag>.
+///
+/// Room: capacity values are allocated up front, in whole pages. Past that the
+/// pool grows a page at a time, logging a warning with its new capacity, a
+/// sign that capacity should be larger. It holds at most maxCapacity values,
+/// counting retired ones not yet collected; past that emplace fails. Values
+/// never move while they live.
+///
+/// Threads: every call is safe from any thread at once. find takes no lock.
+/// The other calls lock only to take or give back a slot; values are made and
+/// destroyed outside the lock, so a slow constructor or destructor holds no
+/// one up and may use the pool itself. Using one value from two threads at
+/// once is the caller's to synchronize.
+///
+/// Lifetime: retire ends a handle at once, so find stops finding it, but its
+/// value lives on until collect is told that the token it was retired with has
+/// completed. The device retires against GPU progress, so nothing the GPU may
+/// still use is destroyed.
 template <class T, class Tag = T>
 class Pool {
 public:
     static constexpr std::uint32_t kPageSize = 64;
 
-    /// Room for capacity values, rounded up to whole pages. name labels the
-    /// growth warning and must outlive the pool.
-    Pool(std::string_view name, std::uint32_t capacity) : name_(name) {
-        const std::uint32_t pages = (capacity + kPageSize - 1) / kPageSize;
-        if (pages != 0) {
-            addPages(pages);
-        }
+    /// Room for capacity values now, rounded up to whole pages, and for
+    /// maxCapacity at most. name labels the growth warning and must outlive the
+    /// pool.
+    Pool(std::string_view name, std::uint32_t capacity, std::uint32_t maxCapacity)
+        : name_(name), maxCapacity_(maxCapacity), pages_(pagesFor(maxCapacity)) {
+        const std::scoped_lock lock{mutex_};
+        addPages(std::min(pagesFor(capacity), maxPages()));
     }
 
-    ~Pool() { destroyLive(); }
+    ~Pool() { clear(); }
     Pool(const Pool&) = delete;
     Pool& operator=(const Pool&) = delete;
     Pool(Pool&&) = delete;
     Pool& operator=(Pool&&) = delete;
 
-    /// Makes a value from args and returns its handle.
+    /// Makes a value from args and returns its handle; a null handle when the
+    /// pool is at its maximum.
     template <class... Args>
     Handle<Tag> emplace(Args&&... args) {
-        if (free_ == kNoFree) {
-            addPages(1);
-            BFR_LOG_WARN("Pool {} grew to {} entries", name_, capacity_);
+        const std::uint32_t index = take();
+        if (index == kNoFree) {
+            return {};
         }
-        const std::uint32_t index = free_;
         Entry& entry = entryAt(index);
-        const std::uint32_t next = entry.nextFree;
-        std::construct_at(&entry.value, std::forward<Args>(args)...);
-        free_ = next;
-        std::uint32_t& generation = generationAt(index);
-        ++generation; // odd: live
-        ++size_;
-        return {.index = index, .generation = generation};
+        try {
+            std::construct_at(&entry.value, std::forward<Args>(args)...);
+        } catch (...) {
+            const std::scoped_lock lock{mutex_};
+            give(index);
+            throw;
+        }
+        // Odd: live. Released, so a find that sees it sees the value made.
+        std::atomic<std::uint32_t>& generation = generationAt(index);
+        const std::uint32_t live = generation.load(std::memory_order_relaxed) + 1;
+        generation.store(live, std::memory_order_release);
+        size_.fetch_add(1, std::memory_order_relaxed);
+        return {.index = index, .generation = live};
     }
 
-    /// The value handle names; null when handle is null or erased.
-    [[nodiscard]] T* find(Handle<Tag> handle) { return live(handle) ? &entryAt(handle.index).value : nullptr; }
+    /// The value handle names; null when handle is null, retired, or never
+    /// made by this pool. Takes no lock.
+    [[nodiscard]] T* find(Handle<Tag> handle) {
+        if ((handle.generation & 1U) == 0 || (handle.index >> kPageShift) >= maxPages()) {
+            return nullptr;
+        }
+        Page* page = pages_[handle.index >> kPageShift].load(std::memory_order_acquire);
+        if (page == nullptr) {
+            return nullptr;
+        }
+        const std::uint32_t slot = handle.index & (kPageSize - 1);
+        if (std::span{page->generations}[slot].load(std::memory_order_acquire) != handle.generation) {
+            return nullptr;
+        }
+        return &std::span{page->entries}[slot].value;
+    }
 
-    /// Destroys the value handle names; false when handle is null or erased.
-    bool erase(Handle<Tag> handle) {
-        if (!live(handle)) {
+    /// Ends handle at once; its value is destroyed by the first collect told
+    /// that token has completed. False when handle is null or already retired.
+    bool retire(Handle<Tag> handle, std::uint64_t token) {
+        const std::scoped_lock lock{mutex_};
+        // Under the lock, so of two retires of one handle only one passes.
+        if (find(handle) == nullptr) {
             return false;
         }
-        release(handle.index);
-        --size_;
+        retireLocked(handle.index, token);
         return true;
     }
 
-    /// Destroys every value; their handles stop finding anything.
-    void clear() {
-        destroyLive();
-        size_ = 0;
+    /// Destroys the values retired with a token at or before completed and
+    /// frees their slots.
+    void collect(std::uint64_t completed) {
+        std::vector<std::uint32_t> ready;
+        {
+            const std::scoped_lock lock{mutex_};
+            const auto done = std::ranges::partition(retired_, [completed](const Retired& retired) {
+                return retired.token > completed;
+            });
+            ready.reserve(done.size());
+            for (const Retired& retired : done) {
+                ready.push_back(retired.index);
+            }
+            retired_.erase(done.begin(), done.end());
+        }
+        for (const std::uint32_t index : ready) {
+            std::destroy_at(&entryAt(index).value);
+        }
+        const std::scoped_lock lock{mutex_};
+        for (const std::uint32_t index : ready) {
+            give(index);
+        }
     }
 
-    [[nodiscard]] std::uint32_t size() const { return size_; }
-    [[nodiscard]] std::uint32_t capacity() const { return capacity_; }
+    /// Retires every live value and destroys every retired one, whatever its
+    /// token: for when nothing can still be using them.
+    void clear() {
+        {
+            const std::scoped_lock lock{mutex_};
+            for (std::uint32_t index = 0; index < pageCount_ * kPageSize; ++index) {
+                if ((generationAt(index).load(std::memory_order_relaxed) & 1U) != 0) {
+                    retireLocked(index, 0);
+                }
+            }
+        }
+        collect(std::numeric_limits<std::uint64_t>::max());
+    }
+
+    /// Live values: made and not yet retired.
+    [[nodiscard]] std::uint32_t size() const { return size_.load(std::memory_order_relaxed); }
+
+    [[nodiscard]] std::uint32_t capacity() const {
+        const std::scoped_lock lock{mutex_};
+        return pageCount_ * kPageSize;
+    }
 
 private:
     static_assert(std::has_single_bit(kPageSize));
     static constexpr std::uint32_t kPageShift = std::countr_zero(kPageSize);
     static constexpr std::uint32_t kNoFree = std::numeric_limits<std::uint32_t>::max();
 
-    // A live entry holds its value; a free one, the next free index.
+    // A live or retired entry holds its value; a free one, the next free index.
     union Entry {
         Entry() : nextFree(kNoFree) {}
         ~Entry() {}
@@ -99,61 +174,94 @@ private:
     };
 
     // Generations apart from entries, so checking a handle reads only them. An
-    // odd generation is live; 0, a null handle's, never is.
+    // odd generation is live; even is free or retired; 0, a null handle's, is
+    // never live.
     struct Page {
-        std::array<std::uint32_t, kPageSize> generations{};
+        std::array<std::atomic<std::uint32_t>, kPageSize> generations{};
         std::array<Entry, kPageSize> entries;
     };
 
-    Entry& entryAt(std::uint32_t index) {
-        return std::span{pages_[index >> kPageShift]->entries}[index & (kPageSize - 1)];
+    struct Retired {
+        std::uint32_t index;
+        std::uint64_t token;
+    };
+
+    static std::uint32_t pagesFor(std::uint32_t count) { return (count + kPageSize - 1) / kPageSize; }
+
+    [[nodiscard]] std::uint32_t maxPages() const { return static_cast<std::uint32_t>(pages_.size()); }
+
+    Page& pageAt(std::uint32_t index) { return *pages_[index >> kPageShift].load(std::memory_order_acquire); }
+
+    Entry& entryAt(std::uint32_t index) { return std::span{pageAt(index).entries}[index & (kPageSize - 1)]; }
+
+    std::atomic<std::uint32_t>& generationAt(std::uint32_t index) {
+        return std::span{pageAt(index).generations}[index & (kPageSize - 1)];
     }
 
-    std::uint32_t& generationAt(std::uint32_t index) {
-        return std::span{pages_[index >> kPageShift]->generations}[index & (kPageSize - 1)];
+    // Takes a free slot, growing a page if there is none; kNoFree at the maximum.
+    std::uint32_t take() {
+        const std::scoped_lock lock{mutex_};
+        if (taken_ == maxCapacity_) {
+            return kNoFree;
+        }
+        if (free_ == kNoFree) {
+            addPages(1);
+            BFR_LOG_WARN("Pool {} grew to {} entries", name_, pageCount_ * kPageSize);
+        }
+        const std::uint32_t index = free_;
+        free_ = entryAt(index).nextFree;
+        ++taken_;
+        return index;
     }
 
-    [[nodiscard]] bool live(Handle<Tag> handle) {
-        return handle.index < capacity_ && (handle.generation & 1U) != 0 &&
-               generationAt(handle.index) == handle.generation;
+    // Puts a slot whose value is gone at the head of the free list. Locked.
+    void give(std::uint32_t index) {
+        pushFree(index);
+        --taken_;
     }
 
-    // Destroys the value and puts its slot at the head of the free list.
-    void release(std::uint32_t index) {
-        Entry& entry = entryAt(index);
-        std::destroy_at(&entry.value);
-        entry.nextFree = free_;
+    // Puts a slot at the head of the free list. Locked.
+    void pushFree(std::uint32_t index) {
+        entryAt(index).nextFree = free_;
         free_ = index;
-        ++generationAt(index); // even: free
     }
 
-    void destroyLive() {
-        for (std::uint32_t index = 0; index < capacity_; ++index) {
-            if ((generationAt(index) & 1U) != 0) {
-                release(index);
-            }
-        }
+    // Moves a live slot to its next, even, generation and queues its value.
+    // Locked.
+    void retireLocked(std::uint32_t index, std::uint64_t token) {
+        std::atomic<std::uint32_t>& generation = generationAt(index);
+        generation.store(generation.load(std::memory_order_relaxed) + 1, std::memory_order_release);
+        retired_.push_back({.index = index, .token = token});
+        size_.fetch_sub(1, std::memory_order_relaxed);
     }
 
-    // Adds count pages; their slots join the free list in index order.
+    // Adds count pages; their slots join the free list in index order. Locked.
     void addPages(std::uint32_t count) {
-        for (std::uint32_t page = 0; page < count; ++page) {
-            pages_.push_back(std::make_unique<Page>());
+        const std::uint32_t first = pageCount_ * kPageSize;
+        for (std::uint32_t added = 0; added < count; ++added) {
+            owned_.push_back(std::make_unique<Page>());
+            pages_[pageCount_].store(owned_.back().get(), std::memory_order_release);
+            ++pageCount_;
         }
-        const std::uint32_t first = capacity_;
-        capacity_ += count * kPageSize;
-        for (std::uint32_t index = capacity_; index-- > first;) {
-            entryAt(index).nextFree = free_;
-            free_ = index;
+        for (std::uint32_t index = pageCount_ * kPageSize; index-- > first;) {
+            pushFree(index);
         }
     }
 
     std::string_view name_;
-    // Grows only when the pool does.
-    std::vector<std::unique_ptr<Page>> pages_;
-    std::uint32_t capacity_ = 0;
-    std::uint32_t size_ = 0;
+    std::uint32_t maxCapacity_;
+    // One per page the pool may ever have, made once and never resized, so find
+    // reads it without the lock. A page is published here once it is ready.
+    std::vector<std::atomic<Page*>> pages_;
+    std::atomic<std::uint32_t> size_{0};
+    // Guards everything below.
+    mutable std::mutex mutex_;
+    std::vector<std::unique_ptr<Page>> owned_;
+    std::uint32_t pageCount_ = 0;
     std::uint32_t free_ = kNoFree;
+    // Slots off the free list: live, being made, or retired and not collected.
+    std::uint32_t taken_ = 0;
+    std::vector<Retired> retired_;
 };
 
 } // namespace bfr::core

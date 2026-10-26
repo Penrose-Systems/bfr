@@ -49,6 +49,8 @@ std::string_view name(ErrorCode code) noexcept {
             return "RhiPresentUnsupported";
         case ErrorCode::RhiSwapchainFailed:
             return "RhiSwapchainFailed";
+        case ErrorCode::RhiLimitReached:
+            return "RhiLimitReached";
     }
     return "Unknown";
 }

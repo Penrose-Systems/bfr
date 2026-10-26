@@ -12,9 +12,20 @@
 
 #include <cstdint>
 #include <expected>
+#include <format>
 #include <utility>
 
 namespace bfr::rhi::vulkan {
+
+namespace {
+
+// The GPU progress objects retire against. No queue submits yet, so nothing
+// retired can still be in use and token 0 has always completed; once queues
+// submit, a retire takes the last value submitted and a collect what has
+// completed.
+constexpr std::uint64_t kNothingSubmitted = 0;
+
+} // namespace
 
 VulkanDevice::VulkanDevice(VulkanRhi& rhi, VkPhysicalDevice adapter, VkDevice device, std::uint32_t presentFamily)
     : rhi_(&rhi), adapter_(adapter), device_(device), presentFamily_(presentFamily) {
@@ -27,7 +38,12 @@ core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::
     if (!surface) {
         return std::unexpected(std::move(surface.error()));
     }
-    return swapchains_.emplace(device_, table_, std::move(*surface), imageCount);
+    const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, std::move(*surface), imageCount);
+    if (swapchain.isNull()) {
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             std::format("a device holds at most {} swapchains", kSwapchainLimit));
+    }
+    return swapchain;
 }
 
 core::Result<SwapchainImages> VulkanDevice::resizeSwapchain(SwapchainHandle swapchain, std::uint32_t width,
@@ -45,7 +61,11 @@ core::Result<SwapchainImages> VulkanDevice::resizeSwapchain(SwapchainHandle swap
 }
 
 core::Result<void> VulkanDevice::destroySwapchain(SwapchainHandle swapchain) {
-    if (swapchain.isNull() || swapchains_.erase(swapchain)) {
+    if (swapchain.isNull()) {
+        return {};
+    }
+    if (swapchains_.retire(swapchain, kNothingSubmitted)) {
+        swapchains_.collect(kNothingSubmitted);
         return {};
     }
     return core::failure(core::ErrorCode::RhiInvalidHandle, "the swapchain handle is stale");

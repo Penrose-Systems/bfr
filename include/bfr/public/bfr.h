@@ -78,6 +78,8 @@ typedef enum bfr_result {
     BFR_RESULT_ERROR_BACKEND_UNAVAILABLE = -15,
     // BFR failed in a way it does not expect; the message says how.
     BFR_RESULT_ERROR_INTERNAL = -16,
+    // A fixed limit was reached, such as how many objects of one type a device holds.
+    BFR_RESULT_ERROR_LIMIT_REACHED = -17,
     BFR_RESULT_FORCE32 = 0x7FFFFFFF
 } bfr_result;
 

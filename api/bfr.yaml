@@ -41,6 +41,7 @@ enums:
       error_out_of_date: {value: -14, doc: The swapchain no longer matches the window; resize it.}
       error_backend_unavailable: {value: -15, doc: This build of BFR does not include the backend asked for.}
       error_internal: {value: -16, doc: BFR failed in a way it does not expect; the message says how.}
+      error_limit_reached: {value: -17, doc: "A fixed limit was reached, such as how many objects of one type a device holds."}
 
   backend:
     doc: The native API an instance runs on.

@@ -32,6 +32,7 @@ enum class ErrorCode : std::uint8_t {
     RhiInvalidHandle,
     RhiPresentUnsupported,
     RhiSwapchainFailed,
+    RhiLimitReached,
 };
 
 struct Error {
