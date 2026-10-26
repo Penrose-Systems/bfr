@@ -42,10 +42,14 @@ public:
     static constexpr std::uint32_t kPageSize = 64;
 
     /// Room for capacity values now, rounded up to whole pages, and for
-    /// maxCapacity at most. name labels the growth warning and must outlive the
-    /// pool.
+    /// maxCapacity at most, which a handle's index must be able to name:
+    /// Handle<Tag>::kMaxIndices or fewer. name labels the growth warning and
+    /// must outlive the pool.
     Pool(std::string_view name, std::uint32_t capacity, std::uint32_t maxCapacity)
-        : name_(name), maxCapacity_(maxCapacity), pages_(pagesFor(maxCapacity)) {
+        : name_(name), maxCapacity_(std::min(maxCapacity, Handle<Tag>::kMaxIndices)), pages_(pagesFor(maxCapacity_)) {
+        if (maxCapacity > maxCapacity_) {
+            BFR_LOG_ERROR("Pool {} asked for {} entries; a handle names at most {}", name_, maxCapacity, maxCapacity_);
+        }
         const std::scoped_lock lock{mutex_};
         addPages(std::min(pagesFor(capacity), maxPages()));
     }
@@ -73,25 +77,26 @@ public:
             throw;
         }
         // Odd: live. Released, so a find that sees it sees the value made.
-        std::atomic<std::uint32_t>& generation = generationAt(index);
-        const std::uint32_t live = generation.load(std::memory_order_relaxed) + 1;
+        std::atomic<std::uint64_t>& generation = generationAt(index);
+        const std::uint64_t live = generation.load(std::memory_order_relaxed) + 1;
         generation.store(live, std::memory_order_release);
         size_.fetch_add(1, std::memory_order_relaxed);
-        return {.index = index, .generation = live};
+        return {index, live};
     }
 
     /// The value handle names; null when handle is null, retired, or never
     /// made by this pool. Takes no lock.
     [[nodiscard]] T* find(Handle<Tag> handle) {
-        if ((handle.generation & 1U) == 0 || (handle.index >> kPageShift) >= maxPages()) {
+        const std::uint32_t index = handle.index();
+        if ((handle.generation() & 1U) == 0 || (index >> kPageShift) >= maxPages()) {
             return nullptr;
         }
-        Page* page = pages_[handle.index >> kPageShift].load(std::memory_order_acquire);
+        Page* page = pages_[index >> kPageShift].load(std::memory_order_acquire);
         if (page == nullptr) {
             return nullptr;
         }
-        const std::uint32_t slot = handle.index & (kPageSize - 1);
-        if (std::span{page->generations}[slot].load(std::memory_order_acquire) != handle.generation) {
+        const std::uint32_t slot = index & (kPageSize - 1);
+        if (std::span{page->generations}[slot].load(std::memory_order_acquire) != handle.generation()) {
             return nullptr;
         }
         return &std::span{page->entries}[slot].value;
@@ -105,7 +110,7 @@ public:
         if (find(handle) == nullptr) {
             return false;
         }
-        retireLocked(handle.index, token);
+        retireLocked(handle.index(), token);
         return true;
     }
 
@@ -157,6 +162,8 @@ public:
 
 private:
     static_assert(std::has_single_bit(kPageSize));
+    // find reads a generation without a lock.
+    static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
     static constexpr std::uint32_t kPageShift = std::countr_zero(kPageSize);
     static constexpr std::uint32_t kNoFree = std::numeric_limits<std::uint32_t>::max();
 
@@ -175,9 +182,9 @@ private:
 
     // Generations apart from entries, so checking a handle reads only them. An
     // odd generation is live; even is free or retired; 0, a null handle's, is
-    // never live.
+    // never live. 64 bits, so a slot never comes back to a generation it had.
     struct Page {
-        std::array<std::atomic<std::uint32_t>, kPageSize> generations{};
+        std::array<std::atomic<std::uint64_t>, kPageSize> generations{};
         std::array<Entry, kPageSize> entries;
     };
 
@@ -194,7 +201,7 @@ private:
 
     Entry& entryAt(std::uint32_t index) { return std::span{pageAt(index).entries}[index & (kPageSize - 1)]; }
 
-    std::atomic<std::uint32_t>& generationAt(std::uint32_t index) {
+    std::atomic<std::uint64_t>& generationAt(std::uint32_t index) {
         return std::span{pageAt(index).generations}[index & (kPageSize - 1)];
     }
 
@@ -229,7 +236,7 @@ private:
     // Moves a live slot to its next, even, generation and queues its value.
     // Locked.
     void retireLocked(std::uint32_t index, std::uint64_t token) {
-        std::atomic<std::uint32_t>& generation = generationAt(index);
+        std::atomic<std::uint64_t>& generation = generationAt(index);
         generation.store(generation.load(std::memory_order_relaxed) + 1, std::memory_order_release);
         retired_.push_back({.index = index, .token = token});
         size_.fetch_sub(1, std::memory_order_relaxed);

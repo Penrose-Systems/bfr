@@ -200,11 +200,15 @@ encoder switching needs lookahead.
 
 - Instance, device and command list are opaque pointers. Reason: recording
   is the hot path and a pointer needs no lookup.
-- Everything else is a generational 64-bit handle: slot index, generation,
-  type tag. Each type is its own struct, so the C compiler rejects a buffer
-  where a texture is expected. Scoped to one device; every call names the
-  device, so a handle needs no device ID. Reason: C-compatible, safe against
-  stale use, no reference counts.
+- Everything else is a generational 64-bit handle: a 24-bit slot index under
+  a 40-bit generation. Each type is its own struct, so the C compiler rejects
+  a buffer where a texture is expected, and every wrapper has a class per
+  type, so a handle carries no type tag. Scoped to one device; every call
+  names the device, so a handle needs no device ID. Reason: C-compatible,
+  safe against stale use, no reference counts. The generation grows by two
+  per reuse of a slot and the free list reuses the last slot freed, so 32
+  bits would come round after 2^31 destroy-and-create cycles on one slot, a
+  few days of churn for a tool; 40 bits never do.
 
 ### Threading
 

@@ -89,11 +89,39 @@ TEST_CASE("Pool gives a reused slot a new generation", "[core][unit]") {
 
     const Handle<int> second = pool.emplace(2);
 
-    CHECK(second.index == first.index);
-    CHECK(second.generation != first.generation);
+    CHECK(second.index() == first.index());
+    CHECK(second.generation() != first.generation());
     CHECK(pool.find(first) == nullptr);
     REQUIRE(pool.find(second) != nullptr);
     CHECK(*pool.find(second) == 2);
+}
+
+TEST_CASE("Handle packs its index under its generation", "[core][unit]") {
+    constexpr std::uint32_t kIndex = 5;
+    constexpr std::uint64_t kGeneration = std::uint64_t{1} << 36;
+    const Handle<int> handle{kIndex, kGeneration};
+
+    CHECK(handle.index() == kIndex);
+    CHECK(handle.generation() == kGeneration);
+    CHECK(handle.bits == (kGeneration << Handle<int>::kIndexBits | kIndex));
+    CHECK_FALSE(handle.isNull());
+}
+
+TEST_CASE("Pool finds nothing for a generation past 32 bits that a slot never had", "[core][unit]") {
+    Pool<int> pool{"test", 1, kLimit};
+    const Handle<int> handle = pool.emplace(1);
+    const Handle<int> forged{handle.index(), handle.generation() + (std::uint64_t{1} << 32)};
+
+    CHECK(forged != handle);
+    CHECK(pool.find(forged) == nullptr);
+    CHECK_FALSE(pool.retire(forged, 0));
+}
+
+TEST_CASE("Pool caps its maximum at what a handle can name", "[core][unit]") {
+    const Pool<int> pool{"test", 0, std::numeric_limits<std::uint32_t>::max()};
+
+    CHECK(pool.capacity() == 0);
+    CHECK(Handle<int>::kMaxIndices == (std::uint32_t{1} << Handle<int>::kIndexBits));
 }
 
 TEST_CASE("Pool finds nothing for a null handle", "[core][unit]") {

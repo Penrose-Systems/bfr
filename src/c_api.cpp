@@ -124,17 +124,13 @@ void quietly(Body&& body) noexcept {
     }
 }
 
-// A C handle's bits: the generation above the index, so 0 is the null handle.
-constexpr unsigned kGenerationShift = 32;
-constexpr std::uint64_t kIndexMask = 0xFFFFFFFFU;
-
+// A C handle is a Handle's bits, so the two convert by copy.
 bfr_swapchain toC(bfr::rhi::SwapchainHandle handle) {
-    return {.bits = (std::uint64_t{handle.generation} << kGenerationShift) | handle.index};
+    return {.bits = handle.bits};
 }
 
 bfr::rhi::SwapchainHandle fromC(bfr_swapchain handle) {
-    return {.index = static_cast<std::uint32_t>(handle.bits & kIndexMask),
-            .generation = static_cast<std::uint32_t>(handle.bits >> kGenerationShift)};
+    return bfr::rhi::SwapchainHandle::fromBits(handle.bits);
 }
 
 // The extension struct that chain heads. Every one starts with its bfr_chain,

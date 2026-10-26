@@ -280,18 +280,16 @@ TEST_CASE("Device treats a failed present query as no and empties the swapchain"
 TEST_CASE("Device fails with RhiInvalidHandle for a forged swapchain handle", "[rhi][gpu]") {
     // Past the pool's capacity; an unused slot with a live generation; the used
     // slot with a generation it never had; the used slot with a free one.
-    const SwapchainHandle forged = GENERATE(SwapchainHandle{.index = 100000, .generation = 1},
-                                            SwapchainHandle{.index = 3, .generation = 1},
-                                            SwapchainHandle{.index = 0, .generation = 7},
-                                            SwapchainHandle{.index = 0, .generation = 2});
-    INFO("index " << forged.index << ", generation " << forged.generation);
+    const SwapchainHandle forged = GENERATE(SwapchainHandle{100000, 1}, SwapchainHandle{3, 1}, SwapchainHandle{0, 7},
+                                            SwapchainHandle{0, 2});
+    INFO("index " << forged.index() << ", generation " << forged.generation());
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(messages)};
     const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainImages);
     INFO(failureOf(swapchain));
     REQUIRE(swapchain.has_value());
-    REQUIRE(swapchain->index == 0);
-    REQUIRE(swapchain->generation == 1);
+    REQUIRE(swapchain->index() == 0);
+    REQUIRE(swapchain->generation() == 1);
 
     const auto resized = headless.device->resizeSwapchain(forged, kWidth, kHeight);
     const auto destroyed = headless.device->destroySwapchain(forged);
