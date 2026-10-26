@@ -62,7 +62,7 @@ typedef enum bfr_result {
     BFR_RESULT_ERROR_DEVICE_FAILED = -7,
     // The device was lost. Every later call on it returns this.
     BFR_RESULT_ERROR_DEVICE_LOST = -8,
-    // A handle is stale, destroyed or from another device.
+    // A handle is stale or destroyed.
     BFR_RESULT_ERROR_INVALID_HANDLE = -9,
     // No surface could be made for the window.
     BFR_RESULT_ERROR_SURFACE_FAILED = -10,
