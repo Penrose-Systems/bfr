@@ -67,11 +67,22 @@ enums:
       error: {value: 3, doc: Invalid use of the API; behaviour is undefined after it.}
 
 objects:
-  instance: {doc: One backend in this process. Several may exist at once.}
-  device: {doc: An open adapter. Creates and owns every handle.}
+  instance:
+    doc: >-
+      One backend in this process. Several may exist at once. Do not destroy
+      it while another thread is calling a function on it.
+  device:
+    doc: >-
+      An open adapter. Creates and owns every handle. Its functions may be
+      called from several threads at once, except as a handle's doc says. Do
+      not destroy it while another thread is calling a function on it.
 
 handles:
-  swapchain: {doc: The images presented to one window.}
+  swapchain:
+    doc: >-
+      The images presented to one window. Calls on one swapchain must not
+      overlap, destroying it included; the caller synchronizes them. Different
+      swapchains may be used from different threads at once.
 
 callbacks:
   message_callback:
@@ -229,7 +240,8 @@ functions:
   device_destroy_swapchain:
     doc: >-
       Destroys a swapchain once the GPU has finished with it. A handle that
-      is already destroyed does nothing.
+      is already destroyed does nothing. Not while another thread is using
+      the swapchain.
     params:
       - {name: device, type: device}
       - {name: swapchain, type: swapchain}

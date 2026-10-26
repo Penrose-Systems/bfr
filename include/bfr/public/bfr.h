@@ -137,13 +137,18 @@ typedef struct bfr_chain {
     bfr_struct_type type;
 } bfr_chain;
 
-// One backend in this process. Several may exist at once.
+// One backend in this process. Several may exist at once. Do not destroy it while another thread is
+// calling a function on it.
 typedef struct bfr_instance bfr_instance;
 
-// An open adapter. Creates and owns every handle.
+// An open adapter. Creates and owns every handle. Its functions may be called from several threads
+// at once, except as a handle's doc says. Do not destroy it while another thread is calling a
+// function on it.
 typedef struct bfr_device bfr_device;
 
-// The images presented to one window. A generational handle; 0 is never valid.
+// The images presented to one window. Calls on one swapchain must not overlap, destroying it
+// included; the caller synchronizes them. Different swapchains may be used from different threads
+// at once. A generational handle; 0 is never valid.
 typedef struct bfr_swapchain {
     uint64_t bits;
 } bfr_swapchain;
@@ -288,7 +293,7 @@ BFR_API bfr_result bfr_device_resize_swapchain(
     bfr_swapchain_images* images);
 
 // Destroys a swapchain once the GPU has finished with it. A handle that is already destroyed does
-// nothing.
+// nothing. Not while another thread is using the swapchain.
 BFR_API void bfr_device_destroy_swapchain(bfr_device* device, bfr_swapchain swapchain);
 
 #ifdef __cplusplus
