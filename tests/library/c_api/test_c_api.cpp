@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -20,8 +21,10 @@ std::string lastError() {
     return {error.data, error.length};
 }
 
-// Records every message the instance reports.
+// Records every message the instance reports, from whichever thread reports it.
 void record(bfr_message_severity /*severity*/, bfr_string message, void* userData) {
+    static std::mutex mutex;
+    const std::scoped_lock lock{mutex};
     static_cast<std::vector<std::string>*>(userData)->emplace_back(message.data, message.length);
 }
 
