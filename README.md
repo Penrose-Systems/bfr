@@ -3,14 +3,14 @@
 Babel Fish RHI: one GPU API over Vulkan, D3D12 and Metal, in C, with wrappers
 for C++, C#, Rust and Python.
 
-## Status (2026-10-25)
+## Status (2026-10-26)
 
-Early. Today: a C API, [`bfr.h`](include/bfr/public/bfr.h), over a Vulkan
-backend tested on Linux. It covers instances, adapters, devices and
-swapchains.
+Early. Today: a C API, [`bfr.h`](include/bfr/public/bfr.h), and its C++
+wrapper, [`bfr.hpp`](bindings/cpp/include/bfr.hpp), over a Vulkan backend
+tested on Linux. They cover instances, adapters, devices and swapchains.
 
 Planned: the rest of the core API below, a render graph, D3D12 and Metal
-backends, and the C++, C#, Rust and Python wrappers.
+backends, and the C#, Rust and Python wrappers.
 
 ## Design
 
@@ -44,7 +44,31 @@ target_link_libraries(your_app PRIVATE bfr)   # static
 
 Include `bfr.h`. Dependencies come from vcpkg; see [`vcpkg.json`](vcpkg.json).
 The API itself is described in [`api/bfr.yaml`](api/bfr.yaml), which
-`bfr.h` is generated from.
+`bfr.h` and `bfr.hpp` are generated from.
+
+From C++23, link `bfr_cpp` as well and include `bfr.hpp`. Objects destroy
+what they own, and calls return `std::expected`; nothing throws, so it
+builds without exceptions.
+
+```cpp
+// Each call returns std::expected; error().code and error().message say why it failed.
+auto instance = bfr::Instance::create({.backend = bfr::Backend::Vulkan});
+if (!instance) {
+    return report(instance.error());
+}
+const bfr::WindowXlib window{.display = display, .window = xid};
+auto device = instance->createDevice({.adapter = 0}, window);
+if (!device) {
+    return report(device.error());
+}
+auto swapchain = device->createSwapchain({.imageCount = 3}, window);
+if (!swapchain) {
+    return report(swapchain.error());
+}
+auto images = swapchain->resize(1280, 720);
+```
+
+A swapchain borrows the device that made it, so destroy it first.
 
 ## Build and test
 
@@ -54,6 +78,7 @@ cmake --build --preset debug
 ctest --preset debug            # -LE gpu skips GPU tests
 python3 tools/check_format.py
 python3 tools/gen_c_api.py      # after editing api/bfr.yaml
+python3 tools/gen_cpp_api.py
 ```
 
 Presets: `debug`, `tsan`, `releasedebinfo`, `release`, `ci`.
