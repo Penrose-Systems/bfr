@@ -1,36 +1,7 @@
-# BFR respec
+# Research
 
-Working notes for the top-down respec, started 2026-10-20. Each decision moves
-into its owning doc when it lands; this file is deleted when it is empty.
-
-## Decided
-
-- BFR (Babel Fish RHI) is its own public project; Vesper consumes it.
-- Backends: Vulkan, D3D12, Metal. WebGPU named, then removed: no explicit
-  barriers, no bindless, no push constants, one queue.
-- Platforms: Windows, Linux, macOS, Android (Vulkan), iOS (Metal).
-- Ownership points down only: an object never holds a pointer or reference to
-  its owner or creator. What it needs from above is given at creation, by
-  value.
-- Namespaces: `bfr` for the API, `bfr::core` for the base (result, handle,
-  pool, allocator, log hook, window handles).
-
-## Decision order
-
-1. Scope. Platforms and backends decided above. Still open: translation only;
-   translation plus a frame graph; translation plus automatic barrier tracking.
-2. Shader contract: what each backend accepts, cross-compilation inside or
-   outside BFR.
-3. Object model: instance, adapter, device, queues, swapchain, resources,
-   pipelines, commands, sync; who creates whom. Includes window at device
-   creation and which queues to open.
-4. References: handles with generations versus pointers; how a handle names
-   its device.
-5. Failure model: expected with an error struct, device loss, validation.
-6. Threading contract.
-7. Host hooks, one row of the table below at a time. The CPU allocator sits
-   here.
-8. Repo, build, tests; how Vesper consumes BFR; CI on lavapipe.
+What other engines and RHIs do, gathered while designing BFR. Findings only;
+the choices are in [`design.md`](design.md).
 
 ## Host hooks found
 

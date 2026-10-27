@@ -2,8 +2,8 @@
 
 Ground-up design, started 2026-10-24. Nothing here is final. Every entry is
 the current choice and its reason; when a later question exposes a problem,
-the earlier choice is reopened. `respec.md` and earlier proposals are input
-like everything else.
+the earlier choice is reopened. Earlier proposals are input like everything
+else. [`research.md`](research.md) has what other engines and RHIs do.
 
 ## Requirements
 
@@ -12,8 +12,11 @@ like everything else.
 - Hardware floor: modern desktop and recent mobile. Vulkan 1.3 with
   descriptor indexing, D3D12 Shader Model 6.6, Metal 3 (Apple GPU family 7+).
   Bindless is available everywhere; no non-bindless binding path.
+- Platforms: Windows, Linux, macOS, Android (Vulkan), iOS (Metal).
 - OS floor: macOS/iOS 26+ (Metal 4). Windows 10 1909+ with D3D12 enhanced
   barriers in the driver.
+- Backends: Vulkan, D3D12, Metal. No WebGPU: it has no explicit barriers, no
+  bindless, no push constants and one queue.
 - Workloads: real-time 3D games, GPU-driven rendering (indirect, compute
   culling, mesh shaders), ray tracing, tools and editors (many swapchains,
   offscreen rendering, readback).
@@ -24,6 +27,8 @@ like everything else.
   once MSVC, Apple Clang and the Android NDK all ship it. Reason: MSVC and
   Apple Clang are required for D3D12 and Metal; C++26 reflection is GCC-only
   as of 2026-10.
+- Namespaces: `bfr` for the API, `bfr::core` for the base (results,
+  handles, pools, logging, window handles), `bfr::rhi` for the backends.
 - Public API: C. Wrappers for C++, C#, Rust and Python are part of the
   project. See [C API and wrappers](#c-api-and-wrappers). Reason: C++ has no
   stable ABI; every FFI speaks the C calling convention.
