@@ -7,7 +7,8 @@ for C++, C#, Rust and Python.
 
 Early. Today: a C API, [`bfr.h`](include/bfr/public/bfr.h), and its C++
 wrapper, [`bfr.hpp`](bindings/cpp/include/bfr.hpp), over a Vulkan backend
-tested on Linux. They cover instances, adapters, devices and swapchains.
+tested on Linux. They cover instances, adapters and what each can do,
+devices and swapchains.
 
 Planned: the rest of the core API below, a render graph, D3D12 and Metal
 backends, and the C#, Rust and Python wrappers.
@@ -70,6 +71,18 @@ auto images = swapchain->resize(1280, 720);
 ```
 
 A swapchain borrows the device that made it, so destroy it first.
+
+Ask what an adapter can do before opening it: `caps` returns its limits,
+features, memory and queues in one struct; `formats`, `surfaceCaps`,
+`surfaceFormats` and `native` answer the rest, and a device's `budget` gives
+its memory use now.
+
+```cpp
+auto caps = instance->caps(0);
+if (caps && caps->features.meshShader) {
+    // ...
+}
+```
 
 ## Build and test
 

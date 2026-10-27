@@ -4,9 +4,11 @@
 
 #include <vulkan/vulkan_core.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <expected>
 #include <format>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -35,6 +37,13 @@ std::expected<void, VulkanFailure> listInto(std::vector<Item>& items, std::strin
         return std::unexpected(VulkanFailure{.call = std::string{function}, .result = result});
     }
     return {};
+}
+
+/// Whether extensions lists name.
+[[nodiscard]] inline bool lists(std::span<const VkExtensionProperties> extensions, std::string_view name) {
+    return std::ranges::any_of(extensions, [name](const VkExtensionProperties& extension) {
+        return std::string_view{extension.extensionName} == name;
+    });
 }
 
 /// What listInto fills, in a new list.

@@ -165,7 +165,8 @@ def render(api: Api) -> str:
             member_doc = field_doc(member)
             if member_doc:
                 out.extend(comment(member_doc, "    "))
-            emit(f"    {c_type(api, member)} {member['name']};")
+            fixed = f"[{member['fixed']}]" if member.get("fixed") else ""
+            emit(f"    {c_type(api, member)} {member['name']}{fixed};")
         emit(f"}} {c_name(name)};")
 
     for name, function in api.functions.items():

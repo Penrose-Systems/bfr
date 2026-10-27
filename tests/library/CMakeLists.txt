@@ -17,6 +17,7 @@ add_executable(bfr_tests
     core/test_pool.cpp
     core/test_text.cpp
     rhi/test_queue_families.cpp
+    rhi/test_caps.cpp
     rhi/test_rhi.cpp
     rhi/test_swapchain.cpp
     rhi/test_swapchain_settings.cpp

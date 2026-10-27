@@ -231,27 +231,32 @@ TEST_CASE("Rhi skips an adapter it fails to check, and says which call failed", 
 
 TEST_CASE("Rhi fails with RhiNoAdapter when every adapter is below the floor", "[rhi][gpu]") {
     const AdapterOverrideLayer adapterOverride;
-    const ScopedEnv version("BFR_ADAPTER_MINOR", "1");
+    const ScopedEnv version("BFR_ADAPTER_MINOR", "2");
 
     const auto rhi = Rhi::create({}, {});
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
-    CHECK_THAT(rhi.error().message, Catch::Matchers::ContainsSubstring("Vulkan 1.1, needs 1.2"));
+    CHECK_THAT(rhi.error().message, Catch::Matchers::ContainsSubstring("Vulkan 1.2, needs 1.3"));
 }
 
-TEST_CASE("Rhi fails with RhiNoAdapter when a Vulkan 1.2 adapter lacks a floor extension", "[rhi][gpu]") {
-    const std::string extension = GENERATE("VK_KHR_dynamic_rendering", "VK_KHR_synchronization2", "VK_KHR_swapchain");
+TEST_CASE("Rhi fails with RhiNoAdapter when an adapter lacks a floor feature, and names it", "[rhi][gpu]") {
+    const std::string feature =
+        GENERATE("descriptorIndexing", "runtimeDescriptorArray", "descriptorBindingPartiallyBound",
+                 "descriptorBindingVariableDescriptorCount", "descriptorBindingUpdateUnusedWhilePending",
+                 "descriptorBindingSampledImageUpdateAfterBind", "descriptorBindingStorageImageUpdateAfterBind",
+                 "descriptorBindingStorageBufferUpdateAfterBind", "shaderSampledImageArrayNonUniformIndexing",
+                 "shaderStorageBufferArrayNonUniformIndexing", "shaderStorageImageArrayNonUniformIndexing",
+                 "timelineSemaphore", "bufferDeviceAddress", "dynamicRendering", "synchronization2", "maintenance4");
     const AdapterOverrideLayer adapterOverride;
-    const ScopedEnv version("BFR_ADAPTER_MINOR", "2");
-    const ScopedEnv hidden("BFR_ADAPTER_HIDE", extension);
+    const ScopedEnv hidden("BFR_ADAPTER_NO_FEATURE", feature);
 
     const auto rhi = Rhi::create({}, {});
 
-    INFO(extension);
+    INFO(feature);
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
-    CHECK_THAT(rhi.error().message, Catch::Matchers::ContainsSubstring("lacks " + extension));
+    CHECK_THAT(rhi.error().message, Catch::Matchers::ContainsSubstring("below the floor, lacks " + feature));
 }
 
 TEST_CASE("Rhi lists a Vulkan 1.3 adapter without an extension that 1.3 made core", "[rhi][gpu]") {
@@ -441,13 +446,13 @@ TEST_CASE("Rhi logs why an adapter is below the floor", "[rhi][gpu]") {
         SKIP("logging is compiled out");
     }
     const AdapterOverrideLayer adapterOverride;
-    const ScopedEnv version("BFR_ADAPTER_MINOR", "1");
+    const ScopedEnv version("BFR_ADAPTER_MINOR", "2");
     std::ostringstream log;
 
     const auto rhi = Rhi::create({.logger = loggingInto(log)}, {});
 
     REQUIRE_FALSE(rhi.has_value());
-    CHECK_THAT(log.str(), Catch::Matchers::ContainsSubstring(", Vulkan 1.1: below the floor, Vulkan 1.1, needs 1.2"));
+    CHECK_THAT(log.str(), Catch::Matchers::ContainsSubstring(", Vulkan 1.2: below the floor, Vulkan 1.2, needs 1.3"));
 }
 
 TEST_CASE("Rhi logs the validation layer's version", "[rhi][gpu]") {

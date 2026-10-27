@@ -9,6 +9,7 @@
 #include "bfr.h"
 #include "bfr_detail.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -62,6 +63,10 @@ enum class Result : std::int32_t {
     ErrorInternal = BFR_RESULT_ERROR_INTERNAL,
     /// A fixed limit was reached, such as how many objects of one type a device holds.
     ErrorLimitReached = BFR_RESULT_ERROR_LIMIT_REACHED,
+    /// The adapter cannot do or report what was asked; the message says what.
+    ErrorUnsupported = BFR_RESULT_ERROR_UNSUPPORTED,
+    /// The API failed when asked about the adapter; the message says how.
+    ErrorQueryFailed = BFR_RESULT_ERROR_QUERY_FAILED,
 };
 
 /// The native API an instance runs on.
@@ -100,6 +105,191 @@ enum class MessageSeverity : std::int32_t {
     Warning = BFR_MESSAGE_SEVERITY_WARNING,
     /// Invalid use of the API; behaviour is undefined after it.
     Error = BFR_MESSAGE_SEVERITY_ERROR,
+};
+
+/// How a texel is stored. Channels are named in memory order, so rgba8 holds red in its first byte;
+/// a packed format names its channels from the low bits up. unorm and snorm read as 0 to 1 and -1
+/// to 1, srgb decodes to linear, float is floating point.
+enum class Format : std::int32_t {
+    R8Unorm = BFR_FORMAT_R8_UNORM,
+    R8Snorm = BFR_FORMAT_R8_SNORM,
+    R8Uint = BFR_FORMAT_R8_UINT,
+    R8Sint = BFR_FORMAT_R8_SINT,
+    Rg8Unorm = BFR_FORMAT_RG8_UNORM,
+    Rg8Snorm = BFR_FORMAT_RG8_SNORM,
+    Rg8Uint = BFR_FORMAT_RG8_UINT,
+    Rg8Sint = BFR_FORMAT_RG8_SINT,
+    Rgba8Unorm = BFR_FORMAT_RGBA8_UNORM,
+    Rgba8Srgb = BFR_FORMAT_RGBA8_SRGB,
+    Rgba8Snorm = BFR_FORMAT_RGBA8_SNORM,
+    Rgba8Uint = BFR_FORMAT_RGBA8_UINT,
+    Rgba8Sint = BFR_FORMAT_RGBA8_SINT,
+    Bgra8Unorm = BFR_FORMAT_BGRA8_UNORM,
+    Bgra8Srgb = BFR_FORMAT_BGRA8_SRGB,
+    R16Unorm = BFR_FORMAT_R16_UNORM,
+    R16Snorm = BFR_FORMAT_R16_SNORM,
+    R16Uint = BFR_FORMAT_R16_UINT,
+    R16Sint = BFR_FORMAT_R16_SINT,
+    R16Float = BFR_FORMAT_R16_FLOAT,
+    Rg16Unorm = BFR_FORMAT_RG16_UNORM,
+    Rg16Snorm = BFR_FORMAT_RG16_SNORM,
+    Rg16Uint = BFR_FORMAT_RG16_UINT,
+    Rg16Sint = BFR_FORMAT_RG16_SINT,
+    Rg16Float = BFR_FORMAT_RG16_FLOAT,
+    Rgba16Unorm = BFR_FORMAT_RGBA16_UNORM,
+    Rgba16Snorm = BFR_FORMAT_RGBA16_SNORM,
+    Rgba16Uint = BFR_FORMAT_RGBA16_UINT,
+    Rgba16Sint = BFR_FORMAT_RGBA16_SINT,
+    Rgba16Float = BFR_FORMAT_RGBA16_FLOAT,
+    R32Uint = BFR_FORMAT_R32_UINT,
+    R32Sint = BFR_FORMAT_R32_SINT,
+    R32Float = BFR_FORMAT_R32_FLOAT,
+    Rg32Uint = BFR_FORMAT_RG32_UINT,
+    Rg32Sint = BFR_FORMAT_RG32_SINT,
+    Rg32Float = BFR_FORMAT_RG32_FLOAT,
+    Rgb32Uint = BFR_FORMAT_RGB32_UINT,
+    Rgb32Sint = BFR_FORMAT_RGB32_SINT,
+    Rgb32Float = BFR_FORMAT_RGB32_FLOAT,
+    Rgba32Uint = BFR_FORMAT_RGBA32_UINT,
+    Rgba32Sint = BFR_FORMAT_RGBA32_SINT,
+    Rgba32Float = BFR_FORMAT_RGBA32_FLOAT,
+    /// Red in the low bits.
+    Rgb10a2Unorm = BFR_FORMAT_RGB10A2_UNORM,
+    /// Red in the low bits.
+    Rgb10a2Uint = BFR_FORMAT_RGB10A2_UINT,
+    /// Blue in the low bits.
+    Bgr10a2Unorm = BFR_FORMAT_BGR10A2_UNORM,
+    /// Red in the low bits.
+    Rg11b10Float = BFR_FORMAT_RG11B10_FLOAT,
+    /// Red in the low bits; a shared exponent.
+    Rgb9e5Float = BFR_FORMAT_RGB9E5_FLOAT,
+    /// Blue in the low bits.
+    B5g6r5Unorm = BFR_FORMAT_B5G6R5_UNORM,
+    /// Blue in the low bits.
+    Bgr5a1Unorm = BFR_FORMAT_BGR5A1_UNORM,
+    /// Blue in the low bits.
+    Bgra4Unorm = BFR_FORMAT_BGRA4_UNORM,
+    D16Unorm = BFR_FORMAT_D16_UNORM,
+    D24UnormS8Uint = BFR_FORMAT_D24_UNORM_S8_UINT,
+    D32Float = BFR_FORMAT_D32_FLOAT,
+    D32FloatS8Uint = BFR_FORMAT_D32_FLOAT_S8_UINT,
+    S8Uint = BFR_FORMAT_S8_UINT,
+    Bc1Unorm = BFR_FORMAT_BC1_UNORM,
+    Bc1Srgb = BFR_FORMAT_BC1_SRGB,
+    Bc2Unorm = BFR_FORMAT_BC2_UNORM,
+    Bc2Srgb = BFR_FORMAT_BC2_SRGB,
+    Bc3Unorm = BFR_FORMAT_BC3_UNORM,
+    Bc3Srgb = BFR_FORMAT_BC3_SRGB,
+    Bc4Unorm = BFR_FORMAT_BC4_UNORM,
+    Bc4Snorm = BFR_FORMAT_BC4_SNORM,
+    Bc5Unorm = BFR_FORMAT_BC5_UNORM,
+    Bc5Snorm = BFR_FORMAT_BC5_SNORM,
+    Bc6hUfloat = BFR_FORMAT_BC6H_UFLOAT,
+    Bc6hSfloat = BFR_FORMAT_BC6H_SFLOAT,
+    Bc7Unorm = BFR_FORMAT_BC7_UNORM,
+    Bc7Srgb = BFR_FORMAT_BC7_SRGB,
+    Etc2Rgb8Unorm = BFR_FORMAT_ETC2_RGB8_UNORM,
+    Etc2Rgb8Srgb = BFR_FORMAT_ETC2_RGB8_SRGB,
+    Etc2Rgb8a1Unorm = BFR_FORMAT_ETC2_RGB8A1_UNORM,
+    Etc2Rgb8a1Srgb = BFR_FORMAT_ETC2_RGB8A1_SRGB,
+    Etc2Rgba8Unorm = BFR_FORMAT_ETC2_RGBA8_UNORM,
+    Etc2Rgba8Srgb = BFR_FORMAT_ETC2_RGBA8_SRGB,
+    EacR11Unorm = BFR_FORMAT_EAC_R11_UNORM,
+    EacR11Snorm = BFR_FORMAT_EAC_R11_SNORM,
+    EacRg11Unorm = BFR_FORMAT_EAC_RG11_UNORM,
+    EacRg11Snorm = BFR_FORMAT_EAC_RG11_SNORM,
+    Astc4x4Unorm = BFR_FORMAT_ASTC_4X4_UNORM,
+    Astc4x4Srgb = BFR_FORMAT_ASTC_4X4_SRGB,
+    Astc4x4Float = BFR_FORMAT_ASTC_4X4_FLOAT,
+    Astc5x4Unorm = BFR_FORMAT_ASTC_5X4_UNORM,
+    Astc5x4Srgb = BFR_FORMAT_ASTC_5X4_SRGB,
+    Astc5x4Float = BFR_FORMAT_ASTC_5X4_FLOAT,
+    Astc5x5Unorm = BFR_FORMAT_ASTC_5X5_UNORM,
+    Astc5x5Srgb = BFR_FORMAT_ASTC_5X5_SRGB,
+    Astc5x5Float = BFR_FORMAT_ASTC_5X5_FLOAT,
+    Astc6x5Unorm = BFR_FORMAT_ASTC_6X5_UNORM,
+    Astc6x5Srgb = BFR_FORMAT_ASTC_6X5_SRGB,
+    Astc6x5Float = BFR_FORMAT_ASTC_6X5_FLOAT,
+    Astc6x6Unorm = BFR_FORMAT_ASTC_6X6_UNORM,
+    Astc6x6Srgb = BFR_FORMAT_ASTC_6X6_SRGB,
+    Astc6x6Float = BFR_FORMAT_ASTC_6X6_FLOAT,
+    Astc8x5Unorm = BFR_FORMAT_ASTC_8X5_UNORM,
+    Astc8x5Srgb = BFR_FORMAT_ASTC_8X5_SRGB,
+    Astc8x5Float = BFR_FORMAT_ASTC_8X5_FLOAT,
+    Astc8x6Unorm = BFR_FORMAT_ASTC_8X6_UNORM,
+    Astc8x6Srgb = BFR_FORMAT_ASTC_8X6_SRGB,
+    Astc8x6Float = BFR_FORMAT_ASTC_8X6_FLOAT,
+    Astc8x8Unorm = BFR_FORMAT_ASTC_8X8_UNORM,
+    Astc8x8Srgb = BFR_FORMAT_ASTC_8X8_SRGB,
+    Astc8x8Float = BFR_FORMAT_ASTC_8X8_FLOAT,
+    Astc10x5Unorm = BFR_FORMAT_ASTC_10X5_UNORM,
+    Astc10x5Srgb = BFR_FORMAT_ASTC_10X5_SRGB,
+    Astc10x5Float = BFR_FORMAT_ASTC_10X5_FLOAT,
+    Astc10x6Unorm = BFR_FORMAT_ASTC_10X6_UNORM,
+    Astc10x6Srgb = BFR_FORMAT_ASTC_10X6_SRGB,
+    Astc10x6Float = BFR_FORMAT_ASTC_10X6_FLOAT,
+    Astc10x8Unorm = BFR_FORMAT_ASTC_10X8_UNORM,
+    Astc10x8Srgb = BFR_FORMAT_ASTC_10X8_SRGB,
+    Astc10x8Float = BFR_FORMAT_ASTC_10X8_FLOAT,
+    Astc10x10Unorm = BFR_FORMAT_ASTC_10X10_UNORM,
+    Astc10x10Srgb = BFR_FORMAT_ASTC_10X10_SRGB,
+    Astc10x10Float = BFR_FORMAT_ASTC_10X10_FLOAT,
+    Astc12x10Unorm = BFR_FORMAT_ASTC_12X10_UNORM,
+    Astc12x10Srgb = BFR_FORMAT_ASTC_12X10_SRGB,
+    Astc12x10Float = BFR_FORMAT_ASTC_12X10_FLOAT,
+    Astc12x12Unorm = BFR_FORMAT_ASTC_12X12_UNORM,
+    Astc12x12Srgb = BFR_FORMAT_ASTC_12X12_SRGB,
+    Astc12x12Float = BFR_FORMAT_ASTC_12X12_FLOAT,
+};
+
+/// How a window's display reads the values a swapchain presents.
+enum class ColorSpace : std::int32_t {
+    /// sRGB. Every window has it.
+    Srgb = BFR_COLOR_SPACE_SRGB,
+    /// scRGB: sRGB primaries, linear, values beyond 0 to 1.
+    SrgbExtendedLinear = BFR_COLOR_SPACE_SRGB_EXTENDED_LINEAR,
+    /// sRGB primaries and curve, values beyond 0 to 1.
+    SrgbExtended = BFR_COLOR_SPACE_SRGB_EXTENDED,
+    /// Display P3 with the sRGB curve.
+    DisplayP3 = BFR_COLOR_SPACE_DISPLAY_P3,
+    /// Display P3, linear.
+    DisplayP3Linear = BFR_COLOR_SPACE_DISPLAY_P3_LINEAR,
+    /// DCI-P3 with its own curve.
+    DciP3 = BFR_COLOR_SPACE_DCI_P3,
+    /// BT.709 with its curve.
+    Bt709 = BFR_COLOR_SPACE_BT709,
+    /// BT.709, linear.
+    Bt709Linear = BFR_COLOR_SPACE_BT709_LINEAR,
+    /// BT.2020, linear.
+    Bt2020Linear = BFR_COLOR_SPACE_BT2020_LINEAR,
+    /// HDR10: BT.2020 with the PQ (ST 2084) curve.
+    Hdr10Pq = BFR_COLOR_SPACE_HDR10_PQ,
+    /// BT.2020 with the HLG curve.
+    Hdr10Hlg = BFR_COLOR_SPACE_HDR10_HLG,
+    /// Dolby Vision.
+    DolbyVision = BFR_COLOR_SPACE_DOLBY_VISION,
+    /// Adobe RGB with its curve.
+    AdobeRgb = BFR_COLOR_SPACE_ADOBE_RGB,
+    /// Adobe RGB, linear.
+    AdobeRgbLinear = BFR_COLOR_SPACE_ADOBE_RGB_LINEAR,
+    /// Values reach the display as they are.
+    PassThrough = BFR_COLOR_SPACE_PASS_THROUGH,
+    /// The display's own space (AMD FreeSync 2).
+    DisplayNative = BFR_COLOR_SPACE_DISPLAY_NATIVE,
+};
+
+/// How a window's display is turned relative to its natural orientation.
+enum class SurfaceRotation : std::int32_t {
+    /// Not turned.
+    None = BFR_SURFACE_ROTATION_NONE,
+    /// Turned 90 degrees clockwise.
+    Rotate90 = BFR_SURFACE_ROTATION_ROTATE_90,
+    /// Turned 180 degrees.
+    Rotate180 = BFR_SURFACE_ROTATION_ROTATE_180,
+    /// Turned 270 degrees clockwise.
+    Rotate270 = BFR_SURFACE_ROTATION_ROTATE_270,
+    /// Mirrored, or left to the platform.
+    Other = BFR_SURFACE_ROTATION_OTHER,
 };
 
 /// A failed call: what it returned and the message bfr_get_last_error gave for it.
@@ -162,7 +352,388 @@ struct SwapchainImages {
     std::uint32_t count{};
 };
 
-/// An Xlib window. Extends DeviceDesc, SwapchainDesc.
+/// Which window to ask about. Chain exactly one window struct. Pass any of WindowXlib,
+/// WindowWayland, WindowWin32, WindowMetal, WindowHeadless after it.
+struct SurfaceDesc {
+};
+
+/// What an adapter is.
+struct CapsInfo {
+    std::string name{};
+    AdapterType type{};
+    Backend backend{};
+    /// The PCI vendor ID: 0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel, 0x13B5 Arm, 0x5143 Qualcomm.
+    std::uint32_t vendorId{};
+    /// The vendor's ID for the GPU.
+    std::uint32_t deviceId{};
+    /// Empty when the driver does not say.
+    std::string driverName{};
+    /// The driver's version as text; empty when the driver does not say.
+    std::string driverInfo{};
+    /// The driver's version, in the vendor's own encoding.
+    std::uint64_t driverVersion{};
+    /// The newest API version the adapter supports: Vulkan 1.3.280 is 1, 3, 280.
+    std::uint32_t apiMajor{};
+    std::uint32_t apiMinor{};
+    std::uint32_t apiPatch{};
+    /// The same GPU has the same UUID in every process and API.
+    std::array<std::uint8_t, 16> deviceUuid{};
+    std::array<std::uint8_t, 16> driverUuid{};
+    /// Windows' ID for the GPU, as D3D12 and DXGI give it.
+    std::array<std::uint8_t, 8> luid{};
+    /// Whether luid is set; only on Windows.
+    bool luidValid{};
+    /// A pipeline cache loads only on an adapter with the same cache_uuid.
+    std::array<std::uint8_t, 16> cacheUuid{};
+};
+
+/// The adapter's limits on textures, buffers, rendering and sampling.
+struct CapsLimits {
+    /// Widest 1D texture.
+    std::uint32_t maxTexture1d{};
+    /// Widest or tallest 2D texture.
+    std::uint32_t maxTexture2d{};
+    /// Largest side of a 3D texture.
+    std::uint32_t maxTexture3d{};
+    /// Largest side of a cube texture.
+    std::uint32_t maxTextureCube{};
+    /// Most layers in an array texture.
+    std::uint32_t maxTextureLayers{};
+    /// Largest buffer in bytes.
+    std::uint64_t maxBufferSize{};
+    /// Largest single allocation in bytes.
+    std::uint64_t maxAllocationSize{};
+    /// Most allocations alive at once.
+    std::uint32_t maxAllocations{};
+    /// Most samplers alive at once.
+    std::uint32_t maxSamplerObjects{};
+    /// Most bytes a shader reads through one uniform buffer view.
+    std::uint32_t maxUniformBufferRange{};
+    /// Most bytes a shader reaches through one storage buffer view.
+    std::uint32_t maxStorageBufferRange{};
+    /// Most elements in a texel buffer view.
+    std::uint32_t maxTexelBufferElements{};
+    /// Most bytes of push constants.
+    std::uint32_t maxPushConstantsSize{};
+    std::uint32_t maxColorAttachments{};
+    /// Widest render area.
+    std::uint32_t maxRenderWidth{};
+    /// Tallest render area.
+    std::uint32_t maxRenderHeight{};
+    /// Most layers rendered at once.
+    std::uint32_t maxRenderLayers{};
+    /// Sample counts for float and normalized color attachments: each set bit is a count it
+    /// supports, 1, 2, 4 and so on.
+    std::uint32_t colorSampleCounts{};
+    /// Sample counts for integer color attachments.
+    std::uint32_t integerSampleCounts{};
+    /// Sample counts for depth attachments.
+    std::uint32_t depthSampleCounts{};
+    /// Sample counts for stencil attachments.
+    std::uint32_t stencilSampleCounts{};
+    /// Sample counts for rendering with no attachments.
+    std::uint32_t noAttachmentSampleCounts{};
+    /// Sample counts for storage textures.
+    std::uint32_t storageTextureSampleCounts{};
+    std::uint32_t maxViewports{};
+    std::uint32_t maxViewportWidth{};
+    std::uint32_t maxViewportHeight{};
+    /// Most draws one indirect call makes.
+    std::uint32_t maxDrawIndirectCount{};
+    std::uint32_t maxClipDistances{};
+    std::uint32_t maxCullDistances{};
+    float maxSamplerAnisotropy{};
+    float maxSamplerLodBias{};
+    /// Smallest tile of a shading rate texture; 0 without one.
+    std::uint32_t minShadingRateTile{};
+    /// Largest tile of a shading rate texture; 0 without one.
+    std::uint32_t maxShadingRateTile{};
+    /// Alignment in bytes of a uniform buffer view's offset.
+    std::uint64_t minUniformBufferAlignment{};
+    /// Alignment in bytes of a storage buffer view's offset.
+    std::uint64_t minStorageBufferAlignment{};
+    /// Alignment in bytes of a texel buffer view's offset.
+    std::uint64_t minTexelBufferAlignment{};
+    /// Best alignment in bytes of a buffer offset in a texture copy.
+    std::uint64_t copyOffsetAlignment{};
+    /// Best alignment in bytes of a row in a texture copy.
+    std::uint64_t copyRowPitchAlignment{};
+    /// Granularity in bytes of flushing memory the CPU writes without coherence.
+    std::uint64_t nonCoherentAtomSize{};
+    /// Bytes apart a buffer and a texture in one allocation must be.
+    std::uint64_t bufferTextureGranularity{};
+    /// Nanoseconds per timestamp tick.
+    float timestampPeriod{};
+};
+
+/// How many of each resource the bindless tables can hold.
+struct CapsBindless {
+    /// Sampled textures.
+    std::uint32_t maxTextures{};
+    std::uint32_t maxStorageTextures{};
+    std::uint32_t maxStorageBuffers{};
+    std::uint32_t maxUniformBuffers{};
+    std::uint32_t maxSamplers{};
+    /// All of them together that one shader stage can reach.
+    std::uint32_t maxPerStage{};
+};
+
+/// The adapter's compute limits.
+struct CapsCompute {
+    /// Most workgroups one dispatch makes in x, y and z.
+    std::array<std::uint32_t, 3> maxWorkgroupCount{};
+    /// Largest workgroup in x, y and z.
+    std::array<std::uint32_t, 3> maxWorkgroupSize{};
+    /// Most invocations in one workgroup.
+    std::uint32_t maxWorkgroupInvocations{};
+    /// Most bytes of workgroup shared memory.
+    std::uint32_t maxSharedMemory{};
+    /// Invocations in a subgroup (a wave or warp) by default.
+    std::uint32_t subgroupSize{};
+    std::uint32_t minSubgroupSize{};
+    std::uint32_t maxSubgroupSize{};
+};
+
+/// The adapter's mesh and task shader limits; all 0 without mesh shaders.
+struct CapsMesh {
+    std::array<std::uint32_t, 3> maxMeshWorkgroupSize{};
+    std::uint32_t maxMeshInvocations{};
+    std::uint32_t maxMeshOutputVertices{};
+    std::uint32_t maxMeshOutputPrimitives{};
+    std::uint32_t maxMeshSharedMemory{};
+    std::array<std::uint32_t, 3> maxTaskWorkgroupSize{};
+    std::uint32_t maxTaskInvocations{};
+    std::uint32_t maxTaskPayloadSize{};
+};
+
+/// The adapter's ray tracing limits. The structure limits are 0 without acceleration structures,
+/// the rest without ray tracing pipelines.
+struct CapsRayTracing {
+    /// Most geometries in a bottom-level structure.
+    std::uint64_t maxGeometries{};
+    /// Most instances in a top-level structure.
+    std::uint64_t maxInstances{};
+    /// Most primitives in a bottom-level structure.
+    std::uint64_t maxPrimitives{};
+    /// Alignment in bytes of a build's scratch memory.
+    std::uint32_t scratchAlignment{};
+    /// Deepest ray recursion; 0 without ray tracing pipelines.
+    std::uint32_t maxRecursionDepth{};
+    /// Bytes in a shader binding table record's handle.
+    std::uint32_t handleSize{};
+    /// Alignment in bytes of a handle in the table.
+    std::uint32_t handleAlignment{};
+    /// Alignment in bytes of the table's start.
+    std::uint32_t tableAlignment{};
+};
+
+/// Optional features the adapter has. The floor's features are always there and not listed.
+struct CapsFeatures {
+    /// Rays traced inline from any shader.
+    bool rayQuery{};
+    /// Ray tracing pipelines and shader binding tables.
+    bool rayTracingPipeline{};
+    bool accelerationStructure{};
+    bool meshShader{};
+    bool taskShader{};
+    /// A shading rate per draw.
+    bool shadingRate{};
+    /// A shading rate per screen tile, from a texture.
+    bool shadingRateTexture{};
+    bool shaderFloat16{};
+    bool shaderFloat64{};
+    bool shaderInt8{};
+    bool shaderInt16{};
+    bool shaderInt64{};
+    /// 64-bit integer atomics on buffers.
+    bool atomicInt64{};
+    /// 64-bit integer atomics on storage textures.
+    bool atomicInt64Texture{};
+    /// 32-bit float atomic add on buffers.
+    bool atomicFloat32Add{};
+    /// Fragment shaders read barycentric coordinates.
+    bool barycentrics{};
+    bool conservativeRaster{};
+    bool geometryShader{};
+    bool tessellation{};
+    bool multiview{};
+    bool sampleRateShading{};
+    bool dualSourceBlend{};
+    /// Each color attachment blends its own way.
+    bool independentBlend{};
+    bool logicOp{};
+    bool depthClamp{};
+    bool depthBounds{};
+    bool wireframe{};
+    bool wideLines{};
+    bool samplerAnisotropy{};
+    /// Samplers that return the minimum or maximum of the texels they read.
+    bool samplerMinmax{};
+    bool compressionBc{};
+    bool compressionEtc2{};
+    bool compressionAstc{};
+    bool compressionAstcHdr{};
+    bool multiDrawIndirect{};
+    /// Indirect draws that read their count from a buffer.
+    bool drawIndirectCount{};
+    bool drawIndirectFirstInstance{};
+    bool storageReadWithoutFormat{};
+    bool storageWriteWithoutFormat{};
+    /// Every graphics and compute queue writes timestamps.
+    bool timestampsOnAllQueues{};
+    bool pipelineStatistics{};
+    bool occlusionQueryPrecise{};
+    bool sparseBinding{};
+    /// Partly resident 2D textures.
+    bool sparseTextures{};
+    /// Partly resident buffers.
+    bool sparseBuffers{};
+};
+
+/// One pool of memory.
+struct MemoryHeap {
+    /// Bytes.
+    std::uint64_t size{};
+    /// On or nearest the GPU.
+    bool deviceLocal{};
+    /// Some memory type in it is visible to the CPU.
+    bool hostVisible{};
+};
+
+/// One kind of memory in a heap.
+struct MemoryType {
+    /// Index into the heaps.
+    std::uint32_t heap{};
+    bool deviceLocal{};
+    /// The CPU can map it.
+    bool hostVisible{};
+    /// CPU writes reach the GPU without a flush.
+    bool hostCoherent{};
+    /// CPU reads are cached.
+    bool hostCached{};
+    /// Backed only as the GPU needs it; for transient attachments on tiled GPUs.
+    bool lazilyAllocated{};
+};
+
+/// The adapter's memory.
+struct CapsMemory {
+    std::uint32_t heapCount{};
+    /// The first heap_count are set.
+    std::array<MemoryHeap, 16> heaps{};
+    std::uint32_t typeCount{};
+    /// The first type_count are set.
+    std::array<MemoryType, 32> types{};
+    /// The GPU and CPU share one memory.
+    bool unified{};
+};
+
+/// How many queues of each type the adapter has.
+struct CapsQueues {
+    /// Queues that run graphics.
+    std::uint32_t graphics{};
+    /// Queues that run compute but not graphics (async compute).
+    std::uint32_t compute{};
+    /// Queues that only copy.
+    std::uint32_t copy{};
+    /// Valid bits in a graphics queue's timestamps; 0 without timestamps.
+    std::uint32_t graphicsTimestampBits{};
+    std::uint32_t computeTimestampBits{};
+    std::uint32_t copyTimestampBits{};
+};
+
+/// Everything about an adapter that stays the same while it runs.
+struct Caps {
+    CapsInfo info{};
+    CapsLimits limits{};
+    CapsBindless bindless{};
+    CapsCompute compute{};
+    CapsMesh mesh{};
+    CapsRayTracing rayTracing{};
+    CapsFeatures features{};
+    CapsMemory memory{};
+    CapsQueues queues{};
+};
+
+/// What an adapter does with one format.
+struct FormatCaps {
+    Format format{};
+    /// Shaders sample textures of it.
+    bool sampled{};
+    /// Samplers filter it linearly.
+    bool filterLinear{};
+    /// Min and max samplers read it.
+    bool filterMinmax{};
+    /// Shaders read and write storage textures of it.
+    bool storage{};
+    /// Shaders use atomics on storage textures of it.
+    bool storageAtomic{};
+    bool colorAttachment{};
+    /// Color attachments of it blend.
+    bool blend{};
+    bool depthStencil{};
+    bool copySrc{};
+    bool copyDst{};
+    /// Shaders read texel buffers of it.
+    bool texelBuffer{};
+    bool storageTexelBuffer{};
+    bool storageTexelBufferAtomic{};
+    /// Sample counts for 2D textures of it: each set bit is a count, 1, 2, 4 and so on; 0 when it
+    /// can't be rendered to.
+    std::uint32_t sampleCounts{};
+};
+
+/// What a window's swapchain may be, on one adapter.
+struct SurfaceCaps {
+    std::uint32_t minImageCount{};
+    /// 0 for no limit.
+    std::uint32_t maxImageCount{};
+    /// The window's size now; 0xFFFFFFFF each when the swapchain's size sets the window's.
+    std::uint32_t width{};
+    std::uint32_t height{};
+    std::uint32_t minWidth{};
+    std::uint32_t minHeight{};
+    std::uint32_t maxWidth{};
+    std::uint32_t maxHeight{};
+    /// How the display is turned now; on phones the app may render turned to match.
+    SurfaceRotation rotation{};
+    /// Presents wait for vertical blank and queue up. Always there.
+    bool fifo{};
+    /// As fifo, but a late frame presents at once, and may tear.
+    bool fifoRelaxed{};
+    /// Presents wait for vertical blank, and a newer frame replaces a waiting one.
+    bool mailbox{};
+    /// Presents at once, and may tear.
+    bool immediate{};
+    /// The window ignores alpha.
+    bool alphaOpaque{};
+    bool alphaPremultiplied{};
+    bool alphaPostmultiplied{};
+    /// The window system decides how alpha blends.
+    bool alphaInherit{};
+};
+
+/// A format and color space a window's swapchain may use.
+struct SurfaceFormat {
+    Format format{};
+    ColorSpace colorSpace{};
+};
+
+/// How much of one heap the process may use, and uses.
+struct MemoryBudgetHeap {
+    /// Bytes the process may use before allocations start failing or slowing.
+    std::uint64_t budget{};
+    /// Bytes the process uses now.
+    std::uint64_t usage{};
+};
+
+/// A device's memory use now, heap by heap, in the order bfr_caps lists the heaps.
+struct MemoryBudget {
+    std::uint32_t heapCount{};
+    /// The first heap_count are set.
+    std::array<MemoryBudgetHeap, 16> heaps{};
+};
+
+/// An Xlib window. Extends DeviceDesc, SwapchainDesc, SurfaceDesc.
 struct WindowXlib {
     /// The Display*.
     void* display{};
@@ -170,7 +741,7 @@ struct WindowXlib {
     std::uint64_t window{};
 };
 
-/// A Wayland surface. Extends DeviceDesc, SwapchainDesc.
+/// A Wayland surface. Extends DeviceDesc, SwapchainDesc, SurfaceDesc.
 struct WindowWayland {
     /// The wl_display*.
     void* display{};
@@ -178,7 +749,7 @@ struct WindowWayland {
     void* surface{};
 };
 
-/// A Win32 window. Extends DeviceDesc, SwapchainDesc.
+/// A Win32 window. Extends DeviceDesc, SwapchainDesc, SurfaceDesc.
 struct WindowWin32 {
     /// The HINSTANCE.
     void* instance{};
@@ -186,14 +757,14 @@ struct WindowWin32 {
     void* window{};
 };
 
-/// A Core Animation Metal layer. Extends DeviceDesc, SwapchainDesc.
+/// A Core Animation Metal layer. Extends DeviceDesc, SwapchainDesc, SurfaceDesc.
 struct WindowMetal {
     /// The CAMetalLayer*.
     void* layer{};
 };
 
 /// No window. Images are presented nowhere; for tests and offscreen tools. Extends DeviceDesc,
-/// SwapchainDesc.
+/// SwapchainDesc, SurfaceDesc.
 struct WindowHeadless {
 };
 
@@ -226,6 +797,10 @@ inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
 
 inline bfr_swapchain_desc toC(const SwapchainDesc& value, const bfr_chain* next) {
     return {.next = next, .image_count = value.imageCount};
+}
+
+inline bfr_surface_desc toC(const SurfaceDesc&, const bfr_chain* next) {
+    return {.next = next};
 }
 
 inline bfr_window_xlib toC(const WindowXlib& value) {
@@ -271,6 +846,286 @@ inline SwapchainImages fromC(const bfr_swapchain_images& value) {
     return {.width = value.width, .height = value.height, .count = value.count};
 }
 
+inline CapsInfo fromC(const bfr_caps_info& value) {
+    return {
+        .name = std::string{detail::text(value.name)},
+        .type = static_cast<AdapterType>(value.type),
+        .backend = static_cast<Backend>(value.backend),
+        .vendorId = value.vendor_id,
+        .deviceId = value.device_id,
+        .driverName = std::string{detail::text(value.driver_name)},
+        .driverInfo = std::string{detail::text(value.driver_info)},
+        .driverVersion = value.driver_version,
+        .apiMajor = value.api_major,
+        .apiMinor = value.api_minor,
+        .apiPatch = value.api_patch,
+        .deviceUuid = std::to_array(value.device_uuid),
+        .driverUuid = std::to_array(value.driver_uuid),
+        .luid = std::to_array(value.luid),
+        .luidValid = value.luid_valid != BFR_FALSE,
+        .cacheUuid = std::to_array(value.cache_uuid),
+    };
+}
+
+inline CapsLimits fromC(const bfr_caps_limits& value) {
+    return {
+        .maxTexture1d = value.max_texture_1d,
+        .maxTexture2d = value.max_texture_2d,
+        .maxTexture3d = value.max_texture_3d,
+        .maxTextureCube = value.max_texture_cube,
+        .maxTextureLayers = value.max_texture_layers,
+        .maxBufferSize = value.max_buffer_size,
+        .maxAllocationSize = value.max_allocation_size,
+        .maxAllocations = value.max_allocations,
+        .maxSamplerObjects = value.max_sampler_objects,
+        .maxUniformBufferRange = value.max_uniform_buffer_range,
+        .maxStorageBufferRange = value.max_storage_buffer_range,
+        .maxTexelBufferElements = value.max_texel_buffer_elements,
+        .maxPushConstantsSize = value.max_push_constants_size,
+        .maxColorAttachments = value.max_color_attachments,
+        .maxRenderWidth = value.max_render_width,
+        .maxRenderHeight = value.max_render_height,
+        .maxRenderLayers = value.max_render_layers,
+        .colorSampleCounts = value.color_sample_counts,
+        .integerSampleCounts = value.integer_sample_counts,
+        .depthSampleCounts = value.depth_sample_counts,
+        .stencilSampleCounts = value.stencil_sample_counts,
+        .noAttachmentSampleCounts = value.no_attachment_sample_counts,
+        .storageTextureSampleCounts = value.storage_texture_sample_counts,
+        .maxViewports = value.max_viewports,
+        .maxViewportWidth = value.max_viewport_width,
+        .maxViewportHeight = value.max_viewport_height,
+        .maxDrawIndirectCount = value.max_draw_indirect_count,
+        .maxClipDistances = value.max_clip_distances,
+        .maxCullDistances = value.max_cull_distances,
+        .maxSamplerAnisotropy = value.max_sampler_anisotropy,
+        .maxSamplerLodBias = value.max_sampler_lod_bias,
+        .minShadingRateTile = value.min_shading_rate_tile,
+        .maxShadingRateTile = value.max_shading_rate_tile,
+        .minUniformBufferAlignment = value.min_uniform_buffer_alignment,
+        .minStorageBufferAlignment = value.min_storage_buffer_alignment,
+        .minTexelBufferAlignment = value.min_texel_buffer_alignment,
+        .copyOffsetAlignment = value.copy_offset_alignment,
+        .copyRowPitchAlignment = value.copy_row_pitch_alignment,
+        .nonCoherentAtomSize = value.non_coherent_atom_size,
+        .bufferTextureGranularity = value.buffer_texture_granularity,
+        .timestampPeriod = value.timestamp_period,
+    };
+}
+
+inline CapsBindless fromC(const bfr_caps_bindless& value) {
+    return {
+        .maxTextures = value.max_textures,
+        .maxStorageTextures = value.max_storage_textures,
+        .maxStorageBuffers = value.max_storage_buffers,
+        .maxUniformBuffers = value.max_uniform_buffers,
+        .maxSamplers = value.max_samplers,
+        .maxPerStage = value.max_per_stage,
+    };
+}
+
+inline CapsCompute fromC(const bfr_caps_compute& value) {
+    return {
+        .maxWorkgroupCount = std::to_array(value.max_workgroup_count),
+        .maxWorkgroupSize = std::to_array(value.max_workgroup_size),
+        .maxWorkgroupInvocations = value.max_workgroup_invocations,
+        .maxSharedMemory = value.max_shared_memory,
+        .subgroupSize = value.subgroup_size,
+        .minSubgroupSize = value.min_subgroup_size,
+        .maxSubgroupSize = value.max_subgroup_size,
+    };
+}
+
+inline CapsMesh fromC(const bfr_caps_mesh& value) {
+    return {
+        .maxMeshWorkgroupSize = std::to_array(value.max_mesh_workgroup_size),
+        .maxMeshInvocations = value.max_mesh_invocations,
+        .maxMeshOutputVertices = value.max_mesh_output_vertices,
+        .maxMeshOutputPrimitives = value.max_mesh_output_primitives,
+        .maxMeshSharedMemory = value.max_mesh_shared_memory,
+        .maxTaskWorkgroupSize = std::to_array(value.max_task_workgroup_size),
+        .maxTaskInvocations = value.max_task_invocations,
+        .maxTaskPayloadSize = value.max_task_payload_size,
+    };
+}
+
+inline CapsRayTracing fromC(const bfr_caps_ray_tracing& value) {
+    return {
+        .maxGeometries = value.max_geometries,
+        .maxInstances = value.max_instances,
+        .maxPrimitives = value.max_primitives,
+        .scratchAlignment = value.scratch_alignment,
+        .maxRecursionDepth = value.max_recursion_depth,
+        .handleSize = value.handle_size,
+        .handleAlignment = value.handle_alignment,
+        .tableAlignment = value.table_alignment,
+    };
+}
+
+inline CapsFeatures fromC(const bfr_caps_features& value) {
+    return {
+        .rayQuery = value.ray_query != BFR_FALSE,
+        .rayTracingPipeline = value.ray_tracing_pipeline != BFR_FALSE,
+        .accelerationStructure = value.acceleration_structure != BFR_FALSE,
+        .meshShader = value.mesh_shader != BFR_FALSE,
+        .taskShader = value.task_shader != BFR_FALSE,
+        .shadingRate = value.shading_rate != BFR_FALSE,
+        .shadingRateTexture = value.shading_rate_texture != BFR_FALSE,
+        .shaderFloat16 = value.shader_float16 != BFR_FALSE,
+        .shaderFloat64 = value.shader_float64 != BFR_FALSE,
+        .shaderInt8 = value.shader_int8 != BFR_FALSE,
+        .shaderInt16 = value.shader_int16 != BFR_FALSE,
+        .shaderInt64 = value.shader_int64 != BFR_FALSE,
+        .atomicInt64 = value.atomic_int64 != BFR_FALSE,
+        .atomicInt64Texture = value.atomic_int64_texture != BFR_FALSE,
+        .atomicFloat32Add = value.atomic_float32_add != BFR_FALSE,
+        .barycentrics = value.barycentrics != BFR_FALSE,
+        .conservativeRaster = value.conservative_raster != BFR_FALSE,
+        .geometryShader = value.geometry_shader != BFR_FALSE,
+        .tessellation = value.tessellation != BFR_FALSE,
+        .multiview = value.multiview != BFR_FALSE,
+        .sampleRateShading = value.sample_rate_shading != BFR_FALSE,
+        .dualSourceBlend = value.dual_source_blend != BFR_FALSE,
+        .independentBlend = value.independent_blend != BFR_FALSE,
+        .logicOp = value.logic_op != BFR_FALSE,
+        .depthClamp = value.depth_clamp != BFR_FALSE,
+        .depthBounds = value.depth_bounds != BFR_FALSE,
+        .wireframe = value.wireframe != BFR_FALSE,
+        .wideLines = value.wide_lines != BFR_FALSE,
+        .samplerAnisotropy = value.sampler_anisotropy != BFR_FALSE,
+        .samplerMinmax = value.sampler_minmax != BFR_FALSE,
+        .compressionBc = value.compression_bc != BFR_FALSE,
+        .compressionEtc2 = value.compression_etc2 != BFR_FALSE,
+        .compressionAstc = value.compression_astc != BFR_FALSE,
+        .compressionAstcHdr = value.compression_astc_hdr != BFR_FALSE,
+        .multiDrawIndirect = value.multi_draw_indirect != BFR_FALSE,
+        .drawIndirectCount = value.draw_indirect_count != BFR_FALSE,
+        .drawIndirectFirstInstance = value.draw_indirect_first_instance != BFR_FALSE,
+        .storageReadWithoutFormat = value.storage_read_without_format != BFR_FALSE,
+        .storageWriteWithoutFormat = value.storage_write_without_format != BFR_FALSE,
+        .timestampsOnAllQueues = value.timestamps_on_all_queues != BFR_FALSE,
+        .pipelineStatistics = value.pipeline_statistics != BFR_FALSE,
+        .occlusionQueryPrecise = value.occlusion_query_precise != BFR_FALSE,
+        .sparseBinding = value.sparse_binding != BFR_FALSE,
+        .sparseTextures = value.sparse_textures != BFR_FALSE,
+        .sparseBuffers = value.sparse_buffers != BFR_FALSE,
+    };
+}
+
+inline MemoryHeap fromC(const bfr_memory_heap& value) {
+    return {
+        .size = value.size,
+        .deviceLocal = value.device_local != BFR_FALSE,
+        .hostVisible = value.host_visible != BFR_FALSE,
+    };
+}
+
+inline MemoryType fromC(const bfr_memory_type& value) {
+    return {
+        .heap = value.heap,
+        .deviceLocal = value.device_local != BFR_FALSE,
+        .hostVisible = value.host_visible != BFR_FALSE,
+        .hostCoherent = value.host_coherent != BFR_FALSE,
+        .hostCached = value.host_cached != BFR_FALSE,
+        .lazilyAllocated = value.lazily_allocated != BFR_FALSE,
+    };
+}
+
+inline CapsMemory fromC(const bfr_caps_memory& value) {
+    return {
+        .heapCount = value.heap_count,
+        .heaps = arrayFrom<MemoryHeap>(value.heaps, [](const bfr_memory_heap& element) { return fromC(element); }),
+        .typeCount = value.type_count,
+        .types = arrayFrom<MemoryType>(value.types, [](const bfr_memory_type& element) { return fromC(element); }),
+        .unified = value.unified != BFR_FALSE,
+    };
+}
+
+inline CapsQueues fromC(const bfr_caps_queues& value) {
+    return {
+        .graphics = value.graphics,
+        .compute = value.compute,
+        .copy = value.copy,
+        .graphicsTimestampBits = value.graphics_timestamp_bits,
+        .computeTimestampBits = value.compute_timestamp_bits,
+        .copyTimestampBits = value.copy_timestamp_bits,
+    };
+}
+
+inline Caps fromC(const bfr_caps& value) {
+    return {
+        .info = fromC(value.info),
+        .limits = fromC(value.limits),
+        .bindless = fromC(value.bindless),
+        .compute = fromC(value.compute),
+        .mesh = fromC(value.mesh),
+        .rayTracing = fromC(value.ray_tracing),
+        .features = fromC(value.features),
+        .memory = fromC(value.memory),
+        .queues = fromC(value.queues),
+    };
+}
+
+inline FormatCaps fromC(const bfr_format_caps& value) {
+    return {
+        .format = static_cast<Format>(value.format),
+        .sampled = value.sampled != BFR_FALSE,
+        .filterLinear = value.filter_linear != BFR_FALSE,
+        .filterMinmax = value.filter_minmax != BFR_FALSE,
+        .storage = value.storage != BFR_FALSE,
+        .storageAtomic = value.storage_atomic != BFR_FALSE,
+        .colorAttachment = value.color_attachment != BFR_FALSE,
+        .blend = value.blend != BFR_FALSE,
+        .depthStencil = value.depth_stencil != BFR_FALSE,
+        .copySrc = value.copy_src != BFR_FALSE,
+        .copyDst = value.copy_dst != BFR_FALSE,
+        .texelBuffer = value.texel_buffer != BFR_FALSE,
+        .storageTexelBuffer = value.storage_texel_buffer != BFR_FALSE,
+        .storageTexelBufferAtomic = value.storage_texel_buffer_atomic != BFR_FALSE,
+        .sampleCounts = value.sample_counts,
+    };
+}
+
+inline SurfaceCaps fromC(const bfr_surface_caps& value) {
+    return {
+        .minImageCount = value.min_image_count,
+        .maxImageCount = value.max_image_count,
+        .width = value.width,
+        .height = value.height,
+        .minWidth = value.min_width,
+        .minHeight = value.min_height,
+        .maxWidth = value.max_width,
+        .maxHeight = value.max_height,
+        .rotation = static_cast<SurfaceRotation>(value.rotation),
+        .fifo = value.fifo != BFR_FALSE,
+        .fifoRelaxed = value.fifo_relaxed != BFR_FALSE,
+        .mailbox = value.mailbox != BFR_FALSE,
+        .immediate = value.immediate != BFR_FALSE,
+        .alphaOpaque = value.alpha_opaque != BFR_FALSE,
+        .alphaPremultiplied = value.alpha_premultiplied != BFR_FALSE,
+        .alphaPostmultiplied = value.alpha_postmultiplied != BFR_FALSE,
+        .alphaInherit = value.alpha_inherit != BFR_FALSE,
+    };
+}
+
+inline SurfaceFormat fromC(const bfr_surface_format& value) {
+    return {
+        .format = static_cast<Format>(value.format),
+        .colorSpace = static_cast<ColorSpace>(value.color_space),
+    };
+}
+
+inline MemoryBudgetHeap fromC(const bfr_memory_budget_heap& value) {
+    return {.budget = value.budget, .usage = value.usage};
+}
+
+inline MemoryBudget fromC(const bfr_memory_budget& value) {
+    return {
+        .heapCount = value.heap_count,
+        .heaps = arrayFrom<MemoryBudgetHeap>(value.heaps, [](const bfr_memory_budget_heap& element) { return fromC(element); }),
+    };
+}
+
 template <> inline constexpr bool kExtends<WindowXlib, DeviceDesc> = true;
 template <> inline constexpr bool kExtends<WindowWayland, DeviceDesc> = true;
 template <> inline constexpr bool kExtends<WindowWin32, DeviceDesc> = true;
@@ -282,6 +1137,12 @@ template <> inline constexpr bool kExtends<WindowWayland, SwapchainDesc> = true;
 template <> inline constexpr bool kExtends<WindowWin32, SwapchainDesc> = true;
 template <> inline constexpr bool kExtends<WindowMetal, SwapchainDesc> = true;
 template <> inline constexpr bool kExtends<WindowHeadless, SwapchainDesc> = true;
+
+template <> inline constexpr bool kExtends<WindowXlib, SurfaceDesc> = true;
+template <> inline constexpr bool kExtends<WindowWayland, SurfaceDesc> = true;
+template <> inline constexpr bool kExtends<WindowWin32, SurfaceDesc> = true;
+template <> inline constexpr bool kExtends<WindowMetal, SurfaceDesc> = true;
+template <> inline constexpr bool kExtends<WindowHeadless, SurfaceDesc> = true;
 
 } // namespace detail
 
@@ -316,6 +1177,30 @@ public:
 
     /// Lists the instance's adapters.
     [[nodiscard]] Expected<std::vector<AdapterInfo>> adapters() const;
+
+    /// Writes everything about an adapter that stays the same while it runs. Needs no device.
+    [[nodiscard]] Expected<Caps> caps(std::uint32_t adapter) const;
+
+    /// Lists what an adapter does with each format, every format in the order bfr_format declares
+    /// them.
+    [[nodiscard]] Expected<std::vector<FormatCaps>> formats(std::uint32_t adapter) const;
+
+    /// Writes what a swapchain for the window chained to desc may be on an adapter. Asks the window
+    /// system each time, since the window changes. Fails with present_unsupported for a driver that
+    /// would crash if asked.
+    template <class... Extensions>
+        requires(detail::kExtends<Extensions, SurfaceDesc> && ...)
+    [[nodiscard]] Expected<SurfaceCaps> surfaceCaps(std::uint32_t adapter, const SurfaceDesc& desc, const Extensions&... extensions) const;
+
+    /// Lists the formats and color spaces a swapchain for the window chained to desc may use on an
+    /// adapter, the order the window system gives.
+    template <class... Extensions>
+        requires(detail::kExtends<Extensions, SurfaceDesc> && ...)
+    [[nodiscard]] Expected<std::vector<SurfaceFormat>> surfaceFormats(std::uint32_t adapter, const SurfaceDesc& desc, const Extensions&... extensions) const;
+
+    /// Writes the backend's own object for an adapter, for what BFR does not cover: a
+    /// VkPhysicalDevice on Vulkan. It stays valid while the instance lives.
+    [[nodiscard]] Expected<void*> native(std::uint32_t adapter) const;
 
     /// Opens an adapter. Chain a window struct to pick a queue that can present to it.
     template <class... Extensions>
@@ -356,6 +1241,10 @@ public:
     /// The C value, for calls bfr.hpp does not wrap; this still owns it.
     [[nodiscard]] bfr_device* get() const { return device_; }
     [[nodiscard]] explicit operator bool() const { return device_ != nullptr; }
+
+    /// Writes how much memory the device's process may use and uses now. Fails with unsupported
+    /// when the driver cannot say.
+    [[nodiscard]] Expected<MemoryBudget> budget() const;
 
     /// Creates a swapchain for the window chained to desc, which the device must be able to present
     /// to. It has no images until the first bfr_device_resize_swapchain gives it a size.
@@ -448,6 +1337,90 @@ inline Expected<std::vector<AdapterInfo>> Instance::adapters() const {
     return adapters;
 }
 
+inline Expected<Caps> Instance::caps(std::uint32_t adapter) const {
+    bfr_caps caps{};
+    if (const bfr_result result = bfr_get_caps(instance_, adapter, &caps); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(caps);
+}
+
+inline Expected<std::vector<FormatCaps>> Instance::formats(std::uint32_t adapter) const {
+    std::vector<bfr_format_caps> formatsC;
+    std::uint32_t count = 0;
+    // Asked again while the list grows between the two calls.
+    for (;;) {
+        bfr_result result = bfr_get_formats(instance_, adapter, &count, nullptr);
+        if (result < 0) {
+            return std::unexpected(detail::failure(result));
+        }
+        formatsC.resize(count);
+        result = bfr_get_formats(instance_, adapter, &count, formatsC.data());
+        if (result < 0) {
+            return std::unexpected(detail::failure(result));
+        }
+        if (result != BFR_RESULT_INCOMPLETE) {
+            break;
+        }
+    }
+    std::vector<FormatCaps> formats;
+    formats.reserve(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        formats.push_back(detail::fromC(formatsC[i]));
+    }
+    return formats;
+}
+
+template <class... Extensions>
+    requires(detail::kExtends<Extensions, SurfaceDesc> && ...)
+Expected<SurfaceCaps> Instance::surfaceCaps(std::uint32_t adapter, const SurfaceDesc& desc, const Extensions&... extensions) const {
+    const detail::Chain<decltype(detail::toC(extensions))...> chain{detail::toC(extensions)...};
+    const bfr_surface_desc cDesc = detail::toC(desc, chain.head());
+    bfr_surface_caps caps{};
+    if (const bfr_result result = bfr_get_surface_caps(instance_, adapter, &cDesc, &caps); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(caps);
+}
+
+template <class... Extensions>
+    requires(detail::kExtends<Extensions, SurfaceDesc> && ...)
+Expected<std::vector<SurfaceFormat>> Instance::surfaceFormats(std::uint32_t adapter, const SurfaceDesc& desc, const Extensions&... extensions) const {
+    const detail::Chain<decltype(detail::toC(extensions))...> chain{detail::toC(extensions)...};
+    const bfr_surface_desc cDesc = detail::toC(desc, chain.head());
+    std::vector<bfr_surface_format> formatsC;
+    std::uint32_t count = 0;
+    // Asked again while the list grows between the two calls.
+    for (;;) {
+        bfr_result result = bfr_get_surface_formats(instance_, adapter, &cDesc, &count, nullptr);
+        if (result < 0) {
+            return std::unexpected(detail::failure(result));
+        }
+        formatsC.resize(count);
+        result = bfr_get_surface_formats(instance_, adapter, &cDesc, &count, formatsC.data());
+        if (result < 0) {
+            return std::unexpected(detail::failure(result));
+        }
+        if (result != BFR_RESULT_INCOMPLETE) {
+            break;
+        }
+    }
+    std::vector<SurfaceFormat> formats;
+    formats.reserve(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        formats.push_back(detail::fromC(formatsC[i]));
+    }
+    return formats;
+}
+
+inline Expected<void*> Instance::native(std::uint32_t adapter) const {
+    void* native{};
+    if (const bfr_result result = bfr_get_native(instance_, adapter, &native); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return native;
+}
+
 template <class... Extensions>
     requires(detail::kExtends<Extensions, DeviceDesc> && ...)
 Expected<Device> Instance::createDevice(const DeviceDesc& desc, const Extensions&... extensions) const {
@@ -458,6 +1431,14 @@ Expected<Device> Instance::createDevice(const DeviceDesc& desc, const Extensions
         return std::unexpected(detail::failure(result));
     }
     return Device{device, keepAlive_};
+}
+
+inline Expected<MemoryBudget> Device::budget() const {
+    bfr_memory_budget budget{};
+    if (const bfr_result result = bfr_get_budget(device_, &budget); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(budget);
 }
 
 template <class... Extensions>

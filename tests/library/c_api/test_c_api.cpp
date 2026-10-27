@@ -8,12 +8,16 @@
 #include <catch2/matchers/catch_matchers_quantifiers.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <format>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -310,4 +314,203 @@ TEST_CASE("C API sends BFR's messages from min_severity up", "[c_api][gpu]") {
                Catch::Matchers::AnyMatch(Catch::Matchers::StartsWith("Vulkan loader ")));
     CHECK_THAT(created(BFR_MESSAGE_SEVERITY_WARNING),
                Catch::Matchers::NoneMatch(Catch::Matchers::StartsWith("Vulkan loader ")));
+}
+
+namespace {
+
+std::string_view text(bfr_string string) {
+    return {string.data, string.length};
+}
+
+// What is wrong with the caps a Vulkan adapter listed as listed wrote: each
+// name whose check fails.
+std::vector<std::string> capsProblems(const bfr_caps& caps, const bfr_adapter_info& listed) {
+    constexpr std::uint32_t kMinTexture2d = 4096;
+    constexpr std::uint32_t kMinWorkgroupSize = 128;
+    const std::vector<std::pair<bool, std::string>> checks{
+        {text(caps.info.name) == text(listed.name), "name"},
+        {caps.info.type == listed.type, "type"},
+        {caps.info.backend == BFR_BACKEND_VULKAN, "backend"},
+        {caps.info.api_major == 1, "api_major"},
+        {caps.info.driver_name.length > 0, "driver_name"},
+        {caps.limits.max_texture_2d >= kMinTexture2d, "max_texture_2d"},
+        {caps.compute.max_workgroup_size[0] >= kMinWorkgroupSize, "max_workgroup_size"},
+        {caps.memory.heap_count > 0 && caps.memory.heaps[0].size > 0, "heaps"},
+        {caps.memory.type_count > 0, "types"},
+        {caps.queues.graphics >= 1, "graphics queues"},
+    };
+    std::vector<std::string> problems;
+    for (const auto& [held, name] : checks) {
+        if (!held) {
+            problems.push_back(name);
+        }
+    }
+    return problems;
+}
+
+// The CPU adapter, lavapipe, which presents headless on every test machine.
+std::uint32_t cpuAdapter(bfr_instance* instance) {
+    std::uint32_t count = 0;
+    REQUIRE(bfr_instance_get_adapters(instance, &count, nullptr) == BFR_RESULT_SUCCESS);
+    std::vector<bfr_adapter_info> adapters(count);
+    REQUIRE(bfr_instance_get_adapters(instance, &count, adapters.data()) == BFR_RESULT_SUCCESS);
+    for (std::uint32_t adapter = 0; adapter < count; ++adapter) {
+        if (adapters[adapter].type == BFR_ADAPTER_TYPE_CPU) {
+            return adapter;
+        }
+    }
+    FAIL("no CPU adapter");
+    return 0;
+}
+
+} // namespace
+
+TEST_CASE("C API writes each adapter's caps", "[c_api][gpu]") {
+    std::vector<std::string> messages;
+    const Instance instance{messages};
+    std::uint32_t count = 0;
+    REQUIRE(bfr_instance_get_adapters(instance.instance, &count, nullptr) == BFR_RESULT_SUCCESS);
+    std::vector<bfr_adapter_info> adapters(count);
+    REQUIRE(bfr_instance_get_adapters(instance.instance, &count, adapters.data()) == BFR_RESULT_SUCCESS);
+
+    for (std::uint32_t adapter = 0; adapter < count; ++adapter) {
+        bfr_caps caps{};
+        const bfr_result result = bfr_get_caps(instance.instance, adapter, &caps);
+
+        INFO(lastError());
+        CHECK(result == BFR_RESULT_SUCCESS);
+        CHECK_THAT(capsProblems(caps, adapters[adapter]), Catch::Matchers::IsEmpty());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C API refuses caps queries with null arguments", "[c_api][gpu]") {
+    std::vector<std::string> messages;
+    const Instance instance{messages};
+    bfr_caps caps{};
+    bfr_surface_caps surfaceCaps{};
+
+    const std::vector<bfr_result> results{
+        bfr_get_caps(nullptr, 0, &caps),
+        bfr_get_caps(instance.instance, 0, nullptr),
+        bfr_get_formats(instance.instance, 0, nullptr, nullptr),
+        bfr_get_surface_caps(instance.instance, 0, nullptr, &surfaceCaps),
+        bfr_get_surface_formats(instance.instance, 0, nullptr, nullptr, nullptr),
+        bfr_get_native(instance.instance, 0, nullptr),
+        bfr_get_budget(nullptr, nullptr),
+    };
+
+    CHECK(std::ranges::all_of(results, [](bfr_result result) { return result == BFR_RESULT_ERROR_INVALID_ARGUMENT; }));
+    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("must not be null"));
+}
+
+TEST_CASE("C API refuses caps queries about an adapter it does not list", "[c_api][gpu]") {
+    std::vector<std::string> messages;
+    const Instance instance{messages};
+    std::uint32_t count = 0;
+    REQUIRE(bfr_instance_get_adapters(instance.instance, &count, nullptr) == BFR_RESULT_SUCCESS);
+    bfr_caps caps{};
+    std::uint32_t formats = 0;
+    const bfr_surface_desc surface{.next = &kHeadless.chain};
+    bfr_surface_caps surfaceCaps{};
+    void* native = &caps;
+
+    const std::vector<bfr_result> results{
+        bfr_get_formats(instance.instance, count, &formats, nullptr),
+        bfr_get_surface_caps(instance.instance, count, &surface, &surfaceCaps),
+        bfr_get_surface_formats(instance.instance, count, &surface, &formats, nullptr),
+        bfr_get_native(instance.instance, count, &native),
+        bfr_get_caps(instance.instance, count, &caps),
+    };
+
+    CHECK(std::ranges::all_of(results, [](bfr_result result) { return result == BFR_RESULT_ERROR_INVALID_ARGUMENT; }));
+    CHECK_THAT(lastError(), Catch::Matchers::Equals(std::format("adapter {} of {}", count, count)));
+    CHECK(native == nullptr);
+}
+
+TEST_CASE("C API lists every format in two calls, and says when the array is too small", "[c_api][gpu]") {
+    std::vector<std::string> messages;
+    const Instance instance{messages};
+    std::uint32_t count = 0;
+    REQUIRE(bfr_get_formats(instance.instance, 0, &count, nullptr) == BFR_RESULT_SUCCESS);
+    REQUIRE(count > 100);
+    std::vector<bfr_format_caps> formats(count);
+
+    std::uint32_t written = count;
+    CHECK(bfr_get_formats(instance.instance, 0, &written, formats.data()) == BFR_RESULT_SUCCESS);
+    CHECK(written == count);
+    CHECK(formats.front().format == BFR_FORMAT_R8_UNORM);
+    CHECK(formats.back().format == BFR_FORMAT_ASTC_12X12_FLOAT);
+    const auto rgba8 = std::ranges::find(formats, BFR_FORMAT_RGBA8_UNORM, &bfr_format_caps::format);
+    REQUIRE(rgba8 != formats.end());
+    CHECK(rgba8->color_attachment == BFR_TRUE);
+    CHECK(rgba8->sampled == BFR_TRUE);
+
+    std::uint32_t few = 2;
+    CHECK(bfr_get_formats(instance.instance, 0, &few, formats.data()) == BFR_RESULT_INCOMPLETE);
+    CHECK(few == 2);
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C API reports what a swapchain for a headless window may be", "[c_api][gpu]") {
+    std::vector<std::string> messages;
+    const Instance instance{messages};
+    const std::uint32_t adapter = cpuAdapter(instance.instance);
+    const bfr_surface_desc desc{.next = &kHeadless.chain};
+    bfr_surface_caps caps{};
+    std::uint32_t count = 0;
+
+    CHECK(bfr_get_surface_caps(instance.instance, adapter, &desc, &caps) == BFR_RESULT_SUCCESS);
+    CHECK(bfr_get_surface_formats(instance.instance, adapter, &desc, &count, nullptr) == BFR_RESULT_SUCCESS);
+
+    INFO(lastError());
+    CHECK(caps.min_image_count >= 1);
+    CHECK(caps.fifo == BFR_TRUE);
+    REQUIRE(count > 0);
+    std::vector<bfr_surface_format> formats(count);
+    CHECK(bfr_get_surface_formats(instance.instance, adapter, &desc, &count, formats.data()) == BFR_RESULT_SUCCESS);
+    CHECK(std::ranges::any_of(formats, [](const bfr_surface_format& format) {
+        return format.color_space == BFR_COLOR_SPACE_SRGB;
+    }));
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C API needs exactly one window to ask about a surface", "[c_api][gpu]") {
+    std::vector<std::string> messages;
+    const Instance instance{messages};
+    bfr_surface_caps caps{};
+
+    const bfr_surface_desc none{.next = nullptr};
+    CHECK(bfr_get_surface_caps(instance.instance, 0, &none, &caps) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("needs a window"));
+
+    const bfr_window_headless second{.chain = {.next = &kHeadless.chain, .type = BFR_STRUCT_TYPE_WINDOW_HEADLESS}};
+    const bfr_surface_desc two{.next = &second.chain};
+    CHECK(bfr_get_surface_caps(instance.instance, 0, &two, &caps) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("more than one window"));
+}
+
+TEST_CASE("C API gives a device's memory budget or says the driver can't", "[c_api][gpu]") {
+    std::vector<std::string> messages;
+    const Instance instance{messages};
+    const HeadlessDevice device{instance.instance};
+    bfr_memory_budget budget{};
+
+    const bfr_result result = bfr_get_budget(device.device, &budget);
+
+    INFO(lastError());
+    const bool unsupported = result == BFR_RESULT_ERROR_UNSUPPORTED;
+    CHECK((result == BFR_RESULT_SUCCESS || unsupported));
+    CHECK((unsupported || (budget.heap_count > 0 && budget.heaps[0].budget > 0)));
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C API gives each adapter's native object", "[c_api][gpu]") {
+    std::vector<std::string> messages;
+    const Instance instance{messages};
+    void* native = nullptr;
+
+    CHECK(bfr_get_native(instance.instance, 0, &native) == BFR_RESULT_SUCCESS);
+
+    CHECK(native != nullptr);
 }

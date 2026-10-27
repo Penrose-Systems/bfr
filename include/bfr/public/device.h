@@ -1,5 +1,6 @@
 #pragma once
 
+#include "caps.h"
 #include "error.h"
 #include "swapchain.h"
 #include "window.h"
@@ -40,6 +41,10 @@ public:
     /// nothing. Fails with RhiInvalidHandle when the swapchain is already
     /// destroyed.
     [[nodiscard]] virtual core::Result<void> destroySwapchain(SwapchainHandle swapchain) = 0;
+
+    /// How much of each heap the process may use and uses now. Fails with
+    /// RhiUnsupported when the driver can't say.
+    [[nodiscard]] virtual core::Result<MemoryBudget> budget() const = 0;
 
 protected:
     Device() = default;

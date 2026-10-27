@@ -45,6 +45,10 @@ std::string_view name(ErrorCode code) noexcept {
             return "RhiDeviceLost";
         case ErrorCode::RhiSurfaceLost:
             return "RhiSurfaceLost";
+        case ErrorCode::RhiUnsupported:
+            return "RhiUnsupported";
+        case ErrorCode::RhiQueryFailed:
+            return "RhiQueryFailed";
     }
     return "Unknown";
 }

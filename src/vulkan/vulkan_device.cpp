@@ -1,8 +1,10 @@
 #include "vulkan_device.h"
 
+#include "caps.h"
 #include "error.h"
 #include "log.h"
 #include "swapchain.h"
+#include "vulkan_caps.h"
 #include "vulkan_rhi.h"
 #include "vulkan_swapchain.h"
 #include "window.h"
@@ -18,11 +20,13 @@
 
 namespace bfr::rhi::vulkan {
 
-VulkanDevice::VulkanDevice(VulkanRhi& rhi, VkPhysicalDevice adapter, VkDevice device, std::uint32_t presentFamily)
+VulkanDevice::VulkanDevice(VulkanRhi& rhi, VkPhysicalDevice adapter, VkDevice device, std::uint32_t presentFamily,
+                           bool hasBudget)
     : rhi_(&rhi),
       adapter_(adapter),
       device_(device),
       presentFamily_(presentFamily),
+      hasBudget_(hasBudget),
       swapchains_("swapchains", kSwapchainCapacity, kSwapchainLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
 }
@@ -71,6 +75,13 @@ core::Result<void> VulkanDevice::destroySwapchain(SwapchainHandle swapchain) {
         return {};
     }
     return core::failure(core::ErrorCode::RhiInvalidHandle, "the swapchain handle is stale");
+}
+
+core::Result<MemoryBudget> VulkanDevice::budget() const {
+    if (!hasBudget_) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "the driver lacks VK_EXT_memory_budget");
+    }
+    return readBudget(adapter_);
 }
 
 VulkanDevice::~VulkanDevice() {

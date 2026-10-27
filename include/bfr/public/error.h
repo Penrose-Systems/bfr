@@ -25,6 +25,8 @@ enum class ErrorCode : std::uint8_t {
     RhiOutOfMemory,
     RhiDeviceLost,
     RhiSurfaceLost,
+    RhiUnsupported,
+    RhiQueryFailed,
 };
 
 struct Error {

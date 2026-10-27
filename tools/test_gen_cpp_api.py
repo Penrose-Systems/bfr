@@ -85,6 +85,42 @@ class RenderTests(unittest.TestCase):
         self.assertIn("    /// Lists the formats.\n", self.header)
         self.assertIn("        if (result != BFR_RESULT_INCOMPLETE) {", self.header)
 
+    def test_an_out_struct_converts_the_structs_and_arrays_it_holds(self) -> None:
+        spec = with_more(MINIMAL)
+        spec["structs"]["format"]["members"] += [
+            {"name": "uuid", "type": "u8", "fixed": 16},
+            {"name": "period", "type": "f32"},
+        ]
+        spec["structs"]["caps"] = {
+            "doc": "Caps.",
+            "members": [{"name": "format", "type": "format"}, {"name": "formats", "type": "format", "fixed": 2}],
+        }
+        spec["functions"]["device_get_caps"] = {
+            "doc": "Gets caps.",
+            "returns": "result",
+            "params": [{"name": "device", "type": "device"}, {"name": "caps", "type": "caps", "pointer": "out"}],
+        }
+        header = render(Api(spec))
+        self.assertIn("    std::array<std::uint8_t, 16> uuid{};", header)
+        self.assertIn("    float period{};", header)
+        self.assertIn(".uuid = std::to_array(value.uuid)", header)
+        self.assertIn("        .format = fromC(value.format),", header)
+        self.assertIn("arrayFrom<Format>(value.formats, [](const bfr_format& element) { return fromC(element); })",
+                      header)
+        self.assertIn("    [[nodiscard]] Expected<Caps> caps() const;", header)
+
+    def test_a_plain_out_param_is_returned_as_its_value(self) -> None:
+        spec = with_more(MINIMAL)
+        spec["functions"]["device_get_native"] = {
+            "doc": "Gets the native object.",
+            "returns": "result",
+            "params": [{"name": "device", "type": "device"}, {"name": "native", "type": "opaque", "pointer": "out"}],
+        }
+        header = render(Api(spec))
+        self.assertIn("    [[nodiscard]] Expected<void*> native() const;", header)
+        self.assertIn("    void* native{};", header)
+        self.assertIn("    return native;", header)
+
     def test_the_header_is_exempt_from_lint_and_format(self) -> None:
         self.assertIn("// clang-format off\n// NOLINTBEGIN", self.header)
         self.assertTrue(self.header.endswith("// NOLINTEND\n// clang-format on\n"))

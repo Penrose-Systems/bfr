@@ -1,12 +1,15 @@
 #include "vulkan_rhi.h"
 
+#include "caps.h"
 #include "device.h"
 #include "error.h"
+#include "format.h"
 #include "log.h"
 #include "queue_families.h"
 #include "rhi.h"
 #include "rhi_config.h"
 #include "text.h"
+#include "vulkan_caps.h"
 #include "vulkan_device.h"
 #include "vulkan_list.h"
 #include "vulkan_loader.h"
@@ -26,12 +29,12 @@
 #include <expected>
 #include <format>
 #include <iterator>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -49,7 +52,7 @@ namespace {
 constexpr const char* kValidationLayer = "VK_LAYER_KHRONOS_validation";
 
 // The oldest Vulkan an adapter may report and still be listed.
-constexpr std::uint32_t kFloorVersion = VK_API_VERSION_1_2;
+constexpr std::uint32_t kFloorVersion = VK_API_VERSION_1_3;
 
 constexpr std::uint32_t kInstanceVersion = VK_API_VERSION_1_3;
 
@@ -71,19 +74,8 @@ core::Result<std::uint32_t> loaderVersion() {
     return version;
 }
 
-// A device extension every listed adapter needs, unless its Vulkan version
-// made the extension core.
-struct FloorExtension {
-    const char* name;
-    std::uint32_t coreFrom;
-};
-
-constexpr std::uint32_t kNeverCore = std::numeric_limits<std::uint32_t>::max();
-constexpr std::array kFloorExtensions{
-    FloorExtension{.name = VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, .coreFrom = VK_API_VERSION_1_3},
-    FloorExtension{.name = VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME, .coreFrom = VK_API_VERSION_1_3},
-    FloorExtension{.name = VK_KHR_SWAPCHAIN_EXTENSION_NAME, .coreFrom = kNeverCore},
-};
+// The device extensions every listed adapter needs.
+constexpr std::array kFloorExtensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
 // A portability driver, such as MoltenVK, lists it, and a device on that
 // adapter must then enable it. It is provisional, so vulkan_core.h lacks its name.
@@ -96,12 +88,6 @@ std::expected<std::vector<VkExtensionProperties>, VulkanFailure> deviceExtension
                                               return vkEnumerateDeviceExtensionProperties(adapter, nullptr, count,
                                                                                           extensions);
                                           });
-}
-
-bool lists(const std::vector<VkExtensionProperties>& extensions, std::string_view name) {
-    return std::ranges::any_of(extensions, [name](const VkExtensionProperties& extension) {
-        return std::string_view{extension.extensionName} == name;
-    });
 }
 
 std::vector<VkQueueFamilyProperties> queueFamilies(VkPhysicalDevice adapter) {
@@ -140,10 +126,10 @@ std::string familyList(std::span<const VkDeviceQueueCreateInfo> queues) {
     return core::text::join(families, ", ");
 }
 
-// Why the adapter is below the floor, empty when it meets it, or the call that
-// failed while checking.
-std::expected<std::string, VulkanFailure> belowFloor(VkPhysicalDevice adapter,
-                                                     const VkPhysicalDeviceProperties& properties) {
+// Why the adapter is below the floor, empty when it meets it. extensions are
+// the device extensions it lists.
+std::string belowFloor(VkPhysicalDevice adapter, const VkPhysicalDeviceProperties& properties,
+                       std::span<const VkExtensionProperties> extensions) {
     if (properties.apiVersion < kFloorVersion) {
         return std::format("Vulkan {}, needs {}", versionName(properties.apiVersion), versionName(kFloorVersion));
     }
@@ -159,16 +145,13 @@ std::expected<std::string, VulkanFailure> belowFloor(VkPhysicalDevice adapter,
     if (noFamilyRuns(VK_QUEUE_COMPUTE_BIT)) {
         return "no queue family runs compute";
     }
-    const auto extensions = deviceExtensions(adapter);
-    if (!extensions) {
-        return std::unexpected(extensions.error());
-    }
-    std::vector<const char*> missing;
-    for (const FloorExtension& required : kFloorExtensions) {
-        if (properties.apiVersion < required.coreFrom && !lists(*extensions, required.name)) {
-            missing.push_back(required.name);
+    std::vector<std::string> missing;
+    for (const char* required : kFloorExtensions) {
+        if (!lists(extensions, required)) {
+            missing.emplace_back(required);
         }
     }
+    std::ranges::move(missingFloorFeatures(adapter), std::back_inserter(missing));
     return missing.empty() ? std::string{} : "lacks " + core::text::join(missing, ", ");
 }
 
@@ -337,6 +320,10 @@ core::Result<std::vector<const char*>> optionalExtensions() {
     if (available(VK_KHR_SURFACE_EXTENSION_NAME)) {
         extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
         std::ranges::copy_if(surfaceExtensions(), std::back_inserter(extensions), available);
+        // Lets surfaces list color spaces other than sRGB, such as HDR10.
+        if (available(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME)) {
+            extensions.push_back(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+        }
     }
     return extensions;
 }
@@ -411,9 +398,8 @@ std::span<const Adapter> VulkanRhi::adapters() const {
 
 core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapter,
                                                               const core::window::NativeWindow& presentTo) {
-    if (adapter >= adapters_.size()) {
-        return core::failure(core::ErrorCode::RhiAdapterOutOfRange,
-                             std::format("adapter {} of {}", adapter, adapters_.size()));
+    if (auto listed = checkAdapter(adapter); !listed) {
+        return std::unexpected(std::move(listed.error()));
     }
     const Adapter& listed = adapters_[adapter];
     VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
@@ -442,8 +428,10 @@ core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapte
     }
 
     const auto queues = queueCreateInfos(*families, *families->present);
+    const FloorFeatures features;
     VkDeviceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    info.pNext = &features.head();
     info.queueCreateInfoCount = static_cast<std::uint32_t>(queues.size());
     info.pQueueCreateInfos = queues.data();
     info.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
@@ -457,7 +445,58 @@ core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapte
     }
     BFR_LOG_INFO(logger(), "device on {}, queue families {}, extensions: {}", listed.name, familyList(queues),
                  core::text::join(extensions, ", "));
-    return std::make_unique<VulkanDevice>(*this, physicalDevice, device, *families->present);
+    return std::make_unique<VulkanDevice>(*this, physicalDevice, device, *families->present, hasBudget_[adapter]);
+}
+
+core::Result<FormatCaps> VulkanRhi::formatCaps(std::size_t adapter, Format format) const {
+    if (auto listed = checkAdapter(adapter); !listed) {
+        return std::unexpected(std::move(listed.error()));
+    }
+    return readFormatCaps(physicalDevices_[adapter], format);
+}
+
+core::Result<SurfaceCaps> VulkanRhi::surfaceCaps(std::size_t adapter, const core::window::NativeWindow& window) const {
+    return askAboutSurface(adapter, window, readSurfaceCaps);
+}
+
+core::Result<std::vector<SurfaceFormat>> VulkanRhi::surfaceFormats(std::size_t adapter,
+                                                                   const core::window::NativeWindow& window) const {
+    return askAboutSurface(adapter, window, readSurfaceFormats);
+}
+
+core::Result<void*> VulkanRhi::native(std::size_t adapter) const {
+    if (auto listed = checkAdapter(adapter); !listed) {
+        return std::unexpected(std::move(listed.error()));
+    }
+    return physicalDevices_[adapter];
+}
+
+core::Result<void> VulkanRhi::checkAdapter(std::size_t adapter) const {
+    if (adapter >= adapters_.size()) {
+        return core::failure(core::ErrorCode::RhiAdapterOutOfRange,
+                             std::format("adapter {} of {}", adapter, adapters_.size()));
+    }
+    return {};
+}
+
+template <class Query>
+auto VulkanRhi::askAboutSurface(std::size_t adapter, const core::window::NativeWindow& window, Query query) const
+    -> std::invoke_result_t<Query, VkPhysicalDevice, VkSurfaceKHR> {
+    if (auto listed = checkAdapter(adapter); !listed) {
+        return std::unexpected(std::move(listed.error()));
+    }
+    const auto surface = surfaceFor(window);
+    if (!surface) {
+        return std::unexpected(surface.error());
+    }
+    VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
+    if (presentQueryCrashes(physicalDevice, *surface)) {
+        return core::failure(core::ErrorCode::RhiPresentUnsupported,
+                             std::format("{} does not present to headless surfaces; not asked, since loader {} would "
+                                         "crash its driver",
+                                         adapters_[adapter].name, versionName(loaderVersion_)));
+    }
+    return query(physicalDevice, surface->handle());
 }
 
 core::Result<std::vector<VkBool32>> VulkanRhi::presentingFamilies(std::size_t adapter, std::size_t familyCount,
@@ -596,21 +635,25 @@ core::Result<void> VulkanRhi::listAdapters() {
     for (VkPhysicalDevice device : *devices) {
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(device, &properties);
-        const auto reason = belowFloor(device, properties);
-        if (!reason) {
-            const std::string why = "skipped, " + reason.error().message();
+        const auto extensions = deviceExtensions(device);
+        if (!extensions) {
+            const std::string why = "skipped, " + extensions.error().message();
             BFR_LOG_WARN(logger(), "adapter {}: {}", describe(device, properties), why);
             rejected.push_back(std::format("{}: {}", properties.deviceName, why));
             continue;
         }
+        const std::string reason = belowFloor(device, properties, *extensions);
         BFR_LOG_INFO(logger(), "adapter {}: {}", describe(device, properties),
-                     reason->empty() ? std::string{"listed"} : "below the floor, " + *reason);
-        if (!reason->empty()) {
-            rejected.push_back(std::format("{}: below the floor, {}", properties.deviceName, *reason));
+                     reason.empty() ? std::string{"listed"} : "below the floor, " + reason);
+        if (!reason.empty()) {
+            rejected.push_back(std::format("{}: below the floor, {}", properties.deviceName, reason));
             continue;
         }
-        adapters_.push_back({.name = properties.deviceName, .type = adapterType(properties.deviceType)});
+        adapters_.push_back({.name = properties.deviceName,
+                             .type = adapterType(properties.deviceType),
+                             .caps = readCaps(device, *extensions)});
         physicalDevices_.push_back(device);
+        hasBudget_.push_back(lists(*extensions, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME));
     }
     if (adapters_.empty()) {
         return core::failure(core::ErrorCode::RhiNoAdapter, core::error::withReasons("no usable adapter", rejected));

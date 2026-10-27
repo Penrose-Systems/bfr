@@ -80,6 +80,10 @@ typedef enum bfr_result {
     BFR_RESULT_ERROR_INTERNAL = -16,
     // A fixed limit was reached, such as how many objects of one type a device holds.
     BFR_RESULT_ERROR_LIMIT_REACHED = -17,
+    // The adapter cannot do or report what was asked; the message says what.
+    BFR_RESULT_ERROR_UNSUPPORTED = -18,
+    // The API failed when asked about the adapter; the message says how.
+    BFR_RESULT_ERROR_QUERY_FAILED = -19,
     BFR_RESULT_FORCE32 = 0x7FFFFFFF
 } bfr_result;
 
@@ -123,6 +127,194 @@ typedef enum bfr_message_severity {
     BFR_MESSAGE_SEVERITY_ERROR = 5,
     BFR_MESSAGE_SEVERITY_FORCE32 = 0x7FFFFFFF
 } bfr_message_severity;
+
+// How a texel is stored. Channels are named in memory order, so rgba8 holds red in its first byte;
+// a packed format names its channels from the low bits up. unorm and snorm read as 0 to 1 and -1 to
+// 1, srgb decodes to linear, float is floating point.
+typedef enum bfr_format {
+    BFR_FORMAT_R8_UNORM = 1,
+    BFR_FORMAT_R8_SNORM = 2,
+    BFR_FORMAT_R8_UINT = 3,
+    BFR_FORMAT_R8_SINT = 4,
+    BFR_FORMAT_RG8_UNORM = 5,
+    BFR_FORMAT_RG8_SNORM = 6,
+    BFR_FORMAT_RG8_UINT = 7,
+    BFR_FORMAT_RG8_SINT = 8,
+    BFR_FORMAT_RGBA8_UNORM = 9,
+    BFR_FORMAT_RGBA8_SRGB = 10,
+    BFR_FORMAT_RGBA8_SNORM = 11,
+    BFR_FORMAT_RGBA8_UINT = 12,
+    BFR_FORMAT_RGBA8_SINT = 13,
+    BFR_FORMAT_BGRA8_UNORM = 14,
+    BFR_FORMAT_BGRA8_SRGB = 15,
+    BFR_FORMAT_R16_UNORM = 16,
+    BFR_FORMAT_R16_SNORM = 17,
+    BFR_FORMAT_R16_UINT = 18,
+    BFR_FORMAT_R16_SINT = 19,
+    BFR_FORMAT_R16_FLOAT = 20,
+    BFR_FORMAT_RG16_UNORM = 21,
+    BFR_FORMAT_RG16_SNORM = 22,
+    BFR_FORMAT_RG16_UINT = 23,
+    BFR_FORMAT_RG16_SINT = 24,
+    BFR_FORMAT_RG16_FLOAT = 25,
+    BFR_FORMAT_RGBA16_UNORM = 26,
+    BFR_FORMAT_RGBA16_SNORM = 27,
+    BFR_FORMAT_RGBA16_UINT = 28,
+    BFR_FORMAT_RGBA16_SINT = 29,
+    BFR_FORMAT_RGBA16_FLOAT = 30,
+    BFR_FORMAT_R32_UINT = 31,
+    BFR_FORMAT_R32_SINT = 32,
+    BFR_FORMAT_R32_FLOAT = 33,
+    BFR_FORMAT_RG32_UINT = 34,
+    BFR_FORMAT_RG32_SINT = 35,
+    BFR_FORMAT_RG32_FLOAT = 36,
+    BFR_FORMAT_RGB32_UINT = 37,
+    BFR_FORMAT_RGB32_SINT = 38,
+    BFR_FORMAT_RGB32_FLOAT = 39,
+    BFR_FORMAT_RGBA32_UINT = 40,
+    BFR_FORMAT_RGBA32_SINT = 41,
+    BFR_FORMAT_RGBA32_FLOAT = 42,
+    // Red in the low bits.
+    BFR_FORMAT_RGB10A2_UNORM = 43,
+    // Red in the low bits.
+    BFR_FORMAT_RGB10A2_UINT = 44,
+    // Blue in the low bits.
+    BFR_FORMAT_BGR10A2_UNORM = 45,
+    // Red in the low bits.
+    BFR_FORMAT_RG11B10_FLOAT = 46,
+    // Red in the low bits; a shared exponent.
+    BFR_FORMAT_RGB9E5_FLOAT = 47,
+    // Blue in the low bits.
+    BFR_FORMAT_B5G6R5_UNORM = 48,
+    // Blue in the low bits.
+    BFR_FORMAT_BGR5A1_UNORM = 49,
+    // Blue in the low bits.
+    BFR_FORMAT_BGRA4_UNORM = 50,
+    BFR_FORMAT_D16_UNORM = 100,
+    BFR_FORMAT_D24_UNORM_S8_UINT = 101,
+    BFR_FORMAT_D32_FLOAT = 102,
+    BFR_FORMAT_D32_FLOAT_S8_UINT = 103,
+    BFR_FORMAT_S8_UINT = 104,
+    BFR_FORMAT_BC1_UNORM = 200,
+    BFR_FORMAT_BC1_SRGB = 201,
+    BFR_FORMAT_BC2_UNORM = 202,
+    BFR_FORMAT_BC2_SRGB = 203,
+    BFR_FORMAT_BC3_UNORM = 204,
+    BFR_FORMAT_BC3_SRGB = 205,
+    BFR_FORMAT_BC4_UNORM = 206,
+    BFR_FORMAT_BC4_SNORM = 207,
+    BFR_FORMAT_BC5_UNORM = 208,
+    BFR_FORMAT_BC5_SNORM = 209,
+    BFR_FORMAT_BC6H_UFLOAT = 210,
+    BFR_FORMAT_BC6H_SFLOAT = 211,
+    BFR_FORMAT_BC7_UNORM = 212,
+    BFR_FORMAT_BC7_SRGB = 213,
+    BFR_FORMAT_ETC2_RGB8_UNORM = 300,
+    BFR_FORMAT_ETC2_RGB8_SRGB = 301,
+    BFR_FORMAT_ETC2_RGB8A1_UNORM = 302,
+    BFR_FORMAT_ETC2_RGB8A1_SRGB = 303,
+    BFR_FORMAT_ETC2_RGBA8_UNORM = 304,
+    BFR_FORMAT_ETC2_RGBA8_SRGB = 305,
+    BFR_FORMAT_EAC_R11_UNORM = 306,
+    BFR_FORMAT_EAC_R11_SNORM = 307,
+    BFR_FORMAT_EAC_RG11_UNORM = 308,
+    BFR_FORMAT_EAC_RG11_SNORM = 309,
+    BFR_FORMAT_ASTC_4X4_UNORM = 400,
+    BFR_FORMAT_ASTC_4X4_SRGB = 401,
+    BFR_FORMAT_ASTC_4X4_FLOAT = 402,
+    BFR_FORMAT_ASTC_5X4_UNORM = 403,
+    BFR_FORMAT_ASTC_5X4_SRGB = 404,
+    BFR_FORMAT_ASTC_5X4_FLOAT = 405,
+    BFR_FORMAT_ASTC_5X5_UNORM = 406,
+    BFR_FORMAT_ASTC_5X5_SRGB = 407,
+    BFR_FORMAT_ASTC_5X5_FLOAT = 408,
+    BFR_FORMAT_ASTC_6X5_UNORM = 409,
+    BFR_FORMAT_ASTC_6X5_SRGB = 410,
+    BFR_FORMAT_ASTC_6X5_FLOAT = 411,
+    BFR_FORMAT_ASTC_6X6_UNORM = 412,
+    BFR_FORMAT_ASTC_6X6_SRGB = 413,
+    BFR_FORMAT_ASTC_6X6_FLOAT = 414,
+    BFR_FORMAT_ASTC_8X5_UNORM = 415,
+    BFR_FORMAT_ASTC_8X5_SRGB = 416,
+    BFR_FORMAT_ASTC_8X5_FLOAT = 417,
+    BFR_FORMAT_ASTC_8X6_UNORM = 418,
+    BFR_FORMAT_ASTC_8X6_SRGB = 419,
+    BFR_FORMAT_ASTC_8X6_FLOAT = 420,
+    BFR_FORMAT_ASTC_8X8_UNORM = 421,
+    BFR_FORMAT_ASTC_8X8_SRGB = 422,
+    BFR_FORMAT_ASTC_8X8_FLOAT = 423,
+    BFR_FORMAT_ASTC_10X5_UNORM = 424,
+    BFR_FORMAT_ASTC_10X5_SRGB = 425,
+    BFR_FORMAT_ASTC_10X5_FLOAT = 426,
+    BFR_FORMAT_ASTC_10X6_UNORM = 427,
+    BFR_FORMAT_ASTC_10X6_SRGB = 428,
+    BFR_FORMAT_ASTC_10X6_FLOAT = 429,
+    BFR_FORMAT_ASTC_10X8_UNORM = 430,
+    BFR_FORMAT_ASTC_10X8_SRGB = 431,
+    BFR_FORMAT_ASTC_10X8_FLOAT = 432,
+    BFR_FORMAT_ASTC_10X10_UNORM = 433,
+    BFR_FORMAT_ASTC_10X10_SRGB = 434,
+    BFR_FORMAT_ASTC_10X10_FLOAT = 435,
+    BFR_FORMAT_ASTC_12X10_UNORM = 436,
+    BFR_FORMAT_ASTC_12X10_SRGB = 437,
+    BFR_FORMAT_ASTC_12X10_FLOAT = 438,
+    BFR_FORMAT_ASTC_12X12_UNORM = 439,
+    BFR_FORMAT_ASTC_12X12_SRGB = 440,
+    BFR_FORMAT_ASTC_12X12_FLOAT = 441,
+    BFR_FORMAT_FORCE32 = 0x7FFFFFFF
+} bfr_format;
+
+// How a window's display reads the values a swapchain presents.
+typedef enum bfr_color_space {
+    // sRGB. Every window has it.
+    BFR_COLOR_SPACE_SRGB = 1,
+    // scRGB: sRGB primaries, linear, values beyond 0 to 1.
+    BFR_COLOR_SPACE_SRGB_EXTENDED_LINEAR = 2,
+    // sRGB primaries and curve, values beyond 0 to 1.
+    BFR_COLOR_SPACE_SRGB_EXTENDED = 3,
+    // Display P3 with the sRGB curve.
+    BFR_COLOR_SPACE_DISPLAY_P3 = 4,
+    // Display P3, linear.
+    BFR_COLOR_SPACE_DISPLAY_P3_LINEAR = 5,
+    // DCI-P3 with its own curve.
+    BFR_COLOR_SPACE_DCI_P3 = 6,
+    // BT.709 with its curve.
+    BFR_COLOR_SPACE_BT709 = 7,
+    // BT.709, linear.
+    BFR_COLOR_SPACE_BT709_LINEAR = 8,
+    // BT.2020, linear.
+    BFR_COLOR_SPACE_BT2020_LINEAR = 9,
+    // HDR10: BT.2020 with the PQ (ST 2084) curve.
+    BFR_COLOR_SPACE_HDR10_PQ = 10,
+    // BT.2020 with the HLG curve.
+    BFR_COLOR_SPACE_HDR10_HLG = 11,
+    // Dolby Vision.
+    BFR_COLOR_SPACE_DOLBY_VISION = 12,
+    // Adobe RGB with its curve.
+    BFR_COLOR_SPACE_ADOBE_RGB = 13,
+    // Adobe RGB, linear.
+    BFR_COLOR_SPACE_ADOBE_RGB_LINEAR = 14,
+    // Values reach the display as they are.
+    BFR_COLOR_SPACE_PASS_THROUGH = 15,
+    // The display's own space (AMD FreeSync 2).
+    BFR_COLOR_SPACE_DISPLAY_NATIVE = 16,
+    BFR_COLOR_SPACE_FORCE32 = 0x7FFFFFFF
+} bfr_color_space;
+
+// How a window's display is turned relative to its natural orientation.
+typedef enum bfr_surface_rotation {
+    // Not turned.
+    BFR_SURFACE_ROTATION_NONE = 0,
+    // Turned 90 degrees clockwise.
+    BFR_SURFACE_ROTATION_ROTATE_90 = 1,
+    // Turned 180 degrees.
+    BFR_SURFACE_ROTATION_ROTATE_180 = 2,
+    // Turned 270 degrees clockwise.
+    BFR_SURFACE_ROTATION_ROTATE_270 = 3,
+    // Mirrored, or left to the platform.
+    BFR_SURFACE_ROTATION_OTHER = 4,
+    BFR_SURFACE_ROTATION_FORCE32 = 0x7FFFFFFF
+} bfr_surface_rotation;
 
 // Which extension struct a bfr_chain begins.
 typedef enum bfr_struct_type {
@@ -210,7 +402,390 @@ typedef struct bfr_swapchain_images {
     uint32_t count;
 } bfr_swapchain_images;
 
-// An Xlib window. Extends bfr_device_desc, bfr_swapchain_desc; chain.type is
+// Which window to ask about. Chain exactly one window struct.
+typedef struct bfr_surface_desc {
+    const bfr_chain* next;
+} bfr_surface_desc;
+
+// What an adapter is.
+typedef struct bfr_caps_info {
+    // Valid while the instance lives.
+    bfr_string name;
+    bfr_adapter_type type;
+    bfr_backend backend;
+    // The PCI vendor ID: 0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel, 0x13B5 Arm, 0x5143 Qualcomm.
+    uint32_t vendor_id;
+    // The vendor's ID for the GPU.
+    uint32_t device_id;
+    // Empty when the driver does not say. Valid while the instance lives.
+    bfr_string driver_name;
+    // The driver's version as text; empty when the driver does not say. Valid while the instance
+    // lives.
+    bfr_string driver_info;
+    // The driver's version, in the vendor's own encoding.
+    uint64_t driver_version;
+    // The newest API version the adapter supports: Vulkan 1.3.280 is 1, 3, 280.
+    uint32_t api_major;
+    uint32_t api_minor;
+    uint32_t api_patch;
+    // The same GPU has the same UUID in every process and API.
+    uint8_t device_uuid[16];
+    uint8_t driver_uuid[16];
+    // Windows' ID for the GPU, as D3D12 and DXGI give it.
+    uint8_t luid[8];
+    // Whether luid is set; only on Windows.
+    bfr_bool luid_valid;
+    // A pipeline cache loads only on an adapter with the same cache_uuid.
+    uint8_t cache_uuid[16];
+} bfr_caps_info;
+
+// The adapter's limits on textures, buffers, rendering and sampling.
+typedef struct bfr_caps_limits {
+    // Widest 1D texture.
+    uint32_t max_texture_1d;
+    // Widest or tallest 2D texture.
+    uint32_t max_texture_2d;
+    // Largest side of a 3D texture.
+    uint32_t max_texture_3d;
+    // Largest side of a cube texture.
+    uint32_t max_texture_cube;
+    // Most layers in an array texture.
+    uint32_t max_texture_layers;
+    // Largest buffer in bytes.
+    uint64_t max_buffer_size;
+    // Largest single allocation in bytes.
+    uint64_t max_allocation_size;
+    // Most allocations alive at once.
+    uint32_t max_allocations;
+    // Most samplers alive at once.
+    uint32_t max_sampler_objects;
+    // Most bytes a shader reads through one uniform buffer view.
+    uint32_t max_uniform_buffer_range;
+    // Most bytes a shader reaches through one storage buffer view.
+    uint32_t max_storage_buffer_range;
+    // Most elements in a texel buffer view.
+    uint32_t max_texel_buffer_elements;
+    // Most bytes of push constants.
+    uint32_t max_push_constants_size;
+    uint32_t max_color_attachments;
+    // Widest render area.
+    uint32_t max_render_width;
+    // Tallest render area.
+    uint32_t max_render_height;
+    // Most layers rendered at once.
+    uint32_t max_render_layers;
+    // Sample counts for float and normalized color attachments: each set bit is a count it
+    // supports, 1, 2, 4 and so on.
+    uint32_t color_sample_counts;
+    // Sample counts for integer color attachments.
+    uint32_t integer_sample_counts;
+    // Sample counts for depth attachments.
+    uint32_t depth_sample_counts;
+    // Sample counts for stencil attachments.
+    uint32_t stencil_sample_counts;
+    // Sample counts for rendering with no attachments.
+    uint32_t no_attachment_sample_counts;
+    // Sample counts for storage textures.
+    uint32_t storage_texture_sample_counts;
+    uint32_t max_viewports;
+    uint32_t max_viewport_width;
+    uint32_t max_viewport_height;
+    // Most draws one indirect call makes.
+    uint32_t max_draw_indirect_count;
+    uint32_t max_clip_distances;
+    uint32_t max_cull_distances;
+    float max_sampler_anisotropy;
+    float max_sampler_lod_bias;
+    // Smallest tile of a shading rate texture; 0 without one.
+    uint32_t min_shading_rate_tile;
+    // Largest tile of a shading rate texture; 0 without one.
+    uint32_t max_shading_rate_tile;
+    // Alignment in bytes of a uniform buffer view's offset.
+    uint64_t min_uniform_buffer_alignment;
+    // Alignment in bytes of a storage buffer view's offset.
+    uint64_t min_storage_buffer_alignment;
+    // Alignment in bytes of a texel buffer view's offset.
+    uint64_t min_texel_buffer_alignment;
+    // Best alignment in bytes of a buffer offset in a texture copy.
+    uint64_t copy_offset_alignment;
+    // Best alignment in bytes of a row in a texture copy.
+    uint64_t copy_row_pitch_alignment;
+    // Granularity in bytes of flushing memory the CPU writes without coherence.
+    uint64_t non_coherent_atom_size;
+    // Bytes apart a buffer and a texture in one allocation must be.
+    uint64_t buffer_texture_granularity;
+    // Nanoseconds per timestamp tick.
+    float timestamp_period;
+} bfr_caps_limits;
+
+// How many of each resource the bindless tables can hold.
+typedef struct bfr_caps_bindless {
+    // Sampled textures.
+    uint32_t max_textures;
+    uint32_t max_storage_textures;
+    uint32_t max_storage_buffers;
+    uint32_t max_uniform_buffers;
+    uint32_t max_samplers;
+    // All of them together that one shader stage can reach.
+    uint32_t max_per_stage;
+} bfr_caps_bindless;
+
+// The adapter's compute limits.
+typedef struct bfr_caps_compute {
+    // Most workgroups one dispatch makes in x, y and z.
+    uint32_t max_workgroup_count[3];
+    // Largest workgroup in x, y and z.
+    uint32_t max_workgroup_size[3];
+    // Most invocations in one workgroup.
+    uint32_t max_workgroup_invocations;
+    // Most bytes of workgroup shared memory.
+    uint32_t max_shared_memory;
+    // Invocations in a subgroup (a wave or warp) by default.
+    uint32_t subgroup_size;
+    uint32_t min_subgroup_size;
+    uint32_t max_subgroup_size;
+} bfr_caps_compute;
+
+// The adapter's mesh and task shader limits; all 0 without mesh shaders.
+typedef struct bfr_caps_mesh {
+    uint32_t max_mesh_workgroup_size[3];
+    uint32_t max_mesh_invocations;
+    uint32_t max_mesh_output_vertices;
+    uint32_t max_mesh_output_primitives;
+    uint32_t max_mesh_shared_memory;
+    uint32_t max_task_workgroup_size[3];
+    uint32_t max_task_invocations;
+    uint32_t max_task_payload_size;
+} bfr_caps_mesh;
+
+// The adapter's ray tracing limits. The structure limits are 0 without acceleration structures, the
+// rest without ray tracing pipelines.
+typedef struct bfr_caps_ray_tracing {
+    // Most geometries in a bottom-level structure.
+    uint64_t max_geometries;
+    // Most instances in a top-level structure.
+    uint64_t max_instances;
+    // Most primitives in a bottom-level structure.
+    uint64_t max_primitives;
+    // Alignment in bytes of a build's scratch memory.
+    uint32_t scratch_alignment;
+    // Deepest ray recursion; 0 without ray tracing pipelines.
+    uint32_t max_recursion_depth;
+    // Bytes in a shader binding table record's handle.
+    uint32_t handle_size;
+    // Alignment in bytes of a handle in the table.
+    uint32_t handle_alignment;
+    // Alignment in bytes of the table's start.
+    uint32_t table_alignment;
+} bfr_caps_ray_tracing;
+
+// Optional features the adapter has. The floor's features are always there and not listed.
+typedef struct bfr_caps_features {
+    // Rays traced inline from any shader.
+    bfr_bool ray_query;
+    // Ray tracing pipelines and shader binding tables.
+    bfr_bool ray_tracing_pipeline;
+    bfr_bool acceleration_structure;
+    bfr_bool mesh_shader;
+    bfr_bool task_shader;
+    // A shading rate per draw.
+    bfr_bool shading_rate;
+    // A shading rate per screen tile, from a texture.
+    bfr_bool shading_rate_texture;
+    bfr_bool shader_float16;
+    bfr_bool shader_float64;
+    bfr_bool shader_int8;
+    bfr_bool shader_int16;
+    bfr_bool shader_int64;
+    // 64-bit integer atomics on buffers.
+    bfr_bool atomic_int64;
+    // 64-bit integer atomics on storage textures.
+    bfr_bool atomic_int64_texture;
+    // 32-bit float atomic add on buffers.
+    bfr_bool atomic_float32_add;
+    // Fragment shaders read barycentric coordinates.
+    bfr_bool barycentrics;
+    bfr_bool conservative_raster;
+    bfr_bool geometry_shader;
+    bfr_bool tessellation;
+    bfr_bool multiview;
+    bfr_bool sample_rate_shading;
+    bfr_bool dual_source_blend;
+    // Each color attachment blends its own way.
+    bfr_bool independent_blend;
+    bfr_bool logic_op;
+    bfr_bool depth_clamp;
+    bfr_bool depth_bounds;
+    bfr_bool wireframe;
+    bfr_bool wide_lines;
+    bfr_bool sampler_anisotropy;
+    // Samplers that return the minimum or maximum of the texels they read.
+    bfr_bool sampler_minmax;
+    bfr_bool compression_bc;
+    bfr_bool compression_etc2;
+    bfr_bool compression_astc;
+    bfr_bool compression_astc_hdr;
+    bfr_bool multi_draw_indirect;
+    // Indirect draws that read their count from a buffer.
+    bfr_bool draw_indirect_count;
+    bfr_bool draw_indirect_first_instance;
+    bfr_bool storage_read_without_format;
+    bfr_bool storage_write_without_format;
+    // Every graphics and compute queue writes timestamps.
+    bfr_bool timestamps_on_all_queues;
+    bfr_bool pipeline_statistics;
+    bfr_bool occlusion_query_precise;
+    bfr_bool sparse_binding;
+    // Partly resident 2D textures.
+    bfr_bool sparse_textures;
+    // Partly resident buffers.
+    bfr_bool sparse_buffers;
+} bfr_caps_features;
+
+// One pool of memory.
+typedef struct bfr_memory_heap {
+    // Bytes.
+    uint64_t size;
+    // On or nearest the GPU.
+    bfr_bool device_local;
+    // Some memory type in it is visible to the CPU.
+    bfr_bool host_visible;
+} bfr_memory_heap;
+
+// One kind of memory in a heap.
+typedef struct bfr_memory_type {
+    // Index into the heaps.
+    uint32_t heap;
+    bfr_bool device_local;
+    // The CPU can map it.
+    bfr_bool host_visible;
+    // CPU writes reach the GPU without a flush.
+    bfr_bool host_coherent;
+    // CPU reads are cached.
+    bfr_bool host_cached;
+    // Backed only as the GPU needs it; for transient attachments on tiled GPUs.
+    bfr_bool lazily_allocated;
+} bfr_memory_type;
+
+// The adapter's memory.
+typedef struct bfr_caps_memory {
+    uint32_t heap_count;
+    // The first heap_count are set.
+    bfr_memory_heap heaps[16];
+    uint32_t type_count;
+    // The first type_count are set.
+    bfr_memory_type types[32];
+    // The GPU and CPU share one memory.
+    bfr_bool unified;
+} bfr_caps_memory;
+
+// How many queues of each type the adapter has.
+typedef struct bfr_caps_queues {
+    // Queues that run graphics.
+    uint32_t graphics;
+    // Queues that run compute but not graphics (async compute).
+    uint32_t compute;
+    // Queues that only copy.
+    uint32_t copy;
+    // Valid bits in a graphics queue's timestamps; 0 without timestamps.
+    uint32_t graphics_timestamp_bits;
+    uint32_t compute_timestamp_bits;
+    uint32_t copy_timestamp_bits;
+} bfr_caps_queues;
+
+// Everything about an adapter that stays the same while it runs.
+typedef struct bfr_caps {
+    bfr_caps_info info;
+    bfr_caps_limits limits;
+    bfr_caps_bindless bindless;
+    bfr_caps_compute compute;
+    bfr_caps_mesh mesh;
+    bfr_caps_ray_tracing ray_tracing;
+    bfr_caps_features features;
+    bfr_caps_memory memory;
+    bfr_caps_queues queues;
+} bfr_caps;
+
+// What an adapter does with one format.
+typedef struct bfr_format_caps {
+    bfr_format format;
+    // Shaders sample textures of it.
+    bfr_bool sampled;
+    // Samplers filter it linearly.
+    bfr_bool filter_linear;
+    // Min and max samplers read it.
+    bfr_bool filter_minmax;
+    // Shaders read and write storage textures of it.
+    bfr_bool storage;
+    // Shaders use atomics on storage textures of it.
+    bfr_bool storage_atomic;
+    bfr_bool color_attachment;
+    // Color attachments of it blend.
+    bfr_bool blend;
+    bfr_bool depth_stencil;
+    bfr_bool copy_src;
+    bfr_bool copy_dst;
+    // Shaders read texel buffers of it.
+    bfr_bool texel_buffer;
+    bfr_bool storage_texel_buffer;
+    bfr_bool storage_texel_buffer_atomic;
+    // Sample counts for 2D textures of it: each set bit is a count, 1, 2, 4 and so on; 0 when it
+    // can't be rendered to.
+    uint32_t sample_counts;
+} bfr_format_caps;
+
+// What a window's swapchain may be, on one adapter.
+typedef struct bfr_surface_caps {
+    uint32_t min_image_count;
+    // 0 for no limit.
+    uint32_t max_image_count;
+    // The window's size now; 0xFFFFFFFF each when the swapchain's size sets the window's.
+    uint32_t width;
+    uint32_t height;
+    uint32_t min_width;
+    uint32_t min_height;
+    uint32_t max_width;
+    uint32_t max_height;
+    // How the display is turned now; on phones the app may render turned to match.
+    bfr_surface_rotation rotation;
+    // Presents wait for vertical blank and queue up. Always there.
+    bfr_bool fifo;
+    // As fifo, but a late frame presents at once, and may tear.
+    bfr_bool fifo_relaxed;
+    // Presents wait for vertical blank, and a newer frame replaces a waiting one.
+    bfr_bool mailbox;
+    // Presents at once, and may tear.
+    bfr_bool immediate;
+    // The window ignores alpha.
+    bfr_bool alpha_opaque;
+    bfr_bool alpha_premultiplied;
+    bfr_bool alpha_postmultiplied;
+    // The window system decides how alpha blends.
+    bfr_bool alpha_inherit;
+} bfr_surface_caps;
+
+// A format and color space a window's swapchain may use.
+typedef struct bfr_surface_format {
+    bfr_format format;
+    bfr_color_space color_space;
+} bfr_surface_format;
+
+// How much of one heap the process may use, and uses.
+typedef struct bfr_memory_budget_heap {
+    // Bytes the process may use before allocations start failing or slowing.
+    uint64_t budget;
+    // Bytes the process uses now.
+    uint64_t usage;
+} bfr_memory_budget_heap;
+
+// A device's memory use now, heap by heap, in the order bfr_caps lists the heaps.
+typedef struct bfr_memory_budget {
+    uint32_t heap_count;
+    // The first heap_count are set.
+    bfr_memory_budget_heap heaps[16];
+} bfr_memory_budget;
+
+// An Xlib window. Extends bfr_device_desc, bfr_swapchain_desc, bfr_surface_desc; chain.type is
 // BFR_STRUCT_TYPE_WINDOW_XLIB.
 typedef struct bfr_window_xlib {
     bfr_chain chain;
@@ -220,7 +795,7 @@ typedef struct bfr_window_xlib {
     uint64_t window;
 } bfr_window_xlib;
 
-// A Wayland surface. Extends bfr_device_desc, bfr_swapchain_desc; chain.type is
+// A Wayland surface. Extends bfr_device_desc, bfr_swapchain_desc, bfr_surface_desc; chain.type is
 // BFR_STRUCT_TYPE_WINDOW_WAYLAND.
 typedef struct bfr_window_wayland {
     bfr_chain chain;
@@ -230,7 +805,7 @@ typedef struct bfr_window_wayland {
     void* surface;
 } bfr_window_wayland;
 
-// A Win32 window. Extends bfr_device_desc, bfr_swapchain_desc; chain.type is
+// A Win32 window. Extends bfr_device_desc, bfr_swapchain_desc, bfr_surface_desc; chain.type is
 // BFR_STRUCT_TYPE_WINDOW_WIN32.
 typedef struct bfr_window_win32 {
     bfr_chain chain;
@@ -240,8 +815,8 @@ typedef struct bfr_window_win32 {
     void* window;
 } bfr_window_win32;
 
-// A Core Animation Metal layer. Extends bfr_device_desc, bfr_swapchain_desc; chain.type is
-// BFR_STRUCT_TYPE_WINDOW_METAL.
+// A Core Animation Metal layer. Extends bfr_device_desc, bfr_swapchain_desc, bfr_surface_desc;
+// chain.type is BFR_STRUCT_TYPE_WINDOW_METAL.
 typedef struct bfr_window_metal {
     bfr_chain chain;
     // The CAMetalLayer*.
@@ -249,7 +824,7 @@ typedef struct bfr_window_metal {
 } bfr_window_metal;
 
 // No window. Images are presented nowhere; for tests and offscreen tools. Extends bfr_device_desc,
-// bfr_swapchain_desc; chain.type is BFR_STRUCT_TYPE_WINDOW_HEADLESS.
+// bfr_swapchain_desc, bfr_surface_desc; chain.type is BFR_STRUCT_TYPE_WINDOW_HEADLESS.
 typedef struct bfr_window_headless {
     bfr_chain chain;
 } bfr_window_headless;
@@ -274,6 +849,49 @@ BFR_API bfr_result bfr_instance_get_adapters(
     bfr_instance* instance,
     uint32_t* count,
     bfr_adapter_info* adapters);
+
+// Writes everything about an adapter that stays the same while it runs. Needs no device.
+// adapter: Index into the instance's adapter list.
+BFR_API bfr_result bfr_get_caps(bfr_instance* instance, uint32_t adapter, bfr_caps* caps);
+
+// Lists what an adapter does with each format, every format in the order bfr_format declares them.
+// With formats null, writes how many there are to count. Otherwise writes up to count of them, sets
+// count to how many it wrote, and returns incomplete if there were more.
+// formats: An array of count elements. May be null.
+BFR_API bfr_result bfr_get_formats(
+    bfr_instance* instance,
+    uint32_t adapter,
+    uint32_t* count,
+    bfr_format_caps* formats);
+
+// Writes what a swapchain for the window chained to desc may be on an adapter. Asks the window
+// system each time, since the window changes. Fails with present_unsupported for a driver that
+// would crash if asked.
+BFR_API bfr_result bfr_get_surface_caps(
+    bfr_instance* instance,
+    uint32_t adapter,
+    const bfr_surface_desc* desc,
+    bfr_surface_caps* caps);
+
+// Lists the formats and color spaces a swapchain for the window chained to desc may use on an
+// adapter, the order the window system gives. Only those BFR has names for. With formats null,
+// writes how many there are to count. Otherwise writes up to count of them, sets count to how many
+// it wrote, and returns incomplete if there were more. Fails as bfr_get_surface_caps does.
+// formats: An array of count elements. May be null.
+BFR_API bfr_result bfr_get_surface_formats(
+    bfr_instance* instance,
+    uint32_t adapter,
+    const bfr_surface_desc* desc,
+    uint32_t* count,
+    bfr_surface_format* formats);
+
+// Writes how much memory the device's process may use and uses now. Fails with unsupported when the
+// driver cannot say.
+BFR_API bfr_result bfr_get_budget(bfr_device* device, bfr_memory_budget* budget);
+
+// Writes the backend's own object for an adapter, for what BFR does not cover: a VkPhysicalDevice
+// on Vulkan. It stays valid while the instance lives.
+BFR_API bfr_result bfr_get_native(bfr_instance* instance, uint32_t adapter, void** native);
 
 // Opens an adapter. Chain a window struct to pick a queue that can present to it.
 BFR_API bfr_result bfr_instance_create_device(

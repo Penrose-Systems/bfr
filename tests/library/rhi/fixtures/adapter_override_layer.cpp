@@ -2,6 +2,9 @@
 // the RHI tests:
 // - BFR_ADAPTER_MINOR: the adapter reports Vulkan 1.<minor>.
 // - BFR_ADAPTER_DRIVER_ID: the adapter reports this VkDriverId.
+// - BFR_ADAPTER_VENDOR_ID: the adapter reports this vendor ID.
+// - BFR_ADAPTER_NO_FEATURE: the adapter reports this Vulkan 1.2 or 1.3
+//   feature, by its member name, as missing.
 // - BFR_ADAPTER_HIDE: the adapter leaves this device extension out.
 // - BFR_ADAPTER_ADD: the adapter lists this device extension too, and
 //   vkCreateDevice drops it, since the driver underneath lacks it.
@@ -13,10 +16,11 @@
 // - BFR_PRESENT_UNSUPPORTED: no queue family presents to any surface.
 // - BFR_SURFACE_NO_FORMATS: surfaces list no formats, which Vulkan forbids.
 // - BFR_FAIL: the named function fails with VK_ERROR_UNKNOWN, or the result
-//   BFR_FAIL_RESULT names (VK_ERROR_OUT_OF_HOST_MEMORY, VK_ERROR_DEVICE_LOST or
-//   VK_ERROR_SURFACE_LOST_KHR), and leaves junk in what it would have
-//   returned, as Vulkan allows: one of
+//   BFR_FAIL_RESULT names (VK_ERROR_OUT_OF_HOST_MEMORY, VK_ERROR_DEVICE_LOST,
+//   VK_ERROR_SURFACE_LOST_KHR or VK_ERROR_FORMAT_NOT_SUPPORTED), and leaves
+//   junk in what it would have returned, as Vulkan allows: one of
 //   vkEnumerateDeviceExtensionProperties, vkCreateDevice, vkCreateHeadlessSurfaceEXT,
+//   vkGetPhysicalDeviceImageFormatProperties2,
 //   vkGetPhysicalDeviceSurfaceSupportKHR,
 //   vkGetPhysicalDeviceSurfaceCapabilitiesKHR,
 //   vkGetPhysicalDeviceSurfaceFormatsKHR, vkCreateSwapchainKHR and
@@ -32,7 +36,9 @@
 #include <vulkan/vulkan_core.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <span>
@@ -46,6 +52,8 @@ PFN_vkGetInstanceProcAddr nextGetInstanceProcAddr = nullptr;
 PFN_vkGetDeviceProcAddr nextGetDeviceProcAddr = nullptr;
 PFN_vkGetPhysicalDeviceProperties nextGetPhysicalDeviceProperties = nullptr;
 PFN_vkGetPhysicalDeviceProperties2 nextGetPhysicalDeviceProperties2 = nullptr;
+PFN_vkGetPhysicalDeviceFeatures2 nextGetPhysicalDeviceFeatures2 = nullptr;
+PFN_vkGetPhysicalDeviceImageFormatProperties2 nextGetImageFormatProperties2 = nullptr;
 PFN_vkEnumerateDeviceExtensionProperties nextEnumerateDeviceExtensionProperties = nullptr;
 PFN_vkGetPhysicalDeviceQueueFamilyProperties nextGetPhysicalDeviceQueueFamilyProperties = nullptr;
 PFN_vkGetPhysicalDeviceQueueFamilyProperties2 nextGetPhysicalDeviceQueueFamilyProperties2 = nullptr;
@@ -69,6 +77,9 @@ VkResult failure() {
     if (result == "VK_ERROR_SURFACE_LOST_KHR") {
         return VK_ERROR_SURFACE_LOST_KHR;
     }
+    if (result == "VK_ERROR_FORMAT_NOT_SUPPORTED") {
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    }
     return VK_ERROR_UNKNOWN;
 }
 
@@ -89,9 +100,13 @@ bool separatePresent() {
     return std::getenv("BFR_ADAPTER_SEPARATE_PRESENT") != nullptr;
 }
 
-void overrideVersion(std::uint32_t& apiVersion) {
+// Sets the version and vendor the variables name.
+void overrideProperties(VkPhysicalDeviceProperties& properties) {
     if (const char* minor = std::getenv("BFR_ADAPTER_MINOR"); minor != nullptr) {
-        apiVersion = VK_MAKE_API_VERSION(0, 1, std::stoul(minor), 0);
+        properties.apiVersion = VK_MAKE_API_VERSION(0, 1, std::stoul(minor), 0);
+    }
+    if (const char* vendor = std::getenv("BFR_ADAPTER_VENDOR_ID"); vendor != nullptr) {
+        properties.vendorID = static_cast<std::uint32_t>(std::stoul(vendor, nullptr, 0));
     }
 }
 
@@ -115,6 +130,10 @@ VKAPI_ATTR VkResult VKAPI_CALL createInstance(const VkInstanceCreateInfo* info, 
                                                                                   "vkGetPhysicalDeviceProperties");
         nextGetPhysicalDeviceProperties2 = next<PFN_vkGetPhysicalDeviceProperties2>(*instance,
                                                                                     "vkGetPhysicalDeviceProperties2");
+        nextGetPhysicalDeviceFeatures2 = next<PFN_vkGetPhysicalDeviceFeatures2>(*instance,
+                                                                                "vkGetPhysicalDeviceFeatures2");
+        nextGetImageFormatProperties2 =
+            next<PFN_vkGetPhysicalDeviceImageFormatProperties2>(*instance, "vkGetPhysicalDeviceImageFormatProperties2");
         nextEnumerateDeviceExtensionProperties =
             next<PFN_vkEnumerateDeviceExtensionProperties>(*instance, "vkEnumerateDeviceExtensionProperties");
         nextGetPhysicalDeviceQueueFamilyProperties =
@@ -183,7 +202,7 @@ VKAPI_ATTR VkResult VKAPI_CALL createDevice(VkPhysicalDevice adapter, const VkDe
 VKAPI_ATTR void VKAPI_CALL getPhysicalDeviceProperties(VkPhysicalDevice device,
                                                        VkPhysicalDeviceProperties* properties) {
     nextGetPhysicalDeviceProperties(device, properties);
-    overrideVersion(properties->apiVersion);
+    overrideProperties(*properties);
 }
 
 // Sets the driver ID in the driver properties chained from properties.
@@ -202,8 +221,83 @@ void overrideDriver(VkPhysicalDeviceProperties2& properties) {
 VKAPI_ATTR void VKAPI_CALL getPhysicalDeviceProperties2(VkPhysicalDevice device,
                                                         VkPhysicalDeviceProperties2* properties) {
     nextGetPhysicalDeviceProperties2(device, properties);
-    overrideVersion(properties->properties.apiVersion);
+    overrideProperties(properties->properties);
     overrideDriver(*properties);
+}
+
+// The features BFR_ADAPTER_NO_FEATURE may name.
+template <class Features>
+struct NamedFeature {
+    std::string_view name;
+    VkBool32 Features::* member;
+};
+
+using Vulkan12 = VkPhysicalDeviceVulkan12Features;
+using Vulkan13 = VkPhysicalDeviceVulkan13Features;
+
+constexpr std::array kVulkan12Features{
+    NamedFeature<Vulkan12>{.name = "descriptorIndexing", .member = &Vulkan12::descriptorIndexing},
+    NamedFeature<Vulkan12>{.name = "runtimeDescriptorArray", .member = &Vulkan12::runtimeDescriptorArray},
+    NamedFeature<Vulkan12>{.name = "descriptorBindingPartiallyBound",
+                           .member = &Vulkan12::descriptorBindingPartiallyBound},
+    NamedFeature<Vulkan12>{.name = "descriptorBindingVariableDescriptorCount",
+                           .member = &Vulkan12::descriptorBindingVariableDescriptorCount},
+    NamedFeature<Vulkan12>{.name = "descriptorBindingUpdateUnusedWhilePending",
+                           .member = &Vulkan12::descriptorBindingUpdateUnusedWhilePending},
+    NamedFeature<Vulkan12>{.name = "descriptorBindingSampledImageUpdateAfterBind",
+                           .member = &Vulkan12::descriptorBindingSampledImageUpdateAfterBind},
+    NamedFeature<Vulkan12>{.name = "descriptorBindingStorageImageUpdateAfterBind",
+                           .member = &Vulkan12::descriptorBindingStorageImageUpdateAfterBind},
+    NamedFeature<Vulkan12>{.name = "descriptorBindingStorageBufferUpdateAfterBind",
+                           .member = &Vulkan12::descriptorBindingStorageBufferUpdateAfterBind},
+    NamedFeature<Vulkan12>{.name = "shaderSampledImageArrayNonUniformIndexing",
+                           .member = &Vulkan12::shaderSampledImageArrayNonUniformIndexing},
+    NamedFeature<Vulkan12>{.name = "shaderStorageBufferArrayNonUniformIndexing",
+                           .member = &Vulkan12::shaderStorageBufferArrayNonUniformIndexing},
+    NamedFeature<Vulkan12>{.name = "shaderStorageImageArrayNonUniformIndexing",
+                           .member = &Vulkan12::shaderStorageImageArrayNonUniformIndexing},
+    NamedFeature<Vulkan12>{.name = "timelineSemaphore", .member = &Vulkan12::timelineSemaphore},
+    NamedFeature<Vulkan12>{.name = "bufferDeviceAddress", .member = &Vulkan12::bufferDeviceAddress},
+    NamedFeature<Vulkan12>{.name = "shaderFloat16", .member = &Vulkan12::shaderFloat16},
+};
+
+constexpr std::array kVulkan13Features{
+    NamedFeature<Vulkan13>{.name = "dynamicRendering", .member = &Vulkan13::dynamicRendering},
+    NamedFeature<Vulkan13>{.name = "synchronization2", .member = &Vulkan13::synchronization2},
+    NamedFeature<Vulkan13>{.name = "maintenance4", .member = &Vulkan13::maintenance4},
+};
+
+// Clears the feature BFR_ADAPTER_NO_FEATURE names in features, if it has it.
+template <class Features, std::size_t Count>
+void clearNamed(Features& features, const std::array<NamedFeature<Features>, Count>& named) {
+    const char* hidden = std::getenv("BFR_ADAPTER_NO_FEATURE");
+    for (const auto& feature : named) {
+        if (hidden != nullptr && feature.name == hidden) {
+            features.*feature.member = VK_FALSE;
+        }
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL getPhysicalDeviceFeatures2(VkPhysicalDevice device, VkPhysicalDeviceFeatures2* features) {
+    nextGetPhysicalDeviceFeatures2(device, features);
+    for (auto* next = static_cast<VkBaseOutStructure*>(features->pNext); next != nullptr; next = next->pNext) {
+        if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES) {
+            clearNamed(*std::bit_cast<Vulkan12*>(next), kVulkan12Features);
+        }
+        else if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) {
+            clearNamed(*std::bit_cast<Vulkan13*>(next), kVulkan13Features);
+        }
+    }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL getImageFormatProperties2(VkPhysicalDevice device,
+                                                         const VkPhysicalDeviceImageFormatInfo2* info,
+                                                         VkImageFormatProperties2* properties) {
+    if (failing("vkGetPhysicalDeviceImageFormatProperties2")) {
+        properties->imageFormatProperties.sampleCounts = VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM;
+        return failure();
+    }
+    return nextGetImageFormatProperties2(device, info, properties);
 }
 
 // The driver's queue families as this layer reports them.
@@ -375,6 +469,44 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL getDeviceProcAddr(VkDevice device, cons
     return nextGetDeviceProcAddr(device, name);
 }
 
+// The layer's own version of a physical device function, or null for one it
+// passes through.
+PFN_vkVoidFunction physicalDeviceFunction(std::string_view function) {
+    if (function == "vkGetPhysicalDeviceProperties") {
+        return std::bit_cast<PFN_vkVoidFunction>(&getPhysicalDeviceProperties);
+    }
+    if (function == "vkGetPhysicalDeviceProperties2" || function == "vkGetPhysicalDeviceProperties2KHR") {
+        return std::bit_cast<PFN_vkVoidFunction>(&getPhysicalDeviceProperties2);
+    }
+    if (function == "vkGetPhysicalDeviceFeatures2" || function == "vkGetPhysicalDeviceFeatures2KHR") {
+        return std::bit_cast<PFN_vkVoidFunction>(&getPhysicalDeviceFeatures2);
+    }
+    if (function == "vkGetPhysicalDeviceImageFormatProperties2" ||
+        function == "vkGetPhysicalDeviceImageFormatProperties2KHR") {
+        return std::bit_cast<PFN_vkVoidFunction>(&getImageFormatProperties2);
+    }
+    if (function == "vkGetPhysicalDeviceQueueFamilyProperties") {
+        return std::bit_cast<PFN_vkVoidFunction>(&getPhysicalDeviceQueueFamilyProperties);
+    }
+    if (function == "vkGetPhysicalDeviceQueueFamilyProperties2" ||
+        function == "vkGetPhysicalDeviceQueueFamilyProperties2KHR") {
+        return std::bit_cast<PFN_vkVoidFunction>(&getPhysicalDeviceQueueFamilyProperties2);
+    }
+    if (function == "vkGetPhysicalDeviceSurfaceSupportKHR") {
+        return std::bit_cast<PFN_vkVoidFunction>(&getSurfaceSupport);
+    }
+    if (function == "vkGetPhysicalDeviceSurfaceCapabilitiesKHR") {
+        return std::bit_cast<PFN_vkVoidFunction>(&getSurfaceCapabilities);
+    }
+    if (function == "vkGetPhysicalDeviceSurfaceFormatsKHR") {
+        return std::bit_cast<PFN_vkVoidFunction>(&getSurfaceFormats);
+    }
+    if (function == "vkEnumerateDeviceExtensionProperties") {
+        return std::bit_cast<PFN_vkVoidFunction>(&enumerateDeviceExtensionProperties);
+    }
+    return nullptr;
+}
+
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL getInstanceProcAddr(VkInstance instance, const char* name) {
     const std::string_view function{name};
     if (function == "vkGetInstanceProcAddr") {
@@ -389,30 +521,8 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL getInstanceProcAddr(VkInstance instance
     if (function == "vkCreateDevice") {
         return std::bit_cast<PFN_vkVoidFunction>(&createDevice);
     }
-    if (function == "vkGetPhysicalDeviceProperties") {
-        return std::bit_cast<PFN_vkVoidFunction>(&getPhysicalDeviceProperties);
-    }
-    if (function == "vkGetPhysicalDeviceProperties2" || function == "vkGetPhysicalDeviceProperties2KHR") {
-        return std::bit_cast<PFN_vkVoidFunction>(&getPhysicalDeviceProperties2);
-    }
-    if (function == "vkGetPhysicalDeviceQueueFamilyProperties") {
-        return std::bit_cast<PFN_vkVoidFunction>(&getPhysicalDeviceQueueFamilyProperties);
-    }
-    if (function == "vkGetPhysicalDeviceQueueFamilyProperties2" ||
-        function == "vkGetPhysicalDeviceQueueFamilyProperties2KHR") {
-        return std::bit_cast<PFN_vkVoidFunction>(&getPhysicalDeviceQueueFamilyProperties2);
-    }
     if (function == "vkCreateHeadlessSurfaceEXT") {
         return std::bit_cast<PFN_vkVoidFunction>(&createHeadlessSurface);
-    }
-    if (function == "vkGetPhysicalDeviceSurfaceSupportKHR") {
-        return std::bit_cast<PFN_vkVoidFunction>(&getSurfaceSupport);
-    }
-    if (function == "vkGetPhysicalDeviceSurfaceCapabilitiesKHR") {
-        return std::bit_cast<PFN_vkVoidFunction>(&getSurfaceCapabilities);
-    }
-    if (function == "vkGetPhysicalDeviceSurfaceFormatsKHR") {
-        return std::bit_cast<PFN_vkVoidFunction>(&getSurfaceFormats);
     }
     if (function == "vkCreateSwapchainKHR") {
         return std::bit_cast<PFN_vkVoidFunction>(&createSwapchain);
@@ -420,8 +530,8 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL getInstanceProcAddr(VkInstance instance
     if (function == "vkGetSwapchainImagesKHR") {
         return std::bit_cast<PFN_vkVoidFunction>(&getSwapchainImages);
     }
-    if (function == "vkEnumerateDeviceExtensionProperties") {
-        return std::bit_cast<PFN_vkVoidFunction>(&enumerateDeviceExtensionProperties);
+    if (const PFN_vkVoidFunction own = physicalDeviceFunction(function); own != nullptr) {
+        return own;
     }
     return nextGetInstanceProcAddr(instance, name);
 }

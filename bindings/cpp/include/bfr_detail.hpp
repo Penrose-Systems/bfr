@@ -4,6 +4,8 @@
 
 #include "bfr.h"
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -32,6 +34,15 @@ inline constexpr bool kExtends = false;
 /// The calling thread's last error, copied before another call replaces it.
 [[nodiscard]] inline std::string lastError() {
     return std::string{text(bfr_get_last_error())};
+}
+
+/// A C array as a std::array, each element converted by convert.
+template <class To, class From, std::size_t Size, class Convert>
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays): the C struct holds one
+[[nodiscard]] std::array<To, Size> arrayFrom(const From (&values)[Size], Convert convert) {
+    std::array<To, Size> converted{};
+    std::ranges::transform(values, converted.begin(), convert);
+    return converted;
 }
 
 /// Calls call, keeping anything it throws from leaving: a callback runs on a

@@ -1,7 +1,9 @@
 #pragma once
 
+#include "caps.h"
 #include "device.h"
 #include "error.h"
+#include "format.h"
 #include "log.h"
 #include "rhi_config.h"
 #include "window.h"
@@ -13,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace bfr::rhi {
 
@@ -28,6 +31,7 @@ enum class AdapterType : std::uint8_t {
 struct Adapter {
     std::string name;
     AdapterType type = AdapterType::Other;
+    Caps caps;
 };
 
 struct RhiDesc {
@@ -65,6 +69,30 @@ public:
     /// refuses the device.
     [[nodiscard]] virtual core::Result<std::unique_ptr<Device>> createDevice(
         std::size_t adapter, const core::window::NativeWindow& presentTo) = 0;
+
+    // The queries below fail with RhiAdapterOutOfRange when adapter is not an
+    // index into adapters(). The API answers each afresh.
+
+    /// What adapters()[adapter] does with format. Fails with the API's error
+    /// when the query fails for a reason other than the format being
+    /// unsupported.
+    [[nodiscard]] virtual core::Result<FormatCaps> formatCaps(std::size_t adapter, Format format) const = 0;
+
+    /// What a swapchain for window may be on adapters()[adapter]. Fails with
+    /// RhiSurfaceFailed as Device::createSwapchain describes, or when a query
+    /// fails.
+    [[nodiscard]] virtual core::Result<SurfaceCaps> surfaceCaps(std::size_t adapter,
+                                                                const core::window::NativeWindow& window) const = 0;
+
+    /// The formats and color spaces a swapchain for window may use on
+    /// adapters()[adapter], those BFR has names for, in the API's order. Fails
+    /// as surfaceCaps does.
+    [[nodiscard]] virtual core::Result<std::vector<SurfaceFormat>> surfaceFormats(
+        std::size_t adapter, const core::window::NativeWindow& window) const = 0;
+
+    /// The API's own object for adapters()[adapter], valid while this Rhi
+    /// lives: a VkPhysicalDevice on Vulkan.
+    [[nodiscard]] virtual core::Result<void*> native(std::size_t adapter) const = 0;
 
 protected:
     explicit Rhi(const RhiConfig& config) : config_(config) {}

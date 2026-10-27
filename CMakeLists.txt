@@ -94,6 +94,7 @@ add_library(bfr_objects OBJECT
     src/error.cpp
     src/vulkan/queue_families.cpp
     src/vulkan/swapchain_settings.cpp
+    src/vulkan/vulkan_caps.cpp
     src/vulkan/vulkan_device.cpp
     src/vulkan/vulkan_loader.cpp
     src/vulkan/vulkan_rhi.cpp

@@ -121,6 +121,27 @@ class CheckTests(unittest.TestCase):
     def test_user_data_must_be_opaque(self) -> None:
         self.assert_rejected(lambda s: s["structs"]["logger"]["members"][1].update(type="u64"), "must be opaque")
 
+    def test_a_fixed_length_must_be_positive(self) -> None:
+        for length in (0, -1, True, "16"):
+            self.assert_rejected(
+                lambda s, length=length: s["structs"]["buffer_desc"]["members"].append(
+                    {"name": "id", "type": "u8", "fixed": length}
+                ),
+                "positive length",
+            )
+
+    def test_only_a_struct_member_may_be_fixed(self) -> None:
+        self.assert_rejected(
+            lambda s: s["functions"]["create_buffer"]["params"].append({"name": "id", "type": "u8", "fixed": 4}),
+            "only a struct member",
+        )
+
+    def test_a_struct_member_must_be_declared_first(self) -> None:
+        self.assert_rejected(
+            lambda s: s["structs"]["buffer_desc"]["members"].append({"name": "items", "type": "list"}),
+            "declare list before buffer_desc",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

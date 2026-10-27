@@ -1,5 +1,6 @@
 #pragma once
 
+#include "caps.h"
 #include "device.h"
 #include "error.h"
 #include "pool.h"
@@ -18,8 +19,10 @@ class VulkanRhi;
 class VulkanDevice final : public Device {
 public:
     /// Takes ownership of device, which rhi made on adapter; rhi outlives it.
-    /// presentFamily is the queue family it presents from.
-    VulkanDevice(VulkanRhi& rhi, VkPhysicalDevice adapter, VkDevice device, std::uint32_t presentFamily);
+    /// presentFamily is the queue family it presents from. hasBudget says
+    /// whether adapter has VK_EXT_memory_budget.
+    VulkanDevice(VulkanRhi& rhi, VkPhysicalDevice adapter, VkDevice device, std::uint32_t presentFamily,
+                 bool hasBudget);
     ~VulkanDevice() override;
     VulkanDevice(const VulkanDevice&) = delete;
     VulkanDevice& operator=(const VulkanDevice&) = delete;
@@ -31,6 +34,7 @@ public:
     [[nodiscard]] core::Result<SwapchainImages> resizeSwapchain(SwapchainHandle swapchain, std::uint32_t width,
                                                                 std::uint32_t height) override;
     [[nodiscard]] core::Result<void> destroySwapchain(SwapchainHandle swapchain) override;
+    [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
     VulkanRhi* rhi_;
@@ -40,6 +44,7 @@ private:
     // device's functions, and two adapters can have different drivers.
     VolkDeviceTable table_{};
     std::uint32_t presentFamily_;
+    bool hasBudget_;
     // Room for a few windows' swapchains before the pool grows, and a limit no
     // tool should reach.
     static constexpr std::uint32_t kSwapchainCapacity = 4;

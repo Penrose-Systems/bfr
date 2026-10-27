@@ -23,9 +23,11 @@ WIDTH = 100
 
 BUILTINS = {
     "bool": "bfr_bool",
+    "u8": "uint8_t",
     "u32": "uint32_t",
     "u64": "uint64_t",
     "i32": "int32_t",
+    "f32": "float",
     "size": "size_t",
     "opaque": "void*",
     "string": "bfr_string",
@@ -40,7 +42,7 @@ KEYS = {
     "callback": {"doc", "params"},
     "struct": {"doc", "extensible", "extends", "struct_type", "members"},
     "function": {"doc", "returns", "params"},
-    "field": {"name", "type", "doc", "pointer", "array", "optional", "lifetime", "user_data"},
+    "field": {"name", "type", "doc", "pointer", "array", "fixed", "optional", "lifetime", "user_data"},
 }
 
 
@@ -112,6 +114,11 @@ class Api:
                     raise SpecError(f"{name} repeats the struct_type of {struct_types[struct_type]}")
                 struct_types[struct_type] = name
             self._check_fields(name, struct["members"])
+            for member in struct["members"]:
+                if member["type"] in self.structs and list(self.structs).index(member["type"]) > list(
+                    self.structs
+                ).index(name):
+                    raise SpecError(f"{name}.{member['name']}: declare {member['type']} before {name}")
 
         for name, handle in self.handles.items():
             if handle.get("parent") not in self.objects:
@@ -123,8 +130,10 @@ class Api:
 
         for name, callback in self.callbacks.items():
             self._check_fields(name, callback["params"])
+            self._check_not_fixed(name, callback["params"])
         for name, function in self.functions.items():
             self._check_fields(name, function["params"])
+            self._check_not_fixed(name, function["params"])
             returns = function.get("returns")
             if returns is not None:
                 self._check_type(name, returns)
@@ -141,11 +150,21 @@ class Api:
             count = field.get("array")
             if count is not None and count not in field_names:
                 raise SpecError(f"{where}: its count {count} is not in {owner}")
+            fixed = field.get("fixed")
+            if fixed is not None and (
+                not isinstance(fixed, int) or isinstance(fixed, bool) or fixed < 1 or pointer or count
+            ):
+                raise SpecError(f"{where}: fixed must be a positive length, without pointer or array")
             callback = field.get("user_data")
             if callback is not None and (
                 field["type"] != "opaque" or callback not in {other["type"] for other in fields}
             ):
                 raise SpecError(f"{where}: user data for {callback} must be opaque, beside a {callback} member")
+
+    def _check_not_fixed(self, owner: str, fields: list[dict[str, Any]]) -> None:
+        for field in fields:
+            if field.get("fixed") is not None:
+                raise SpecError(f"{owner}.{field['name']}: only a struct member may be fixed")
 
     def _check_destroy(self, name: str, entry: dict[str, Any], params: list[str]) -> None:
         """entry names the function that destroys it, which takes params' types

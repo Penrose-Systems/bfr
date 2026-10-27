@@ -3,12 +3,14 @@
 #
 # Names are snake_case without the bfr_ prefix; the generator adds it.
 #
-# Types: bool, u32, u64, i32, size, opaque (void*), string, or a name declared
-# here. An object type (instance, device) is already a pointer.
+# Types: bool, u8, u32, u64, i32, f32, size, opaque (void*), string, or a name
+# declared here. An object type (instance, device) is already a pointer. A
+# struct member may be another struct, declared before it.
 #
 # Members and params may have:
 #   pointer: in | out | inout   passed by pointer; in is const
 #   array: <name>               a pointer to elements, counted by <name>
+#   fixed: <length>             a struct member that is an array of length elements
 #   optional: true              may be null
 #   lifetime: <object>          returned data stays valid while <object> lives
 #   user_data: <callback>       an opaque member passed to the <callback> beside it
@@ -47,6 +49,8 @@ enums:
       error_backend_unavailable: {value: -15, doc: This build of BFR does not include the backend asked for.}
       error_internal: {value: -16, doc: BFR failed in a way it does not expect; the message says how.}
       error_limit_reached: {value: -17, doc: "A fixed limit was reached, such as how many objects of one type a device holds."}
+      error_unsupported: {value: -18, doc: The adapter cannot do or report what was asked; the message says what.}
+      error_query_failed: {value: -19, doc: The API failed when asked about the adapter; the message says how.}
 
   backend:
     doc: The native API an instance runs on.
@@ -72,6 +76,164 @@ enums:
       info: {value: 3, doc: For information.}
       warning: {value: 4, doc: Likely a mistake.}
       error: {value: 5, doc: Invalid use of the API; behaviour is undefined after it.}
+
+  format:
+    doc: >-
+      How a texel is stored. Channels are named in memory order, so rgba8
+      holds red in its first byte; a packed format names its channels from
+      the low bits up. unorm and snorm read as 0 to 1 and -1 to 1, srgb
+      decodes to linear, float is floating point.
+    values:
+      r8_unorm: {value: 1}
+      r8_snorm: {value: 2}
+      r8_uint: {value: 3}
+      r8_sint: {value: 4}
+      rg8_unorm: {value: 5}
+      rg8_snorm: {value: 6}
+      rg8_uint: {value: 7}
+      rg8_sint: {value: 8}
+      rgba8_unorm: {value: 9}
+      rgba8_srgb: {value: 10}
+      rgba8_snorm: {value: 11}
+      rgba8_uint: {value: 12}
+      rgba8_sint: {value: 13}
+      bgra8_unorm: {value: 14}
+      bgra8_srgb: {value: 15}
+      r16_unorm: {value: 16}
+      r16_snorm: {value: 17}
+      r16_uint: {value: 18}
+      r16_sint: {value: 19}
+      r16_float: {value: 20}
+      rg16_unorm: {value: 21}
+      rg16_snorm: {value: 22}
+      rg16_uint: {value: 23}
+      rg16_sint: {value: 24}
+      rg16_float: {value: 25}
+      rgba16_unorm: {value: 26}
+      rgba16_snorm: {value: 27}
+      rgba16_uint: {value: 28}
+      rgba16_sint: {value: 29}
+      rgba16_float: {value: 30}
+      r32_uint: {value: 31}
+      r32_sint: {value: 32}
+      r32_float: {value: 33}
+      rg32_uint: {value: 34}
+      rg32_sint: {value: 35}
+      rg32_float: {value: 36}
+      rgb32_uint: {value: 37}
+      rgb32_sint: {value: 38}
+      rgb32_float: {value: 39}
+      rgba32_uint: {value: 40}
+      rgba32_sint: {value: 41}
+      rgba32_float: {value: 42}
+      rgb10a2_unorm: {value: 43, doc: Red in the low bits.}
+      rgb10a2_uint: {value: 44, doc: Red in the low bits.}
+      bgr10a2_unorm: {value: 45, doc: Blue in the low bits.}
+      rg11b10_float: {value: 46, doc: Red in the low bits.}
+      rgb9e5_float: {value: 47, doc: Red in the low bits; a shared exponent.}
+      b5g6r5_unorm: {value: 48, doc: Blue in the low bits.}
+      bgr5a1_unorm: {value: 49, doc: Blue in the low bits.}
+      bgra4_unorm: {value: 50, doc: Blue in the low bits.}
+      d16_unorm: {value: 100}
+      d24_unorm_s8_uint: {value: 101}
+      d32_float: {value: 102}
+      d32_float_s8_uint: {value: 103}
+      s8_uint: {value: 104}
+      bc1_unorm: {value: 200}
+      bc1_srgb: {value: 201}
+      bc2_unorm: {value: 202}
+      bc2_srgb: {value: 203}
+      bc3_unorm: {value: 204}
+      bc3_srgb: {value: 205}
+      bc4_unorm: {value: 206}
+      bc4_snorm: {value: 207}
+      bc5_unorm: {value: 208}
+      bc5_snorm: {value: 209}
+      bc6h_ufloat: {value: 210}
+      bc6h_sfloat: {value: 211}
+      bc7_unorm: {value: 212}
+      bc7_srgb: {value: 213}
+      etc2_rgb8_unorm: {value: 300}
+      etc2_rgb8_srgb: {value: 301}
+      etc2_rgb8a1_unorm: {value: 302}
+      etc2_rgb8a1_srgb: {value: 303}
+      etc2_rgba8_unorm: {value: 304}
+      etc2_rgba8_srgb: {value: 305}
+      eac_r11_unorm: {value: 306}
+      eac_r11_snorm: {value: 307}
+      eac_rg11_unorm: {value: 308}
+      eac_rg11_snorm: {value: 309}
+      astc_4x4_unorm: {value: 400}
+      astc_4x4_srgb: {value: 401}
+      astc_4x4_float: {value: 402}
+      astc_5x4_unorm: {value: 403}
+      astc_5x4_srgb: {value: 404}
+      astc_5x4_float: {value: 405}
+      astc_5x5_unorm: {value: 406}
+      astc_5x5_srgb: {value: 407}
+      astc_5x5_float: {value: 408}
+      astc_6x5_unorm: {value: 409}
+      astc_6x5_srgb: {value: 410}
+      astc_6x5_float: {value: 411}
+      astc_6x6_unorm: {value: 412}
+      astc_6x6_srgb: {value: 413}
+      astc_6x6_float: {value: 414}
+      astc_8x5_unorm: {value: 415}
+      astc_8x5_srgb: {value: 416}
+      astc_8x5_float: {value: 417}
+      astc_8x6_unorm: {value: 418}
+      astc_8x6_srgb: {value: 419}
+      astc_8x6_float: {value: 420}
+      astc_8x8_unorm: {value: 421}
+      astc_8x8_srgb: {value: 422}
+      astc_8x8_float: {value: 423}
+      astc_10x5_unorm: {value: 424}
+      astc_10x5_srgb: {value: 425}
+      astc_10x5_float: {value: 426}
+      astc_10x6_unorm: {value: 427}
+      astc_10x6_srgb: {value: 428}
+      astc_10x6_float: {value: 429}
+      astc_10x8_unorm: {value: 430}
+      astc_10x8_srgb: {value: 431}
+      astc_10x8_float: {value: 432}
+      astc_10x10_unorm: {value: 433}
+      astc_10x10_srgb: {value: 434}
+      astc_10x10_float: {value: 435}
+      astc_12x10_unorm: {value: 436}
+      astc_12x10_srgb: {value: 437}
+      astc_12x10_float: {value: 438}
+      astc_12x12_unorm: {value: 439}
+      astc_12x12_srgb: {value: 440}
+      astc_12x12_float: {value: 441}
+
+  color_space:
+    doc: How a window's display reads the values a swapchain presents.
+    values:
+      srgb: {value: 1, doc: sRGB. Every window has it.}
+      srgb_extended_linear: {value: 2, doc: "scRGB: sRGB primaries, linear, values beyond 0 to 1."}
+      srgb_extended: {value: 3, doc: "sRGB primaries and curve, values beyond 0 to 1."}
+      display_p3: {value: 4, doc: Display P3 with the sRGB curve.}
+      display_p3_linear: {value: 5, doc: "Display P3, linear."}
+      dci_p3: {value: 6, doc: DCI-P3 with its own curve.}
+      bt709: {value: 7, doc: BT.709 with its curve.}
+      bt709_linear: {value: 8, doc: "BT.709, linear."}
+      bt2020_linear: {value: 9, doc: "BT.2020, linear."}
+      hdr10_pq: {value: 10, doc: "HDR10: BT.2020 with the PQ (ST 2084) curve."}
+      hdr10_hlg: {value: 11, doc: BT.2020 with the HLG curve.}
+      dolby_vision: {value: 12, doc: Dolby Vision.}
+      adobe_rgb: {value: 13, doc: Adobe RGB with its curve.}
+      adobe_rgb_linear: {value: 14, doc: "Adobe RGB, linear."}
+      pass_through: {value: 15, doc: Values reach the display as they are.}
+      display_native: {value: 16, doc: The display's own space (AMD FreeSync 2).}
+
+  surface_rotation:
+    doc: How a window's display is turned relative to its natural orientation.
+    values:
+      none: {value: 0, doc: Not turned.}
+      rotate_90: {value: 1, doc: Turned 90 degrees clockwise.}
+      rotate_180: {value: 2, doc: Turned 180 degrees.}
+      rotate_270: {value: 3, doc: Turned 270 degrees clockwise.}
+      other: {value: 4, doc: "Mirrored, or left to the platform."}
 
 objects:
   instance:
@@ -148,9 +310,282 @@ structs:
       - {name: height, type: u32}
       - {name: count, type: u32}
 
+  surface_desc:
+    doc: Which window to ask about. Chain exactly one window struct.
+    extensible: true
+    members: []
+
+  caps_info:
+    doc: What an adapter is.
+    members:
+      - {name: name, type: string, lifetime: instance}
+      - {name: type, type: adapter_type}
+      - {name: backend, type: backend}
+      - {name: vendor_id, type: u32, doc: "The PCI vendor ID: 0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel, 0x13B5 Arm, 0x5143 Qualcomm."}
+      - {name: device_id, type: u32, doc: The vendor's ID for the GPU.}
+      - {name: driver_name, type: string, lifetime: instance, doc: Empty when the driver does not say.}
+      - {name: driver_info, type: string, lifetime: instance, doc: "The driver's version as text; empty when the driver does not say."}
+      - {name: driver_version, type: u64, doc: "The driver's version, in the vendor's own encoding."}
+      - {name: api_major, type: u32, doc: "The newest API version the adapter supports: Vulkan 1.3.280 is 1, 3, 280."}
+      - {name: api_minor, type: u32}
+      - {name: api_patch, type: u32}
+      - {name: device_uuid, type: u8, fixed: 16, doc: The same GPU has the same UUID in every process and API.}
+      - {name: driver_uuid, type: u8, fixed: 16}
+      - {name: luid, type: u8, fixed: 8, doc: "Windows' ID for the GPU, as D3D12 and DXGI give it."}
+      - {name: luid_valid, type: bool, doc: Whether luid is set; only on Windows.}
+      - {name: cache_uuid, type: u8, fixed: 16, doc: A pipeline cache loads only on an adapter with the same cache_uuid.}
+
+  caps_limits:
+    doc: The adapter's limits on textures, buffers, rendering and sampling.
+    members:
+      - {name: max_texture_1d, type: u32, doc: Widest 1D texture.}
+      - {name: max_texture_2d, type: u32, doc: Widest or tallest 2D texture.}
+      - {name: max_texture_3d, type: u32, doc: Largest side of a 3D texture.}
+      - {name: max_texture_cube, type: u32, doc: Largest side of a cube texture.}
+      - {name: max_texture_layers, type: u32, doc: Most layers in an array texture.}
+      - {name: max_buffer_size, type: u64, doc: Largest buffer in bytes.}
+      - {name: max_allocation_size, type: u64, doc: Largest single allocation in bytes.}
+      - {name: max_allocations, type: u32, doc: Most allocations alive at once.}
+      - {name: max_sampler_objects, type: u32, doc: Most samplers alive at once.}
+      - {name: max_uniform_buffer_range, type: u32, doc: Most bytes a shader reads through one uniform buffer view.}
+      - {name: max_storage_buffer_range, type: u32, doc: Most bytes a shader reaches through one storage buffer view.}
+      - {name: max_texel_buffer_elements, type: u32, doc: Most elements in a texel buffer view.}
+      - {name: max_push_constants_size, type: u32, doc: Most bytes of push constants.}
+      - {name: max_color_attachments, type: u32}
+      - {name: max_render_width, type: u32, doc: Widest render area.}
+      - {name: max_render_height, type: u32, doc: Tallest render area.}
+      - {name: max_render_layers, type: u32, doc: Most layers rendered at once.}
+      - {name: color_sample_counts, type: u32, doc: "Sample counts for float and normalized color attachments: each set bit is a count it supports, 1, 2, 4 and so on."}
+      - {name: integer_sample_counts, type: u32, doc: Sample counts for integer color attachments.}
+      - {name: depth_sample_counts, type: u32, doc: Sample counts for depth attachments.}
+      - {name: stencil_sample_counts, type: u32, doc: Sample counts for stencil attachments.}
+      - {name: no_attachment_sample_counts, type: u32, doc: Sample counts for rendering with no attachments.}
+      - {name: storage_texture_sample_counts, type: u32, doc: Sample counts for storage textures.}
+      - {name: max_viewports, type: u32}
+      - {name: max_viewport_width, type: u32}
+      - {name: max_viewport_height, type: u32}
+      - {name: max_draw_indirect_count, type: u32, doc: Most draws one indirect call makes.}
+      - {name: max_clip_distances, type: u32}
+      - {name: max_cull_distances, type: u32}
+      - {name: max_sampler_anisotropy, type: f32}
+      - {name: max_sampler_lod_bias, type: f32}
+      - {name: min_shading_rate_tile, type: u32, doc: Smallest tile of a shading rate texture; 0 without one.}
+      - {name: max_shading_rate_tile, type: u32, doc: Largest tile of a shading rate texture; 0 without one.}
+      - {name: min_uniform_buffer_alignment, type: u64, doc: Alignment in bytes of a uniform buffer view's offset.}
+      - {name: min_storage_buffer_alignment, type: u64, doc: Alignment in bytes of a storage buffer view's offset.}
+      - {name: min_texel_buffer_alignment, type: u64, doc: Alignment in bytes of a texel buffer view's offset.}
+      - {name: copy_offset_alignment, type: u64, doc: Best alignment in bytes of a buffer offset in a texture copy.}
+      - {name: copy_row_pitch_alignment, type: u64, doc: Best alignment in bytes of a row in a texture copy.}
+      - {name: non_coherent_atom_size, type: u64, doc: Granularity in bytes of flushing memory the CPU writes without coherence.}
+      - {name: buffer_texture_granularity, type: u64, doc: Bytes apart a buffer and a texture in one allocation must be.}
+      - {name: timestamp_period, type: f32, doc: Nanoseconds per timestamp tick.}
+
+  caps_bindless:
+    doc: How many of each resource the bindless tables can hold.
+    members:
+      - {name: max_textures, type: u32, doc: Sampled textures.}
+      - {name: max_storage_textures, type: u32}
+      - {name: max_storage_buffers, type: u32}
+      - {name: max_uniform_buffers, type: u32}
+      - {name: max_samplers, type: u32}
+      - {name: max_per_stage, type: u32, doc: All of them together that one shader stage can reach.}
+
+  caps_compute:
+    doc: The adapter's compute limits.
+    members:
+      - {name: max_workgroup_count, type: u32, fixed: 3, doc: "Most workgroups one dispatch makes in x, y and z."}
+      - {name: max_workgroup_size, type: u32, fixed: 3, doc: "Largest workgroup in x, y and z."}
+      - {name: max_workgroup_invocations, type: u32, doc: Most invocations in one workgroup.}
+      - {name: max_shared_memory, type: u32, doc: Most bytes of workgroup shared memory.}
+      - {name: subgroup_size, type: u32, doc: Invocations in a subgroup (a wave or warp) by default.}
+      - {name: min_subgroup_size, type: u32}
+      - {name: max_subgroup_size, type: u32}
+
+  caps_mesh:
+    doc: The adapter's mesh and task shader limits; all 0 without mesh shaders.
+    members:
+      - {name: max_mesh_workgroup_size, type: u32, fixed: 3}
+      - {name: max_mesh_invocations, type: u32}
+      - {name: max_mesh_output_vertices, type: u32}
+      - {name: max_mesh_output_primitives, type: u32}
+      - {name: max_mesh_shared_memory, type: u32}
+      - {name: max_task_workgroup_size, type: u32, fixed: 3}
+      - {name: max_task_invocations, type: u32}
+      - {name: max_task_payload_size, type: u32}
+
+  caps_ray_tracing:
+    doc: >-
+      The adapter's ray tracing limits. The structure limits are 0 without
+      acceleration structures, the rest without ray tracing pipelines.
+    members:
+      - {name: max_geometries, type: u64, doc: Most geometries in a bottom-level structure.}
+      - {name: max_instances, type: u64, doc: Most instances in a top-level structure.}
+      - {name: max_primitives, type: u64, doc: Most primitives in a bottom-level structure.}
+      - {name: scratch_alignment, type: u32, doc: Alignment in bytes of a build's scratch memory.}
+      - {name: max_recursion_depth, type: u32, doc: Deepest ray recursion; 0 without ray tracing pipelines.}
+      - {name: handle_size, type: u32, doc: Bytes in a shader binding table record's handle.}
+      - {name: handle_alignment, type: u32, doc: Alignment in bytes of a handle in the table.}
+      - {name: table_alignment, type: u32, doc: Alignment in bytes of the table's start.}
+
+  caps_features:
+    doc: Optional features the adapter has. The floor's features are always there and not listed.
+    members:
+      - {name: ray_query, type: bool, doc: Rays traced inline from any shader.}
+      - {name: ray_tracing_pipeline, type: bool, doc: Ray tracing pipelines and shader binding tables.}
+      - {name: acceleration_structure, type: bool}
+      - {name: mesh_shader, type: bool}
+      - {name: task_shader, type: bool}
+      - {name: shading_rate, type: bool, doc: A shading rate per draw.}
+      - {name: shading_rate_texture, type: bool, doc: "A shading rate per screen tile, from a texture."}
+      - {name: shader_float16, type: bool}
+      - {name: shader_float64, type: bool}
+      - {name: shader_int8, type: bool}
+      - {name: shader_int16, type: bool}
+      - {name: shader_int64, type: bool}
+      - {name: atomic_int64, type: bool, doc: 64-bit integer atomics on buffers.}
+      - {name: atomic_int64_texture, type: bool, doc: 64-bit integer atomics on storage textures.}
+      - {name: atomic_float32_add, type: bool, doc: 32-bit float atomic add on buffers.}
+      - {name: barycentrics, type: bool, doc: Fragment shaders read barycentric coordinates.}
+      - {name: conservative_raster, type: bool}
+      - {name: geometry_shader, type: bool}
+      - {name: tessellation, type: bool}
+      - {name: multiview, type: bool}
+      - {name: sample_rate_shading, type: bool}
+      - {name: dual_source_blend, type: bool}
+      - {name: independent_blend, type: bool, doc: Each color attachment blends its own way.}
+      - {name: logic_op, type: bool}
+      - {name: depth_clamp, type: bool}
+      - {name: depth_bounds, type: bool}
+      - {name: wireframe, type: bool}
+      - {name: wide_lines, type: bool}
+      - {name: sampler_anisotropy, type: bool}
+      - {name: sampler_minmax, type: bool, doc: Samplers that return the minimum or maximum of the texels they read.}
+      - {name: compression_bc, type: bool}
+      - {name: compression_etc2, type: bool}
+      - {name: compression_astc, type: bool}
+      - {name: compression_astc_hdr, type: bool}
+      - {name: multi_draw_indirect, type: bool}
+      - {name: draw_indirect_count, type: bool, doc: Indirect draws that read their count from a buffer.}
+      - {name: draw_indirect_first_instance, type: bool}
+      - {name: storage_read_without_format, type: bool}
+      - {name: storage_write_without_format, type: bool}
+      - {name: timestamps_on_all_queues, type: bool, doc: Every graphics and compute queue writes timestamps.}
+      - {name: pipeline_statistics, type: bool}
+      - {name: occlusion_query_precise, type: bool}
+      - {name: sparse_binding, type: bool}
+      - {name: sparse_textures, type: bool, doc: Partly resident 2D textures.}
+      - {name: sparse_buffers, type: bool, doc: Partly resident buffers.}
+
+  memory_heap:
+    doc: One pool of memory.
+    members:
+      - {name: size, type: u64, doc: Bytes.}
+      - {name: device_local, type: bool, doc: On or nearest the GPU.}
+      - {name: host_visible, type: bool, doc: Some memory type in it is visible to the CPU.}
+
+  memory_type:
+    doc: One kind of memory in a heap.
+    members:
+      - {name: heap, type: u32, doc: Index into the heaps.}
+      - {name: device_local, type: bool}
+      - {name: host_visible, type: bool, doc: The CPU can map it.}
+      - {name: host_coherent, type: bool, doc: CPU writes reach the GPU without a flush.}
+      - {name: host_cached, type: bool, doc: CPU reads are cached.}
+      - {name: lazily_allocated, type: bool, doc: Backed only as the GPU needs it; for transient attachments on tiled GPUs.}
+
+  caps_memory:
+    doc: The adapter's memory.
+    members:
+      - {name: heap_count, type: u32}
+      - {name: heaps, type: memory_heap, fixed: 16, doc: The first heap_count are set.}
+      - {name: type_count, type: u32}
+      - {name: types, type: memory_type, fixed: 32, doc: The first type_count are set.}
+      - {name: unified, type: bool, doc: The GPU and CPU share one memory.}
+
+  caps_queues:
+    doc: How many queues of each type the adapter has.
+    members:
+      - {name: graphics, type: u32, doc: Queues that run graphics.}
+      - {name: compute, type: u32, doc: Queues that run compute but not graphics (async compute).}
+      - {name: copy, type: u32, doc: Queues that only copy.}
+      - {name: graphics_timestamp_bits, type: u32, doc: Valid bits in a graphics queue's timestamps; 0 without timestamps.}
+      - {name: compute_timestamp_bits, type: u32}
+      - {name: copy_timestamp_bits, type: u32}
+
+  caps:
+    doc: Everything about an adapter that stays the same while it runs.
+    members:
+      - {name: info, type: caps_info}
+      - {name: limits, type: caps_limits}
+      - {name: bindless, type: caps_bindless}
+      - {name: compute, type: caps_compute}
+      - {name: mesh, type: caps_mesh}
+      - {name: ray_tracing, type: caps_ray_tracing}
+      - {name: features, type: caps_features}
+      - {name: memory, type: caps_memory}
+      - {name: queues, type: caps_queues}
+
+  format_caps:
+    doc: What an adapter does with one format.
+    members:
+      - {name: format, type: format}
+      - {name: sampled, type: bool, doc: Shaders sample textures of it.}
+      - {name: filter_linear, type: bool, doc: Samplers filter it linearly.}
+      - {name: filter_minmax, type: bool, doc: Min and max samplers read it.}
+      - {name: storage, type: bool, doc: Shaders read and write storage textures of it.}
+      - {name: storage_atomic, type: bool, doc: Shaders use atomics on storage textures of it.}
+      - {name: color_attachment, type: bool}
+      - {name: blend, type: bool, doc: Color attachments of it blend.}
+      - {name: depth_stencil, type: bool}
+      - {name: copy_src, type: bool}
+      - {name: copy_dst, type: bool}
+      - {name: texel_buffer, type: bool, doc: Shaders read texel buffers of it.}
+      - {name: storage_texel_buffer, type: bool}
+      - {name: storage_texel_buffer_atomic, type: bool}
+      - {name: sample_counts, type: u32, doc: "Sample counts for 2D textures of it: each set bit is a count, 1, 2, 4 and so on; 0 when it can't be rendered to."}
+
+  surface_caps:
+    doc: What a window's swapchain may be, on one adapter.
+    members:
+      - {name: min_image_count, type: u32}
+      - {name: max_image_count, type: u32, doc: 0 for no limit.}
+      - {name: width, type: u32, doc: The window's size now; 0xFFFFFFFF each when the swapchain's size sets the window's.}
+      - {name: height, type: u32}
+      - {name: min_width, type: u32}
+      - {name: min_height, type: u32}
+      - {name: max_width, type: u32}
+      - {name: max_height, type: u32}
+      - {name: rotation, type: surface_rotation, doc: How the display is turned now; on phones the app may render turned to match.}
+      - {name: fifo, type: bool, doc: "Presents wait for vertical blank and queue up. Always there."}
+      - {name: fifo_relaxed, type: bool, doc: "As fifo, but a late frame presents at once, and may tear."}
+      - {name: mailbox, type: bool, doc: "Presents wait for vertical blank, and a newer frame replaces a waiting one."}
+      - {name: immediate, type: bool, doc: "Presents at once, and may tear."}
+      - {name: alpha_opaque, type: bool, doc: The window ignores alpha.}
+      - {name: alpha_premultiplied, type: bool}
+      - {name: alpha_postmultiplied, type: bool}
+      - {name: alpha_inherit, type: bool, doc: The window system decides how alpha blends.}
+
+  surface_format:
+    doc: A format and color space a window's swapchain may use.
+    members:
+      - {name: format, type: format}
+      - {name: color_space, type: color_space}
+
+  memory_budget_heap:
+    doc: How much of one heap the process may use, and uses.
+    members:
+      - {name: budget, type: u64, doc: Bytes the process may use before allocations start failing or slowing.}
+      - {name: usage, type: u64, doc: Bytes the process uses now.}
+
+  memory_budget:
+    doc: A device's memory use now, heap by heap, in the order bfr_caps lists the heaps.
+    members:
+      - {name: heap_count, type: u32}
+      - {name: heaps, type: memory_budget_heap, fixed: 16, doc: The first heap_count are set.}
+
   window_xlib:
     doc: An Xlib window.
-    extends: [device_desc, swapchain_desc]
+    extends: [device_desc, swapchain_desc, surface_desc]
     struct_type: 1
     members:
       - {name: display, type: opaque, doc: The Display*.}
@@ -158,7 +593,7 @@ structs:
 
   window_wayland:
     doc: A Wayland surface.
-    extends: [device_desc, swapchain_desc]
+    extends: [device_desc, swapchain_desc, surface_desc]
     struct_type: 2
     members:
       - {name: display, type: opaque, doc: The wl_display*.}
@@ -166,7 +601,7 @@ structs:
 
   window_win32:
     doc: A Win32 window.
-    extends: [device_desc, swapchain_desc]
+    extends: [device_desc, swapchain_desc, surface_desc]
     struct_type: 3
     members:
       - {name: instance, type: opaque, doc: The HINSTANCE.}
@@ -174,14 +609,14 @@ structs:
 
   window_metal:
     doc: A Core Animation Metal layer.
-    extends: [device_desc, swapchain_desc]
+    extends: [device_desc, swapchain_desc, surface_desc]
     struct_type: 4
     members:
       - {name: layer, type: opaque, doc: The CAMetalLayer*.}
 
   window_headless:
     doc: No window. Images are presented nowhere; for tests and offscreen tools.
-    extends: [device_desc, swapchain_desc]
+    extends: [device_desc, swapchain_desc, surface_desc]
     struct_type: 5
     members: []
 
@@ -218,6 +653,75 @@ functions:
       - {name: instance, type: instance}
       - {name: count, type: u32, pointer: inout}
       - {name: adapters, type: adapter_info, array: count, pointer: out, optional: true}
+
+  get_caps:
+    doc: Writes everything about an adapter that stays the same while it runs. Needs no device.
+    returns: result
+    params:
+      - {name: instance, type: instance}
+      - {name: adapter, type: u32, doc: Index into the instance's adapter list.}
+      - {name: caps, type: caps, pointer: out}
+
+  get_formats:
+    doc: >-
+      Lists what an adapter does with each format, every format in the order
+      bfr_format declares them. With formats null, writes how many there are
+      to count. Otherwise writes up to count of them, sets count to how many
+      it wrote, and returns incomplete if there were more.
+    returns: result
+    params:
+      - {name: instance, type: instance}
+      - {name: adapter, type: u32}
+      - {name: count, type: u32, pointer: inout}
+      - {name: formats, type: format_caps, array: count, pointer: out, optional: true}
+
+  get_surface_caps:
+    doc: >-
+      Writes what a swapchain for the window chained to desc may be on an
+      adapter. Asks the window system each time, since the window changes.
+      Fails with present_unsupported for a driver that would crash if asked.
+    returns: result
+    params:
+      - {name: instance, type: instance}
+      - {name: adapter, type: u32}
+      - {name: desc, type: surface_desc, pointer: in}
+      - {name: caps, type: surface_caps, pointer: out}
+
+  get_surface_formats:
+    doc: >-
+      Lists the formats and color spaces a swapchain for the window chained to
+      desc may use on an adapter, the order the window system gives. Only those
+      BFR has names for. With formats null, writes how many there are to count.
+      Otherwise writes up to count of them, sets count to how many it wrote,
+      and returns incomplete if there were more. Fails as bfr_get_surface_caps
+      does.
+    returns: result
+    params:
+      - {name: instance, type: instance}
+      - {name: adapter, type: u32}
+      - {name: desc, type: surface_desc, pointer: in}
+      - {name: count, type: u32, pointer: inout}
+      - {name: formats, type: surface_format, array: count, pointer: out, optional: true}
+
+  get_budget:
+    doc: >-
+      Writes how much memory the device's process may use and uses now. Fails
+      with unsupported when the driver cannot say.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: budget, type: memory_budget, pointer: out}
+
+  get_native:
+    doc: >-
+      Writes the backend's own object for an adapter, for what BFR does not
+      cover: a VkPhysicalDevice on Vulkan. It stays valid while the instance
+      lives.
+    returns: result
+    params:
+      - {name: instance, type: instance}
+      - {name: adapter, type: u32}
+      - {name: native, type: opaque, pointer: out}
 
   instance_create_device:
     doc: >-

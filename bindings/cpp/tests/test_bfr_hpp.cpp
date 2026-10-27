@@ -6,6 +6,7 @@
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -238,6 +239,60 @@ TEST_CASE("C++ API creates and destroys swapchains on one device from many threa
             }
         }
         CHECK(failed == 0);
+    }
+    CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C++ API gives an adapter's caps, formats and surface caps", "[cpp_api][gpu]") {
+    Messages messages;
+    {
+        const bfr::Instance instance = validatedInstance(messages);
+        const auto adapters = instance.adapters();
+        REQUIRE(adapters.has_value());
+        const auto cpu = std::ranges::find(*adapters, bfr::AdapterType::Cpu, &bfr::AdapterInfo::type);
+        REQUIRE(cpu != adapters->end());
+        const auto adapter = static_cast<std::uint32_t>(cpu - adapters->begin());
+
+        const auto caps = instance.caps(adapter);
+        const auto formats = instance.formats(adapter);
+        const auto surface = instance.surfaceCaps(adapter, {}, bfr::WindowHeadless{});
+        const auto surfaceFormats = instance.surfaceFormats(adapter, {}, bfr::WindowHeadless{});
+        const auto native = instance.native(adapter);
+
+        INFO(failureOf(caps) << failureOf(formats) << failureOf(surface) << failureOf(surfaceFormats));
+        REQUIRE(caps.has_value());
+        CHECK(caps->info.name == cpu->name);
+        CHECK(caps->info.type == bfr::AdapterType::Cpu);
+        CHECK(caps->limits.maxTexture2d >= 4096);
+        CHECK(caps->compute.maxWorkgroupSize[0] >= 128);
+        CHECK(caps->memory.heapCount > 0);
+        CHECK(caps->memory.heaps[0].size > 0);
+        REQUIRE(formats.has_value());
+        CHECK(formats->front().format == bfr::Format::R8Unorm);
+        REQUIRE(surface.has_value());
+        CHECK(surface->fifo);
+        REQUIRE(surfaceFormats.has_value());
+        CHECK_FALSE(surfaceFormats->empty());
+        REQUIRE(native.has_value());
+        CHECK(*native != nullptr);
+    }
+    CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C++ API gives a device's memory budget or says the driver can't", "[cpp_api][gpu]") {
+    Messages messages;
+    {
+        const bfr::Instance instance = validatedInstance(messages);
+        const bfr::Device device = headlessDevice(instance);
+
+        const auto budget = device.budget();
+
+        if (budget.has_value()) {
+            CHECK(budget->heapCount > 0);
+        }
+        else {
+            CHECK(budget.error().code == bfr::Result::ErrorUnsupported);
+        }
     }
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }

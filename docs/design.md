@@ -96,8 +96,18 @@ encoder switching needs lookahead.
 ### Device and queues
 
 - The device is created from an adapter with the queues and optional
-  features it wants. Missing floor features fail creation; optional ones
-  are negotiated and queryable.
+  features it wants. An adapter missing a floor feature (Vulkan: descriptor
+  indexing with update-after-bind, timelines, synchronization2, dynamic
+  rendering, buffer device address) is not listed; every device turns the
+  floor's features on. Optional ones are negotiated and queryable.
+- Caps are per adapter and readable before any device exists. Reason:
+  optional features are asked for when the device is created, and choosing
+  a GPU shouldn't mean opening each one. One call returns everything fixed
+  (info, limits, bindless, compute, mesh, ray tracing, features, memory,
+  queues) as one struct. Formats, a window's surface caps and formats, the
+  live memory budget and the native object are calls of their own: per
+  format, per window, or changing while the app runs. A limit for a
+  feature the adapter lacks is 0.
 - Queue types: graphics, compute, copy. Start with one graphics queue in the
   first backend; async compute and copy queues come later on the same model.
 

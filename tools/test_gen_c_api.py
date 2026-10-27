@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 
 import copy
+import re
 import unittest
 
-from bfr_api import SOURCE, Api, load
+from bfr_api import REPO_ROOT, SOURCE, Api, load
 from gen_c_api import HEADER, render
 from test_bfr_api import MINIMAL
 
@@ -41,6 +42,16 @@ class RenderTests(unittest.TestCase):
         self.assertIn("BFR_API bfr_result bfr_create_buffer(\n    bfr_device* device,\n", header)
         self.assertTrue(all(len(line) <= 100 for line in header.splitlines()))
 
+    def test_fixed_members_are_c_arrays_and_f32_is_float(self) -> None:
+        spec = copy.deepcopy(MINIMAL)
+        spec["structs"]["list"]["members"] += [
+            {"name": "uuid", "type": "u8", "fixed": 16},
+            {"name": "period", "type": "f32"},
+        ]
+        header = render(Api(spec))
+        self.assertIn("    uint8_t uuid[16];\n", header)
+        self.assertIn("    float period;\n", header)
+
     def test_the_header_compiles_as_c_and_cpp_and_is_exempt_from_lint_and_format(self) -> None:
         self.assertIn('#ifdef __cplusplus\nextern "C" {\n#endif', self.header)
         self.assertIn("// clang-format off\n// NOLINTBEGIN", self.header)
@@ -50,6 +61,19 @@ class RenderTests(unittest.TestCase):
 class RepositoryTests(unittest.TestCase):
     def test_committed_header_matches_the_description(self) -> None:
         self.assertEqual(HEADER.read_text(encoding="utf-8"), render(load(SOURCE)), "run: python3 tools/gen_c_api.py")
+
+    def test_the_implementation_s_formats_match_the_description(self) -> None:
+        # format.h repeats the format enum for the C++ code behind the C API.
+        text = (REPO_ROOT / "include" / "bfr" / "public" / "format.h").read_text(encoding="utf-8")
+        enum = text[text.index("enum class Format") : text.index("};")]
+        declared = re.findall(r"^    (\w+) = (\d+),$", enum, re.MULTILINE)
+        listed = re.findall(r"Format::(\w+)", text[text.index("kFormats") :])
+        expected = [
+            ("".join(part[:1].upper() + part[1:] for part in name.split("_")), value["value"])
+            for name, value in load(SOURCE).enums["format"]["values"].items()
+        ]
+        self.assertEqual([(name, int(value)) for name, value in declared], expected)
+        self.assertEqual(listed, [name for name, _ in expected])
 
 
 if __name__ == "__main__":

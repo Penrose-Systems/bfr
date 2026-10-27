@@ -40,9 +40,11 @@ HEADER = REPO_ROOT / "bindings" / "cpp" / "include" / "bfr.hpp"
 
 BUILTINS = {
     "bool": "bool",
+    "u8": "std::uint8_t",
     "u32": "std::uint32_t",
     "u64": "std::uint64_t",
     "i32": "std::int32_t",
+    "f32": "float",
     "size": "std::size_t",
     "opaque": "void*",
     "string": "std::string_view",
@@ -101,7 +103,7 @@ class Plan:
                 raise SpecError(f"{name}: {pascal(method.owner)} already has a method {method.name}")
             self.methods[method.owner].append(method)
 
-        self.out_structs = self._structs_passed("out")
+        self.out_structs = self._with_members(self._structs_passed("out"))
         self.in_structs = self._structs_passed("in")
         if self.out_structs & self.in_structs:
             raise SpecError(f"{sorted(self.out_structs & self.in_structs)}: the C++ generator does not yet handle a "
@@ -178,6 +180,17 @@ class Plan:
                     found.add(param["type"])
         return found
 
+    def _with_members(self, structs: set[str]) -> set[str]:
+        """structs and every struct their members hold, however deep."""
+        found = set(structs)
+        pending = list(structs)
+        while pending:
+            for member in self.api.structs[pending.pop()]["members"]:
+                if member["type"] in self.api.structs and member["type"] not in found:
+                    found.add(member["type"])
+                    pending.append(member["type"])
+        return found
+
     def _check_members(self, name: str) -> None:
         api = self.api
         members = api.structs[name]["members"]
@@ -195,6 +208,11 @@ class Plan:
                 opaque = [p for p in api.callbacks[kind]["params"] if p["type"] == "opaque"]
                 if len(opaque) != 1:
                     raise SpecError(f"{kind}: a callback takes exactly one opaque param, its user data")
+            elif kind in api.structs:
+                if name not in self.out_structs:
+                    raise SpecError(f"{where}: the C++ generator handles a struct member only in a struct passed out")
+            elif member.get("fixed") and kind in ("bool", "string", "opaque"):
+                raise SpecError(f"{where}: the C++ generator does not yet handle a fixed array of {kind}")
             elif kind not in BUILTINS and kind not in api.enums:
                 raise SpecError(f"{where}: the C++ generator does not yet handle a {kind} member")
 
@@ -211,6 +229,23 @@ def cpp_type(api: Api, kind: str, out: bool = False) -> str:
     if kind in BUILTINS:
         return BUILTINS[kind]
     return pascal(kind)
+
+
+def member_type(api: Api, member: dict[str, Any], out: bool) -> str:
+    """A struct member's C++ type: a std::array for a fixed one."""
+    kind = cpp_type(api, member["type"], out)
+    return f"std::array<{kind}, {member['fixed']}>" if member.get("fixed") else kind
+
+
+def member_from_c(api: Api, member: dict[str, Any], value: str) -> str:
+    """A struct member's C value, value, as its C++ type."""
+    kind = member["type"]
+    if not member.get("fixed"):
+        return from_c(api, kind, value)
+    if kind in BUILTINS:
+        return f"std::to_array({value})"
+    element = from_c(api, kind, "element")
+    return f"arrayFrom<{cpp_type(api, kind)}>({value}, [](const {c_type(kind)}& element) {{ return {element}; }})"
 
 
 def to_c(api: Api, kind: str, value: str) -> str:
@@ -232,6 +267,8 @@ def from_c(api: Api, kind: str, value: str) -> str:
         return f"std::string{{detail::text({value})}}"
     if kind in api.enums:
         return f"static_cast<{pascal(kind)}>({value})"
+    if kind in api.structs:
+        return f"fromC({value})"
     return value
 
 
@@ -284,6 +321,7 @@ class Renderer:
             '#include "bfr.h"',
             '#include "bfr_detail.hpp"',
             "",
+            "#include <array>",
             "#include <cstddef>",
             "#include <cstdint>",
             "#include <expected>",
@@ -363,7 +401,7 @@ class Renderer:
                 member_doc = (member_doc + " May be empty.").strip()
             if member_doc:
                 self.emit(*doc(member_doc, "    "))
-            self.emit(f"    {cpp_type(api, member['type'], out)} {camel(member['name'])}{{}};")
+            self.emit(f"    {member_type(api, member, out)} {camel(member['name'])}{{}};")
         self.emit("};")
 
     def detail(self) -> None:
@@ -392,7 +430,7 @@ class Renderer:
             self.to_c_function(name, api.structs[name])
         for name in sorted(plan.out_structs, key=list(api.structs).index):
             struct = api.structs[name]
-            members = [f".{camel(m['name'])} = {from_c(api, m['type'], 'value.' + m['name'])}"
+            members = [f".{camel(m['name'])} = {member_from_c(api, m, 'value.' + m['name'])}"
                        for m in struct["members"]]
             self.emit("", f"inline {pascal(name)} fromC(const {c_name(name)}& value) {{",
                       *initializer(members), "}")
@@ -516,7 +554,7 @@ class Renderer:
         elif method.count is not None:
             returns = f"Expected<std::vector<{pascal(method.returned['type'])}>>"
         else:
-            returns = f"Expected<{pascal(method.returned['type'])}>"
+            returns = f"Expected<{cpp_type(api, method.returned['type'], out=True)}>"
         return template, returns, ", ".join(params)
 
     def const(self, method: Method) -> str:
@@ -585,7 +623,7 @@ class Renderer:
             if returned is not None:
                 kind, name = returned["type"], camel(returned["name"])
                 initial = " = nullptr" if kind in api.objects else "{}"
-                self.emit(f"    {c_name(kind)}{'*' if kind in api.objects else ''} {name}{initial};")
+                self.emit(f"    {c_type(kind)}{'*' if kind in api.objects else ''} {name}{initial};")
                 args_in_order = self.ordered_args(method, args, {returned["name"]: f"&{name}"})
             else:
                 args_in_order = self.ordered_args(method, args, {})
@@ -596,8 +634,10 @@ class Renderer:
                 self.emit(f"    return {pascal(kind)}{{{name}, {keep_alive}}};")
             elif kind in api.handles:
                 self.emit(f"    return {pascal(kind)}{{{camel(api.handles[kind]['parent'])}_, {name}}};")
-            else:
+            elif kind in api.structs:
                 self.emit(f"    return detail::fromC({name});")
+            else:
+                self.emit(f"    return {from_c(api, kind, name)};")
         self.emit("}")
 
     def ordered_args(self, method: Method, args: list[str], extra: dict[str, str]) -> list[str]:
