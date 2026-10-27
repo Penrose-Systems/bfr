@@ -32,7 +32,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("// device: May be null.\nBFR_API void bfr_destroy_device(bfr_device* device);", self.header)
 
     def test_callbacks_are_function_pointers(self) -> None:
-        self.assertIn("typedef void (*bfr_log)(bfr_string text);", self.header)
+        self.assertIn("typedef void (*bfr_log)(bfr_string text, void* user_data);", self.header)
 
     def test_long_prototypes_take_one_param_per_line(self) -> None:
         spec = copy.deepcopy(MINIMAL)

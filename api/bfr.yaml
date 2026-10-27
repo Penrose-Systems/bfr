@@ -11,6 +11,11 @@
 #   array: <name>               a pointer to elements, counted by <name>
 #   optional: true              may be null
 #   lifetime: <object>          returned data stays valid while <object> lives
+#   user_data: <callback>       an opaque member passed to the <callback> beside it
+#
+# Objects and handles name the function that destroys them, so wrappers own
+# them: destroy: <function>, which takes the object, or the handle's parent and
+# then the handle. A handle names its parent object: parent: <object>.
 #
 # Every enum value is explicit, so the ABI never depends on order. Quote a doc
 # that has a comma in it: in {...} a comma ends the value.
@@ -68,10 +73,12 @@ enums:
 
 objects:
   instance:
+    destroy: destroy_instance
     doc: >-
       One backend in this process. Several may exist at once. Do not destroy
       it while another thread is calling a function on it.
   device:
+    destroy: destroy_device
     doc: >-
       An open adapter. Creates and owns every handle. Its functions may be
       called from several threads at once, except as a handle's doc says. Do
@@ -79,6 +86,8 @@ objects:
 
 handles:
   swapchain:
+    parent: device
+    destroy: device_destroy_swapchain
     doc: >-
       The images presented to one window. Calls on one swapchain must not
       overlap, destroying it included; the caller synchronizes them. Different
@@ -103,7 +112,13 @@ structs:
       - {name: backend, type: backend}
       - {name: validation, type: bool, doc: Enable the backend's validation layer.}
       - {name: message_callback, type: message_callback, optional: true}
-      - {name: message_user_data, type: opaque, optional: true, doc: "Passed to message_callback, which may still be called after bfr_destroy_instance while a device lives."}
+      - name: message_user_data
+        type: opaque
+        optional: true
+        user_data: message_callback
+        doc: >-
+          Passed to message_callback, which may still be called after
+          bfr_destroy_instance while a device lives.
 
   adapter_info:
     doc: An adapter, as an instance lists it. Nothing is opened.

@@ -35,12 +35,12 @@ POINTERS = {"in", "out", "inout"}
 KEYS = {
     "enum": {"doc", "values"},
     "value": {"value", "doc"},
-    "object": {"doc"},
-    "handle": {"doc"},
+    "object": {"doc", "destroy"},
+    "handle": {"doc", "parent", "destroy"},
     "callback": {"doc", "params"},
     "struct": {"doc", "extensible", "extends", "struct_type", "members"},
     "function": {"doc", "returns", "params"},
-    "field": {"name", "type", "doc", "pointer", "array", "optional", "lifetime"},
+    "field": {"name", "type", "doc", "pointer", "array", "optional", "lifetime", "user_data"},
 }
 
 
@@ -113,6 +113,14 @@ class Api:
                 struct_types[struct_type] = name
             self._check_fields(name, struct["members"])
 
+        for name, handle in self.handles.items():
+            if handle.get("parent") not in self.objects:
+                raise SpecError(f"{name} needs a parent, an object")
+        for name, obj in self.objects.items():
+            self._check_destroy(name, obj, [name])
+        for name, handle in self.handles.items():
+            self._check_destroy(name, handle, [handle["parent"], name])
+
         for name, callback in self.callbacks.items():
             self._check_fields(name, callback["params"])
         for name, function in self.functions.items():
@@ -133,6 +141,20 @@ class Api:
             count = field.get("array")
             if count is not None and count not in field_names:
                 raise SpecError(f"{where}: its count {count} is not in {owner}")
+            callback = field.get("user_data")
+            if callback is not None and (
+                field["type"] != "opaque" or callback not in {other["type"] for other in fields}
+            ):
+                raise SpecError(f"{where}: user data for {callback} must be opaque, beside a {callback} member")
+
+    def _check_destroy(self, name: str, entry: dict[str, Any], params: list[str]) -> None:
+        """entry names the function that destroys it, which takes params' types
+        in order and returns nothing."""
+        destroy = self.functions.get(entry.get("destroy", ""))
+        if destroy is None:
+            raise SpecError(f"{name} needs destroy, the function that destroys it")
+        if destroy.get("returns") is not None or [param["type"] for param in destroy["params"]] != params:
+            raise SpecError(f"{name}: {entry['destroy']} must take {', '.join(params)} and return nothing")
 
     def _check_type(self, where: str, name: str) -> None:
         declared = {**self.enums, **self.objects, **self.handles, **self.callbacks, **self.structs}

@@ -13,13 +13,23 @@ MINIMAL = {
             "values": {"success": {"value": 0, "doc": "Done."}, "error_lost": {"value": -1, "doc": "Lost."}},
         },
     },
-    "objects": {"device": {"doc": "A device."}},
-    "handles": {"buffer": {"doc": "A buffer."}},
+    "objects": {"device": {"doc": "A device.", "destroy": "destroy_device"}},
+    "handles": {"buffer": {"doc": "A buffer.", "parent": "device", "destroy": "destroy_buffer"}},
     "callbacks": {
-        "log": {"doc": "Logs.", "params": [{"name": "text", "type": "string"}]},
+        "log": {
+            "doc": "Logs.",
+            "params": [{"name": "text", "type": "string"}, {"name": "user_data", "type": "opaque"}],
+        },
     },
     "structs": {
         "buffer_desc": {"doc": "A buffer to make.", "extensible": True, "members": [{"name": "size", "type": "u64"}]},
+        "logger": {
+            "doc": "Where to log.",
+            "members": [
+                {"name": "log", "type": "log"},
+                {"name": "log_user_data", "type": "opaque", "user_data": "log"},
+            ],
+        },
         "buffer_name": {
             "doc": "A name for it.",
             "extends": ["buffer_desc"],
@@ -44,6 +54,10 @@ MINIMAL = {
         "destroy_device": {
             "doc": "Destroys a device.",
             "params": [{"name": "device", "type": "device", "optional": True}],
+        },
+        "destroy_buffer": {
+            "doc": "Destroys a buffer.",
+            "params": [{"name": "device", "type": "device"}, {"name": "buffer", "type": "buffer"}],
         },
     },
 }
@@ -88,6 +102,24 @@ class CheckTests(unittest.TestCase):
 
     def test_an_array_needs_its_count_beside_it(self) -> None:
         self.assert_rejected(lambda s: s["structs"]["list"]["members"][1].update(array="missing"), "count")
+
+    def test_an_object_without_a_destroy_is_rejected(self) -> None:
+        self.assert_rejected(lambda s: s["objects"]["device"].pop("destroy"), "needs destroy")
+
+    def test_a_destroy_that_takes_other_params_is_rejected(self) -> None:
+        self.assert_rejected(lambda s: s["handles"]["buffer"].update(destroy="destroy_device"), "must take device, buffer")
+
+    def test_a_destroy_that_returns_something_is_rejected(self) -> None:
+        self.assert_rejected(lambda s: s["functions"]["destroy_device"].update(returns="result"), "return nothing")
+
+    def test_a_handle_needs_an_object_for_its_parent(self) -> None:
+        self.assert_rejected(lambda s: s["handles"]["buffer"].update(parent="buffer_desc"), "needs a parent")
+
+    def test_user_data_must_sit_beside_its_callback(self) -> None:
+        self.assert_rejected(lambda s: s["structs"]["logger"]["members"].pop(0), "beside a log member")
+
+    def test_user_data_must_be_opaque(self) -> None:
+        self.assert_rejected(lambda s: s["structs"]["logger"]["members"][1].update(type="u64"), "must be opaque")
 
 
 if __name__ == "__main__":
