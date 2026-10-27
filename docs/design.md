@@ -77,6 +77,18 @@ option. Several instances of different backends may coexist in one process.
 Reason: Windows has two backends and tools may want both; one indirect call
 per command is small next to driver cost.
 
+A device can be rebuilt while the app runs: on another backend, on another
+adapter, or on the same one after device loss. BFR waits for the GPU, reads
+back resource contents if the old device still works, destroys everything,
+recreates every object from its stored desc on the new device and uploads
+the contents again. Handles stay the same, so the app's code doesn't change.
+After device loss the contents are gone, so BFR reports which resources need
+refilling. A rebuild happens between frames; unsubmitted command lists are
+dropped. Pipelines need bytecode for every backend the app may switch to.
+Reason: switching backend or GPU in a settings menu, and recovering from
+device loss, are the same job, and BFR is the one that knows every object.
+Not built until resources exist.
+
 Commands are translated to native calls as they are recorded, not buffered
 and replayed. Reason: avoids recording everything twice. Revisit if Metal
 encoder switching needs lookahead.
@@ -257,7 +269,7 @@ encoder switching needs lookahead.
   last failure. Recording calls return nothing; misuse is caught by
   validation. Wrappers turn failures into their language's errors.
 - Device loss is sticky: every later call reports it, and a host callback
-  fires once.
+  fires once, until the device is rebuilt (see Backend selection).
 - Validation is configured at instance creation; messages go to a host
   callback.
 
