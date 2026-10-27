@@ -1,11 +1,16 @@
-# One Catch2 executable for every test; each case carries its area tag, such as
-# [core] or [rhi], and a kind tag, [unit] or [gpu] (code_style.md).
-# test_main.cpp sets the environment the tests need.
+# One Catch2 executable for every test of the library; each case carries its
+# area tag, such as [core] or [rhi], and a kind tag, [unit] or [gpu]
+# (code_style.md).
 find_package(Catch2 3 CONFIG REQUIRED)
 include(Catch)
 
+# The main every Catch2 test program runs, which sets the environment the GPU
+# tests need; the C++ wrapper's tests use it too.
+add_library(bfr_test_main OBJECT test_main.cpp)
+bfr_apply_compiler_flags(bfr_test_main)
+target_link_libraries(bfr_test_main PUBLIC Catch2::Catch2)
+
 add_executable(bfr_tests
-    test_main.cpp
     c_api/test_c_api.cpp
     config/test_config.cpp
     core/test_error.cpp
@@ -27,7 +32,8 @@ target_include_directories(bfr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # header.
 target_include_directories(bfr_tests PRIVATE ${PROJECT_SOURCE_DIR}/include/bfr/vulkan)
 # The platform tests drive the display through SDL's event queue.
-target_link_libraries(bfr_tests PRIVATE bfr bfr_sanitizer_options Catch2::Catch2 SDL3::SDL3 volk::volk_headers)
+target_link_libraries(bfr_tests PRIVATE bfr bfr_test_main bfr_sanitizer_options Catch2::Catch2 SDL3::SDL3
+    volk::volk_headers)
 # The fullscreen tests give a Wayland window a blank buffer, which needs
 # wayland-client; the Wayland headers are installed for SDL3 already.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -45,14 +51,14 @@ string(JSON library GET "${manifest}" layer library_path)
 cmake_path(GET library FILENAME library)
 string(JSON manifest SET "${manifest}" layer library_path "\"${vcpkg_prefix}/lib/${library}\"")
 file(WRITE ${validation_layer}/VkLayer_khronos_validation.json "${manifest}")
-target_compile_definitions(bfr_tests PRIVATE BFR_TEST_LAYER_PATH="${validation_layer}")
+target_compile_definitions(bfr_test_main PRIVATE BFR_TEST_LAYER_PATH="${validation_layer}")
 if(BFR_SANITIZE STREQUAL "thread")
     find_file(BFR_LAVAPIPE_ICD NAMES lvp_icd.json lvp_icd.x86_64.json
         PATHS /usr/share/vulkan/icd.d NO_DEFAULT_PATH)
     if(NOT BFR_LAVAPIPE_ICD)
         message(FATAL_ERROR "ThreadSanitizer builds run the GPU tests on lavapipe; install mesa-vulkan-drivers")
     endif()
-    target_compile_definitions(bfr_tests PRIVATE BFR_TEST_DRIVER_FILES="${BFR_LAVAPIPE_ICD}")
+    target_compile_definitions(bfr_test_main PRIVATE BFR_TEST_DRIVER_FILES="${BFR_LAVAPIPE_ICD}")
 endif()
 
 # A Vulkan layer the RHI tests load, written to directory with its manifest.

@@ -10,3 +10,13 @@ add_library(bfr_cpp_no_exceptions OBJECT compiles_without_exceptions.cpp)
 bfr_apply_compiler_flags(bfr_cpp_no_exceptions)
 target_compile_options(bfr_cpp_no_exceptions PRIVATE -fno-exceptions -fno-rtti)
 target_link_libraries(bfr_cpp_no_exceptions PRIVATE bfr_cpp bfr_shared)
+
+# The wrapper's tests, through the shared library the wrappers load. They
+# run with the library tests' main and environment.
+find_package(Catch2 3 CONFIG REQUIRED)
+include(Catch)
+add_executable(bfr_cpp_tests test_bfr_hpp.cpp)
+bfr_apply_compiler_flags(bfr_cpp_tests)
+target_link_libraries(bfr_cpp_tests PRIVATE bfr_cpp bfr_shared bfr_test_main bfr_sanitizer_options Catch2::Catch2)
+catch_discover_tests(bfr_cpp_tests TEST_SPEC "~[gpu]")
+catch_discover_tests(bfr_cpp_tests TEST_SPEC "[gpu]~[.]" PROPERTIES LABELS gpu)
