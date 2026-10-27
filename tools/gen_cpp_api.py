@@ -343,6 +343,7 @@ class Renderer:
                     self.emit(*doc(value["doc"], "    "))
                 self.emit(f"    {pascal(value_name)} = {macro(name, value_name)},")
             self.emit("};")
+            self.enum_name(name, enum)
         self.emit(
             "",
             "/// A failed call: what it returned and the message bfr_get_last_error gave for it.",
@@ -380,6 +381,18 @@ class Renderer:
                 self.method_definition(owner, method)
         self.emit("", "} // namespace bfr", "", "// NOLINTEND", "// clang-format on")
         return "\n".join(self.out) + "\n"
+
+    def enum_name(self, name: str, enum: dict[str, Any]) -> None:
+        # No default, so a value added to the enum but not here is a warning.
+        self.emit(
+            "",
+            f"/// value's name in bfr.yaml; empty for a value {pascal(name)} doesn't have.",
+            f"[[nodiscard]] constexpr std::string_view name({pascal(name)} value) {{",
+            "    switch (value) {",
+        )
+        for value_name in enum["values"]:
+            self.emit(f'    case {pascal(name)}::{pascal(value_name)}: return "{value_name}";')
+        self.emit("    }", "    return {};", "}")
 
     def struct(self, name: str, struct: dict[str, Any]) -> None:
         api = self.api

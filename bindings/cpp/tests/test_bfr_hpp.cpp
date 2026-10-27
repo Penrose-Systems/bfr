@@ -106,6 +106,12 @@ TEST_CASE("C++ API takes after a desc only the extensions that extend it", "[cpp
     STATIC_CHECK_FALSE(SwapchainTakes<bfr::DeviceDesc>);
 }
 
+TEST_CASE("C++ API names enum values as bfr.yaml does", "[cpp_api][unit]") {
+    STATIC_CHECK(bfr::name(bfr::Format::Astc4x4Unorm) == "astc_4x4_unorm");
+    STATIC_CHECK(bfr::name(bfr::ColorSpace::Hdr10Pq) == "hdr10_pq");
+    STATIC_CHECK(bfr::name(static_cast<bfr::Format>(-1)).empty());
+}
+
 TEST_CASE("C++ API lists adapters", "[cpp_api][gpu]") {
     Messages messages;
     {

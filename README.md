@@ -84,6 +84,14 @@ if (caps && caps->features.meshShader) {
 }
 ```
 
+## Samples
+
+[`samples/`](samples) shows the API in use, through the C++ wrapper.
+
+- [`caps`](samples/caps/main.cpp): what each adapter is and can do. Run
+  `bfr_caps` for a summary, `--formats` for every format's uses, `--window`
+  for what a swapchain may be, and `--all` for every field.
+
 ## Build and test
 
 ```sh
@@ -103,10 +111,11 @@ Presets: `debug`, `tsan`, `releasedebinfo`, `release`, `ci`.
 | `BFR_SANITIZE` | `address` in Debug | `address`, `thread` or `none` |
 | `BFR_CLANG_TIDY` | `OFF` | Run clang-tidy on every source |
 | `BFR_BUILD_TESTS` | `ON` | Build the tests |
+| `BFR_BUILD_SAMPLES` | `ON` | Build the samples |
 | `BFR_USE_CCACHE` | `ON` | Use ccache if installed |
 
 As a subproject, the parent project sets the build type and sanitizers, and
-tests are off.
+tests and samples are off.
 
 ## License
 

@@ -69,6 +69,34 @@ enum class Result : std::int32_t {
     ErrorQueryFailed = BFR_RESULT_ERROR_QUERY_FAILED,
 };
 
+/// value's name in bfr.yaml; empty for a value Result doesn't have.
+[[nodiscard]] constexpr std::string_view name(Result value) {
+    switch (value) {
+    case Result::Success: return "success";
+    case Result::Incomplete: return "incomplete";
+    case Result::ErrorInvalidArgument: return "error_invalid_argument";
+    case Result::ErrorOutOfMemory: return "error_out_of_memory";
+    case Result::ErrorInstanceFailed: return "error_instance_failed";
+    case Result::ErrorLoaderFailed: return "error_loader_failed";
+    case Result::ErrorValidationUnavailable: return "error_validation_unavailable";
+    case Result::ErrorNoAdapter: return "error_no_adapter";
+    case Result::ErrorDeviceFailed: return "error_device_failed";
+    case Result::ErrorDeviceLost: return "error_device_lost";
+    case Result::ErrorInvalidHandle: return "error_invalid_handle";
+    case Result::ErrorSurfaceFailed: return "error_surface_failed";
+    case Result::ErrorSurfaceLost: return "error_surface_lost";
+    case Result::ErrorPresentUnsupported: return "error_present_unsupported";
+    case Result::ErrorSwapchainFailed: return "error_swapchain_failed";
+    case Result::ErrorOutOfDate: return "error_out_of_date";
+    case Result::ErrorBackendUnavailable: return "error_backend_unavailable";
+    case Result::ErrorInternal: return "error_internal";
+    case Result::ErrorLimitReached: return "error_limit_reached";
+    case Result::ErrorUnsupported: return "error_unsupported";
+    case Result::ErrorQueryFailed: return "error_query_failed";
+    }
+    return {};
+}
+
 /// The native API an instance runs on.
 enum class Backend : std::int32_t {
     /// Vulkan 1.3.
@@ -78,6 +106,16 @@ enum class Backend : std::int32_t {
     /// Metal 4.
     Metal = BFR_BACKEND_METAL,
 };
+
+/// value's name in bfr.yaml; empty for a value Backend doesn't have.
+[[nodiscard]] constexpr std::string_view name(Backend value) {
+    switch (value) {
+    case Backend::Vulkan: return "vulkan";
+    case Backend::D3d12: return "d3d12";
+    case Backend::Metal: return "metal";
+    }
+    return {};
+}
 
 /// What kind of GPU an adapter is.
 enum class AdapterType : std::int32_t {
@@ -93,6 +131,18 @@ enum class AdapterType : std::int32_t {
     Cpu = BFR_ADAPTER_TYPE_CPU,
 };
 
+/// value's name in bfr.yaml; empty for a value AdapterType doesn't have.
+[[nodiscard]] constexpr std::string_view name(AdapterType value) {
+    switch (value) {
+    case AdapterType::Other: return "other";
+    case AdapterType::Discrete: return "discrete";
+    case AdapterType::Integrated: return "integrated";
+    case AdapterType::Virtual: return "virtual";
+    case AdapterType::Cpu: return "cpu";
+    }
+    return {};
+}
+
 /// How serious a message is, least first.
 enum class MessageSeverity : std::int32_t {
     /// Step by step detail.
@@ -106,6 +156,18 @@ enum class MessageSeverity : std::int32_t {
     /// Invalid use of the API; behaviour is undefined after it.
     Error = BFR_MESSAGE_SEVERITY_ERROR,
 };
+
+/// value's name in bfr.yaml; empty for a value MessageSeverity doesn't have.
+[[nodiscard]] constexpr std::string_view name(MessageSeverity value) {
+    switch (value) {
+    case MessageSeverity::Trace: return "trace";
+    case MessageSeverity::Debug: return "debug";
+    case MessageSeverity::Info: return "info";
+    case MessageSeverity::Warning: return "warning";
+    case MessageSeverity::Error: return "error";
+    }
+    return {};
+}
 
 /// How a texel is stored. Channels are named in memory order, so rgba8 holds red in its first byte;
 /// a packed format names its channels from the low bits up. unorm and snorm read as 0 to 1 and -1
@@ -242,6 +304,134 @@ enum class Format : std::int32_t {
     Astc12x12Float = BFR_FORMAT_ASTC_12X12_FLOAT,
 };
 
+/// value's name in bfr.yaml; empty for a value Format doesn't have.
+[[nodiscard]] constexpr std::string_view name(Format value) {
+    switch (value) {
+    case Format::R8Unorm: return "r8_unorm";
+    case Format::R8Snorm: return "r8_snorm";
+    case Format::R8Uint: return "r8_uint";
+    case Format::R8Sint: return "r8_sint";
+    case Format::Rg8Unorm: return "rg8_unorm";
+    case Format::Rg8Snorm: return "rg8_snorm";
+    case Format::Rg8Uint: return "rg8_uint";
+    case Format::Rg8Sint: return "rg8_sint";
+    case Format::Rgba8Unorm: return "rgba8_unorm";
+    case Format::Rgba8Srgb: return "rgba8_srgb";
+    case Format::Rgba8Snorm: return "rgba8_snorm";
+    case Format::Rgba8Uint: return "rgba8_uint";
+    case Format::Rgba8Sint: return "rgba8_sint";
+    case Format::Bgra8Unorm: return "bgra8_unorm";
+    case Format::Bgra8Srgb: return "bgra8_srgb";
+    case Format::R16Unorm: return "r16_unorm";
+    case Format::R16Snorm: return "r16_snorm";
+    case Format::R16Uint: return "r16_uint";
+    case Format::R16Sint: return "r16_sint";
+    case Format::R16Float: return "r16_float";
+    case Format::Rg16Unorm: return "rg16_unorm";
+    case Format::Rg16Snorm: return "rg16_snorm";
+    case Format::Rg16Uint: return "rg16_uint";
+    case Format::Rg16Sint: return "rg16_sint";
+    case Format::Rg16Float: return "rg16_float";
+    case Format::Rgba16Unorm: return "rgba16_unorm";
+    case Format::Rgba16Snorm: return "rgba16_snorm";
+    case Format::Rgba16Uint: return "rgba16_uint";
+    case Format::Rgba16Sint: return "rgba16_sint";
+    case Format::Rgba16Float: return "rgba16_float";
+    case Format::R32Uint: return "r32_uint";
+    case Format::R32Sint: return "r32_sint";
+    case Format::R32Float: return "r32_float";
+    case Format::Rg32Uint: return "rg32_uint";
+    case Format::Rg32Sint: return "rg32_sint";
+    case Format::Rg32Float: return "rg32_float";
+    case Format::Rgb32Uint: return "rgb32_uint";
+    case Format::Rgb32Sint: return "rgb32_sint";
+    case Format::Rgb32Float: return "rgb32_float";
+    case Format::Rgba32Uint: return "rgba32_uint";
+    case Format::Rgba32Sint: return "rgba32_sint";
+    case Format::Rgba32Float: return "rgba32_float";
+    case Format::Rgb10a2Unorm: return "rgb10a2_unorm";
+    case Format::Rgb10a2Uint: return "rgb10a2_uint";
+    case Format::Bgr10a2Unorm: return "bgr10a2_unorm";
+    case Format::Rg11b10Float: return "rg11b10_float";
+    case Format::Rgb9e5Float: return "rgb9e5_float";
+    case Format::B5g6r5Unorm: return "b5g6r5_unorm";
+    case Format::Bgr5a1Unorm: return "bgr5a1_unorm";
+    case Format::Bgra4Unorm: return "bgra4_unorm";
+    case Format::D16Unorm: return "d16_unorm";
+    case Format::D24UnormS8Uint: return "d24_unorm_s8_uint";
+    case Format::D32Float: return "d32_float";
+    case Format::D32FloatS8Uint: return "d32_float_s8_uint";
+    case Format::S8Uint: return "s8_uint";
+    case Format::Bc1Unorm: return "bc1_unorm";
+    case Format::Bc1Srgb: return "bc1_srgb";
+    case Format::Bc2Unorm: return "bc2_unorm";
+    case Format::Bc2Srgb: return "bc2_srgb";
+    case Format::Bc3Unorm: return "bc3_unorm";
+    case Format::Bc3Srgb: return "bc3_srgb";
+    case Format::Bc4Unorm: return "bc4_unorm";
+    case Format::Bc4Snorm: return "bc4_snorm";
+    case Format::Bc5Unorm: return "bc5_unorm";
+    case Format::Bc5Snorm: return "bc5_snorm";
+    case Format::Bc6hUfloat: return "bc6h_ufloat";
+    case Format::Bc6hSfloat: return "bc6h_sfloat";
+    case Format::Bc7Unorm: return "bc7_unorm";
+    case Format::Bc7Srgb: return "bc7_srgb";
+    case Format::Etc2Rgb8Unorm: return "etc2_rgb8_unorm";
+    case Format::Etc2Rgb8Srgb: return "etc2_rgb8_srgb";
+    case Format::Etc2Rgb8a1Unorm: return "etc2_rgb8a1_unorm";
+    case Format::Etc2Rgb8a1Srgb: return "etc2_rgb8a1_srgb";
+    case Format::Etc2Rgba8Unorm: return "etc2_rgba8_unorm";
+    case Format::Etc2Rgba8Srgb: return "etc2_rgba8_srgb";
+    case Format::EacR11Unorm: return "eac_r11_unorm";
+    case Format::EacR11Snorm: return "eac_r11_snorm";
+    case Format::EacRg11Unorm: return "eac_rg11_unorm";
+    case Format::EacRg11Snorm: return "eac_rg11_snorm";
+    case Format::Astc4x4Unorm: return "astc_4x4_unorm";
+    case Format::Astc4x4Srgb: return "astc_4x4_srgb";
+    case Format::Astc4x4Float: return "astc_4x4_float";
+    case Format::Astc5x4Unorm: return "astc_5x4_unorm";
+    case Format::Astc5x4Srgb: return "astc_5x4_srgb";
+    case Format::Astc5x4Float: return "astc_5x4_float";
+    case Format::Astc5x5Unorm: return "astc_5x5_unorm";
+    case Format::Astc5x5Srgb: return "astc_5x5_srgb";
+    case Format::Astc5x5Float: return "astc_5x5_float";
+    case Format::Astc6x5Unorm: return "astc_6x5_unorm";
+    case Format::Astc6x5Srgb: return "astc_6x5_srgb";
+    case Format::Astc6x5Float: return "astc_6x5_float";
+    case Format::Astc6x6Unorm: return "astc_6x6_unorm";
+    case Format::Astc6x6Srgb: return "astc_6x6_srgb";
+    case Format::Astc6x6Float: return "astc_6x6_float";
+    case Format::Astc8x5Unorm: return "astc_8x5_unorm";
+    case Format::Astc8x5Srgb: return "astc_8x5_srgb";
+    case Format::Astc8x5Float: return "astc_8x5_float";
+    case Format::Astc8x6Unorm: return "astc_8x6_unorm";
+    case Format::Astc8x6Srgb: return "astc_8x6_srgb";
+    case Format::Astc8x6Float: return "astc_8x6_float";
+    case Format::Astc8x8Unorm: return "astc_8x8_unorm";
+    case Format::Astc8x8Srgb: return "astc_8x8_srgb";
+    case Format::Astc8x8Float: return "astc_8x8_float";
+    case Format::Astc10x5Unorm: return "astc_10x5_unorm";
+    case Format::Astc10x5Srgb: return "astc_10x5_srgb";
+    case Format::Astc10x5Float: return "astc_10x5_float";
+    case Format::Astc10x6Unorm: return "astc_10x6_unorm";
+    case Format::Astc10x6Srgb: return "astc_10x6_srgb";
+    case Format::Astc10x6Float: return "astc_10x6_float";
+    case Format::Astc10x8Unorm: return "astc_10x8_unorm";
+    case Format::Astc10x8Srgb: return "astc_10x8_srgb";
+    case Format::Astc10x8Float: return "astc_10x8_float";
+    case Format::Astc10x10Unorm: return "astc_10x10_unorm";
+    case Format::Astc10x10Srgb: return "astc_10x10_srgb";
+    case Format::Astc10x10Float: return "astc_10x10_float";
+    case Format::Astc12x10Unorm: return "astc_12x10_unorm";
+    case Format::Astc12x10Srgb: return "astc_12x10_srgb";
+    case Format::Astc12x10Float: return "astc_12x10_float";
+    case Format::Astc12x12Unorm: return "astc_12x12_unorm";
+    case Format::Astc12x12Srgb: return "astc_12x12_srgb";
+    case Format::Astc12x12Float: return "astc_12x12_float";
+    }
+    return {};
+}
+
 /// How a window's display reads the values a swapchain presents.
 enum class ColorSpace : std::int32_t {
     /// sRGB. Every window has it.
@@ -278,6 +468,29 @@ enum class ColorSpace : std::int32_t {
     DisplayNative = BFR_COLOR_SPACE_DISPLAY_NATIVE,
 };
 
+/// value's name in bfr.yaml; empty for a value ColorSpace doesn't have.
+[[nodiscard]] constexpr std::string_view name(ColorSpace value) {
+    switch (value) {
+    case ColorSpace::Srgb: return "srgb";
+    case ColorSpace::SrgbExtendedLinear: return "srgb_extended_linear";
+    case ColorSpace::SrgbExtended: return "srgb_extended";
+    case ColorSpace::DisplayP3: return "display_p3";
+    case ColorSpace::DisplayP3Linear: return "display_p3_linear";
+    case ColorSpace::DciP3: return "dci_p3";
+    case ColorSpace::Bt709: return "bt709";
+    case ColorSpace::Bt709Linear: return "bt709_linear";
+    case ColorSpace::Bt2020Linear: return "bt2020_linear";
+    case ColorSpace::Hdr10Pq: return "hdr10_pq";
+    case ColorSpace::Hdr10Hlg: return "hdr10_hlg";
+    case ColorSpace::DolbyVision: return "dolby_vision";
+    case ColorSpace::AdobeRgb: return "adobe_rgb";
+    case ColorSpace::AdobeRgbLinear: return "adobe_rgb_linear";
+    case ColorSpace::PassThrough: return "pass_through";
+    case ColorSpace::DisplayNative: return "display_native";
+    }
+    return {};
+}
+
 /// How a window's display is turned relative to its natural orientation.
 enum class SurfaceRotation : std::int32_t {
     /// Not turned.
@@ -291,6 +504,18 @@ enum class SurfaceRotation : std::int32_t {
     /// Mirrored, or left to the platform.
     Other = BFR_SURFACE_ROTATION_OTHER,
 };
+
+/// value's name in bfr.yaml; empty for a value SurfaceRotation doesn't have.
+[[nodiscard]] constexpr std::string_view name(SurfaceRotation value) {
+    switch (value) {
+    case SurfaceRotation::None: return "none";
+    case SurfaceRotation::Rotate90: return "rotate_90";
+    case SurfaceRotation::Rotate180: return "rotate_180";
+    case SurfaceRotation::Rotate270: return "rotate_270";
+    case SurfaceRotation::Other: return "other";
+    }
+    return {};
+}
 
 /// A failed call: what it returned and the message bfr_get_last_error gave for it.
 struct Error {

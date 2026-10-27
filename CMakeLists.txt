@@ -49,6 +49,7 @@ endif()
 
 include(CMakeDependentOption)
 cmake_dependent_option(BFR_BUILD_TESTS "Build the tests" ON "PROJECT_IS_TOP_LEVEL" OFF)
+cmake_dependent_option(BFR_BUILD_SAMPLES "Build the samples" ON "PROJECT_IS_TOP_LEVEL" OFF)
 set(BFR_SANITIZE ${sanitize_default} CACHE STRING
     "address (AddressSanitizer, UndefinedBehaviorSanitizer, LeakSanitizer), thread (ThreadSanitizer) or none")
 set_property(CACHE BFR_SANITIZE PROPERTY STRINGS address thread none)
@@ -164,3 +165,7 @@ if(BFR_BUILD_TESTS)
 endif()
 
 add_subdirectory(bindings/cpp)
+
+if(BFR_BUILD_SAMPLES)
+    add_subdirectory(samples)
+endif()

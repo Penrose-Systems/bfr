@@ -45,6 +45,10 @@ class RenderTests(unittest.TestCase):
         self.assertIn("enum class Result : std::int32_t {", self.header)
         self.assertIn("    ErrorLost = BFR_RESULT_ERROR_LOST,", self.header)
 
+    def test_every_enum_value_has_its_yaml_name(self) -> None:
+        self.assertIn("[[nodiscard]] constexpr std::string_view name(Result value) {", self.header)
+        self.assertIn('    case Result::ErrorLost: return "error_lost";', self.header)
+
     def test_objects_and_handles_destroy_what_they_own(self) -> None:
         self.assertIn("    ~Device() { bfr_destroy_device(device_); }", self.header)
         self.assertIn("    ~Buffer() { bfr_destroy_buffer(device_, buffer_); }", self.header)
