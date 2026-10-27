@@ -170,3 +170,5 @@ if(BFR_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+add_subdirectory(bindings/cpp)

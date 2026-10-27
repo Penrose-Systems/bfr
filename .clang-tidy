@@ -23,7 +23,7 @@ Checks: >
 
 WarningsAsErrors: '*'
 
-HeaderFilterRegex: '.*/(include/bfr|src|tests)/.*'
+HeaderFilterRegex: '.*/(include/bfr|src|tests|bindings/cpp/include)/.*'
 
 FormatStyle: file
 

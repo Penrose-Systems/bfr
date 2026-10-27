@@ -175,10 +175,10 @@ def macro(*parts: str) -> str:
     return MACRO_PREFIX + "_".join(part.upper() for part in parts)
 
 
-def comment(text: str, indent: str = "") -> list[str]:
-    """text as // lines, wrapped to WIDTH."""
+def comment(text: str, indent: str = "", marker: str = "//") -> list[str]:
+    """text as marker lines, // by default, wrapped to WIDTH."""
     text = " ".join(text.split())
-    return [f"{indent}// {line}" for line in textwrap.wrap(text, WIDTH - len(indent) - 3)]
+    return [f"{indent}{marker} {line}" for line in textwrap.wrap(text, WIDTH - len(indent) - len(marker) - 1)]
 
 
 def field_doc(field: dict[str, Any]) -> str:

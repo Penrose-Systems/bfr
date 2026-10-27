@@ -1,0 +1,86 @@
+#pragma once
+
+// What the generated bfr.hpp is built on. Nothing here is part of the API.
+
+#include "bfr.h"
+
+#include <cstddef>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
+
+namespace bfr::detail {
+
+/// Keeps alive what a C object may still call into, such as a callback's
+/// state, for as long as any object holding it lives.
+using KeepAlive = std::shared_ptr<const void>;
+
+/// Whether Extension may be passed after Desc; bfr.hpp says which may.
+template <class Extension, class Desc>
+inline constexpr bool kExtends = false;
+
+[[nodiscard]] inline std::string_view text(bfr_string string) {
+    return {string.data, string.length};
+}
+
+[[nodiscard]] inline bfr_string toC(std::string_view text) {
+    return {.data = text.data(), .length = text.size()};
+}
+
+/// The calling thread's last error, copied before another call replaces it.
+[[nodiscard]] inline std::string lastError() {
+    return std::string{text(bfr_get_last_error())};
+}
+
+/// Calls call, keeping anything it throws from leaving: a callback runs on a
+/// C stack, often a driver's thread.
+template <class Call>
+void callQuietly(Call&& call) noexcept {
+#if defined(__cpp_exceptions)
+    try {
+        std::forward<Call>(call)();
+    } catch (...) { // NOLINT(bugprone-empty-catch): nowhere to report it
+    }
+#else
+    std::forward<Call>(call)();
+#endif
+}
+
+/// Extension structs in C form, each linked to the next, on the stack of the
+/// call that hands head() to the C API. They stay at one address, so a Chain
+/// neither copies nor moves.
+template <class... Links>
+class Chain {
+public:
+    explicit Chain(const Links&... links) : links_{links...} { link(std::index_sequence_for<Links...>{}); }
+    ~Chain() = default;
+    Chain(const Chain&) = delete;
+    Chain& operator=(const Chain&) = delete;
+    Chain(Chain&&) = delete;
+    Chain& operator=(Chain&&) = delete;
+
+    /// The first link, or null when there are none.
+    [[nodiscard]] const bfr_chain* head() const { return at<0>(); }
+
+private:
+    template <std::size_t Index>
+    [[nodiscard]] const bfr_chain* at() const {
+        if constexpr (Index < sizeof...(Links)) {
+            return &std::get<Index>(links_).chain;
+        }
+        else {
+            return nullptr;
+        }
+    }
+
+    template <std::size_t... Index>
+    void link(std::index_sequence<Index...> /*indices*/) {
+        ((std::get<Index>(links_).chain.next = at<Index + 1>()), ...);
+    }
+
+    std::tuple<Links...> links_;
+};
+
+} // namespace bfr::detail

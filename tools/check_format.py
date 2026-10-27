@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail if any .h or .cpp file git tracks or would track differs from .clang-format.
+"""Fail if any .h, .hpp or .cpp file git tracks or would track differs from .clang-format.
 
     python3 tools/check_format.py            # list the offending files
     clang-format -i <file>                   # fix one
@@ -18,10 +18,10 @@ CLANG_FORMAT = os.environ.get("CLANG_FORMAT") or shutil.which("clang-format-19")
 
 
 def sources(root: pathlib.Path = REPO_ROOT) -> list[pathlib.Path]:
-    """The .h and .cpp files git tracks or would track: new files count before
+    """The .h, .hpp and .cpp files git tracks or would track: new files count before
     their first commit, ignored ones never, and deleted ones are skipped."""
     listed = subprocess.run(
-        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "*.h", "*.cpp"],
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "*.h", "*.hpp", "*.cpp"],
         cwd=root,
         capture_output=True,
         text=True,
