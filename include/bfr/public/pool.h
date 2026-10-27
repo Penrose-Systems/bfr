@@ -44,12 +44,17 @@ public:
 
     /// Room for capacity values now, rounded up to whole pages, and for
     /// maxCapacity at most, which a handle's index must be able to name:
-    /// Handle<Tag>::kMaxIndices or fewer. name labels the growth warning and
-    /// must outlive the pool.
-    Pool(std::string_view name, std::uint32_t capacity, std::uint32_t maxCapacity)
-        : name_(name), maxCapacity_(std::min(maxCapacity, Handle<Tag>::kMaxIndices)), pages_(pagesFor(maxCapacity_)) {
+    /// Handle<Tag>::kMaxIndices or fewer. name labels the growth warning, which
+    /// goes to logger; both must outlive the pool.
+    Pool(std::string_view name, std::uint32_t capacity, std::uint32_t maxCapacity,
+         const Logger& logger = Logger::none())
+        : name_(name),
+          logger_(&logger),
+          maxCapacity_(std::min(maxCapacity, Handle<Tag>::kMaxIndices)),
+          pages_(pagesFor(maxCapacity_)) {
         if (maxCapacity > maxCapacity_) {
-            BFR_LOG_ERROR("Pool {} asked for {} entries; a handle names at most {}", name_, maxCapacity, maxCapacity_);
+            BFR_LOG_ERROR(*logger_, "Pool {} asked for {} entries; a handle names at most {}", name_, maxCapacity,
+                          maxCapacity_);
         }
         const std::scoped_lock lock{mutex_};
         addPages(std::min(pagesFor(capacity), maxPages()));
@@ -231,7 +236,7 @@ private:
         }
         if (free_ == kNoFree) {
             addPages(1);
-            BFR_LOG_WARN("Pool {} grew to {} entries", name_, pageCount_ * kPageSize);
+            BFR_LOG_WARN(*logger_, "Pool {} grew to {} entries", name_, pageCount_ * kPageSize);
         }
         const std::uint32_t index = free_;
         free_ = entryAt(index).nextFree;
@@ -279,6 +284,7 @@ private:
     }
 
     std::string_view name_;
+    const Logger* logger_;
     std::uint32_t maxCapacity_;
     // One per page the pool may ever have, made once and never resized, so find
     // reads it without the lock. A page is published here once it is ready.

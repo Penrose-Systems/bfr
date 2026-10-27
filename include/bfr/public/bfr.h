@@ -109,14 +109,18 @@ typedef enum bfr_adapter_type {
     BFR_ADAPTER_TYPE_FORCE32 = 0x7FFFFFFF
 } bfr_adapter_type;
 
-// How serious a message is.
+// How serious a message is, least first.
 typedef enum bfr_message_severity {
+    // Step by step detail.
+    BFR_MESSAGE_SEVERITY_TRACE = 1,
+    // Detail for debugging.
+    BFR_MESSAGE_SEVERITY_DEBUG = 2,
     // For information.
-    BFR_MESSAGE_SEVERITY_INFO = 1,
+    BFR_MESSAGE_SEVERITY_INFO = 3,
     // Likely a mistake.
-    BFR_MESSAGE_SEVERITY_WARNING = 2,
+    BFR_MESSAGE_SEVERITY_WARNING = 4,
     // Invalid use of the API; behaviour is undefined after it.
-    BFR_MESSAGE_SEVERITY_ERROR = 3,
+    BFR_MESSAGE_SEVERITY_ERROR = 5,
     BFR_MESSAGE_SEVERITY_FORCE32 = 0x7FFFFFFF
 } bfr_message_severity;
 
@@ -153,8 +157,9 @@ typedef struct bfr_swapchain {
     uint64_t bits;
 } bfr_swapchain;
 
-// Receives validation and diagnostic messages. Called on any thread, including threads BFR or the
-// driver owns, until the instance and every device made from it are destroyed.
+// Receives BFR's messages and validation's. Without one, BFR prints nothing. Called on any thread,
+// including threads BFR or the driver owns, until the instance and every device made from it are
+// destroyed.
 // message: Valid only during the call.
 // user_data: May be null.
 typedef void (*bfr_message_callback)(
@@ -170,6 +175,8 @@ typedef struct bfr_instance_desc {
     bfr_bool validation;
     // May be null.
     bfr_message_callback message_callback;
+    // The least severe message to send; 0 means warning.
+    bfr_message_severity min_severity;
     // Passed to message_callback, which may still be called after bfr_destroy_instance while a
     // device lives. May be null.
     void* message_user_data;

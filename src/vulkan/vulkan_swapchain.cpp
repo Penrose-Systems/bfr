@@ -47,8 +47,8 @@ core::Result<SwapchainImages> refused(std::string_view function, VkResult result
 } // namespace
 
 VulkanSwapchain::VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, VulkanSurface surface,
-                                 std::uint32_t imageCount)
-    : device_(device), table_(&table), surface_(std::move(surface)), imageCount_(imageCount) {}
+                                 std::uint32_t imageCount, const core::Logger& logger)
+    : device_(device), table_(&table), logger_(&logger), surface_(std::move(surface)), imageCount_(imageCount) {}
 
 VulkanSwapchain::~VulkanSwapchain() {
     release();
@@ -74,7 +74,7 @@ core::Result<SwapchainImages> VulkanSwapchain::build(VkPhysicalDevice adapter, V
     }
     const SwapchainSettings settings = chooseSwapchainSettings(capabilities, formats_, size, imageCount_);
     if (settings.extent.width == 0 || settings.extent.height == 0) {
-        BFR_LOG_DEBUG("swapchain left empty: the window has no area");
+        BFR_LOG_DEBUG(*logger_, "swapchain left empty: the window has no area");
         return SwapchainImages{};
     }
 
@@ -97,7 +97,7 @@ core::Result<SwapchainImages> VulkanSwapchain::build(VkPhysicalDevice adapter, V
     }
     swapchain_ = swapchain;
     const auto count = static_cast<std::uint32_t>(images_.size());
-    BFR_LOG_INFO("swapchain {}x{}, {} images, {}", settings.extent.width, settings.extent.height, count,
+    BFR_LOG_INFO(*logger_, "swapchain {}x{}, {} images, {}", settings.extent.width, settings.extent.height, count,
                  string_VkFormat(settings.format.format));
     return SwapchainImages{.width = settings.extent.width, .height = settings.extent.height, .count = count};
 }

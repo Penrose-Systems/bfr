@@ -1,6 +1,7 @@
 #pragma once
 
 #include "error.h"
+#include "log.h"
 #include "swapchain.h"
 #include "vulkan_surface.h"
 
@@ -16,8 +17,9 @@ namespace bfr::rhi::vulkan {
 class VulkanSwapchain {
 public:
     /// Builds on surface, which it takes over, through device's table, asking
-    /// for imageCount images each time.
-    VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, VulkanSurface surface, std::uint32_t imageCount);
+    /// for imageCount images each time. It reports to logger, which outlives it.
+    VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, VulkanSurface surface, std::uint32_t imageCount,
+                    const core::Logger& logger);
     ~VulkanSwapchain();
     VulkanSwapchain(const VulkanSwapchain&) = delete;
     VulkanSwapchain& operator=(const VulkanSwapchain&) = delete;
@@ -39,6 +41,7 @@ public:
 private:
     VkDevice device_;
     const VolkDeviceTable* table_;
+    const core::Logger* logger_;
     VulkanSurface surface_;
     std::uint32_t imageCount_;
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;

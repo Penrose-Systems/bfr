@@ -2,14 +2,18 @@
 
 #include "log.h"
 
-#include <spdlog/sinks/ostream_sink.h>
-
-#include <memory>
+#include <mutex>
 #include <sstream>
+#include <string_view>
 
-// Replaces the logger's sinks with one that writes the bare message to output.
-inline void captureLogInto(std::ostringstream& output) {
-    auto sink = std::make_shared<spdlog::sinks::ostream_sink_st>(output);
-    sink->set_pattern("%v");
-    bfr::core::Log::getLogger()->sinks() = {sink};
+// A logger that writes each message from least up to output, one a line.
+// output outlives whatever logs to it.
+inline bfr::core::Logger loggingInto(std::ostringstream& output,
+                                     bfr::core::Severity least = bfr::core::Severity::Trace) {
+    return {[&output](bfr::core::Severity /*severity*/, std::string_view message) {
+                static std::mutex mutex;
+                const std::scoped_lock lock{mutex};
+                output << message << '\n';
+            },
+            least};
 }

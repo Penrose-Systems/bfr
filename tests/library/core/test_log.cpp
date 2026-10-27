@@ -5,43 +5,64 @@
 
 #include <sstream>
 
-TEST_CASE("Log writes each message to the logger's sinks", "[core][unit]") {
+using bfr::core::Logger;
+using bfr::core::Severity;
+
+TEST_CASE("Log sends each message its logger wants", "[core][unit]") {
     if (!bfr::core::kLoggingEnabled) {
         SKIP("logging is compiled out");
     }
-    bfr::core::Log::init(bfr::core::LogConfig(BFR_LOGLEVEL_TRACE));
     std::ostringstream output;
-    captureLogInto(output);
+    const Logger logger = loggingInto(output, Severity::Info);
 
-    BFR_LOG_INFO("hello {}", 7);
+    BFR_LOG_INFO(logger, "hello {}", 7);
+    BFR_LOG_ERROR(logger, "and {}", "this");
 
-    REQUIRE(output.str() == "hello 7\n");
+    REQUIRE(output.str() == "hello 7\nand this\n");
 }
 
-TEST_CASE("Log compiled out never evaluates its arguments", "[core][unit]") {
-    if (bfr::core::kLoggingEnabled) {
-        SKIP("logging is compiled in");
-    }
+TEST_CASE("Log never formats a message its logger doesn't want", "[core][unit]") {
+    std::ostringstream output;
+    const Logger logger = loggingInto(output, Severity::Warning);
     bool evaluated = false;
     const auto evaluate = [&evaluated] {
         evaluated = true;
         return 0;
     };
 
-    BFR_LOG_INFO("{}", evaluate());
+    BFR_LOG_DEBUG(logger, "{}", evaluate());
 
+    CHECK(output.str().empty());
     REQUIRE_FALSE(evaluated);
     // The probe does set the flag, so the check above can fail.
     evaluate();
     REQUIRE(evaluated);
 }
 
-TEST_CASE("Log at level off drops every message", "[core][unit]") {
-    bfr::core::Log::init(bfr::core::LogConfig(BFR_LOGLEVEL_OFF));
+TEST_CASE("Log without a callback sends nothing", "[core][unit]") {
+    const Logger logger;
+
+    CHECK_FALSE(logger.wants(Severity::Error));
+    CHECK_FALSE(Logger::none().wants(Severity::Error));
+    BFR_LOG_ERROR(logger, "dropped");
+}
+
+TEST_CASE("Log compiled out never evaluates its arguments", "[core][unit]") {
+    if (bfr::core::kLoggingEnabled) {
+        SKIP("logging is compiled in");
+    }
     std::ostringstream output;
-    captureLogInto(output);
+    const Logger logger = loggingInto(output);
+    bool evaluated = false;
+    const auto evaluate = [&evaluated] {
+        evaluated = true;
+        return 0;
+    };
 
-    BFR_LOG_CRITICAL("dropped");
+    BFR_LOG_ERROR(logger, "{}", evaluate());
 
-    REQUIRE(output.str().empty());
+    CHECK(output.str().empty());
+    REQUIRE_FALSE(evaluated);
+    evaluate();
+    REQUIRE(evaluated);
 }

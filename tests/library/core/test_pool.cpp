@@ -156,9 +156,9 @@ TEST_CASE("Pool preallocates its capacity", "[core][unit]") {
         SKIP("logging is compiled out");
     }
     std::ostringstream log;
-    captureLogInto(log);
+    const bfr::core::Logger logger = loggingInto(log);
     constexpr std::uint32_t kCapacity = 100;
-    Pool<int> pool{"test", kCapacity, kLimit};
+    Pool<int> pool{"test", kCapacity, kLimit, logger};
     REQUIRE(pool.capacity() >= kCapacity);
 
     for (std::uint32_t added = 0; added < pool.capacity(); ++added) {
@@ -173,8 +173,8 @@ TEST_CASE("Pool warns with its new capacity when it grows", "[core][unit]") {
         SKIP("logging is compiled out");
     }
     std::ostringstream log;
-    captureLogInto(log);
-    Pool<int> pool{"surfaces", 1, kLimit};
+    const bfr::core::Logger logger = loggingInto(log);
+    Pool<int> pool{"surfaces", 1, kLimit, logger};
     const std::uint32_t before = pool.capacity();
 
     for (std::uint32_t added = 0; added <= before; ++added) {

@@ -65,11 +65,13 @@ enums:
       cpu: {value: 4, doc: A software renderer.}
 
   message_severity:
-    doc: How serious a message is.
+    doc: How serious a message is, least first.
     values:
-      info: {value: 1, doc: For information.}
-      warning: {value: 2, doc: Likely a mistake.}
-      error: {value: 3, doc: Invalid use of the API; behaviour is undefined after it.}
+      trace: {value: 1, doc: Step by step detail.}
+      debug: {value: 2, doc: Detail for debugging.}
+      info: {value: 3, doc: For information.}
+      warning: {value: 4, doc: Likely a mistake.}
+      error: {value: 5, doc: Invalid use of the API; behaviour is undefined after it.}
 
 objects:
   instance:
@@ -96,9 +98,9 @@ handles:
 callbacks:
   message_callback:
     doc: >-
-      Receives validation and diagnostic messages. Called on any thread,
-      including threads BFR or the driver owns, until the instance and every
-      device made from it are destroyed.
+      Receives BFR's messages and validation's. Without one, BFR prints
+      nothing. Called on any thread, including threads BFR or the driver
+      owns, until the instance and every device made from it are destroyed.
     params:
       - {name: severity, type: message_severity}
       - {name: message, type: string, doc: Valid only during the call.}
@@ -112,6 +114,7 @@ structs:
       - {name: backend, type: backend}
       - {name: validation, type: bool, doc: Enable the backend's validation layer.}
       - {name: message_callback, type: message_callback, optional: true}
+      - {name: min_severity, type: message_severity, doc: The least severe message to send; 0 means warning.}
       - name: message_user_data
         type: opaque
         optional: true

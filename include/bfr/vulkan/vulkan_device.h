@@ -44,7 +44,7 @@ private:
     // tool should reach.
     static constexpr std::uint32_t kSwapchainCapacity = 4;
     static constexpr std::uint32_t kSwapchainLimit = 256;
-    core::Pool<VulkanSwapchain, Swapchain> swapchains_{"swapchains", kSwapchainCapacity, kSwapchainLimit};
+    core::Pool<VulkanSwapchain, Swapchain> swapchains_;
 };
 
 } // namespace bfr::rhi::vulkan

@@ -256,7 +256,7 @@ std::expected<bool, std::string> hasExtension(const char* layer, std::string_vie
 // Validation needs the layer and VK_EXT_debug_utils, which the loader or the
 // layer provides. Checked before the instance exists, so a missing piece is
 // reported as such, not as a failed vkCreateInstance.
-core::Result<void> checkValidation() {
+core::Result<void> checkValidation(const core::Logger& logger) {
     const auto found = findLayer(kValidationLayer);
     if (!found) {
         return core::failure(core::ErrorCode::RhiValidationUnavailable, found.error());
@@ -267,7 +267,7 @@ core::Result<void> checkValidation() {
         return core::failure(core::ErrorCode::RhiValidationUnavailable,
                              std::format("{} is not installed", kValidationLayer));
     }
-    BFR_LOG_INFO("{} {}", kValidationLayer, versionName(layer->specVersion));
+    BFR_LOG_INFO(logger, "{} {}", kValidationLayer, versionName(layer->specVersion));
     for (const char* provider : std::to_array<const char*>({nullptr, kValidationLayer})) {
         const auto provided = hasExtension(provider, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         if (!provided) {
@@ -281,25 +281,31 @@ core::Result<void> checkValidation() {
                          std::format("{} is not available", VK_EXT_DEBUG_UTILS_EXTENSION_NAME));
 }
 
-// Logs each message, then hands it to the sink userData points at.
+core::Severity severityOf(VkDebugUtilsMessageSeverityFlagBitsEXT severity) {
+    switch (severity) {
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
+            return core::Severity::Error;
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT:
+            return core::Severity::Warning;
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT:
+            return core::Severity::Info;
+        default:
+            return core::Severity::Trace;
+    }
+}
+
+// Hands each message to the sink userData points at. Validation messages are
+// the API's behaviour, not BFR's diagnostics, so BFR_LOGGING doesn't drop them.
 VKAPI_ATTR VkBool32 VKAPI_CALL onMessage(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                          VkDebugUtilsMessageTypeFlagsEXT,
                                          const VkDebugUtilsMessengerCallbackDataEXT* data, void* userData) {
-    const bool isError = severity == VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    const core::Severity level = severityOf(severity);
     const std::string_view message = data->pMessage != nullptr ? data->pMessage : "";
-    if (isError) {
-        BFR_LOG_ERROR("{}", message);
-    }
-    else {
-        BFR_LOG_WARN("{}", message);
-    }
     const auto& sink = *static_cast<const VulkanRhi::MessageSink*>(userData);
-    if (sink.reasons != nullptr) {
+    if (sink.reasons != nullptr && level >= core::Severity::Warning) {
         sink.reasons->emplace_back(message);
     }
-    if (sink.callback) {
-        sink.callback(isError, message);
-    }
+    sink.logger.send(level, message);
     return VK_FALSE;
 }
 
@@ -323,12 +329,19 @@ std::vector<const char*> optionalExtensions() {
     return extensions;
 }
 
-// Warnings and errors of every type.
+// Warnings and errors of every type, and the quieter messages when the logger
+// wants them.
 VkDebugUtilsMessengerCreateInfoEXT messengerInfo(VulkanRhi::MessageSink* sink) {
     VkDebugUtilsMessengerCreateInfoEXT info{};
     info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
     info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
                            VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    if (sink->logger.wants(core::Severity::Info)) {
+        info.messageSeverity |= VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
+    }
+    if (sink->logger.wants(core::Severity::Trace)) {
+        info.messageSeverity |= VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT;
+    }
     info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                        VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
     info.pfnUserCallback = onMessage;
@@ -343,15 +356,15 @@ core::Result<std::unique_ptr<VulkanRhi>> VulkanRhi::create(const RhiDesc& desc, 
         return std::unexpected(std::move(opened.error()));
     }
     const std::uint32_t loader = loaderVersion();
-    BFR_LOG_INFO("Vulkan loader {}", versionName(loader));
+    BFR_LOG_INFO(desc.logger, "Vulkan loader {}", versionName(loader));
 
     if (config.validation) {
-        if (auto available = checkValidation(); !available) {
+        if (auto available = checkValidation(desc.logger); !available) {
             return std::unexpected(std::move(available.error()));
         }
     }
 
-    auto rhi = std::make_unique<VulkanRhi>(config, desc.onValidationMessage);
+    auto rhi = std::make_unique<VulkanRhi>(config, desc.logger);
     rhi->loaderVersion_ = loader;
     if (auto created = rhi->createInstance(); !created) {
         return std::unexpected(std::move(created.error()));
@@ -362,8 +375,8 @@ core::Result<std::unique_ptr<VulkanRhi>> VulkanRhi::create(const RhiDesc& desc, 
     return rhi;
 }
 
-VulkanRhi::VulkanRhi(const RhiConfig& config, ValidationCallback onValidationMessage)
-    : Rhi(config), messages_{.callback = std::move(onValidationMessage)} {}
+VulkanRhi::VulkanRhi(const RhiConfig& config, core::Logger logger)
+    : Rhi(config), messages_{.logger = std::move(logger)} {}
 
 VulkanRhi::~VulkanRhi() {
     // Without a VkInstance, volk never loaded vkDestroyInstance.
@@ -374,7 +387,7 @@ VulkanRhi::~VulkanRhi() {
         vkDestroyDebugUtilsMessengerEXT(instance_, messenger_, nullptr);
     }
     vkDestroyInstance(instance_, nullptr);
-    BFR_LOG_DEBUG("Vulkan instance destroyed");
+    BFR_LOG_DEBUG(logger(), "Vulkan instance destroyed");
 }
 
 std::span<const Adapter> VulkanRhi::adapters() const {
@@ -425,7 +438,7 @@ core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapte
         return core::failure(core::ErrorCode::RhiDeviceFailed,
                              std::format("vkCreateDevice on {}: {}", listed.name, string_VkResult(result)));
     }
-    BFR_LOG_INFO("device on {}, queue families {}, extensions: {}", listed.name, familyList(queues),
+    BFR_LOG_INFO(logger(), "device on {}, queue families {}, extensions: {}", listed.name, familyList(queues),
                  core::text::join(extensions, ", "));
     return std::make_unique<VulkanDevice>(*this, physicalDevice, device, *families->present);
 }
@@ -444,7 +457,8 @@ core::Result<std::vector<VkBool32>> VulkanRhi::presentingFamilies(std::size_t ad
     }
     VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
     if (presentQueryCrashes(physicalDevice, *surface)) {
-        BFR_LOG_WARN("{} does not present to headless surfaces; not asked, since loader {} would crash its driver",
+        BFR_LOG_INFO(logger(),
+                     "{} does not present to headless surfaces; not asked, since loader {} would crash its driver",
                      adapters_[adapter].name, versionName(loaderVersion_));
     }
     presenting.resize(familyCount);
@@ -518,7 +532,7 @@ core::Result<void> VulkanRhi::createInstance() {
     instance_ = handle;
     extensions_ = std::move(extensions);
     volkLoadInstanceOnly(instance_);
-    BFR_LOG_INFO("Vulkan instance {}, validation {}", versionName(kInstanceVersion),
+    BFR_LOG_INFO(logger(), "Vulkan instance {}, validation {}", versionName(kInstanceVersion),
                  config().validation ? "on" : "off");
 
     // The chained messenger covers only creation and destruction; this one
@@ -529,7 +543,7 @@ core::Result<void> VulkanRhi::createInstance() {
             return core::failure(core::ErrorCode::RhiInstanceFailed,
                                  std::format("vkCreateDebugUtilsMessengerEXT: {}", string_VkResult(result)));
         }
-        BFR_LOG_DEBUG("Vulkan validation messenger created");
+        BFR_LOG_DEBUG(logger(), "Vulkan validation messenger created");
     }
     return {};
 }
@@ -548,7 +562,7 @@ core::Result<void> VulkanRhi::listAdapters() {
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(device, &properties);
         const std::string reason = belowFloor(device, properties);
-        BFR_LOG_INFO("adapter {}: {}", describe(device, properties),
+        BFR_LOG_INFO(logger(), "adapter {}: {}", describe(device, properties),
                      reason.empty() ? std::string{"listed"} : "below the floor, " + reason);
         if (!reason.empty()) {
             rejected.push_back(std::format("{}: {}", properties.deviceName, reason));

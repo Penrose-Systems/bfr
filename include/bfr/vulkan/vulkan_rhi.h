@@ -2,6 +2,7 @@
 
 #include "device.h"
 #include "error.h"
+#include "log.h"
 #include "rhi.h"
 #include "rhi_config.h"
 #include "vulkan_surface.h"
@@ -20,19 +21,17 @@ namespace bfr::rhi::vulkan {
 
 class VulkanRhi final : public Rhi {
 public:
-    using ValidationCallback = decltype(RhiDesc::onValidationMessage);
-
-    /// Where the messenger sends each message: the callback, and while
+    /// Where the messenger sends each message: the logger, and while
     /// vkCreateInstance runs, the reasons its failure carries.
     struct MessageSink {
-        ValidationCallback callback;
+        core::Logger logger;
         std::vector<std::string>* reasons = nullptr;
     };
 
     [[nodiscard]] static core::Result<std::unique_ptr<VulkanRhi>> create(const RhiDesc& desc, const RhiConfig& config);
 
     /// Holds no VkInstance until create makes one.
-    VulkanRhi(const RhiConfig& config, ValidationCallback onValidationMessage);
+    VulkanRhi(const RhiConfig& config, core::Logger logger);
     ~VulkanRhi() override;
     VulkanRhi(const VulkanRhi&) = delete;
     VulkanRhi& operator=(const VulkanRhi&) = delete;
@@ -44,6 +43,9 @@ public:
         std::size_t adapter, const core::window::NativeWindow& presentTo) override;
 
     using Rhi::config;
+
+    /// Where the Rhi and its devices send their messages.
+    [[nodiscard]] const core::Logger& logger() const { return messages_.logger; }
 
     /// A surface on window, which goes before this Rhi. Fails as
     /// Device::createSwapchain describes.

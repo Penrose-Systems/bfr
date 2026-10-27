@@ -332,8 +332,7 @@ TEST_CASE("Rhi doesn't ask NVIDIA's driver about a headless window on a loader t
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv nvidia("BFR_ADAPTER_DRIVER_ID", std::to_string(VK_DRIVER_ID_NVIDIA_PROPRIETARY));
     std::ostringstream log;
-    captureLogInto(log);
-    const auto rhi = Rhi::create({}, {});
+    const auto rhi = Rhi::create({.logger = loggingInto(log)}, {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -388,12 +387,7 @@ TEST_CASE("Rhi creates a valid device on an adapter that lists VK_KHR_portabilit
     const ScopedEnv added("BFR_ADAPTER_ADD", "VK_KHR_portability_subset");
     // Errors only: the loader also reports layer warnings.
     std::vector<std::string> errors;
-    const RhiDesc desc{.onValidationMessage = [&errors](bool isError, std::string_view message) {
-        if (isError) {
-            errors.emplace_back(message);
-        }
-    }};
-    const auto rhi = Rhi::create(desc, kValidation);
+    const auto rhi = Rhi::create(recordingErrorsInto(errors), kValidation);
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -409,9 +403,8 @@ TEST_CASE("Rhi logs the loader and each adapter it lists", "[rhi][gpu]") {
         SKIP("logging is compiled out");
     }
     std::ostringstream log;
-    captureLogInto(log);
 
-    const auto rhi = Rhi::create({}, {});
+    const auto rhi = Rhi::create({.logger = loggingInto(log)}, {});
 
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
@@ -430,9 +423,8 @@ TEST_CASE("Rhi logs why an adapter is below the floor", "[rhi][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv version("BFR_ADAPTER_MINOR", "1");
     std::ostringstream log;
-    captureLogInto(log);
 
-    const auto rhi = Rhi::create({}, {});
+    const auto rhi = Rhi::create({.logger = loggingInto(log)}, {});
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK_THAT(log.str(), Catch::Matchers::ContainsSubstring(", Vulkan 1.1: below the floor, Vulkan 1.1, needs 1.2"));
@@ -443,9 +435,8 @@ TEST_CASE("Rhi logs the validation layer's version", "[rhi][gpu]") {
         SKIP("logging is compiled out");
     }
     std::ostringstream log;
-    captureLogInto(log);
 
-    const auto rhi = Rhi::create({}, kValidation);
+    const auto rhi = Rhi::create({.logger = loggingInto(log)}, kValidation);
 
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
@@ -460,10 +451,9 @@ TEST_CASE("Rhi logs the device it creates, its queue families and its extensions
     const ScopedEnv added("BFR_ADAPTER_ADD", "VK_KHR_portability_subset");
     // Outlives the Rhi, which logs as it goes.
     std::ostringstream log;
-    const auto rhi = Rhi::create({}, {});
+    const auto rhi = Rhi::create({.logger = loggingInto(log)}, {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
-    captureLogInto(log);
 
     // lavapipe has one queue family.
     const auto device = (*rhi)->createDevice(headlessAdapter(**rhi), kNoWindow);

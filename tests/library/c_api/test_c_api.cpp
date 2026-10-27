@@ -1,9 +1,11 @@
 #include "bfr.h"
+#include "log.h"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
+#include <catch2/matchers/catch_matchers_quantifiers.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <atomic>
@@ -40,6 +42,7 @@ struct Instance {
                                      .backend = BFR_BACKEND_VULKAN,
                                      .validation = BFR_TRUE,
                                      .message_callback = record,
+                                     .min_severity = BFR_MESSAGE_SEVERITY_WARNING,
                                      .message_user_data = &messages};
         const bfr_result result = bfr_create_instance(&desc, &instance);
         INFO(lastError());
@@ -91,6 +94,7 @@ TEST_CASE("C API reports a backend this build lacks", "[c_api][unit]") {
                                  .backend = BFR_BACKEND_D3D12,
                                  .validation = BFR_FALSE,
                                  .message_callback = nullptr,
+                                 .min_severity = BFR_MESSAGE_SEVERITY_WARNING,
                                  .message_user_data = nullptr};
     bfr_instance* instance = nullptr;
 
@@ -103,6 +107,7 @@ TEST_CASE("C API rejects a struct chained where it does not belong", "[c_api][un
                                  .backend = BFR_BACKEND_VULKAN,
                                  .validation = BFR_FALSE,
                                  .message_callback = nullptr,
+                                 .min_severity = BFR_MESSAGE_SEVERITY_WARNING,
                                  .message_user_data = nullptr};
     bfr_instance* instance = nullptr;
 
@@ -266,4 +271,43 @@ TEST_CASE("C API needs exactly one window on a swapchain", "[c_api][gpu]") {
     CHECK(bfr_device_create_swapchain(device.device, &two, &swapchain) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("more than one window"));
     CHECK(swapchain.bits == 0);
+}
+
+TEST_CASE("C API rejects a min_severity that is not a severity", "[c_api][unit]") {
+    constexpr auto kNotASeverity = static_cast<bfr_message_severity>(9);
+    const bfr_instance_desc desc{.next = nullptr,
+                                 .backend = BFR_BACKEND_VULKAN,
+                                 .validation = BFR_FALSE,
+                                 .message_callback = nullptr,
+                                 .min_severity = kNotASeverity,
+                                 .message_user_data = nullptr};
+    bfr_instance* instance = nullptr;
+
+    CHECK(bfr_create_instance(&desc, &instance) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("min_severity 9"));
+    CHECK(instance == nullptr);
+}
+
+TEST_CASE("C API sends BFR's messages from min_severity up", "[c_api][gpu]") {
+    if (!bfr::core::kLoggingEnabled) {
+        SKIP("logging is compiled out");
+    }
+    const auto created = [](bfr_message_severity least) {
+        std::vector<std::string> messages;
+        const bfr_instance_desc desc{.next = nullptr,
+                                     .backend = BFR_BACKEND_VULKAN,
+                                     .validation = BFR_FALSE,
+                                     .message_callback = record,
+                                     .min_severity = least,
+                                     .message_user_data = &messages};
+        bfr_instance* instance = nullptr;
+        REQUIRE(bfr_create_instance(&desc, &instance) == BFR_RESULT_SUCCESS);
+        bfr_destroy_instance(instance);
+        return messages;
+    };
+
+    CHECK_THAT(created(BFR_MESSAGE_SEVERITY_INFO),
+               Catch::Matchers::AnyMatch(Catch::Matchers::StartsWith("Vulkan loader ")));
+    CHECK_THAT(created(BFR_MESSAGE_SEVERITY_WARNING),
+               Catch::Matchers::NoneMatch(Catch::Matchers::StartsWith("Vulkan loader ")));
 }

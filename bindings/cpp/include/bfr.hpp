@@ -88,8 +88,12 @@ enum class AdapterType : std::int32_t {
     Cpu = BFR_ADAPTER_TYPE_CPU,
 };
 
-/// How serious a message is.
+/// How serious a message is, least first.
 enum class MessageSeverity : std::int32_t {
+    /// Step by step detail.
+    Trace = BFR_MESSAGE_SEVERITY_TRACE,
+    /// Detail for debugging.
+    Debug = BFR_MESSAGE_SEVERITY_DEBUG,
     /// For information.
     Info = BFR_MESSAGE_SEVERITY_INFO,
     /// Likely a mistake.
@@ -108,9 +112,9 @@ struct Error {
 template <class T>
 using Expected = std::expected<T, Error>;
 
-/// Receives validation and diagnostic messages. Called on any thread, including threads BFR or the
-/// driver owns, until the instance and every device made from it are destroyed. May be called on
-/// several threads at once.
+/// Receives BFR's messages and validation's. Without one, BFR prints nothing. Called on any thread,
+/// including threads BFR or the driver owns, until the instance and every device made from it are
+/// destroyed. May be called on several threads at once.
 /// message: Valid only during the call.
 using MessageCallback = std::function<void(MessageSeverity severity, std::string_view message)>;
 
@@ -127,6 +131,8 @@ struct InstanceDesc {
     bool validation{};
     /// May be empty.
     MessageCallback messageCallback{};
+    /// The least severe message to send; 0 means warning.
+    MessageSeverity minSeverity{};
 };
 
 /// An adapter, as an instance lists it. Nothing is opened.
@@ -209,6 +215,7 @@ inline bfr_instance_desc toC(const InstanceDesc& value, const bfr_chain* next, M
         .backend = static_cast<bfr_backend>(value.backend),
         .validation = value.validation ? BFR_TRUE : BFR_FALSE,
         .message_callback = messageCallback != nullptr ? &messageCallbackTrampoline : nullptr,
+        .min_severity = static_cast<bfr_message_severity>(value.minSeverity),
         .message_user_data = messageCallback,
     };
 }

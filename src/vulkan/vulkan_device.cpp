@@ -18,7 +18,11 @@
 namespace bfr::rhi::vulkan {
 
 VulkanDevice::VulkanDevice(VulkanRhi& rhi, VkPhysicalDevice adapter, VkDevice device, std::uint32_t presentFamily)
-    : rhi_(&rhi), adapter_(adapter), device_(device), presentFamily_(presentFamily) {
+    : rhi_(&rhi),
+      adapter_(adapter),
+      device_(device),
+      presentFamily_(presentFamily),
+      swapchains_("swapchains", kSwapchainCapacity, kSwapchainLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
 }
 
@@ -33,7 +37,8 @@ core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::
         return core::failure(core::ErrorCode::RhiPresentUnsupported,
                              "the device's present queue doesn't present to the window");
     }
-    const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, std::move(*surface), imageCount);
+    const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, std::move(*surface), imageCount,
+                                                          rhi_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("a device holds at most {} swapchains", kSwapchainLimit));
@@ -68,11 +73,11 @@ VulkanDevice::~VulkanDevice() {
     static_cast<void>(table_.vkDeviceWaitIdle(device_));
     // Swapchains are the device's children, so they go first.
     if (swapchains_.size() != 0) {
-        BFR_LOG_WARN("{} Vulkan swapchains were left when the device went", swapchains_.size());
+        BFR_LOG_WARN(rhi_->logger(), "{} Vulkan swapchains were left when the device went", swapchains_.size());
     }
     swapchains_.clear();
     table_.vkDestroyDevice(device_, nullptr);
-    BFR_LOG_DEBUG("Vulkan device destroyed");
+    BFR_LOG_DEBUG(rhi_->logger(), "Vulkan device destroyed");
 }
 
 } // namespace bfr::rhi::vulkan

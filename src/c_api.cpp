@@ -4,6 +4,7 @@
 #include "bfr.h"
 #include "device.h"
 #include "error.h"
+#include "log.h"
 #include "rhi.h"
 #include "rhi_config.h"
 #include "swapchain.h"
@@ -38,7 +39,24 @@ struct bfr_device {
 namespace {
 
 using bfr::core::ErrorCode;
+using bfr::core::Severity;
 using bfr::core::window::NativeWindow;
+
+// The C and C++ severities are the same numbers.
+static_assert(static_cast<int>(Severity::Trace) == BFR_MESSAGE_SEVERITY_TRACE);
+static_assert(static_cast<int>(Severity::Error) == BFR_MESSAGE_SEVERITY_ERROR);
+
+// The least severity a desc asks for: 0 means warning. Nullopt for a value
+// that is not a severity.
+std::optional<Severity> severityFrom(bfr_message_severity severity) {
+    if (severity == 0) {
+        return Severity::Warning;
+    }
+    if (severity < BFR_MESSAGE_SEVERITY_TRACE || severity > BFR_MESSAGE_SEVERITY_ERROR) {
+        return std::nullopt;
+    }
+    return static_cast<Severity>(severity);
+}
 
 // What bfr_swapchain_desc.image_count = 0 asks for.
 constexpr std::uint32_t kDefaultSwapchainImages = 3;
@@ -218,13 +236,19 @@ bfr_result bfr_create_instance(const bfr_instance_desc* desc, bfr_instance** ins
             return fail(BFR_RESULT_ERROR_BACKEND_UNAVAILABLE,
                         std::format("backend {} is not in this build", static_cast<std::int64_t>(desc->backend)));
         }
+        const auto least = severityFrom(desc->min_severity);
+        if (!least) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, std::format("min_severity {} is not a severity",
+                                                                       static_cast<std::int64_t>(desc->min_severity)));
+        }
         bfr::rhi::RhiDesc rhiDesc;
         if (desc->message_callback != nullptr) {
-            rhiDesc.onValidationMessage = [callback = desc->message_callback,
-                                           userData = desc->message_user_data](bool isError, std::string_view message) {
-                callback(isError ? BFR_MESSAGE_SEVERITY_ERROR : BFR_MESSAGE_SEVERITY_WARNING,
-                         {.data = message.data(), .length = message.size()}, userData);
-            };
+            rhiDesc.logger = {[callback = desc->message_callback,
+                               userData = desc->message_user_data](Severity severity, std::string_view message) {
+                                  callback(static_cast<bfr_message_severity>(severity),
+                                           {.data = message.data(), .length = message.size()}, userData);
+                              },
+                              *least};
         }
         auto rhi = bfr::rhi::Rhi::create(rhiDesc, bfr::rhi::RhiConfig{.validation = desc->validation != BFR_FALSE});
         if (!rhi) {

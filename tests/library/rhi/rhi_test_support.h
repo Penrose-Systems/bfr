@@ -30,21 +30,18 @@ inline const core::window::NativeWindow kNoWindow{};
 /// The images a test swapchain asks for.
 inline constexpr std::uint32_t kSwapchainImages = 3;
 
-/// A description that records every validation message the Rhi reports.
+/// A description that records every warning and error the Rhi and validation
+/// report.
 inline RhiDesc recordingInto(std::vector<std::string>& messages) {
-    return {.onValidationMessage = [&messages](bool, std::string_view message) {
-        messages.emplace_back(message);
-    }};
+    return {.logger = {[&messages](core::Severity, std::string_view message) { messages.emplace_back(message); },
+                       core::Severity::Warning}};
 }
 
-/// A description that records only the errors validation reports: the loader
-/// warns about layers turned on from the environment.
+/// A description that records only errors: the loader warns about layers
+/// turned on from the environment.
 inline RhiDesc recordingErrorsInto(std::vector<std::string>& errors) {
-    return {.onValidationMessage = [&errors](bool isError, std::string_view message) {
-        if (isError) {
-            errors.emplace_back(message);
-        }
-    }};
+    return {.logger = {[&errors](core::Severity, std::string_view message) { errors.emplace_back(message); },
+                       core::Severity::Error}};
 }
 
 /// The code and message of a failed result, for INFO; empty on success.

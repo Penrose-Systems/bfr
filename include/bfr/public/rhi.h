@@ -2,6 +2,7 @@
 
 #include "device.h"
 #include "error.h"
+#include "log.h"
 #include "rhi_config.h"
 #include "window.h"
 
@@ -30,8 +31,9 @@ struct Adapter {
 };
 
 struct RhiDesc {
-    /// Receives each message validation reports, when RhiConfig turns it on.
-    std::function<void(bool isError, std::string_view message)> onValidationMessage;
+    /// Where the Rhi, its devices and, when RhiConfig turns it on, validation
+    /// send their messages.
+    core::Logger logger;
 };
 
 /// The graphics API's entry point and the adapters it found.

@@ -84,7 +84,6 @@ add_compile_options($<$<CONFIG:Debug>:-ftrivial-auto-var-init=pattern>)
 
 include(cmake/bfr_build.cmake)
 
-find_package(spdlog CONFIG REQUIRED)
 find_package(volk CONFIG REQUIRED)
 find_package(VulkanUtilityLibraries CONFIG REQUIRED)
 
@@ -93,7 +92,6 @@ find_package(VulkanUtilityLibraries CONFIG REQUIRED)
 add_library(bfr_objects OBJECT
     src/c_api.cpp
     src/error.cpp
-    src/log.cpp
     src/vulkan/queue_families.cpp
     src/vulkan/swapchain_settings.cpp
     src/vulkan/vulkan_device.cpp
@@ -106,7 +104,6 @@ target_include_directories(bfr_objects
     PUBLIC include/bfr/public
     PRIVATE include/bfr include/bfr/vulkan)
 target_link_libraries(bfr_objects
-    PUBLIC spdlog::spdlog
     PRIVATE volk::volk_headers Vulkan::UtilityHeaders ${CMAKE_DL_LIBS})
 target_compile_definitions(bfr_objects
     PUBLIC BFR_LOGGING_ENABLED=$<BOOL:${BFR_LOGGING}>
