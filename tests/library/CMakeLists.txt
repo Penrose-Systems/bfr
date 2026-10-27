@@ -12,16 +12,12 @@ target_link_libraries(bfr_test_main PUBLIC Catch2::Catch2)
 
 add_executable(bfr_tests
     c_api/test_c_api.cpp
-    config/test_config.cpp
     core/test_error.cpp
     core/test_log.cpp
     core/test_pool.cpp
     core/test_text.cpp
-    platform/test_display.cpp
-    platform/test_display_input.cpp
     rhi/test_queue_families.cpp
     rhi/test_rhi.cpp
-    rhi/test_rhi_config.cpp
     rhi/test_swapchain.cpp
     rhi/test_swapchain_settings.cpp
     rhi/test_vulkan_surface.cpp)
@@ -31,16 +27,7 @@ target_include_directories(bfr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # The Vulkan backend's queue family choice is tested as data, from its private
 # header.
 target_include_directories(bfr_tests PRIVATE ${PROJECT_SOURCE_DIR}/include/bfr/vulkan)
-# The platform tests drive the display through SDL's event queue.
-target_link_libraries(bfr_tests PRIVATE bfr bfr_test_main bfr_sanitizer_options Catch2::Catch2 SDL3::SDL3
-    volk::volk_headers)
-# The fullscreen tests give a Wayland window a blank buffer, which needs
-# wayland-client; the Wayland headers are installed for SDL3 already.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
-    target_link_libraries(bfr_tests PRIVATE PkgConfig::WAYLAND_CLIENT)
-endif()
+target_link_libraries(bfr_tests PRIVATE bfr bfr_test_main bfr_sanitizer_options Catch2::Catch2 volk::volk_headers)
 # vcpkg's validation layer manifest names its library without a path, so the
 # loader finds a system copy of the layer, or none. The tests use a copy of the
 # manifest that names vcpkg's library, its release build, by its full path.

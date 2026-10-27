@@ -1,7 +1,6 @@
 #include "error.h"
 #include "log.h"
 #include "log_capture.h"
-#include "platform/display_test_support.h"
 #include "rhi.h"
 #include "rhi_test_support.h"
 #include "scoped_env.h"
@@ -282,15 +281,14 @@ TEST_CASE("Rhi fails with RhiNoAdapter when no queue family runs graphics", "[rh
     CHECK_THAT(rhi.error().message, Catch::Matchers::ContainsSubstring("no queue family runs graphics"));
 }
 
-TEST_CASE("Rhi creates a device that presents to the display's window", "[rhi][gpu]") {
-    const auto display = bfr::platform::test::openDisplay();
+TEST_CASE("Rhi creates a device that presents to a headless window", "[rhi][gpu]") {
     std::vector<std::string> messages;
     {
         const auto rhi = Rhi::create(recordingInto(messages), kValidation);
         INFO(failureOf(rhi));
         REQUIRE(rhi.has_value());
 
-        const auto device = presentingDevice(**rhi, display->nativeWindow());
+        const auto device = presentingDevice(**rhi, bfr::core::window::Headless{});
 
         REQUIRE(device != nullptr);
     }

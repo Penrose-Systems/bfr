@@ -85,8 +85,6 @@ add_compile_options($<$<CONFIG:Debug>:-ftrivial-auto-var-init=pattern>)
 include(cmake/bfr_build.cmake)
 
 find_package(spdlog CONFIG REQUIRED)
-find_package(nlohmann_json CONFIG REQUIRED)
-find_package(SDL3 CONFIG REQUIRED)
 find_package(volk CONFIG REQUIRED)
 find_package(VulkanUtilityLibraries CONFIG REQUIRED)
 
@@ -94,12 +92,8 @@ find_package(VulkanUtilityLibraries CONFIG REQUIRED)
 # include/bfr/public; the rest of include/bfr is its private headers.
 add_library(bfr_objects OBJECT
     src/c_api.cpp
-    src/config.cpp
     src/error.cpp
     src/log.cpp
-    src/rhi_config.cpp
-    src/sdl_display.cpp
-    src/sdl_input.cpp
     src/vulkan/queue_families.cpp
     src/vulkan/swapchain_settings.cpp
     src/vulkan/vulkan_device.cpp
@@ -113,7 +107,7 @@ target_include_directories(bfr_objects
     PRIVATE include/bfr include/bfr/vulkan)
 target_link_libraries(bfr_objects
     PUBLIC spdlog::spdlog
-    PRIVATE nlohmann_json::nlohmann_json SDL3::SDL3 volk::volk_headers Vulkan::UtilityHeaders ${CMAKE_DL_LIBS})
+    PRIVATE volk::volk_headers Vulkan::UtilityHeaders ${CMAKE_DL_LIBS})
 target_compile_definitions(bfr_objects
     PUBLIC BFR_LOGGING_ENABLED=$<BOOL:${BFR_LOGGING}>
     PRIVATE BFR_BUILDING)

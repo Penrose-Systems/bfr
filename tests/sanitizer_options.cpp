@@ -38,7 +38,7 @@ const char* __lsan_default_suppressions() {
     // DISPLAY. The driver unloads libnvidia-eglcore itself before exit, so a rule
     // naming that library can't match; this one names the libdbus call. It hides
     // any leak allocated inside bus registration, and whatever only that leak
-    // holds. Nothing of ours registers: SDL is built without D-Bus.
+    // holds. Nothing of ours registers on the bus.
     return "leak:^dbus_bus_register$\n";
 }
 

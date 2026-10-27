@@ -83,14 +83,6 @@ bfr_result resultFor(ErrorCode code) {
             return BFR_RESULT_ERROR_SWAPCHAIN_FAILED;
         case ErrorCode::RhiLimitReached:
             return BFR_RESULT_ERROR_LIMIT_REACHED;
-        // The display and config are not behind the C API.
-        case ErrorCode::DisplayAlreadyInitialised:
-        case ErrorCode::DisplayNotInitialised:
-        case ErrorCode::DisplayBackendFailed:
-        case ErrorCode::DisplayWindowFailed:
-        case ErrorCode::DisplayFullscreenFailed:
-        case ErrorCode::ConfigLoadFailed:
-            break;
     }
     return BFR_RESULT_ERROR_INTERNAL;
 }

@@ -8,26 +8,15 @@
 
 namespace bfr::core {
 
-/// The engine-wide failure list, grouped by the module that raises each code.
-/// Codes are appended, never reordered or reused. The base type is the
-/// smallest that holds the list and widens with it.
+/// What went wrong inside BFR. Internal: the C API turns each into a
+/// bfr_result.
 enum class ErrorCode : std::uint8_t {
-    // Platform
-    DisplayAlreadyInitialised,
-    DisplayNotInitialised,
-    DisplayBackendFailed,
-    DisplayWindowFailed,
-    DisplayFullscreenFailed,
-    // RHI
     RhiInstanceFailed,
     RhiLoaderFailed,
     RhiValidationUnavailable,
     RhiAdapterOutOfRange,
     RhiDeviceFailed,
     RhiNoAdapter,
-    // Config
-    ConfigLoadFailed,
-    // RHI
     RhiSurfaceFailed,
     RhiInvalidHandle,
     RhiPresentUnsupported,

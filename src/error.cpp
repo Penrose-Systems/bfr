@@ -17,16 +17,6 @@ std::unexpected<Error> failure(ErrorCode code, std::string message) {
 
 std::string_view name(ErrorCode code) noexcept {
     switch (code) {
-        case ErrorCode::DisplayAlreadyInitialised:
-            return "DisplayAlreadyInitialised";
-        case ErrorCode::DisplayNotInitialised:
-            return "DisplayNotInitialised";
-        case ErrorCode::DisplayBackendFailed:
-            return "DisplayBackendFailed";
-        case ErrorCode::DisplayWindowFailed:
-            return "DisplayWindowFailed";
-        case ErrorCode::DisplayFullscreenFailed:
-            return "DisplayFullscreenFailed";
         case ErrorCode::RhiInstanceFailed:
             return "RhiInstanceFailed";
         case ErrorCode::RhiLoaderFailed:
@@ -39,8 +29,6 @@ std::string_view name(ErrorCode code) noexcept {
             return "RhiDeviceFailed";
         case ErrorCode::RhiNoAdapter:
             return "RhiNoAdapter";
-        case ErrorCode::ConfigLoadFailed:
-            return "ConfigLoadFailed";
         case ErrorCode::RhiSurfaceFailed:
             return "RhiSurfaceFailed";
         case ErrorCode::RhiInvalidHandle:

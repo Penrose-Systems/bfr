@@ -27,7 +27,7 @@ struct Metal {
     void* layer = nullptr; // CAMetalLayer*
 };
 
-/// A window with no window system, such as SDL's offscreen driver.
+/// No window: images are presented nowhere, for tests and offscreen work.
 struct Headless {};
 
 /// std::monostate when there is no window, or its window system has no struct

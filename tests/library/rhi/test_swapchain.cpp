@@ -2,7 +2,6 @@
 #include "error.h"
 #include "log.h"
 #include "log_capture.h"
-#include "platform/display_test_support.h"
 #include "rhi.h"
 #include "rhi_config.h"
 #include "rhi_test_support.h"
@@ -53,24 +52,23 @@ struct HeadlessDevice {
 
 } // namespace
 
-TEST_CASE("Device builds a swapchain at the window's size", "[rhi][gpu]") {
-    const auto display = bfr::platform::test::openDisplay();
+TEST_CASE("Device builds a headless swapchain at the size asked for", "[rhi][gpu]") {
     std::vector<std::string> messages;
     {
         const auto rhi = Rhi::create(recordingInto(messages), kValidation);
         INFO(failureOf(rhi));
         REQUIRE(rhi.has_value());
-        const auto device = presentingDevice(**rhi, display->nativeWindow());
-        const auto swapchain = device->createSwapchain(display->nativeWindow(), kSwapchainImages);
+        const auto device = presentingDevice(**rhi, kHeadless);
+        const auto swapchain = device->createSwapchain(kHeadless, kSwapchainImages);
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 
-        const auto images = device->resizeSwapchain(*swapchain, display->width(), display->height());
+        const auto images = device->resizeSwapchain(*swapchain, kWidth, kHeight);
 
         INFO(failureOf(images));
         REQUIRE(images.has_value());
-        CHECK(images->width == display->width());
-        CHECK(images->height == display->height());
+        CHECK(images->width == kWidth);
+        CHECK(images->height == kHeight);
         CHECK(images->count >= 2);
         CHECK(device->destroySwapchain(*swapchain).has_value());
     }

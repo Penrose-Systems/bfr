@@ -31,6 +31,7 @@ Details: [`docs/how-it-works.md`](docs/how-it-works.md).
 |---|---|
 | GPU | Vulkan 1.3 · D3D12 SM 6.6 with enhanced barriers · Metal 4 (Apple GPU family 7+) |
 | Build | CMake 3.28, Ninja, GCC 13 or Clang 19, vcpkg in `VCPKG_ROOT` |
+| Linux | X11 and Wayland development headers |
 | macOS | MoltenVK, for Vulkan |
 | Checks | clang-format 19, clang-tidy 19, Python 3 with PyYAML |
 

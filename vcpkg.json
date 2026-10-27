@@ -3,17 +3,7 @@
   "name": "bfr",
   "version": "0.1.0",
   "dependencies": [
-    {
-      "name": "sdl3",
-      "default-features": false,
-      "features": [
-        "vulkan",
-        { "name": "x11", "platform": "linux" },
-        { "name": "wayland", "platform": "linux" }
-      ]
-    },
     "catch2",
-    "nlohmann-json",
     {
       "name": "spdlog",
       "default-features": false,
