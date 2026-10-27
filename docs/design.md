@@ -312,6 +312,14 @@ hand-written wrappers would each drift from the header.
   ownership (RAII in C++, `IDisposable` in C#, `Drop` in Rust, context
   managers in Python), errors as exceptions or results. Hand-written only
   where a language deserves its own shape, such as command recording.
+- C++ (`bfr.hpp`): C++23. Calls return `std::expected` and nothing
+  throws, so it works with exceptions off. Windows and other extension
+  structs go after the desc as extra arguments; one the desc doesn't take
+  won't compile. A handle borrows its device, so the device must outlive
+  it. Object methods are `const` because many threads can call them;
+  handle methods aren't, because calls on one handle can't overlap.
+  Reason: lots of engines turn exceptions off, the C API already returns
+  results, and the library needs C++23 anyway.
 - In `bindings/<language>`, each tested through the real library.
 - Order: C++ first, which the tests and Vesper use; then C#; then Rust and
   Python.
