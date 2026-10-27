@@ -1,6 +1,6 @@
 // Built as libvulkan.so.1: a loader that misbehaves as BFR_FAKE_LOADER_MODE
 // says:
-// - "layers" or "extensions": that listing fails with VK_ERROR_OUT_OF_HOST_MEMORY.
+// - "layers" or "extensions": that listing fails with VK_ERROR_UNKNOWN.
 // - "grow": each listing gains an entry once counted, as if one were installed
 //   meanwhile, so its first fill returns VK_INCOMPLETE.
 // It lists the validation layer and VK_EXT_debug_utils, so the Rhi's checks
@@ -64,7 +64,7 @@ Listing<VkExtensionProperties> extensions{.entries = {extensionNamed(VK_EXT_DEBU
 
 VKAPI_ATTR VkResult VKAPI_CALL enumerateInstanceLayerProperties(std::uint32_t* count, VkLayerProperties* properties) {
     if (inMode("layers")) {
-        return VK_ERROR_OUT_OF_HOST_MEMORY;
+        return VK_ERROR_UNKNOWN;
     }
     return layers.answer(count, properties);
 }
@@ -72,7 +72,7 @@ VKAPI_ATTR VkResult VKAPI_CALL enumerateInstanceLayerProperties(std::uint32_t* c
 VKAPI_ATTR VkResult VKAPI_CALL enumerateInstanceExtensionProperties(const char*, std::uint32_t* count,
                                                                     VkExtensionProperties* properties) {
     if (inMode("extensions")) {
-        return VK_ERROR_OUT_OF_HOST_MEMORY;
+        return VK_ERROR_UNKNOWN;
     }
     return extensions.answer(count, properties);
 }

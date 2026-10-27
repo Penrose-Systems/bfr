@@ -1,6 +1,7 @@
 #pragma once
 
-#include <vulkan/vk_enum_string_helper.h>
+#include "vulkan_result.h"
+
 #include <vulkan/vulkan_core.h>
 
 #include <cstdint>
@@ -18,7 +19,7 @@ namespace bfr::rhi::vulkan {
 /// result. VK_INCOMPLETE means the list grew between the calls, so it lists
 /// again.
 template <class Item, class Listing>
-std::expected<void, std::string> listInto(std::vector<Item>& items, std::string_view function, Listing listing) {
+std::expected<void, VulkanFailure> listInto(std::vector<Item>& items, std::string_view function, Listing listing) {
     VkResult result = VK_INCOMPLETE;
     while (result == VK_INCOMPLETE) {
         std::uint32_t count = 0;
@@ -31,14 +32,14 @@ std::expected<void, std::string> listInto(std::vector<Item>& items, std::string_
         items.resize(count);
     }
     if (result != VK_SUCCESS) {
-        return std::unexpected(std::format("{}: {}", function, string_VkResult(result)));
+        return std::unexpected(VulkanFailure{.call = std::string{function}, .result = result});
     }
     return {};
 }
 
 /// What listInto fills, in a new list.
 template <class Item, class Listing>
-std::expected<std::vector<Item>, std::string> listAll(std::string_view function, Listing listing) {
+std::expected<std::vector<Item>, VulkanFailure> listAll(std::string_view function, Listing listing) {
     std::vector<Item> items;
     return listInto(items, function, listing).transform([&items] { return std::move(items); });
 }

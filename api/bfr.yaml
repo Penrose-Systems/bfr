@@ -35,11 +35,11 @@ enums:
       error_instance_failed: {value: -3, doc: The backend refused to create the instance.}
       error_loader_failed: {value: -4, doc: The backend's library could not be loaded.}
       error_validation_unavailable: {value: -5, doc: Validation was asked for but the layer is missing.}
-      error_no_adapter: {value: -6, doc: No adapter meets BFR's hardware floor.}
+      error_no_adapter: {value: -6, doc: No adapter is usable; the message says why for each.}
       error_device_failed: {value: -7, doc: The backend refused to create the device.}
       error_device_lost: {value: -8, doc: The device was lost. Every later call on it returns this.}
       error_invalid_handle: {value: -9, doc: A handle is stale or destroyed.}
-      error_surface_failed: {value: -10, doc: No surface could be made for the window.}
+      error_surface_failed: {value: -10, doc: "The API refused a surface for the window, or failed when asked about it."}
       error_surface_lost: {value: -11, doc: The window's surface is gone; recreate the swapchain.}
       error_present_unsupported: {value: -12, doc: The device's queue cannot present to the window.}
       error_swapchain_failed: {value: -13, doc: The backend refused to create or resize the swapchain.}

@@ -5,6 +5,7 @@
 #include "swapchain.h"
 #include "swapchain_settings.h"
 #include "vulkan_list.h"
+#include "vulkan_result.h"
 #include "vulkan_surface.h"
 
 #include <volk.h>
@@ -41,7 +42,7 @@ VkSwapchainCreateInfoKHR createInfo(VkSurfaceKHR surface, const SwapchainSetting
 }
 
 core::Result<SwapchainImages> refused(std::string_view function, VkResult result) {
-    return core::failure(core::ErrorCode::RhiSwapchainFailed, std::format("{}: {}", function, string_VkResult(result)));
+    return failure(core::ErrorCode::RhiSwapchainFailed, {.call = std::string{function}, .result = result});
 }
 
 } // namespace
@@ -67,7 +68,7 @@ core::Result<SwapchainImages> VulkanSwapchain::build(VkPhysicalDevice adapter, V
                                    return vkGetPhysicalDeviceSurfaceFormatsKHR(adapter, surface, count, formats);
                                });
         !listed) {
-        return core::failure(core::ErrorCode::RhiSwapchainFailed, listed.error());
+        return failure(core::ErrorCode::RhiSwapchainFailed, listed.error());
     }
     if (formats_.empty()) {
         return core::failure(core::ErrorCode::RhiSwapchainFailed, "the surface lists no formats");
@@ -93,7 +94,7 @@ core::Result<SwapchainImages> VulkanSwapchain::build(VkPhysicalDevice adapter, V
         !listed) {
         table_->vkDestroySwapchainKHR(device_, swapchain, nullptr);
         images_.clear();
-        return core::failure(core::ErrorCode::RhiSwapchainFailed, listed.error());
+        return failure(core::ErrorCode::RhiSwapchainFailed, listed.error());
     }
     swapchain_ = swapchain;
     const auto count = static_cast<std::uint32_t>(images_.size());

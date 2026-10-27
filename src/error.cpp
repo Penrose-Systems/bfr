@@ -39,6 +39,12 @@ std::string_view name(ErrorCode code) noexcept {
             return "RhiSwapchainFailed";
         case ErrorCode::RhiLimitReached:
             return "RhiLimitReached";
+        case ErrorCode::RhiOutOfMemory:
+            return "RhiOutOfMemory";
+        case ErrorCode::RhiDeviceLost:
+            return "RhiDeviceLost";
+        case ErrorCode::RhiSurfaceLost:
+            return "RhiSurfaceLost";
     }
     return "Unknown";
 }

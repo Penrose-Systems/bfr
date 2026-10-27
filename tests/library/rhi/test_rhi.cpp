@@ -176,7 +176,7 @@ TEST_CASE("Rhi with validation reports a failed layer listing", "[rhi][unit][.]"
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiValidationUnavailable);
     CHECK_THAT(rhi.error().message,
-               Catch::Matchers::ContainsSubstring("vkEnumerateInstanceLayerProperties: VK_ERROR_OUT_OF_HOST_MEMORY"));
+               Catch::Matchers::ContainsSubstring("vkEnumerateInstanceLayerProperties: VK_ERROR_UNKNOWN"));
 }
 
 TEST_CASE("Rhi with validation reports a failed extension listing", "[rhi][unit][.]") {
@@ -184,8 +184,8 @@ TEST_CASE("Rhi with validation reports a failed extension listing", "[rhi][unit]
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiValidationUnavailable);
-    CHECK_THAT(rhi.error().message, Catch::Matchers::ContainsSubstring(
-                                        "vkEnumerateInstanceExtensionProperties: VK_ERROR_OUT_OF_HOST_MEMORY"));
+    CHECK_THAT(rhi.error().message,
+               Catch::Matchers::ContainsSubstring("vkEnumerateInstanceExtensionProperties: VK_ERROR_UNKNOWN"));
 }
 
 TEST_CASE("Rhi with validation lists again when a listing grows", "[rhi][unit][.]") {
@@ -207,6 +207,26 @@ TEST_CASE("Rhi lists an adapter from a portability driver", "[rhi][gpu][.]") {
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
     CHECK_FALSE((*rhi)->adapters().empty());
+}
+
+TEST_CASE("Rhi skips an adapter it fails to check, and says which call failed", "[rhi][gpu]") {
+    const AdapterOverrideLayer adapterOverride;
+    // Mesa's device-select layer lists device extensions itself, ignores the
+    // failure, and allocates from the count it never got.
+    const ScopedEnv noDeviceSelect("NODEVICE_SELECT", "1");
+    const ScopedEnv failing("BFR_FAIL", "vkEnumerateDeviceExtensionProperties");
+    std::vector<std::string> messages;
+
+    const auto rhi = Rhi::create(recordingInto(messages), {});
+
+    REQUIRE_FALSE(rhi.has_value());
+    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
+    CHECK_THAT(rhi.error().message, Catch::Matchers::StartsWith("no usable adapter") &&
+                                        Catch::Matchers::ContainsSubstring(
+                                            "skipped, vkEnumerateDeviceExtensionProperties: VK_ERROR_UNKNOWN"));
+    if (bfr::core::kLoggingEnabled) {
+        CHECK_THAT(messages, Catch::Matchers::AnyMatch(Catch::Matchers::ContainsSubstring("skipped, ")));
+    }
 }
 
 TEST_CASE("Rhi fails with RhiNoAdapter when every adapter is below the floor", "[rhi][gpu]") {
@@ -321,7 +341,7 @@ TEST_CASE("Rhi fails with RhiSurfaceFailed when the API refuses a surface for th
     REQUIRE_FALSE(device.has_value());
     CHECK(device.error().code == bfr::core::ErrorCode::RhiSurfaceFailed);
     CHECK_THAT(device.error().message,
-               Catch::Matchers::ContainsSubstring("vkCreateHeadlessSurfaceEXT: VK_ERROR_OUT_OF_HOST_MEMORY"));
+               Catch::Matchers::ContainsSubstring("vkCreateHeadlessSurfaceEXT: VK_ERROR_UNKNOWN"));
 }
 
 // In these two, lavapipe reports NVIDIA's driver ID and stands in for NVIDIA's
@@ -375,7 +395,7 @@ TEST_CASE("Rhi fails with RhiDeviceFailed when the API refuses the device and le
         CHECK(device.error().code == bfr::core::ErrorCode::RhiDeviceFailed);
         CHECK_THAT(device.error().message,
                    Catch::Matchers::ContainsSubstring("vkCreateDevice on " + (*rhi)->adapters()[0].name +
-                                                      ": VK_ERROR_OUT_OF_HOST_MEMORY"));
+                                                      ": VK_ERROR_UNKNOWN"));
     }
     // The loader reports the refusal; anything more would be the RHI misusing
     // what the failed call left.

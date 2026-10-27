@@ -1,10 +1,10 @@
 #include "vulkan_surface.h"
 
 #include "error.h"
+#include "vulkan_result.h"
 #include "window.h"
 
 #include <volk.h>
-#include <vulkan/vk_enum_string_helper.h>
 #include <vulkan/vulkan_core.h>
 
 #include <algorithm>
@@ -133,8 +133,7 @@ private:
         }
         VkSurfaceKHR surface = VK_NULL_HANDLE;
         if (const VkResult result = create(&surface); result != VK_SUCCESS) {
-            return core::failure(core::ErrorCode::RhiSurfaceFailed,
-                                 std::format("{}: {}", function, string_VkResult(result)));
+            return failure(core::ErrorCode::RhiSurfaceFailed, {.call = std::string{function}, .result = result});
         }
         return surface;
     }

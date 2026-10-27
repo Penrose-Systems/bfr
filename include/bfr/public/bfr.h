@@ -56,7 +56,7 @@ typedef enum bfr_result {
     BFR_RESULT_ERROR_LOADER_FAILED = -4,
     // Validation was asked for but the layer is missing.
     BFR_RESULT_ERROR_VALIDATION_UNAVAILABLE = -5,
-    // No adapter meets BFR's hardware floor.
+    // No adapter is usable; the message says why for each.
     BFR_RESULT_ERROR_NO_ADAPTER = -6,
     // The backend refused to create the device.
     BFR_RESULT_ERROR_DEVICE_FAILED = -7,
@@ -64,7 +64,7 @@ typedef enum bfr_result {
     BFR_RESULT_ERROR_DEVICE_LOST = -8,
     // A handle is stale or destroyed.
     BFR_RESULT_ERROR_INVALID_HANDLE = -9,
-    // No surface could be made for the window.
+    // The API refused a surface for the window, or failed when asked about it.
     BFR_RESULT_ERROR_SURFACE_FAILED = -10,
     // The window's surface is gone; recreate the swapchain.
     BFR_RESULT_ERROR_SURFACE_LOST = -11,

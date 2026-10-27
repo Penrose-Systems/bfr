@@ -51,12 +51,16 @@ public:
     /// Device::createSwapchain describes.
     [[nodiscard]] core::Result<VulkanSurface> surfaceFor(const core::window::NativeWindow& window) const;
 
-    /// Whether family on adapter presents to surface. A failed query counts as
-    /// no, and so does a driver the query would crash, which is not asked.
-    [[nodiscard]] bool presents(VkPhysicalDevice adapter, std::uint32_t family, const VulkanSurface& surface) const;
+    /// Whether family on adapter presents to surface. A driver the query would
+    /// crash is not asked and counts as no. Fails as the query does.
+    [[nodiscard]] core::Result<bool> presents(VkPhysicalDevice adapter, std::uint32_t family,
+                                              const VulkanSurface& surface) const;
 
 private:
     [[nodiscard]] core::Result<void> createInstance();
+    // The messenger that reports validation's messages between the instance's
+    // creation and its destruction.
+    [[nodiscard]] core::Result<void> createMessenger(const VkDebugUtilsMessengerCreateInfoEXT& info);
     [[nodiscard]] core::Result<void> listAdapters();
     // Which of adapters()[adapter]'s familyCount queue families present to
     // presentTo, index-aligned; empty without a window.

@@ -1,7 +1,6 @@
 #include "device.h"
 #include "error.h"
 #include "log.h"
-#include "log_capture.h"
 #include "rhi.h"
 #include "rhi_config.h"
 #include "rhi_test_support.h"
@@ -20,6 +19,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -36,6 +36,18 @@ const bfr::core::window::NativeWindow kHeadless = bfr::core::window::Headless{};
 
 // An Rhi made with desc, whose recording outlives it, and a device that
 // presents to a headless window.
+// A description that records errors in errors and writes every message from
+// info up to log, one a line.
+RhiDesc errorsAndLogInto(std::vector<std::string>& errors, std::ostringstream& log) {
+    return {.logger = {[&errors, &log](bfr::core::Severity severity, std::string_view message) {
+                           if (severity == bfr::core::Severity::Error) {
+                               errors.emplace_back(message);
+                           }
+                           log << message << '\n';
+                       },
+                       bfr::core::Severity::Info}};
+}
+
 struct HeadlessDevice {
     explicit HeadlessDevice(const RhiDesc& desc, const RhiConfig& config = kValidation) {
         auto created = Rhi::create(desc, config);
@@ -110,13 +122,10 @@ TEST_CASE("Device destroys the swapchains left when it goes, and says so", "[rhi
     }
 
     // Validation reports nothing; the device warns, when logging is compiled in.
-    if (bfr::core::kLoggingEnabled) {
-        REQUIRE_THAT(messages, Catch::Matchers::SizeIs(1));
-        CHECK(messages.front() == "1 Vulkan swapchains were left when the device went");
-    }
-    else {
-        CHECK_THAT(messages, Catch::Matchers::IsEmpty());
-    }
+    const std::vector<std::string> expected =
+        bfr::core::kLoggingEnabled ? std::vector<std::string>{"1 Vulkan swapchains were left when the device went"}
+                                   : std::vector<std::string>{};
+    CHECK(messages == expected);
 }
 
 TEST_CASE("Device empties a swapchain for a window with no area", "[rhi][gpu]") {
@@ -192,7 +201,7 @@ TEST_CASE("Device fails with RhiSurfaceFailed when the API refuses a swapchain's
     REQUIRE_FALSE(swapchain.has_value());
     CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiSurfaceFailed);
     CHECK_THAT(swapchain.error().message,
-               Catch::Matchers::ContainsSubstring("vkCreateHeadlessSurfaceEXT: VK_ERROR_OUT_OF_HOST_MEMORY"));
+               Catch::Matchers::ContainsSubstring("vkCreateHeadlessSurfaceEXT: VK_ERROR_UNKNOWN"));
 }
 
 TEST_CASE("Device fails with RhiPresentUnsupported when it can't present to the swapchain's window", "[rhi][gpu]") {
@@ -231,8 +240,7 @@ TEST_CASE("Device reports each swapchain call the API fails and leaves nothing b
 
         REQUIRE_FALSE(images.has_value());
         CHECK(images.error().code == bfr::core::ErrorCode::RhiSwapchainFailed);
-        CHECK_THAT(images.error().message,
-                   Catch::Matchers::ContainsSubstring(function + ": VK_ERROR_OUT_OF_HOST_MEMORY"));
+        CHECK_THAT(images.error().message, Catch::Matchers::ContainsSubstring(function + ": VK_ERROR_UNKNOWN"));
     }
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
@@ -256,7 +264,7 @@ TEST_CASE("Device fails with RhiSwapchainFailed for a surface that lists no form
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Device treats a failed present query as no", "[rhi][gpu]") {
+TEST_CASE("Device reports a failed present query as the failure it is", "[rhi][gpu]") {
     // The failing query leaves VK_TRUE behind, which must not be believed.
     const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
     const ScopedEnv failing("BFR_FAIL", "vkGetPhysicalDeviceSurfaceSupportKHR");
@@ -272,9 +280,35 @@ TEST_CASE("Device treats a failed present query as no", "[rhi][gpu]") {
         const auto swapchain = (*device)->createSwapchain(kHeadless, kSwapchainImages);
 
         REQUIRE_FALSE(swapchain.has_value());
-        CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
+        CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiSurfaceFailed);
+        CHECK_THAT(swapchain.error().message,
+                   Catch::Matchers::ContainsSubstring("vkGetPhysicalDeviceSurfaceSupportKHR: VK_ERROR_UNKNOWN"));
     }
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device keeps running out of memory, a lost device and a lost surface apart from other failures",
+          "[rhi][gpu]") {
+    using bfr::core::ErrorCode;
+    const auto [result, code] = GENERATE(std::pair{"VK_ERROR_OUT_OF_HOST_MEMORY", ErrorCode::RhiOutOfMemory},
+                                         std::pair{"VK_ERROR_DEVICE_LOST", ErrorCode::RhiDeviceLost},
+                                         std::pair{"VK_ERROR_SURFACE_LOST_KHR", ErrorCode::RhiSurfaceLost});
+    INFO(result);
+    const AdapterOverrideLayer adapterOverride;
+    const HeadlessDevice headless{{}, {}};
+    const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainImages);
+    INFO(failureOf(swapchain));
+    REQUIRE(swapchain.has_value());
+    const ScopedEnv failing("BFR_FAIL", "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
+    const ScopedEnv failingWith("BFR_FAIL_RESULT", result);
+
+    const auto images = headless.device->resizeSwapchain(*swapchain, kWidth, kHeight);
+
+    REQUIRE_FALSE(images.has_value());
+    CHECK(images.error().code == code);
+    CHECK_THAT(images.error().message,
+               Catch::Matchers::ContainsSubstring(std::string{"vkGetPhysicalDeviceSurfaceCapabilitiesKHR: "} + result));
+    CHECK(headless.device->destroySwapchain(*swapchain).has_value());
 }
 
 TEST_CASE("Device fails with RhiInvalidHandle for a forged swapchain handle", "[rhi][gpu]") {
@@ -355,14 +389,7 @@ TEST_CASE("Device presents from a queue family of its own when no graphics famil
     std::vector<std::string> errors;
     std::ostringstream log;
     {
-        const RhiDesc desc{.logger = {[&errors, &log](bfr::core::Severity severity, std::string_view message) {
-                                          if (severity == bfr::core::Severity::Error) {
-                                              errors.emplace_back(message);
-                                          }
-                                          log << message << '\n';
-                                      },
-                                      bfr::core::Severity::Info}};
-        const auto rhi = Rhi::create(desc, kValidation);
+        const auto rhi = Rhi::create(errorsAndLogInto(errors, log), kValidation);
         INFO(failureOf(rhi));
         REQUIRE(rhi.has_value());
         const auto device = (*rhi)->createDevice(headlessAdapter(**rhi), kHeadless);

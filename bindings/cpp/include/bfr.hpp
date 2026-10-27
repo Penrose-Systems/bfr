@@ -38,7 +38,7 @@ enum class Result : std::int32_t {
     ErrorLoaderFailed = BFR_RESULT_ERROR_LOADER_FAILED,
     /// Validation was asked for but the layer is missing.
     ErrorValidationUnavailable = BFR_RESULT_ERROR_VALIDATION_UNAVAILABLE,
-    /// No adapter meets BFR's hardware floor.
+    /// No adapter is usable; the message says why for each.
     ErrorNoAdapter = BFR_RESULT_ERROR_NO_ADAPTER,
     /// The backend refused to create the device.
     ErrorDeviceFailed = BFR_RESULT_ERROR_DEVICE_FAILED,
@@ -46,7 +46,7 @@ enum class Result : std::int32_t {
     ErrorDeviceLost = BFR_RESULT_ERROR_DEVICE_LOST,
     /// A handle is stale or destroyed.
     ErrorInvalidHandle = BFR_RESULT_ERROR_INVALID_HANDLE,
-    /// No surface could be made for the window.
+    /// The API refused a surface for the window, or failed when asked about it.
     ErrorSurfaceFailed = BFR_RESULT_ERROR_SURFACE_FAILED,
     /// The window's surface is gone; recreate the swapchain.
     ErrorSurfaceLost = BFR_RESULT_ERROR_SURFACE_LOST,

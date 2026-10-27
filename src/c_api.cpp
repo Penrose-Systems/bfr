@@ -101,6 +101,12 @@ bfr_result resultFor(ErrorCode code) {
             return BFR_RESULT_ERROR_SWAPCHAIN_FAILED;
         case ErrorCode::RhiLimitReached:
             return BFR_RESULT_ERROR_LIMIT_REACHED;
+        case ErrorCode::RhiOutOfMemory:
+            return BFR_RESULT_ERROR_OUT_OF_MEMORY;
+        case ErrorCode::RhiDeviceLost:
+            return BFR_RESULT_ERROR_DEVICE_LOST;
+        case ErrorCode::RhiSurfaceLost:
+            return BFR_RESULT_ERROR_SURFACE_LOST;
     }
     return BFR_RESULT_ERROR_INTERNAL;
 }

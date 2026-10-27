@@ -10,6 +10,7 @@
 #include "vulkan_device.h"
 #include "vulkan_list.h"
 #include "vulkan_loader.h"
+#include "vulkan_result.h"
 #include "vulkan_surface.h"
 #include "window.h"
 
@@ -60,10 +61,12 @@ std::string versionName(std::uint32_t version) {
 }
 
 // The newest Vulkan the loader supports; a 1.0 loader lacks the query.
-std::uint32_t loaderVersion() {
+core::Result<std::uint32_t> loaderVersion() {
     std::uint32_t version = VK_API_VERSION_1_0;
     if (vkEnumerateInstanceVersion != nullptr) {
-        static_cast<void>(vkEnumerateInstanceVersion(&version));
+        if (const VkResult result = vkEnumerateInstanceVersion(&version); result != VK_SUCCESS) {
+            return failure(core::ErrorCode::RhiLoaderFailed, {.call = "vkEnumerateInstanceVersion", .result = result});
+        }
     }
     return version;
 }
@@ -87,7 +90,7 @@ constexpr std::array kFloorExtensions{
 constexpr const char* kPortabilitySubset = "VK_KHR_portability_subset";
 
 // The device extensions adapter lists, or the call that failed.
-std::expected<std::vector<VkExtensionProperties>, std::string> deviceExtensions(VkPhysicalDevice adapter) {
+std::expected<std::vector<VkExtensionProperties>, VulkanFailure> deviceExtensions(VkPhysicalDevice adapter) {
     return listAll<VkExtensionProperties>("vkEnumerateDeviceExtensionProperties",
                                           [adapter](std::uint32_t* count, VkExtensionProperties* extensions) {
                                               return vkEnumerateDeviceExtensionProperties(adapter, nullptr, count,
@@ -137,8 +140,10 @@ std::string familyList(std::span<const VkDeviceQueueCreateInfo> queues) {
     return core::text::join(families, ", ");
 }
 
-// Why the adapter is below the floor, or empty when it meets it.
-std::string belowFloor(VkPhysicalDevice adapter, const VkPhysicalDeviceProperties& properties) {
+// Why the adapter is below the floor, empty when it meets it, or the call that
+// failed while checking.
+std::expected<std::string, VulkanFailure> belowFloor(VkPhysicalDevice adapter,
+                                                     const VkPhysicalDeviceProperties& properties) {
     if (properties.apiVersion < kFloorVersion) {
         return std::format("Vulkan {}, needs {}", versionName(properties.apiVersion), versionName(kFloorVersion));
     }
@@ -156,7 +161,7 @@ std::string belowFloor(VkPhysicalDevice adapter, const VkPhysicalDevicePropertie
     }
     const auto extensions = deviceExtensions(adapter);
     if (!extensions) {
-        return extensions.error();
+        return std::unexpected(extensions.error());
     }
     std::vector<const char*> missing;
     for (const FloorExtension& required : kFloorExtensions) {
@@ -229,7 +234,7 @@ std::string describe(VkPhysicalDevice adapter, const VkPhysicalDeviceProperties&
 
 // What the loader lists for layer, nullopt when it lacks it, or the call that
 // failed.
-std::expected<std::optional<VkLayerProperties>, std::string> findLayer(std::string_view layer) {
+std::expected<std::optional<VkLayerProperties>, VulkanFailure> findLayer(std::string_view layer) {
     return listAll<VkLayerProperties>("vkEnumerateInstanceLayerProperties", vkEnumerateInstanceLayerProperties)
         .transform([layer](const std::vector<VkLayerProperties>& layers) -> std::optional<VkLayerProperties> {
             const auto found = std::ranges::find_if(layers, [layer](const VkLayerProperties& properties) {
@@ -244,7 +249,7 @@ std::expected<std::optional<VkLayerProperties>, std::string> findLayer(std::stri
 
 // Whether the loader, or layer when given, provides extension, or the call
 // that failed.
-std::expected<bool, std::string> hasExtension(const char* layer, std::string_view extension) {
+std::expected<bool, VulkanFailure> hasExtension(const char* layer, std::string_view extension) {
     return listAll<VkExtensionProperties>("vkEnumerateInstanceExtensionProperties",
                                           [layer](std::uint32_t* count, VkExtensionProperties* extensions) {
                                               return vkEnumerateInstanceExtensionProperties(layer, count, extensions);
@@ -259,7 +264,7 @@ std::expected<bool, std::string> hasExtension(const char* layer, std::string_vie
 core::Result<void> checkValidation(const core::Logger& logger) {
     const auto found = findLayer(kValidationLayer);
     if (!found) {
-        return core::failure(core::ErrorCode::RhiValidationUnavailable, found.error());
+        return failure(core::ErrorCode::RhiValidationUnavailable, found.error());
     }
     // Named, so clang-tidy sees the check before the access.
     const std::optional<VkLayerProperties>& layer = *found;
@@ -271,7 +276,7 @@ core::Result<void> checkValidation(const core::Logger& logger) {
     for (const char* provider : std::to_array<const char*>({nullptr, kValidationLayer})) {
         const auto provided = hasExtension(provider, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         if (!provided) {
-            return core::failure(core::ErrorCode::RhiValidationUnavailable, provided.error());
+            return failure(core::ErrorCode::RhiValidationUnavailable, provided.error());
         }
         if (*provided) {
             return {};
@@ -309,14 +314,21 @@ VKAPI_ATTR VkBool32 VKAPI_CALL onMessage(VkDebugUtilsMessageSeverityFlagBitsEXT 
     return VK_FALSE;
 }
 
-// The instance extensions the Rhi enables when the loader has them; a loader
-// that can't list its extensions goes without, and vkCreateInstance reports
-// what is wrong with it. Portability enumeration shows portability drivers,
-// such as MoltenVK. The surface extensions cover every window system this
-// build supports, and each needs VK_KHR_surface.
-std::vector<const char*> optionalExtensions() {
-    const auto available = [](const char* extension) {
-        return hasExtension(nullptr, extension).value_or(false);
+// The instance extensions the Rhi enables when the loader has them, or the
+// listing that failed. Portability enumeration shows portability drivers, such
+// as MoltenVK. The surface extensions cover every window system this build
+// supports, and each needs VK_KHR_surface.
+core::Result<std::vector<const char*>> optionalExtensions() {
+    const auto listed = listAll<VkExtensionProperties>("vkEnumerateInstanceExtensionProperties",
+                                                       [](std::uint32_t* count, VkExtensionProperties* extensions) {
+                                                           return vkEnumerateInstanceExtensionProperties(nullptr, count,
+                                                                                                         extensions);
+                                                       });
+    if (!listed) {
+        return failure(core::ErrorCode::RhiInstanceFailed, listed.error());
+    }
+    const auto available = [&listed](const char* extension) {
+        return lists(*listed, extension);
     };
     std::vector<const char*> extensions;
     if (available(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
@@ -355,8 +367,11 @@ core::Result<std::unique_ptr<VulkanRhi>> VulkanRhi::create(const RhiDesc& desc, 
     if (auto opened = openLoader(); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
-    const std::uint32_t loader = loaderVersion();
-    BFR_LOG_INFO(desc.logger, "Vulkan loader {}", versionName(loader));
+    const auto loader = loaderVersion();
+    if (!loader) {
+        return std::unexpected(loader.error());
+    }
+    BFR_LOG_INFO(desc.logger, "Vulkan loader {}", versionName(*loader));
 
     if (config.validation) {
         if (auto available = checkValidation(desc.logger); !available) {
@@ -365,7 +380,7 @@ core::Result<std::unique_ptr<VulkanRhi>> VulkanRhi::create(const RhiDesc& desc, 
     }
 
     auto rhi = std::make_unique<VulkanRhi>(config, desc.logger);
-    rhi->loaderVersion_ = loader;
+    rhi->loaderVersion_ = *loader;
     if (auto created = rhi->createInstance(); !created) {
         return std::unexpected(std::move(created.error()));
     }
@@ -417,7 +432,9 @@ core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapte
     }
     const auto available = deviceExtensions(physicalDevice);
     if (!available) {
-        return core::failure(core::ErrorCode::RhiDeviceFailed, std::format("{}: {}", listed.name, available.error()));
+        return failure(core::ErrorCode::RhiDeviceFailed,
+                       {.call = std::format("{} on {}", available.error().call, listed.name),
+                        .result = available.error().result});
     }
     std::vector<const char*> extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
     if (lists(*available, kPortabilitySubset)) {
@@ -435,8 +452,8 @@ core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapte
     VkDevice device = VK_NULL_HANDLE;
     const VkResult result = vkCreateDevice(physicalDevice, &info, nullptr, &device);
     if (result != VK_SUCCESS) {
-        return core::failure(core::ErrorCode::RhiDeviceFailed,
-                             std::format("vkCreateDevice on {}: {}", listed.name, string_VkResult(result)));
+        return failure(core::ErrorCode::RhiDeviceFailed,
+                       {.call = std::format("vkCreateDevice on {}", listed.name), .result = result});
     }
     BFR_LOG_INFO(logger(), "device on {}, queue families {}, extensions: {}", listed.name, familyList(queues),
                  core::text::join(extensions, ", "));
@@ -463,7 +480,11 @@ core::Result<std::vector<VkBool32>> VulkanRhi::presentingFamilies(std::size_t ad
     }
     presenting.resize(familyCount);
     for (std::uint32_t family = 0; family < presenting.size(); ++family) {
-        presenting[family] = presents(physicalDevice, family, *surface) ? VK_TRUE : VK_FALSE;
+        const auto answer = presents(physicalDevice, family, *surface);
+        if (!answer) {
+            return std::unexpected(answer.error());
+        }
+        presenting[family] = *answer ? VK_TRUE : VK_FALSE;
     }
     return presenting;
 }
@@ -472,13 +493,18 @@ core::Result<VulkanSurface> VulkanRhi::surfaceFor(const core::window::NativeWind
     return createSurface(instance_, extensions_, window);
 }
 
-bool VulkanRhi::presents(VkPhysicalDevice adapter, std::uint32_t family, const VulkanSurface& surface) const {
+core::Result<bool> VulkanRhi::presents(VkPhysicalDevice adapter, std::uint32_t family,
+                                       const VulkanSurface& surface) const {
     if (presentQueryCrashes(adapter, surface)) {
         return false;
     }
     VkBool32 supported = VK_FALSE;
-    return vkGetPhysicalDeviceSurfaceSupportKHR(adapter, family, surface.handle(), &supported) == VK_SUCCESS &&
-           supported == VK_TRUE;
+    if (const VkResult result = vkGetPhysicalDeviceSurfaceSupportKHR(adapter, family, surface.handle(), &supported);
+        result != VK_SUCCESS) {
+        return failure(core::ErrorCode::RhiSurfaceFailed,
+                       {.call = "vkGetPhysicalDeviceSurfaceSupportKHR", .result = result});
+    }
+    return supported == VK_TRUE;
 }
 
 bool VulkanRhi::presentQueryCrashes(VkPhysicalDevice adapter, const VulkanSurface& surface) const {
@@ -497,7 +523,11 @@ core::Result<void> VulkanRhi::createInstance() {
     info.pApplicationInfo = &application;
 
     std::vector<const char*> layers;
-    std::vector<const char*> extensions = optionalExtensions();
+    auto optional = optionalExtensions();
+    if (!optional) {
+        return std::unexpected(optional.error());
+    }
+    std::vector<const char*> extensions = std::move(*optional);
     if (std::ranges::find(extensions, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) != extensions.end()) {
         info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
     }
@@ -523,8 +553,9 @@ core::Result<void> VulkanRhi::createInstance() {
     if (result != VK_SUCCESS) {
         // Validation is the only layer the Rhi enables, so a layer that is
         // listed yet fails to load is validation.
-        const core::ErrorCode code = result == VK_ERROR_LAYER_NOT_PRESENT ? core::ErrorCode::RhiValidationUnavailable
-                                                                          : core::ErrorCode::RhiInstanceFailed;
+        const core::ErrorCode code = result == VK_ERROR_LAYER_NOT_PRESENT
+                                         ? core::ErrorCode::RhiValidationUnavailable
+                                         : codeFor(core::ErrorCode::RhiInstanceFailed, result);
         return core::failure(code,
                              core::error::withReasons(std::format("vkCreateInstance: {}", string_VkResult(result)),
                                                       reasons));
@@ -537,14 +568,16 @@ core::Result<void> VulkanRhi::createInstance() {
 
     // The chained messenger covers only creation and destruction; this one
     // reports everything in between.
-    if (config().validation) {
-        if (const VkResult result = vkCreateDebugUtilsMessengerEXT(instance_, &messenger, nullptr, &messenger_);
-            result != VK_SUCCESS) {
-            return core::failure(core::ErrorCode::RhiInstanceFailed,
-                                 std::format("vkCreateDebugUtilsMessengerEXT: {}", string_VkResult(result)));
-        }
-        BFR_LOG_DEBUG(logger(), "Vulkan validation messenger created");
+    return config().validation ? createMessenger(messenger) : core::Result<void>{};
+}
+
+core::Result<void> VulkanRhi::createMessenger(const VkDebugUtilsMessengerCreateInfoEXT& info) {
+    if (const VkResult result = vkCreateDebugUtilsMessengerEXT(instance_, &info, nullptr, &messenger_);
+        result != VK_SUCCESS) {
+        return failure(core::ErrorCode::RhiInstanceFailed,
+                       {.call = "vkCreateDebugUtilsMessengerEXT", .result = result});
     }
+    BFR_LOG_DEBUG(logger(), "Vulkan validation messenger created");
     return {};
 }
 
@@ -554,26 +587,33 @@ core::Result<void> VulkanRhi::listAdapters() {
                                                        return vkEnumeratePhysicalDevices(instance_, count, listed);
                                                    });
     if (!devices) {
-        return core::failure(core::ErrorCode::RhiInstanceFailed, devices.error());
+        return failure(core::ErrorCode::RhiInstanceFailed, devices.error());
     }
 
+    // Each adapter not listed, and why: below the floor, or a call that failed
+    // while checking. One that fails is skipped, so the others still work.
     std::vector<std::string> rejected;
     for (VkPhysicalDevice device : *devices) {
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(device, &properties);
-        const std::string reason = belowFloor(device, properties);
+        const auto reason = belowFloor(device, properties);
+        if (!reason) {
+            const std::string why = "skipped, " + reason.error().message();
+            BFR_LOG_WARN(logger(), "adapter {}: {}", describe(device, properties), why);
+            rejected.push_back(std::format("{}: {}", properties.deviceName, why));
+            continue;
+        }
         BFR_LOG_INFO(logger(), "adapter {}: {}", describe(device, properties),
-                     reason.empty() ? std::string{"listed"} : "below the floor, " + reason);
-        if (!reason.empty()) {
-            rejected.push_back(std::format("{}: {}", properties.deviceName, reason));
+                     reason->empty() ? std::string{"listed"} : "below the floor, " + *reason);
+        if (!reason->empty()) {
+            rejected.push_back(std::format("{}: below the floor, {}", properties.deviceName, *reason));
             continue;
         }
         adapters_.push_back({.name = properties.deviceName, .type = adapterType(properties.deviceType)});
         physicalDevices_.push_back(device);
     }
     if (adapters_.empty()) {
-        return core::failure(core::ErrorCode::RhiNoAdapter,
-                             core::error::withReasons("no adapter meets the floor", rejected));
+        return core::failure(core::ErrorCode::RhiNoAdapter, core::error::withReasons("no usable adapter", rejected));
     }
     return {};
 }

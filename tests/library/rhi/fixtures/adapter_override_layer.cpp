@@ -12,9 +12,11 @@
 //   its queue, since the driver underneath lacks the family.
 // - BFR_PRESENT_UNSUPPORTED: no queue family presents to any surface.
 // - BFR_SURFACE_NO_FORMATS: surfaces list no formats, which Vulkan forbids.
-// - BFR_FAIL: the named function fails with VK_ERROR_OUT_OF_HOST_MEMORY and
-//   leaves junk in what it would have returned, as Vulkan allows: one of
-//   vkCreateDevice, vkCreateHeadlessSurfaceEXT,
+// - BFR_FAIL: the named function fails with VK_ERROR_UNKNOWN, or the result
+//   BFR_FAIL_RESULT names (VK_ERROR_OUT_OF_HOST_MEMORY, VK_ERROR_DEVICE_LOST or
+//   VK_ERROR_SURFACE_LOST_KHR), and leaves junk in what it would have
+//   returned, as Vulkan allows: one of
+//   vkEnumerateDeviceExtensionProperties, vkCreateDevice, vkCreateHeadlessSurfaceEXT,
 //   vkGetPhysicalDeviceSurfaceSupportKHR,
 //   vkGetPhysicalDeviceSurfaceCapabilitiesKHR,
 //   vkGetPhysicalDeviceSurfaceFormatsKHR, vkCreateSwapchainKHR and
@@ -54,7 +56,21 @@ PFN_vkGetPhysicalDeviceSurfaceFormatsKHR nextGetSurfaceFormats = nullptr;
 PFN_vkCreateSwapchainKHR nextCreateSwapchain = nullptr;
 PFN_vkGetSwapchainImagesKHR nextGetSwapchainImages = nullptr;
 
-constexpr VkResult kFailure = VK_ERROR_OUT_OF_HOST_MEMORY;
+// What a failing call returns: BFR_FAIL_RESULT's result, or VK_ERROR_UNKNOWN.
+VkResult failure() {
+    const char* named = std::getenv("BFR_FAIL_RESULT");
+    const std::string_view result = named != nullptr ? named : "";
+    if (result == "VK_ERROR_OUT_OF_HOST_MEMORY") {
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    if (result == "VK_ERROR_DEVICE_LOST") {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    if (result == "VK_ERROR_SURFACE_LOST_KHR") {
+        return VK_ERROR_SURFACE_LOST_KHR;
+    }
+    return VK_ERROR_UNKNOWN;
+}
 
 // What a failed call leaves in a handle it would have returned.
 template <class Handle>
@@ -135,7 +151,7 @@ VKAPI_ATTR VkResult VKAPI_CALL createDevice(VkPhysicalDevice adapter, const VkDe
 
     if (failing("vkCreateDevice")) {
         *device = junk<VkDevice>();
-        return kFailure;
+        return failure();
     }
     const std::span enabled{info->ppEnabledExtensionNames, info->enabledExtensionCount};
     std::vector<const char*> extensions(enabled.begin(), enabled.end());
@@ -247,6 +263,9 @@ VKAPI_ATTR void VKAPI_CALL getPhysicalDeviceQueueFamilyProperties2(VkPhysicalDev
 VKAPI_ATTR VkResult VKAPI_CALL enumerateDeviceExtensionProperties(VkPhysicalDevice device, const char* layer,
                                                                   std::uint32_t* count,
                                                                   VkExtensionProperties* properties) {
+    if (layer == nullptr && failing("vkEnumerateDeviceExtensionProperties")) {
+        return failure();
+    }
     const char* hidden = std::getenv("BFR_ADAPTER_HIDE");
     const char* added = std::getenv("BFR_ADAPTER_ADD");
     if (layer != nullptr || (hidden == nullptr && added == nullptr)) {
@@ -283,7 +302,7 @@ VKAPI_ATTR VkResult VKAPI_CALL createHeadlessSurface(VkInstance instance, const 
                                                      const VkAllocationCallbacks* allocator, VkSurfaceKHR* surface) {
     if (failing("vkCreateHeadlessSurfaceEXT")) {
         *surface = junk<VkSurfaceKHR>();
-        return kFailure;
+        return failure();
     }
     return nextCreateHeadlessSurface(instance, info, allocator, surface);
 }
@@ -292,7 +311,7 @@ VKAPI_ATTR VkResult VKAPI_CALL getSurfaceSupport(VkPhysicalDevice device, std::u
                                                  VkBool32* supported) {
     if (failing("vkGetPhysicalDeviceSurfaceSupportKHR")) {
         *supported = VK_TRUE;
-        return kFailure;
+        return failure();
     }
     if (std::getenv("BFR_PRESENT_UNSUPPORTED") != nullptr) {
         *supported = VK_FALSE;
@@ -308,7 +327,7 @@ VKAPI_ATTR VkResult VKAPI_CALL getSurfaceSupport(VkPhysicalDevice device, std::u
 VKAPI_ATTR VkResult VKAPI_CALL getSurfaceCapabilities(VkPhysicalDevice device, VkSurfaceKHR surface,
                                                       VkSurfaceCapabilitiesKHR* capabilities) {
     if (failing("vkGetPhysicalDeviceSurfaceCapabilitiesKHR")) {
-        return kFailure;
+        return failure();
     }
     return nextGetSurfaceCapabilities(device, surface, capabilities);
 }
@@ -316,7 +335,7 @@ VKAPI_ATTR VkResult VKAPI_CALL getSurfaceCapabilities(VkPhysicalDevice device, V
 VKAPI_ATTR VkResult VKAPI_CALL getSurfaceFormats(VkPhysicalDevice device, VkSurfaceKHR surface, std::uint32_t* count,
                                                  VkSurfaceFormatKHR* formats) {
     if (failing("vkGetPhysicalDeviceSurfaceFormatsKHR")) {
-        return kFailure;
+        return failure();
     }
     if (std::getenv("BFR_SURFACE_NO_FORMATS") != nullptr) {
         *count = 0;
@@ -329,7 +348,7 @@ VKAPI_ATTR VkResult VKAPI_CALL createSwapchain(VkDevice device, const VkSwapchai
                                                const VkAllocationCallbacks* allocator, VkSwapchainKHR* swapchain) {
     if (failing("vkCreateSwapchainKHR")) {
         *swapchain = junk<VkSwapchainKHR>();
-        return kFailure;
+        return failure();
     }
     return nextCreateSwapchain(device, info, allocator, swapchain);
 }
@@ -337,7 +356,7 @@ VKAPI_ATTR VkResult VKAPI_CALL createSwapchain(VkDevice device, const VkSwapchai
 VKAPI_ATTR VkResult VKAPI_CALL getSwapchainImages(VkDevice device, VkSwapchainKHR swapchain, std::uint32_t* count,
                                                   VkImage* images) {
     if (failing("vkGetSwapchainImagesKHR")) {
-        return kFailure;
+        return failure();
     }
     return nextGetSwapchainImages(device, swapchain, count, images);
 }
