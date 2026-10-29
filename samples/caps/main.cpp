@@ -23,9 +23,7 @@
 namespace {
 
 constexpr std::size_t kLabelWidth = 13;
-constexpr std::size_t kLineWidth = 100;
 constexpr std::string_view kIndent = "  ";
-constexpr std::string_view kSeparator = " · ";
 constexpr std::uint64_t kKiB = 1024;
 constexpr std::uint32_t kMaxSamples = 64;
 
@@ -39,23 +37,15 @@ void print(std::string_view text) {
     std::cout << text;
 }
 
-// label, then items joined by kSeparator, wrapped under the first item.
+// label, then one item to a line, the rest under the first, then a blank line.
 void row(std::string_view label, const std::vector<std::string>& items) {
     const std::string margin(kIndent.size() + kLabelWidth, ' ');
-    std::string line = std::format("{}{:<{}}", kIndent, label, kLabelWidth);
     bool first = true;
     for (const std::string& item : items) {
-        const std::string_view separator = first ? std::string_view{} : kSeparator;
-        if (!first && line.size() + separator.size() + item.size() > kLineWidth) {
-            print(line + "\n");
-            line = margin + item;
-        }
-        else {
-            line += std::string{separator} + item;
-        }
+        print(first ? std::format("{}{:<{}}{}\n", kIndent, label, kLabelWidth, item) : margin + item + "\n");
         first = false;
     }
-    print(line + "\n");
+    print("\n");
 }
 
 void row(std::string_view label, const std::string& text) {
@@ -161,7 +151,6 @@ void printLimits(const bfr::Caps& caps) {
     const bfr::CapsQueues& q = caps.queues;
     row("Queues",
         {std::format("{} graphics", q.graphics), std::format("{} compute", q.compute), std::format("{} copy", q.copy)});
-    print("\n");
     row("Textures", {std::format("2D {}", l.maxTexture2d), std::format("3D {}", l.maxTexture3d),
                      std::format("cube {}", l.maxTextureCube), std::format("{} layers", l.maxTextureLayers)});
     row("Buffers",
@@ -288,7 +277,7 @@ void printFormatTable(const std::vector<bfr::FormatCaps>& formats) {
     const auto mark = [](bool has) {
         return has ? "✓" : "·";
     };
-    print(std::format("\n{}{:<{}} sample linear minmax storage atomic color blend depth texel  MSAA\n", kIndent,
+    print(std::format("{}{:<{}} sample linear minmax storage atomic color blend depth texel  MSAA\n", kIndent,
                       "Format", kNameWidth));
     std::vector<std::string> unsupported;
     for (const bfr::FormatCaps& f : formats) {
@@ -302,8 +291,8 @@ void printFormatTable(const std::vector<bfr::FormatCaps>& formats) {
                           mark(f.depthStencil), mark(f.texelBuffer),
                           f.sampleCounts == 0 ? "·" : samples(f.sampleCounts)));
     }
+    print("\n");
     if (!unsupported.empty()) {
-        print("\n");
         row("Unsupported", unsupported);
     }
 }
@@ -561,7 +550,6 @@ void printAllMemory(const bfr::Caps& caps) {
 }
 
 void printAll(const bfr::Caps& caps) {
-    print("\n");
     printAllInfo(caps);
     printAllLimits(caps.limits);
     printAllShaders(caps);
@@ -579,9 +567,7 @@ void printAdapter(const bfr::Instance& instance, std::uint32_t adapter, const Op
     printMemory(caps->memory);
     printLimits(*caps);
     printShaders(*caps);
-    print("\n");
     printFeatures(caps->features);
-    print("\n");
     printFormats(instance, adapter, options);
     if (options.window) {
         printSurface(instance, adapter);
@@ -620,9 +606,6 @@ int run(std::span<char*> args) {
         return 1;
     }
     for (std::uint32_t adapter = 0; adapter < adapters->size(); ++adapter) {
-        if (adapter != 0) {
-            print("\n");
-        }
         printAdapter(*instance, adapter, options);
     }
     return 0;
