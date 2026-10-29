@@ -6,6 +6,7 @@
 #include "rhi.h"
 #include "rhi_config.h"
 #include "scoped_env.h"
+#include "swapchain.h"
 #include "window.h"
 
 #include <catch2/catch_message.hpp>
@@ -27,8 +28,8 @@ inline const RhiConfig kValidation{.validation = true};
 /// For a device that presents to no window yet.
 inline const core::window::NativeWindow kNoWindow{};
 
-/// The images a test swapchain asks for.
-inline constexpr std::uint32_t kSwapchainImages = 3;
+/// What a test swapchain asks for: the defaults.
+inline constexpr SwapchainRequest kSwapchainRequest{};
 
 /// A description that records every warning and error the Rhi and validation
 /// report.

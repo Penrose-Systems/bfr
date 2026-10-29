@@ -63,8 +63,68 @@ std::optional<Severity> severityFrom(bfr_message_severity severity) {
     return static_cast<Severity>(severity);
 }
 
-// What bfr_swapchain_desc.image_count = 0 asks for.
-constexpr std::uint32_t kDefaultSwapchainImages = 3;
+// The swapchain desc asks for, each 0 as its documented default. Nothing when a value is one BFR
+// doesn't have; error says which.
+std::optional<bfr::rhi::SwapchainRequest> requestIn(const bfr_swapchain_desc& desc, std::string& error) {
+    using namespace bfr::rhi;
+    SwapchainRequest request;
+    request.imageCount = desc.image_count;
+    switch (desc.present_mode) {
+        case BFR_PRESENT_MODE_FIFO:
+            request.presentMode = PresentMode::Fifo;
+            break;
+        case BFR_PRESENT_MODE_FIFO_RELAXED:
+            request.presentMode = PresentMode::FifoRelaxed;
+            break;
+        case BFR_PRESENT_MODE_MAILBOX:
+            request.presentMode = PresentMode::Mailbox;
+            break;
+        case BFR_PRESENT_MODE_IMMEDIATE:
+            request.presentMode = PresentMode::Immediate;
+            break;
+        case BFR_PRESENT_MODE_FORCE32:
+        default:
+            error = std::format("present mode {} is not one BFR has", static_cast<std::int64_t>(desc.present_mode));
+            return std::nullopt;
+    }
+    if (const auto format = static_cast<std::int64_t>(desc.format); format != 0) {
+        const auto* found = std::ranges::find_if(kFormats, [format](Format known) {
+            return static_cast<std::int64_t>(known) == format;
+        });
+        if (found == kFormats.end()) {
+            error = std::format("format {} is not one BFR has", format);
+            return std::nullopt;
+        }
+        request.format = *found;
+    }
+    if (const auto colorSpace = static_cast<std::int64_t>(desc.color_space); colorSpace != 0) {
+        if (colorSpace < static_cast<std::int64_t>(ColorSpace::Srgb) ||
+            colorSpace > static_cast<std::int64_t>(ColorSpace::DisplayNative)) {
+            error = std::format("color space {} is not one BFR has", colorSpace);
+            return std::nullopt;
+        }
+        request.colorSpace = static_cast<ColorSpace>(colorSpace);
+    }
+    switch (desc.alpha_mode) {
+        case BFR_ALPHA_MODE_OPAQUE:
+            request.alphaMode = AlphaMode::Opaque;
+            break;
+        case BFR_ALPHA_MODE_PREMULTIPLIED:
+            request.alphaMode = AlphaMode::Premultiplied;
+            break;
+        case BFR_ALPHA_MODE_POSTMULTIPLIED:
+            request.alphaMode = AlphaMode::Postmultiplied;
+            break;
+        case BFR_ALPHA_MODE_INHERIT:
+            request.alphaMode = AlphaMode::Inherit;
+            break;
+        case BFR_ALPHA_MODE_FORCE32:
+        default:
+            error = std::format("alpha mode {} is not one BFR has", static_cast<std::int64_t>(desc.alpha_mode));
+            return std::nullopt;
+    }
+    return request;
+}
 
 // The calling thread's last error, which bfr_get_last_error returns.
 std::string& lastError() {
@@ -237,6 +297,31 @@ static_assert(static_cast<int>(bfr::rhi::SurfaceRotation::Other) == BFR_SURFACE_
 
 bfr_format toC(bfr::rhi::Format format) {
     return static_cast<bfr_format>(format);
+}
+
+bfr_color_space toC(bfr::rhi::ColorSpace colorSpace) {
+    return static_cast<bfr_color_space>(colorSpace);
+}
+
+bfr_present_mode toC(bfr::rhi::PresentMode mode) {
+    return static_cast<bfr_present_mode>(mode);
+}
+
+bfr_alpha_mode toC(bfr::rhi::AlphaMode mode) {
+    return static_cast<bfr_alpha_mode>(mode);
+}
+
+static_assert(static_cast<int>(bfr::rhi::PresentMode::Immediate) == BFR_PRESENT_MODE_IMMEDIATE);
+static_assert(static_cast<int>(bfr::rhi::AlphaMode::Inherit) == BFR_ALPHA_MODE_INHERIT);
+
+bfr_swapchain_images toC(const bfr::rhi::SwapchainImages& images) {
+    return {.width = images.width,
+            .height = images.height,
+            .count = images.count,
+            .format = toC(images.format),
+            .color_space = toC(images.colorSpace),
+            .present_mode = toC(images.presentMode),
+            .alpha_mode = toC(images.alphaMode)};
 }
 
 bfr_caps_info toC(const bfr::rhi::Adapter& adapter, bfr_backend backend) {
@@ -645,8 +730,11 @@ bfr_result bfr_create_swapchain(bfr_device* device, const bfr_swapchain_desc* de
         if (std::holds_alternative<std::monostate>(*window)) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_swapchain_desc needs a window");
         }
-        const std::uint32_t images = desc->image_count == 0 ? kDefaultSwapchainImages : desc->image_count;
-        const auto created = device->device->createSwapchain(*window, images);
+        const auto request = requestIn(*desc, error);
+        if (!request) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto created = device->device->createSwapchain(*window, *request);
         if (!created) {
             return fail(created.error());
         }
@@ -656,7 +744,7 @@ bfr_result bfr_create_swapchain(bfr_device* device, const bfr_swapchain_desc* de
 }
 
 bfr_result bfr_resize_swapchain(bfr_device* device, bfr_swapchain swapchain, uint32_t width, uint32_t height,
-                                       bfr_swapchain_images* images) {
+                                bfr_swapchain_images* images) {
     return guarded([&] {
         if (device == nullptr || images == nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and images must not be null");
@@ -665,7 +753,7 @@ bfr_result bfr_resize_swapchain(bfr_device* device, bfr_swapchain swapchain, uin
         if (!resized) {
             return fail(resized.error());
         }
-        *images = {.width = resized->width, .height = resized->height, .count = resized->count};
+        *images = toC(*resized);
         return BFR_RESULT_SUCCESS;
     });
 }

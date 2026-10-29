@@ -13,25 +13,32 @@
 
 namespace bfr::rhi::vulkan {
 
+/// Whether surface lets adapter present as request says, asked on vk. Fails
+/// with RhiUnsupported, and says what the surface allows, when it doesn't take
+/// something in request; the size is not asked, as the window can change it.
+[[nodiscard]] core::Result<void> checkSwapchainRequest(const InstanceTable& vk, VkPhysicalDevice adapter,
+                                                       VkSurfaceKHR surface, const SwapchainRequest& request);
+
 /// One swapchain on a surface and the images it was last built with; empty
 /// until built.
 class VulkanSwapchain {
 public:
     /// Builds on surface, which it takes over, through device's table and the
-    /// table of the instance the adapter belongs to, asking for imageCount
-    /// images each time. It reports to logger; the tables and logger outlive it.
+    /// table of the instance the adapter belongs to, as request says each
+    /// time. It reports to logger; the tables and logger outlive it.
     VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, const InstanceTable& instanceTable,
-                    VulkanSurface surface, std::uint32_t imageCount, const core::Logger& logger);
+                    VulkanSurface surface, const SwapchainRequest& request, const core::Logger& logger);
     ~VulkanSwapchain();
     VulkanSwapchain(const VulkanSwapchain&) = delete;
     VulkanSwapchain& operator=(const VulkanSwapchain&) = delete;
     VulkanSwapchain(VulkanSwapchain&&) = delete;
     VulkanSwapchain& operator=(VulkanSwapchain&&) = delete;
 
-    /// Builds images as the surface allows on adapter, at size in pixels,
-    /// replacing those it has; a window with no area
-    /// leaves it empty. Fails with RhiSwapchainFailed, naming the call the API
-    /// refused, and leaves it empty.
+    /// Builds images as the request says on adapter, at size in pixels,
+    /// replacing those it has; a window with no area leaves it empty. Fails
+    /// with RhiUnsupported when the surface no longer allows the request, and
+    /// RhiSwapchainFailed, naming the call the API refused. Either leaves it
+    /// empty.
     [[nodiscard]] core::Result<SwapchainImages> build(VkPhysicalDevice adapter, VkExtent2D size);
 
     /// Destroys the swapchain and forgets its images, keeping their storage;
@@ -46,10 +53,9 @@ private:
     const InstanceTable* instanceTable_;
     const core::Logger* logger_;
     VulkanSurface surface_;
-    std::uint32_t imageCount_;
+    SwapchainRequest request_;
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
-    // Refilled by each build, keeping their storage.
-    std::vector<VkSurfaceFormatKHR> formats_;
+    // Refilled by each build, keeping its storage.
     std::vector<VkImage> images_;
 };
 

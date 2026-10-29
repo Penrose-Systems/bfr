@@ -1,6 +1,11 @@
+#include "error.h"
+#include "format.h"
+#include "swapchain.h"
 #include "swapchain_settings.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 
@@ -8,6 +13,7 @@
 #include <cstdint>
 #include <limits>
 
+using namespace bfr::rhi;
 using namespace bfr::rhi::vulkan;
 
 namespace {
@@ -35,34 +41,54 @@ constexpr VkSurfaceFormatKHR format(VkFormat format) {
     return {.format = format, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
 }
 
-const auto kFormats = std::to_array({format(VK_FORMAT_B8G8R8A8_UNORM)});
+const auto kBgraOnly = std::to_array({format(VK_FORMAT_B8G8R8A8_UNORM)});
+const auto kFifoOnly = std::to_array({VK_PRESENT_MODE_FIFO_KHR});
+
+// The settings for request, the defaults unless it says otherwise.
+bfr::core::Result<SwapchainSettings> settingsFor(const VkSurfaceCapabilitiesKHR& surface, VkExtent2D size = kWindow,
+                                                 const SwapchainRequest& request = {}) {
+    return swapchainSettingsFor(surface, kBgraOnly, kFifoOnly, size, request);
+}
 
 } // namespace
 
-TEST_CASE("Swapchain settings take BGRA8 in the sRGB colour space when the surface lists it", "[rhi][unit]") {
-    const auto formats = std::to_array({format(VK_FORMAT_R8G8B8A8_UNORM), format(VK_FORMAT_B8G8R8A8_UNORM)});
+TEST_CASE("Swapchain settings are what the request says when the surface allows it", "[rhi][unit]") {
+    const auto settings = settingsFor(capabilities());
 
-    const SwapchainSettings settings = chooseSwapchainSettings(capabilities(), formats, kWindow, kImages);
-
-    CHECK(settings.format.format == VK_FORMAT_B8G8R8A8_UNORM);
-    CHECK(settings.format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
+    REQUIRE(settings.has_value());
+    CHECK(settings->format.format == VK_FORMAT_B8G8R8A8_UNORM);
+    CHECK(settings->format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
+    CHECK(settings->imageCount == 1);
+    CHECK(settings->presentMode == VK_PRESENT_MODE_FIFO_KHR);
+    CHECK(settings->compositeAlpha == VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR);
 }
 
-TEST_CASE("Swapchain settings take RGBA8 when the surface lacks BGRA8", "[rhi][unit]") {
-    const auto formats = std::to_array({format(VK_FORMAT_A2B10G10R10_UNORM_PACK32), format(VK_FORMAT_R8G8B8A8_UNORM)});
+TEST_CASE("Swapchain settings take exactly the format and color space asked for", "[rhi][unit]") {
+    const auto formats = std::to_array({format(VK_FORMAT_B8G8R8A8_UNORM), format(VK_FORMAT_R8G8B8A8_UNORM)});
 
-    const SwapchainSettings settings = chooseSwapchainSettings(capabilities(), formats, kWindow, kImages);
+    const auto settings = swapchainSettingsFor(capabilities(), formats, kFifoOnly, kWindow,
+                                               {.format = Format::Rgba8Unorm});
 
-    CHECK(settings.format.format == VK_FORMAT_R8G8B8A8_UNORM);
+    REQUIRE(settings.has_value());
+    CHECK(settings->format.format == VK_FORMAT_R8G8B8A8_UNORM);
 }
 
-TEST_CASE("Swapchain settings take the surface's first format when it lists neither 8-bit format", "[rhi][unit]") {
-    const auto formats = std::to_array(
-        {format(VK_FORMAT_A2B10G10R10_UNORM_PACK32), format(VK_FORMAT_R16G16B16A16_SFLOAT)});
+TEST_CASE("Swapchain settings refuse a format the surface doesn't list, and take no other", "[rhi][unit]") {
+    const auto formats = std::to_array({format(VK_FORMAT_R8G8B8A8_UNORM), format(VK_FORMAT_A2B10G10R10_UNORM_PACK32)});
 
-    const SwapchainSettings settings = chooseSwapchainSettings(capabilities(), formats, kWindow, kImages);
+    const auto settings = swapchainSettingsFor(capabilities(), formats, kFifoOnly, kWindow, {});
 
-    CHECK(settings.format.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32);
+    REQUIRE_FALSE(settings.has_value());
+    CHECK(settings.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    CHECK_THAT(settings.error().message, Catch::Matchers::ContainsSubstring("does not list the format"));
+}
+
+TEST_CASE("Swapchain settings refuse a color space the surface lists the format without", "[rhi][unit]") {
+    const auto settings = swapchainSettingsFor(capabilities(), kBgraOnly, kFifoOnly, kWindow,
+                                               {.colorSpace = ColorSpace::Hdr10Pq});
+
+    REQUIRE_FALSE(settings.has_value());
+    CHECK(settings.error().code == bfr::core::ErrorCode::RhiUnsupported);
 }
 
 TEST_CASE("Swapchain settings take the surface's extent when it reports one", "[rhi][unit]") {
@@ -70,75 +96,110 @@ TEST_CASE("Swapchain settings take the surface's extent when it reports one", "[
     VkSurfaceCapabilitiesKHR surface = capabilities();
     surface.currentExtent = kReported;
 
-    const SwapchainSettings settings = chooseSwapchainSettings(surface, kFormats, kWindow, kImages);
+    const auto settings = settingsFor(surface);
 
-    CHECK(settings.extent.width == kReported.width);
-    CHECK(settings.extent.height == kReported.height);
+    REQUIRE(settings.has_value());
+    CHECK(settings->extent.width == kReported.width);
+    CHECK(settings->extent.height == kReported.height);
 }
 
-TEST_CASE("Swapchain settings clamp the window's size when the surface leaves the extent to them", "[rhi][unit]") {
+TEST_CASE("Swapchain settings take the window's size when the surface leaves the extent to them", "[rhi][unit]") {
+    const auto settings = settingsFor(capabilities());
+
+    REQUIRE(settings.has_value());
+    CHECK(settings->extent.width == kWindow.width);
+    CHECK(settings->extent.height == kWindow.height);
+}
+
+TEST_CASE("Swapchain settings refuse a size the surface can't take, and don't clamp it", "[rhi][unit]") {
     // Smaller than the window both ways.
     constexpr VkExtent2D kLargest{.width = 700, .height = 500};
     VkSurfaceCapabilitiesKHR surface = capabilities();
     surface.maxImageExtent = kLargest;
 
-    const SwapchainSettings settings = chooseSwapchainSettings(surface, kFormats, kWindow, kImages);
+    const auto settings = settingsFor(surface);
 
-    CHECK(settings.extent.width == kLargest.width);
-    CHECK(settings.extent.height == kLargest.height);
+    REQUIRE_FALSE(settings.has_value());
+    CHECK(settings.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    CHECK_THAT(settings.error().message, Catch::Matchers::ContainsSubstring("1x1 to 700x500 pixels; 800x600"));
 }
 
 TEST_CASE("Swapchain settings have no extent when the window has no area", "[rhi][unit]") {
     VkSurfaceCapabilitiesKHR minimised = capabilities();
     minimised.currentExtent = {.width = 0, .height = 0};
 
-    const SwapchainSettings reported = chooseSwapchainSettings(minimised, kFormats, kWindow, kImages);
-    const SwapchainSettings asked = chooseSwapchainSettings(capabilities(), kFormats, {.width = 0, .height = 600},
-                                                            kImages);
+    const auto reported = settingsFor(minimised);
+    const auto asked = settingsFor(capabilities(), {.width = 0, .height = 600});
 
-    CHECK(reported.extent.width == 0);
-    CHECK(reported.extent.height == 0);
-    CHECK(asked.extent.width == 0);
-    CHECK(asked.extent.height == 0);
+    REQUIRE(reported.has_value());
+    REQUIRE(asked.has_value());
+    CHECK(reported->extent.width == 0);
+    CHECK(reported->extent.height == 0);
+    CHECK(asked->extent.width == 0);
+    CHECK(asked->extent.height == 0);
 }
 
-TEST_CASE("Swapchain settings ask for the image count within the surface's range", "[rhi][unit]") {
+TEST_CASE("Swapchain settings take the fewest images the surface allows when none are asked for", "[rhi][unit]") {
+    VkSurfaceCapabilitiesKHR surface = capabilities();
+    surface.minImageCount = 4;
+
+    CHECK(settingsFor(surface)->imageCount == 4);
+}
+
+TEST_CASE("Swapchain settings take the image count asked for when the surface allows it", "[rhi][unit]") {
     VkSurfaceCapabilitiesKHR surface = capabilities();
 
-    CHECK(chooseSwapchainSettings(surface, kFormats, kWindow, kImages).imageCount == kImages);
-    CHECK(chooseSwapchainSettings(surface, kFormats, kWindow, kMaxImages + 2).imageCount == kMaxImages);
-    surface.minImageCount = 4;
-    CHECK(chooseSwapchainSettings(surface, kFormats, kWindow, kImages).imageCount == 4);
+    CHECK(settingsFor(surface, kWindow, {.imageCount = kImages})->imageCount == kImages);
+    CHECK(settingsFor(surface, kWindow, {.imageCount = kMaxImages})->imageCount == kMaxImages);
+    // One, though two would let a frame draw while another shows: that is the caller's call.
+    CHECK(settingsFor(surface, kWindow, {.imageCount = 1})->imageCount == 1);
     // No maximum.
     surface.maxImageCount = 0;
-    CHECK(chooseSwapchainSettings(surface, kFormats, kWindow, kMaxImages + 2).imageCount == kMaxImages + 2);
+    CHECK(settingsFor(surface, kWindow, {.imageCount = kMaxImages + 2})->imageCount == kMaxImages + 2);
 }
 
-TEST_CASE("Swapchain settings ask for at least two images", "[rhi][unit]") {
-    CHECK(chooseSwapchainSettings(capabilities(), kFormats, kWindow, 1).imageCount == 2);
-}
-
-TEST_CASE("Swapchain settings composite opaquely when the surface can", "[rhi][unit]") {
+TEST_CASE("Swapchain settings refuse an image count outside the surface's range, and say the range", "[rhi][unit]") {
     VkSurfaceCapabilitiesKHR surface = capabilities();
-    surface.supportedCompositeAlpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR | VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    surface.minImageCount = 4;
 
-    CHECK(chooseSwapchainSettings(surface, kFormats, kWindow, kImages).compositeAlpha ==
-          VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR);
+    const auto below = settingsFor(surface, kWindow, {.imageCount = kImages});
+    const auto above = settingsFor(surface, kWindow, {.imageCount = kMaxImages + 2});
+    surface.maxImageCount = 0;
+    const auto belowWithoutMaximum = settingsFor(surface, kWindow, {.imageCount = kImages});
+
+    REQUIRE_FALSE(below.has_value());
+    CHECK(below.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    CHECK_THAT(below.error().message, Catch::Matchers::ContainsSubstring("4 to 8 images; 3 were asked"));
+    REQUIRE_FALSE(above.has_value());
+    REQUIRE_FALSE(belowWithoutMaximum.has_value());
+    CHECK_THAT(belowWithoutMaximum.error().message, Catch::Matchers::ContainsSubstring("4 or more images"));
 }
 
-TEST_CASE("Swapchain settings composite as the surface supports when it can't composite opaquely", "[rhi][unit]") {
-    VkSurfaceCapabilitiesKHR surface = capabilities();
-    surface.supportedCompositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR | VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR;
+TEST_CASE("Swapchain settings refuse a present mode the surface doesn't list", "[rhi][unit]") {
+    const auto modes = std::to_array({VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR});
 
-    CHECK(chooseSwapchainSettings(surface, kFormats, kWindow, kImages).compositeAlpha ==
-          VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR);
+    const auto immediate = swapchainSettingsFor(capabilities(), kBgraOnly, modes, kWindow,
+                                                {.presentMode = PresentMode::Immediate});
+    const auto mailbox = swapchainSettingsFor(capabilities(), kBgraOnly, modes, kWindow,
+                                              {.presentMode = PresentMode::Mailbox});
+
+    REQUIRE(immediate.has_value());
+    CHECK(immediate->presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR);
+    REQUIRE_FALSE(mailbox.has_value());
+    CHECK(mailbox.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    CHECK_THAT(mailbox.error().message, Catch::Matchers::ContainsSubstring("mailbox"));
 }
 
-TEST_CASE("Swapchain settings composite opaquely when the surface reports no way to composite", "[rhi][unit]") {
-    // Vulkan promises at least one way; a driver that breaks that still gets one.
+TEST_CASE("Swapchain settings refuse an alpha mode the surface doesn't support, and take no other", "[rhi][unit]") {
     VkSurfaceCapabilitiesKHR surface = capabilities();
-    surface.supportedCompositeAlpha = 0;
+    surface.supportedCompositeAlpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR | VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
 
-    CHECK(chooseSwapchainSettings(surface, kFormats, kWindow, kImages).compositeAlpha ==
-          VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR);
+    const auto premultiplied = settingsFor(surface, kWindow, {.alphaMode = AlphaMode::Premultiplied});
+    const auto opaque = settingsFor(surface, kWindow, {.alphaMode = AlphaMode::Opaque});
+
+    REQUIRE(premultiplied.has_value());
+    CHECK(premultiplied->compositeAlpha == VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR);
+    REQUIRE_FALSE(opaque.has_value());
+    CHECK(opaque.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    CHECK_THAT(opaque.error().message, Catch::Matchers::ContainsSubstring("opaque"));
 }

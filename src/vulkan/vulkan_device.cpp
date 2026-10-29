@@ -32,7 +32,7 @@ VulkanDevice::VulkanDevice(VulkanRhi& rhi, VkPhysicalDevice adapter, VkDevice de
 }
 
 core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::NativeWindow& window,
-                                                            std::uint32_t imageCount) {
+                                                            const SwapchainRequest& request) {
     auto surface = rhi_->surfaceFor(window);
     if (!surface) {
         return std::unexpected(std::move(surface.error()));
@@ -46,8 +46,11 @@ core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::
         return core::failure(core::ErrorCode::RhiPresentUnsupported,
                              "the device's present queue doesn't present to the window");
     }
+    if (auto checked = checkSwapchainRequest(rhi_->instanceTable(), adapter_, surface->handle(), request); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, rhi_->instanceTable(), std::move(*surface),
-                                                          imageCount, rhi_->logger());
+                                                          request, rhi_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("a device holds at most {} swapchains", kSwapchainLimit));

@@ -277,8 +277,8 @@ void printFormatTable(const std::vector<bfr::FormatCaps>& formats) {
     const auto mark = [](bool has) {
         return has ? "✓" : "·";
     };
-    print(std::format("{}{:<{}} sample linear minmax storage atomic color blend depth texel  MSAA\n", kIndent,
-                      "Format", kNameWidth));
+    print(std::format("{}{:<{}} sample linear minmax storage atomic color blend depth texel  MSAA\n", kIndent, "Format",
+                      kNameWidth));
     std::vector<std::string> unsupported;
     for (const bfr::FormatCaps& f : formats) {
         if (!f.sampled && !f.storage && !f.colorAttachment && !f.depthStencil && !f.texelBuffer && !f.copySrc) {

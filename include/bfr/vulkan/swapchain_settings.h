@@ -1,5 +1,8 @@
 #pragma once
 
+#include "error.h"
+#include "swapchain.h"
+
 #include <volk.h>
 
 #include <cstdint>
@@ -14,14 +17,23 @@ struct SwapchainSettings {
     VkExtent2D extent;
     std::uint32_t imageCount;
     VkCompositeAlphaFlagBitsKHR compositeAlpha;
+    VkPresentModeKHR presentMode;
 };
 
-/// Chooses each setting from what the surface supports. formats is the
-/// surface's format list, never empty. size is the window's size in pixels,
-/// which the surface's own extent overrides when it reports one. images is
-/// the image count asked for.
-[[nodiscard]] SwapchainSettings chooseSwapchainSettings(const VkSurfaceCapabilitiesKHR& capabilities,
-                                                        std::span<const VkSurfaceFormatKHR> formats, VkExtent2D size,
-                                                        std::uint32_t images);
+/// The Vulkan present mode that is mode.
+[[nodiscard]] VkPresentModeKHR presentModeFor(PresentMode mode);
+
+/// The Vulkan composite alpha that is mode.
+[[nodiscard]] VkCompositeAlphaFlagBitsKHR compositeAlphaFor(AlphaMode mode);
+
+/// request as the surface would build it, or why it won't: RhiUnsupported,
+/// with a message that says what the surface allows. formats and presentModes
+/// are the surface's lists. size is the window's size in pixels, which the
+/// surface's own extent overrides when it reports one; a size the surface
+/// can't take is refused, not clamped.
+[[nodiscard]] core::Result<SwapchainSettings> swapchainSettingsFor(const VkSurfaceCapabilitiesKHR& capabilities,
+                                                                   std::span<const VkSurfaceFormatKHR> formats,
+                                                                   std::span<const VkPresentModeKHR> presentModes,
+                                                                   VkExtent2D size, const SwapchainRequest& request);
 
 } // namespace bfr::rhi::vulkan

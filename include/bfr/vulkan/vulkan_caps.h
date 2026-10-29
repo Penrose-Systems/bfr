@@ -62,6 +62,9 @@ private:
 
 [[nodiscard]] VkFormat vulkanFormat(Format format);
 
+/// The Vulkan color space that is colorSpace.
+[[nodiscard]] VkColorSpaceKHR vulkanColorSpace(ColorSpace colorSpace);
+
 /// The Format for format; nullopt for one without a name here.
 [[nodiscard]] std::optional<Format> formatOf(VkFormat format);
 

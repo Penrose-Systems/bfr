@@ -188,6 +188,25 @@ TEST_CASE("C++ API keeps a device alive for the swapchains made from it", "[cpp_
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("C++ API presents as the mode asked for or says the window doesn't allow it", "[cpp_api][gpu]") {
+    Messages messages;
+    {
+        const bfr::Instance instance = validatedInstance(messages);
+        const bfr::Device device = headlessDevice(instance);
+        const auto fifo = device.createSwapchain({.window = kHeadless, .presentMode = bfr::PresentMode::Fifo});
+        const auto immediate = device.createSwapchain(
+            {.window = kHeadless, .presentMode = bfr::PresentMode::Immediate});
+
+        INFO(failureOf(fifo));
+        CHECK(fifo.has_value());
+        if (!immediate.has_value()) {
+            CHECK(immediate.error().code == bfr::Result::ErrorUnsupported);
+            CHECK_THAT(immediate.error().message, Catch::Matchers::ContainsSubstring("immediate"));
+        }
+    }
+    CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("C++ API keeps the message callback alive while a device lives", "[cpp_api][gpu]") {
     auto state = std::make_shared<int>(0);
     const std::weak_ptr<int> watched = state;

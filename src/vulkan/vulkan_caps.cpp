@@ -783,6 +783,10 @@ VkFormat vulkanFormat(Format format) {
     return std::ranges::find(kVulkanFormats, format, &FormatPair::format)->vulkan;
 }
 
+VkColorSpaceKHR vulkanColorSpace(ColorSpace colorSpace) {
+    return std::ranges::find(kVulkanColorSpaces, colorSpace, &ColorSpacePair::colorSpace)->vulkan;
+}
+
 std::optional<Format> formatOf(VkFormat format) {
     for (const FormatPair& pair : kVulkanFormats) {
         if (pair.vulkan == format) {

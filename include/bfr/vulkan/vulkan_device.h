@@ -30,7 +30,7 @@ public:
     VulkanDevice& operator=(VulkanDevice&&) = delete;
 
     [[nodiscard]] core::Result<SwapchainHandle> createSwapchain(const core::window::NativeWindow& window,
-                                                                std::uint32_t imageCount) override;
+                                                                const SwapchainRequest& request) override;
     [[nodiscard]] core::Result<SwapchainImages> resizeSwapchain(SwapchainHandle swapchain, std::uint32_t width,
                                                                 std::uint32_t height) override;
     [[nodiscard]] core::Result<void> destroySwapchain(SwapchainHandle swapchain) override;

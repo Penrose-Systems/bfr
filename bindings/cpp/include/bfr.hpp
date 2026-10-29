@@ -517,6 +517,52 @@ enum class SurfaceRotation : std::int32_t {
     return {};
 }
 
+/// How a swapchain presents. Which ones a window allows is in bfr_surface_caps.
+enum class PresentMode : std::int32_t {
+    /// Presents wait for vertical blank and queue up. Always available.
+    Fifo = BFR_PRESENT_MODE_FIFO,
+    /// As fifo, but a late frame presents at once, and may tear.
+    FifoRelaxed = BFR_PRESENT_MODE_FIFO_RELAXED,
+    /// Presents wait for vertical blank, and a newer frame replaces a waiting one.
+    Mailbox = BFR_PRESENT_MODE_MAILBOX,
+    /// Presents at once, and may tear.
+    Immediate = BFR_PRESENT_MODE_IMMEDIATE,
+};
+
+/// value's name in bfr.yaml; empty for a value PresentMode doesn't have.
+[[nodiscard]] constexpr std::string_view name(PresentMode value) {
+    switch (value) {
+    case PresentMode::Fifo: return "fifo";
+    case PresentMode::FifoRelaxed: return "fifo_relaxed";
+    case PresentMode::Mailbox: return "mailbox";
+    case PresentMode::Immediate: return "immediate";
+    }
+    return {};
+}
+
+/// How a window blends a swapchain's alpha. Which ones a window allows is in bfr_surface_caps.
+enum class AlphaMode : std::int32_t {
+    /// The window ignores alpha.
+    Opaque = BFR_ALPHA_MODE_OPAQUE,
+    /// Colors are already multiplied by alpha.
+    Premultiplied = BFR_ALPHA_MODE_PREMULTIPLIED,
+    /// The window multiplies colors by alpha.
+    Postmultiplied = BFR_ALPHA_MODE_POSTMULTIPLIED,
+    /// The window system decides how alpha blends.
+    Inherit = BFR_ALPHA_MODE_INHERIT,
+};
+
+/// value's name in bfr.yaml; empty for a value AlphaMode doesn't have.
+[[nodiscard]] constexpr std::string_view name(AlphaMode value) {
+    switch (value) {
+    case AlphaMode::Opaque: return "opaque";
+    case AlphaMode::Premultiplied: return "premultiplied";
+    case AlphaMode::Postmultiplied: return "postmultiplied";
+    case AlphaMode::Inherit: return "inherit";
+    }
+    return {};
+}
+
 /// Which window system a bfr_window comes from, for the platforms that have more than one.
 enum class WindowSystem : std::int32_t {
     /// The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -599,15 +645,33 @@ struct DeviceDesc {
 struct SwapchainDesc {
     /// The window to present to.
     Window window{};
-    /// Images to request; 0 asks for 3.
+    /// Images to request; 0 asks for the fewest the window allows. Fails with error_unsupported
+    /// when the window does not allow that many. bfr_swapchain_images says how many it made.
     std::uint32_t imageCount{};
+    /// How to present; 0 is fifo. Fails with error_unsupported when the window does not allow it;
+    /// bfr_get_surface_caps says which it allows.
+    PresentMode presentMode{};
+    /// The images' format; 0 is bgra8_unorm. Fails with error_unsupported when the window does not
+    /// list it with color_space; bfr_get_surface_formats lists what it does.
+    Format format{};
+    /// How the display reads the images; 0 is srgb.
+    ColorSpace colorSpace{};
+    /// How the window blends alpha; 0 is opaque. Fails with error_unsupported when the window does
+    /// not allow it.
+    AlphaMode alphaMode{};
 };
 
-/// A swapchain's current images.
+/// A swapchain's current images: their size and number, which are 0 while the window has no area,
+/// and the format, color space, present mode and alpha mode in use, whether the desc set them or
+/// left them at 0.
 struct SwapchainImages {
     std::uint32_t width{};
     std::uint32_t height{};
     std::uint32_t count{};
+    Format format{};
+    ColorSpace colorSpace{};
+    PresentMode presentMode{};
+    AlphaMode alphaMode{};
 };
 
 /// Which window to ask about.
@@ -1027,7 +1091,15 @@ inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
 }
 
 inline bfr_swapchain_desc toC(const SwapchainDesc& value, const bfr_chain* next) {
-    return {.next = next, .window = toC(value.window), .image_count = value.imageCount};
+    return {
+        .next = next,
+        .window = toC(value.window),
+        .image_count = value.imageCount,
+        .present_mode = static_cast<bfr_present_mode>(value.presentMode),
+        .format = static_cast<bfr_format>(value.format),
+        .color_space = static_cast<bfr_color_space>(value.colorSpace),
+        .alpha_mode = static_cast<bfr_alpha_mode>(value.alphaMode),
+    };
 }
 
 inline bfr_surface_desc toC(const SurfaceDesc& value, const bfr_chain* next) {
@@ -1042,7 +1114,15 @@ inline AdapterInfo fromC(const bfr_adapter_info& value) {
 }
 
 inline SwapchainImages fromC(const bfr_swapchain_images& value) {
-    return {.width = value.width, .height = value.height, .count = value.count};
+    return {
+        .width = value.width,
+        .height = value.height,
+        .count = value.count,
+        .format = static_cast<Format>(value.format),
+        .colorSpace = static_cast<ColorSpace>(value.color_space),
+        .presentMode = static_cast<PresentMode>(value.present_mode),
+        .alphaMode = static_cast<AlphaMode>(value.alpha_mode),
+    };
 }
 
 inline CapsInfo fromC(const bfr_caps_info& value) {

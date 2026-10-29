@@ -125,7 +125,10 @@ inline int show(const bfr::Window& window, const std::function<bool()>& poll, co
             return detail::fail("can't resize the swapchain", images.error());
         }
         last = now;
-        detail::row("Swapchain", {std::format("{}x{}, {} images", images->width, images->height, images->count)});
+        detail::row("Swapchain", {std::format("{}x{}, {} images", images->width, images->height, images->count),
+                                  std::format("{} {}", bfr::name(images->format), bfr::name(images->colorSpace)),
+                                  std::format("{} presenting", bfr::name(images->presentMode)),
+                                  std::format("{} alpha", bfr::name(images->alphaMode))});
     }
     return 0;
 }

@@ -24,9 +24,11 @@ public:
     /// is destroyed; resizeSwapchain builds its images. Fails with
     /// RhiSurfaceFailed when there is no window, when its window system's
     /// surface extension is unavailable, or when the API refuses the window,
-    /// and RhiPresentUnsupported when the device can't present to it.
+    /// and RhiPresentUnsupported when the device can't present to it. Builds as
+    /// request says, or fails with RhiUnsupported, and says what the window
+    /// allows, when it doesn't allow something in request.
     [[nodiscard]] virtual core::Result<SwapchainHandle> createSwapchain(const core::window::NativeWindow& window,
-                                                                        std::uint32_t imageCount) = 0;
+                                                                        const SwapchainRequest& request) = 0;
 
     /// Builds the swapchain's images at width by height pixels, replacing any
     /// it has, which nothing may still be using. The surface may set the size

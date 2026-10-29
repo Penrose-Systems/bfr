@@ -235,6 +235,26 @@ enums:
       rotate_270: {value: 3, doc: Turned 270 degrees clockwise.}
       other: {value: 4, doc: "Mirrored, or left to the platform."}
 
+  present_mode:
+    doc: >-
+      How a swapchain presents. Which ones a window allows is in
+      bfr_surface_caps.
+    values:
+      fifo: {value: 0, doc: Presents wait for vertical blank and queue up. Always available.}
+      fifo_relaxed: {value: 1, doc: "As fifo, but a late frame presents at once, and may tear."}
+      mailbox: {value: 2, doc: "Presents wait for vertical blank, and a newer frame replaces a waiting one."}
+      immediate: {value: 3, doc: "Presents at once, and may tear."}
+
+  alpha_mode:
+    doc: >-
+      How a window blends a swapchain's alpha. Which ones a window allows is in
+      bfr_surface_caps.
+    values:
+      opaque: {value: 0, doc: The window ignores alpha.}
+      premultiplied: {value: 1, doc: "Colors are already multiplied by alpha."}
+      postmultiplied: {value: 2, doc: "The window multiplies colors by alpha."}
+      inherit: {value: 3, doc: The window system decides how alpha blends.}
+
   window_system:
     doc: >-
       Which window system a bfr_window comes from, for the platforms that have
@@ -329,14 +349,43 @@ structs:
     extensible: true
     members:
       - {name: window, type: window, doc: The window to present to.}
-      - {name: image_count, type: u32, doc: Images to request; 0 asks for 3.}
+      - name: image_count
+        type: u32
+        doc: >-
+          Images to request; 0 asks for the fewest the window allows. Fails with error_unsupported
+          when the window does not allow that many. bfr_swapchain_images says how many it made.
+      - name: present_mode
+        type: present_mode
+        doc: >-
+          How to present; 0 is fifo. Fails with error_unsupported when the window does not allow it;
+          bfr_get_surface_caps says which it allows.
+      - name: format
+        type: format
+        doc: >-
+          The images' format; 0 is bgra8_unorm. Fails with error_unsupported when the window does not
+          list it with color_space; bfr_get_surface_formats lists what it does.
+      - name: color_space
+        type: color_space
+        doc: How the display reads the images; 0 is srgb.
+      - name: alpha_mode
+        type: alpha_mode
+        doc: >-
+          How the window blends alpha; 0 is opaque. Fails with error_unsupported when the window
+          does not allow it.
 
   swapchain_images:
-    doc: A swapchain's current images.
+    doc: >-
+      A swapchain's current images: their size and number, which are 0 while the window has no area,
+      and the format, color space, present mode and alpha mode in use, whether the desc set them or
+      left them at 0.
     members:
       - {name: width, type: u32}
       - {name: height, type: u32}
       - {name: count, type: u32}
+      - {name: format, type: format}
+      - {name: color_space, type: color_space}
+      - {name: present_mode, type: present_mode}
+      - {name: alpha_mode, type: alpha_mode}
 
   surface_desc:
     doc: Which window to ask about.

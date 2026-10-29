@@ -316,6 +316,32 @@ typedef enum bfr_surface_rotation {
     BFR_SURFACE_ROTATION_FORCE32 = 0x7FFFFFFF
 } bfr_surface_rotation;
 
+// How a swapchain presents. Which ones a window allows is in bfr_surface_caps.
+typedef enum bfr_present_mode {
+    // Presents wait for vertical blank and queue up. Always available.
+    BFR_PRESENT_MODE_FIFO = 0,
+    // As fifo, but a late frame presents at once, and may tear.
+    BFR_PRESENT_MODE_FIFO_RELAXED = 1,
+    // Presents wait for vertical blank, and a newer frame replaces a waiting one.
+    BFR_PRESENT_MODE_MAILBOX = 2,
+    // Presents at once, and may tear.
+    BFR_PRESENT_MODE_IMMEDIATE = 3,
+    BFR_PRESENT_MODE_FORCE32 = 0x7FFFFFFF
+} bfr_present_mode;
+
+// How a window blends a swapchain's alpha. Which ones a window allows is in bfr_surface_caps.
+typedef enum bfr_alpha_mode {
+    // The window ignores alpha.
+    BFR_ALPHA_MODE_OPAQUE = 0,
+    // Colors are already multiplied by alpha.
+    BFR_ALPHA_MODE_PREMULTIPLIED = 1,
+    // The window multiplies colors by alpha.
+    BFR_ALPHA_MODE_POSTMULTIPLIED = 2,
+    // The window system decides how alpha blends.
+    BFR_ALPHA_MODE_INHERIT = 3,
+    BFR_ALPHA_MODE_FORCE32 = 0x7FFFFFFF
+} bfr_alpha_mode;
+
 // Which window system a bfr_window comes from, for the platforms that have more than one.
 typedef enum bfr_window_system {
     // The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -412,15 +438,33 @@ typedef struct bfr_swapchain_desc {
     const bfr_chain* next;
     // The window to present to.
     bfr_window window;
-    // Images to request; 0 asks for 3.
+    // Images to request; 0 asks for the fewest the window allows. Fails with error_unsupported when
+    // the window does not allow that many. bfr_swapchain_images says how many it made.
     uint32_t image_count;
+    // How to present; 0 is fifo. Fails with error_unsupported when the window does not allow it;
+    // bfr_get_surface_caps says which it allows.
+    bfr_present_mode present_mode;
+    // The images' format; 0 is bgra8_unorm. Fails with error_unsupported when the window does not
+    // list it with color_space; bfr_get_surface_formats lists what it does.
+    bfr_format format;
+    // How the display reads the images; 0 is srgb.
+    bfr_color_space color_space;
+    // How the window blends alpha; 0 is opaque. Fails with error_unsupported when the window does
+    // not allow it.
+    bfr_alpha_mode alpha_mode;
 } bfr_swapchain_desc;
 
-// A swapchain's current images.
+// A swapchain's current images: their size and number, which are 0 while the window has no area,
+// and the format, color space, present mode and alpha mode in use, whether the desc set them or
+// left them at 0.
 typedef struct bfr_swapchain_images {
     uint32_t width;
     uint32_t height;
     uint32_t count;
+    bfr_format format;
+    bfr_color_space color_space;
+    bfr_present_mode present_mode;
+    bfr_alpha_mode alpha_mode;
 } bfr_swapchain_images;
 
 // Which window to ask about.
