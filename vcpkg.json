@@ -4,6 +4,20 @@
   "version": "0.1.0",
   "dependencies": [
     "catch2",
+    {
+      "name": "glfw3",
+      "features": [
+        { "name": "wayland", "platform": "linux" }
+      ]
+    },
+    {
+      "name": "sdl3",
+      "default-features": false,
+      "features": [
+        { "name": "x11", "platform": "linux" },
+        { "name": "wayland", "platform": "linux" }
+      ]
+    },
     "volk",
     "vulkan-utility-libraries",
     "vulkan-validationlayers"
