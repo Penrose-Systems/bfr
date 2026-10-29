@@ -1,6 +1,7 @@
 #pragma once
 
 #include "error.h"
+#include "instance_table.h"
 #include "window.h"
 
 #include <volk.h>
@@ -18,7 +19,7 @@ class VulkanSurface {
 public:
     /// Takes ownership of surface, which instance made; headless when its
     /// window has no window system.
-    VulkanSurface(VkInstance instance, VkSurfaceKHR surface, bool headless);
+    VulkanSurface(VkInstance instance, const InstanceTable& vk, VkSurfaceKHR surface, bool headless);
     ~VulkanSurface();
     VulkanSurface(const VulkanSurface&) = delete;
     VulkanSurface& operator=(const VulkanSurface&) = delete;
@@ -31,6 +32,7 @@ public:
 
 private:
     VkInstance instance_;
+    const InstanceTable* vk_;
     VkSurfaceKHR surface_;
     bool headless_;
 };
@@ -39,7 +41,8 @@ private:
 /// Fails with RhiSurfaceFailed when there is no window, when its window
 /// system's surface extension is unavailable, or when the API refuses the
 /// surface.
-[[nodiscard]] core::Result<VulkanSurface> createSurface(VkInstance instance, std::span<const char* const> extensions,
+[[nodiscard]] core::Result<VulkanSurface> createSurface(VkInstance instance, const InstanceTable& vk,
+                                                        std::span<const char* const> extensions,
                                                         const core::window::NativeWindow& window);
 
 } // namespace bfr::rhi::vulkan

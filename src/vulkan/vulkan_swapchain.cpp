@@ -47,9 +47,14 @@ core::Result<SwapchainImages> refused(std::string_view function, VkResult result
 
 } // namespace
 
-VulkanSwapchain::VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, VulkanSurface surface,
-                                 std::uint32_t imageCount, const core::Logger& logger)
-    : device_(device), table_(&table), logger_(&logger), surface_(std::move(surface)), imageCount_(imageCount) {}
+VulkanSwapchain::VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, const InstanceTable& instanceTable,
+                                 VulkanSurface surface, std::uint32_t imageCount, const core::Logger& logger)
+    : device_(device),
+      table_(&table),
+      instanceTable_(&instanceTable),
+      logger_(&logger),
+      surface_(std::move(surface)),
+      imageCount_(imageCount) {}
 
 VulkanSwapchain::~VulkanSwapchain() {
     release();
@@ -59,13 +64,15 @@ core::Result<SwapchainImages> VulkanSwapchain::build(VkPhysicalDevice adapter, V
     release();
     VkSurfaceKHR surface = surface_.handle();
     VkSurfaceCapabilitiesKHR capabilities{};
-    if (const VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(adapter, surface, &capabilities);
+    if (const VkResult result = instanceTable_->vkGetPhysicalDeviceSurfaceCapabilitiesKHR(adapter, surface,
+                                                                                          &capabilities);
         result != VK_SUCCESS) {
         return refused("vkGetPhysicalDeviceSurfaceCapabilitiesKHR", result);
     }
     if (auto listed = listInto(formats_, "vkGetPhysicalDeviceSurfaceFormatsKHR",
-                               [adapter, surface](std::uint32_t* count, VkSurfaceFormatKHR* formats) {
-                                   return vkGetPhysicalDeviceSurfaceFormatsKHR(adapter, surface, count, formats);
+                               [this, adapter, surface](std::uint32_t* count, VkSurfaceFormatKHR* formats) {
+                                   return instanceTable_->vkGetPhysicalDeviceSurfaceFormatsKHR(adapter, surface, count,
+                                                                                               formats);
                                });
         !listed) {
         return failure(core::ErrorCode::RhiSwapchainFailed, listed.error());

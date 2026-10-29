@@ -517,6 +517,26 @@ enum class SurfaceRotation : std::int32_t {
     return {};
 }
 
+/// Which window system a bfr_window comes from, for the platforms that have more than one.
+enum class WindowSystem : std::int32_t {
+    /// The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
+    Default = BFR_WINDOW_SYSTEM_DEFAULT,
+    /// Wayland. Linux only.
+    Wayland = BFR_WINDOW_SYSTEM_WAYLAND,
+    /// No window. Images are presented nowhere; for tests and offscreen tools.
+    Headless = BFR_WINDOW_SYSTEM_HEADLESS,
+};
+
+/// value's name in bfr.yaml; empty for a value WindowSystem doesn't have.
+[[nodiscard]] constexpr std::string_view name(WindowSystem value) {
+    switch (value) {
+    case WindowSystem::Default: return "default";
+    case WindowSystem::Wayland: return "wayland";
+    case WindowSystem::Headless: return "headless";
+    }
+    return {};
+}
+
 /// A failed call: what it returned and the message bfr_get_last_error gave for it.
 struct Error {
     Result code{};
@@ -556,16 +576,29 @@ struct AdapterInfo {
     AdapterType type{};
 };
 
-/// How to open an adapter. Pass any of WindowXlib, WindowWayland, WindowWin32, WindowMetal,
-/// WindowHeadless after it.
+/// A window to present to. The caller's windowing code made it; the values stay valid while it is
+/// open. All zero means no window.
+struct Window {
+    /// The window: an HWND on Windows, a Window XID on X11 (as a pointer), a wl_surface* on
+    /// Wayland, a CAMetalLayer* on Apple.
+    void* window{};
+    /// The Display* on X11, the wl_display* on Wayland; unused elsewhere.
+    void* display{};
+    WindowSystem system{};
+};
+
+/// How to open an adapter.
 struct DeviceDesc {
     /// Index into the instance's adapter list.
     std::uint32_t adapter{};
+    /// The window the device must be able to present to; all zero opens it without presenting.
+    Window window{};
 };
 
-/// How to create a swapchain. Chain exactly one window struct. Pass any of WindowXlib,
-/// WindowWayland, WindowWin32, WindowMetal, WindowHeadless after it.
+/// How to create a swapchain.
 struct SwapchainDesc {
+    /// The window to present to.
+    Window window{};
     /// Images to request; 0 asks for 3.
     std::uint32_t imageCount{};
 };
@@ -577,9 +610,9 @@ struct SwapchainImages {
     std::uint32_t count{};
 };
 
-/// Which window to ask about. Chain exactly one window struct. Pass any of WindowXlib,
-/// WindowWayland, WindowWin32, WindowMetal, WindowHeadless after it.
+/// Which window to ask about.
 struct SurfaceDesc {
+    Window window{};
 };
 
 /// What an adapter is.
@@ -958,41 +991,6 @@ struct MemoryBudget {
     std::array<MemoryBudgetHeap, 16> heaps{};
 };
 
-/// An Xlib window. Extends DeviceDesc, SwapchainDesc, SurfaceDesc.
-struct WindowXlib {
-    /// The Display*.
-    void* display{};
-    /// The Window XID.
-    std::uint64_t window{};
-};
-
-/// A Wayland surface. Extends DeviceDesc, SwapchainDesc, SurfaceDesc.
-struct WindowWayland {
-    /// The wl_display*.
-    void* display{};
-    /// The wl_surface*.
-    void* surface{};
-};
-
-/// A Win32 window. Extends DeviceDesc, SwapchainDesc, SurfaceDesc.
-struct WindowWin32 {
-    /// The HINSTANCE.
-    void* instance{};
-    /// The HWND.
-    void* window{};
-};
-
-/// A Core Animation Metal layer. Extends DeviceDesc, SwapchainDesc, SurfaceDesc.
-struct WindowMetal {
-    /// The CAMetalLayer*.
-    void* layer{};
-};
-
-/// No window. Images are presented nowhere; for tests and offscreen tools. Extends DeviceDesc,
-/// SwapchainDesc, SurfaceDesc.
-struct WindowHeadless {
-};
-
 namespace detail {
 
 /// The error for result, with the calling thread's message for it.
@@ -1016,48 +1014,24 @@ inline bfr_instance_desc toC(const InstanceDesc& value, const bfr_chain* next, M
     };
 }
 
+inline bfr_window toC(const Window& value) {
+    return {
+        .window = value.window,
+        .display = value.display,
+        .system = static_cast<bfr_window_system>(value.system),
+    };
+}
+
 inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
-    return {.next = next, .adapter = value.adapter};
+    return {.next = next, .adapter = value.adapter, .window = toC(value.window)};
 }
 
 inline bfr_swapchain_desc toC(const SwapchainDesc& value, const bfr_chain* next) {
-    return {.next = next, .image_count = value.imageCount};
+    return {.next = next, .window = toC(value.window), .image_count = value.imageCount};
 }
 
-inline bfr_surface_desc toC(const SurfaceDesc&, const bfr_chain* next) {
-    return {.next = next};
-}
-
-inline bfr_window_xlib toC(const WindowXlib& value) {
-    return {
-        .chain = {.next = nullptr, .type = BFR_STRUCT_TYPE_WINDOW_XLIB},
-        .display = value.display,
-        .window = value.window,
-    };
-}
-
-inline bfr_window_wayland toC(const WindowWayland& value) {
-    return {
-        .chain = {.next = nullptr, .type = BFR_STRUCT_TYPE_WINDOW_WAYLAND},
-        .display = value.display,
-        .surface = value.surface,
-    };
-}
-
-inline bfr_window_win32 toC(const WindowWin32& value) {
-    return {
-        .chain = {.next = nullptr, .type = BFR_STRUCT_TYPE_WINDOW_WIN32},
-        .instance = value.instance,
-        .window = value.window,
-    };
-}
-
-inline bfr_window_metal toC(const WindowMetal& value) {
-    return {.chain = {.next = nullptr, .type = BFR_STRUCT_TYPE_WINDOW_METAL}, .layer = value.layer};
-}
-
-inline bfr_window_headless toC(const WindowHeadless&) {
-    return {.chain = {.next = nullptr, .type = BFR_STRUCT_TYPE_WINDOW_HEADLESS}};
+inline bfr_surface_desc toC(const SurfaceDesc& value, const bfr_chain* next) {
+    return {.next = next, .window = toC(value.window)};
 }
 
 inline AdapterInfo fromC(const bfr_adapter_info& value) {
@@ -1351,24 +1325,6 @@ inline MemoryBudget fromC(const bfr_memory_budget& value) {
     };
 }
 
-template <> inline constexpr bool kExtends<WindowXlib, DeviceDesc> = true;
-template <> inline constexpr bool kExtends<WindowWayland, DeviceDesc> = true;
-template <> inline constexpr bool kExtends<WindowWin32, DeviceDesc> = true;
-template <> inline constexpr bool kExtends<WindowMetal, DeviceDesc> = true;
-template <> inline constexpr bool kExtends<WindowHeadless, DeviceDesc> = true;
-
-template <> inline constexpr bool kExtends<WindowXlib, SwapchainDesc> = true;
-template <> inline constexpr bool kExtends<WindowWayland, SwapchainDesc> = true;
-template <> inline constexpr bool kExtends<WindowWin32, SwapchainDesc> = true;
-template <> inline constexpr bool kExtends<WindowMetal, SwapchainDesc> = true;
-template <> inline constexpr bool kExtends<WindowHeadless, SwapchainDesc> = true;
-
-template <> inline constexpr bool kExtends<WindowXlib, SurfaceDesc> = true;
-template <> inline constexpr bool kExtends<WindowWayland, SurfaceDesc> = true;
-template <> inline constexpr bool kExtends<WindowWin32, SurfaceDesc> = true;
-template <> inline constexpr bool kExtends<WindowMetal, SurfaceDesc> = true;
-template <> inline constexpr bool kExtends<WindowHeadless, SurfaceDesc> = true;
-
 } // namespace detail
 
 /// One backend in this process. Several may exist at once. Do not destroy it while another thread
@@ -1410,27 +1366,17 @@ public:
     /// them.
     [[nodiscard]] Expected<std::vector<FormatCaps>> formats(std::uint32_t adapter) const;
 
-    /// Writes what a swapchain for the window chained to desc may be on an adapter. Asks the window
-    /// system each time, since the window changes. Fails with present_unsupported for a driver that
-    /// would crash if asked.
-    template <class... Extensions>
-        requires(detail::kExtends<Extensions, SurfaceDesc> && ...)
-    [[nodiscard]] Expected<SurfaceCaps> surfaceCaps(std::uint32_t adapter, const SurfaceDesc& desc, const Extensions&... extensions) const;
+    /// Writes what a swapchain for the window in desc may be on an adapter. Asks the window system
+    /// each time, since the window changes. Fails with present_unsupported for a driver that would
+    /// crash if asked.
+    [[nodiscard]] Expected<SurfaceCaps> surfaceCaps(std::uint32_t adapter, const SurfaceDesc& desc) const;
 
-    /// Lists the formats and color spaces a swapchain for the window chained to desc may use on an
-    /// adapter, the order the window system gives.
-    template <class... Extensions>
-        requires(detail::kExtends<Extensions, SurfaceDesc> && ...)
-    [[nodiscard]] Expected<std::vector<SurfaceFormat>> surfaceFormats(std::uint32_t adapter, const SurfaceDesc& desc, const Extensions&... extensions) const;
+    /// Lists the formats and color spaces a swapchain for the window in desc may use on an adapter,
+    /// the order the window system gives.
+    [[nodiscard]] Expected<std::vector<SurfaceFormat>> surfaceFormats(std::uint32_t adapter, const SurfaceDesc& desc) const;
 
-    /// Writes the backend's own object for an adapter, for what BFR does not cover: a
-    /// VkPhysicalDevice on Vulkan. It stays valid while the instance lives.
-    [[nodiscard]] Expected<void*> native(std::uint32_t adapter) const;
-
-    /// Opens an adapter. Chain a window struct to pick a queue that can present to it.
-    template <class... Extensions>
-        requires(detail::kExtends<Extensions, DeviceDesc> && ...)
-    [[nodiscard]] Expected<Device> createDevice(const DeviceDesc& desc, const Extensions&... extensions) const;
+    /// Opens an adapter. With a window in desc, picks a queue that can present to it.
+    [[nodiscard]] Expected<Device> createDevice(const DeviceDesc& desc) const;
 
 private:
     Instance(bfr_instance* instance, detail::KeepAlive keepAlive) : instance_(instance), keepAlive_(std::move(keepAlive)) {}
@@ -1449,14 +1395,14 @@ public:
     /// Owns nothing, as a moved-from Device does.
     Device() = default;
     /// Destroys a device once the GPU has finished with it, with every handle it still owns. Null
-    /// does nothing.
-    ~Device() { bfr_destroy_device(device_); }
+    /// does nothing. A Device with Swapchain objects left lives on until the last of them is
+    /// destroyed, so they may be destroyed in any order.
+    ~Device() = default;
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
     Device(Device&& other) noexcept : device_(std::exchange(other.device_, nullptr)), keepAlive_(std::move(other.keepAlive_)) {}
     Device& operator=(Device&& other) noexcept {
         if (this != &other) {
-            bfr_destroy_device(device_);
             device_ = std::exchange(other.device_, nullptr);
             keepAlive_ = std::move(other.keepAlive_);
         }
@@ -1471,19 +1417,17 @@ public:
     /// when the driver cannot say.
     [[nodiscard]] Expected<MemoryBudget> budget() const;
 
-    /// Creates a swapchain for the window chained to desc, which the device must be able to present
-    /// to. It has no images until the first bfr_device_resize_swapchain gives it a size.
-    template <class... Extensions>
-        requires(detail::kExtends<Extensions, SwapchainDesc> && ...)
-    [[nodiscard]] Expected<Swapchain> createSwapchain(const SwapchainDesc& desc, const Extensions&... extensions) const;
+    /// Creates a swapchain for the window in desc, which the device must be able to present to. It
+    /// has no images until the first bfr_resize_swapchain gives it a size.
+    [[nodiscard]] Expected<Swapchain> createSwapchain(const SwapchainDesc& desc) const;
 
 private:
-    Device(bfr_device* device, detail::KeepAlive keepAlive) : device_(device), keepAlive_(std::move(keepAlive)) {}
+    Device(bfr_device* device, detail::KeepAlive keepAlive) : device_(device), keepAlive_(detail::share(device, &bfr_destroy_device, std::move(keepAlive))) {}
     friend class Instance;
 
     bfr_device* device_ = nullptr;
-    // What the C object may still call into, such as a callback's state; it goes after the
-    // object does.
+    // Destroys the C object once this and every handle made from it are gone, and keeps what it
+    // may still call into, such as a callback's state, until then.
     detail::KeepAlive keepAlive_;
 };
 
@@ -1497,15 +1441,16 @@ public:
     /// Waits for the GPU to finish with a swapchain and destroys it; when this returns, its window
     /// is no longer used. A handle that is already destroyed does nothing. Not while another thread
     /// is using the swapchain.
-    ~Swapchain() { bfr_device_destroy_swapchain(device_, swapchain_); }
+    ~Swapchain() { bfr_destroy_swapchain(device_, swapchain_); }
     Swapchain(const Swapchain&) = delete;
     Swapchain& operator=(const Swapchain&) = delete;
-    Swapchain(Swapchain&& other) noexcept : device_(std::exchange(other.device_, nullptr)), swapchain_(std::exchange(other.swapchain_, {})) {}
+    Swapchain(Swapchain&& other) noexcept : device_(std::exchange(other.device_, nullptr)), swapchain_(std::exchange(other.swapchain_, {})), keepAlive_(std::move(other.keepAlive_)) {}
     Swapchain& operator=(Swapchain&& other) noexcept {
         if (this != &other) {
-            bfr_device_destroy_swapchain(device_, swapchain_);
+            bfr_destroy_swapchain(device_, swapchain_);
             device_ = std::exchange(other.device_, nullptr);
             swapchain_ = std::exchange(other.swapchain_, {});
+            keepAlive_ = std::move(other.keepAlive_);
         }
         return *this;
     }
@@ -1518,12 +1463,13 @@ public:
     [[nodiscard]] Expected<SwapchainImages> resize(std::uint32_t width, std::uint32_t height);
 
 private:
-    Swapchain(bfr_device* device, bfr_swapchain swapchain) : device_(device), swapchain_(swapchain) {}
+    Swapchain(bfr_device* device, bfr_swapchain swapchain, detail::KeepAlive keepAlive) : device_(device), swapchain_(swapchain), keepAlive_(std::move(keepAlive)) {}
     friend class Device;
 
-    // Borrowed: the Device that made this outlives it.
     bfr_device* device_ = nullptr;
     bfr_swapchain swapchain_{};
+    // Keeps the Device that made this alive until this is destroyed.
+    detail::KeepAlive keepAlive_;
 };
 
 inline Expected<Instance> Instance::create(const InstanceDesc& desc) {
@@ -1541,12 +1487,12 @@ inline Expected<std::vector<AdapterInfo>> Instance::adapters() const {
     std::uint32_t count = 0;
     // Asked again while the list grows between the two calls.
     for (;;) {
-        bfr_result result = bfr_instance_get_adapters(instance_, &count, nullptr);
+        bfr_result result = bfr_get_adapters(instance_, &count, nullptr);
         if (result < 0) {
             return std::unexpected(detail::failure(result));
         }
         adaptersC.resize(count);
-        result = bfr_instance_get_adapters(instance_, &count, adaptersC.data());
+        result = bfr_get_adapters(instance_, &count, adaptersC.data());
         if (result < 0) {
             return std::unexpected(detail::failure(result));
         }
@@ -1596,11 +1542,8 @@ inline Expected<std::vector<FormatCaps>> Instance::formats(std::uint32_t adapter
     return formats;
 }
 
-template <class... Extensions>
-    requires(detail::kExtends<Extensions, SurfaceDesc> && ...)
-Expected<SurfaceCaps> Instance::surfaceCaps(std::uint32_t adapter, const SurfaceDesc& desc, const Extensions&... extensions) const {
-    const detail::Chain<decltype(detail::toC(extensions))...> chain{detail::toC(extensions)...};
-    const bfr_surface_desc cDesc = detail::toC(desc, chain.head());
+inline Expected<SurfaceCaps> Instance::surfaceCaps(std::uint32_t adapter, const SurfaceDesc& desc) const {
+    const bfr_surface_desc cDesc = detail::toC(desc, nullptr);
     bfr_surface_caps caps{};
     if (const bfr_result result = bfr_get_surface_caps(instance_, adapter, &cDesc, &caps); result < 0) {
         return std::unexpected(detail::failure(result));
@@ -1608,11 +1551,8 @@ Expected<SurfaceCaps> Instance::surfaceCaps(std::uint32_t adapter, const Surface
     return detail::fromC(caps);
 }
 
-template <class... Extensions>
-    requires(detail::kExtends<Extensions, SurfaceDesc> && ...)
-Expected<std::vector<SurfaceFormat>> Instance::surfaceFormats(std::uint32_t adapter, const SurfaceDesc& desc, const Extensions&... extensions) const {
-    const detail::Chain<decltype(detail::toC(extensions))...> chain{detail::toC(extensions)...};
-    const bfr_surface_desc cDesc = detail::toC(desc, chain.head());
+inline Expected<std::vector<SurfaceFormat>> Instance::surfaceFormats(std::uint32_t adapter, const SurfaceDesc& desc) const {
+    const bfr_surface_desc cDesc = detail::toC(desc, nullptr);
     std::vector<bfr_surface_format> formatsC;
     std::uint32_t count = 0;
     // Asked again while the list grows between the two calls.
@@ -1638,21 +1578,10 @@ Expected<std::vector<SurfaceFormat>> Instance::surfaceFormats(std::uint32_t adap
     return formats;
 }
 
-inline Expected<void*> Instance::native(std::uint32_t adapter) const {
-    void* native{};
-    if (const bfr_result result = bfr_get_native(instance_, adapter, &native); result < 0) {
-        return std::unexpected(detail::failure(result));
-    }
-    return native;
-}
-
-template <class... Extensions>
-    requires(detail::kExtends<Extensions, DeviceDesc> && ...)
-Expected<Device> Instance::createDevice(const DeviceDesc& desc, const Extensions&... extensions) const {
-    const detail::Chain<decltype(detail::toC(extensions))...> chain{detail::toC(extensions)...};
-    const bfr_device_desc cDesc = detail::toC(desc, chain.head());
+inline Expected<Device> Instance::createDevice(const DeviceDesc& desc) const {
+    const bfr_device_desc cDesc = detail::toC(desc, nullptr);
     bfr_device* device = nullptr;
-    if (const bfr_result result = bfr_instance_create_device(instance_, &cDesc, &device); result < 0) {
+    if (const bfr_result result = bfr_create_device(instance_, &cDesc, &device); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return Device{device, keepAlive_};
@@ -1666,21 +1595,18 @@ inline Expected<MemoryBudget> Device::budget() const {
     return detail::fromC(budget);
 }
 
-template <class... Extensions>
-    requires(detail::kExtends<Extensions, SwapchainDesc> && ...)
-Expected<Swapchain> Device::createSwapchain(const SwapchainDesc& desc, const Extensions&... extensions) const {
-    const detail::Chain<decltype(detail::toC(extensions))...> chain{detail::toC(extensions)...};
-    const bfr_swapchain_desc cDesc = detail::toC(desc, chain.head());
+inline Expected<Swapchain> Device::createSwapchain(const SwapchainDesc& desc) const {
+    const bfr_swapchain_desc cDesc = detail::toC(desc, nullptr);
     bfr_swapchain swapchain{};
-    if (const bfr_result result = bfr_device_create_swapchain(device_, &cDesc, &swapchain); result < 0) {
+    if (const bfr_result result = bfr_create_swapchain(device_, &cDesc, &swapchain); result < 0) {
         return std::unexpected(detail::failure(result));
     }
-    return Swapchain{device_, swapchain};
+    return Swapchain{device_, swapchain, keepAlive_};
 }
 
 inline Expected<SwapchainImages> Swapchain::resize(std::uint32_t width, std::uint32_t height) {
     bfr_swapchain_images images{};
-    if (const bfr_result result = bfr_device_resize_swapchain(device_, swapchain_, width, height, &images); result < 0) {
+    if (const bfr_result result = bfr_resize_swapchain(device_, swapchain_, width, height, &images); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return detail::fromC(images);

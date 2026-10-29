@@ -46,8 +46,8 @@ core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::
         return core::failure(core::ErrorCode::RhiPresentUnsupported,
                              "the device's present queue doesn't present to the window");
     }
-    const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, std::move(*surface), imageCount,
-                                                          rhi_->logger());
+    const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, rhi_->instanceTable(), std::move(*surface),
+                                                          imageCount, rhi_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("a device holds at most {} swapchains", kSwapchainLimit));
@@ -81,7 +81,7 @@ core::Result<MemoryBudget> VulkanDevice::budget() const {
     if (!hasBudget_) {
         return core::failure(core::ErrorCode::RhiUnsupported, "the driver lacks VK_EXT_memory_budget");
     }
-    return readBudget(adapter_);
+    return readBudget(rhi_->instanceTable(), adapter_);
 }
 
 VulkanDevice::~VulkanDevice() {

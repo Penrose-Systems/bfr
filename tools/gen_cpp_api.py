@@ -104,7 +104,7 @@ class Plan:
             self.methods[method.owner].append(method)
 
         self.out_structs = self._with_members(self._structs_passed("out"))
-        self.in_structs = self._structs_passed("in")
+        self.in_structs = self._with_members(self._structs_passed("in"))
         if self.out_structs & self.in_structs:
             raise SpecError(f"{sorted(self.out_structs & self.in_structs)}: the C++ generator does not yet handle a "
                             "struct passed both in and out")
@@ -209,8 +209,8 @@ class Plan:
                 if len(opaque) != 1:
                     raise SpecError(f"{kind}: a callback takes exactly one opaque param, its user data")
             elif kind in api.structs:
-                if name not in self.out_structs:
-                    raise SpecError(f"{where}: the C++ generator handles a struct member only in a struct passed out")
+                if member.get("fixed") and name not in self.out_structs:
+                    raise SpecError(f"{where}: the C++ generator handles a fixed array of structs only in a struct passed out")
             elif member.get("fixed") and kind in ("bool", "string", "opaque"):
                 raise SpecError(f"{where}: the C++ generator does not yet handle a fixed array of {kind}")
             elif kind not in BUILTINS and kind not in api.enums:
@@ -256,6 +256,8 @@ def to_c(api: Api, kind: str, value: str) -> str:
         return f"detail::toC({value})"
     if kind in api.enums:
         return f"static_cast<{c_name(kind)}>({value})"
+    if kind in api.structs:
+        return f"toC({value})"
     return value
 
 
@@ -476,8 +478,9 @@ class Renderer:
                 fields.append(f".{member['name']} = {to_c(api, member['type'], 'value.' + camel(member['name']))}")
         self.emit("", f"inline {c_name(name)} toC({', '.join(params)}) {{", *initializer(fields), "}")
 
-    def owner_class(self, name: str, members: list[str], destroy: str, moved: list[tuple[str, str]],
+    def owner_class(self, name: str, members: list[str], destroy: str | None, moved: list[tuple[str, str]],
                     accessor: tuple[str, str, str], private_ctor: tuple[str, str]) -> None:
+        """destroy is None for an object its handles share: the last of them destroys it."""
         api = self.api
         entry = api.objects.get(name) or api.handles[name]
         cls = pascal(name)
@@ -488,13 +491,22 @@ class Renderer:
         self.emit(*doc(entry["doc"]))
         self.emit(f"class {cls} {{", "public:")
         self.emit(f"    /// Owns nothing, as a moved-from {cls} does.", f"    {cls}() = default;")
-        self.emit(*doc(api.functions[entry["destroy"]]["doc"], "    "))
-        self.emit(f"    ~{cls}() {{ {destroy}; }}")
+        destroy_doc = api.functions[entry["destroy"]]["doc"]
+        if destroy is None:
+            children = sorted(pascal(h) for h, handle in api.handles.items() if handle["parent"] == name)
+            destroy_doc += (f" A {cls} with {' or '.join(children)} objects left lives on until the last of them "
+                            "is destroyed, so they may be destroyed in any order.")
+            self.emit(*doc(destroy_doc, "    "))
+            self.emit(f"    ~{cls}() = default;")
+        else:
+            self.emit(*doc(destroy_doc, "    "))
+            self.emit(f"    ~{cls}() {{ {destroy}; }}")
         self.emit(f"    {cls}(const {cls}&) = delete;", f"    {cls}& operator=(const {cls}&) = delete;")
         inits = ", ".join(f"{member}({how})" for member, how in moved)
         self.emit(f"    {cls}({cls}&& other) noexcept : {inits} {{}}")
-        self.emit(f"    {cls}& operator=({cls}&& other) noexcept {{", "        if (this != &other) {",
-                  f"            {destroy};")
+        self.emit(f"    {cls}& operator=({cls}&& other) noexcept {{", "        if (this != &other) {")
+        if destroy is not None:
+            self.emit(f"            {destroy};")
         for member, how in moved:
             self.emit(f"            {member} = {how};")
         self.emit("        }", "        return *this;", "    }")
@@ -515,18 +527,26 @@ class Renderer:
 
     def object_class(self, name: str) -> None:
         member = f"{camel(name)}_"
-        destroy = f"{c_name(self.api.objects[name]['destroy'])}({member})"
+        destroy_function = c_name(self.api.objects[name]["destroy"])
+        # An object with handles is held by them too, so the last of its owner
+        # and its handles destroys it.
+        shared = any(handle["parent"] == name for handle in self.api.handles.values())
+        keep_alive = (f"detail::share({camel(name)}, &{destroy_function}, std::move(keepAlive))" if shared
+                      else "std::move(keepAlive)")
+        if shared:
+            note = ["    // Destroys the C object once this and every handle made from it are gone, and keeps what it",
+                    "    // may still call into, such as a callback's state, until then."]
+        else:
+            note = ["    // What the C object may still call into, such as a callback's state; it goes after the",
+                    "    // object does."]
         self.owner_class(
             name,
-            [f"    {c_name(name)}* {member} = nullptr;",
-             "    // What the C object may still call into, such as a callback's state; it goes after the",
-             "    // object does.",
-             "    detail::KeepAlive keepAlive_;"],
-            destroy,
+            [f"    {c_name(name)}* {member} = nullptr;", *note, "    detail::KeepAlive keepAlive_;"],
+            None if shared else f"{destroy_function}({member})",
             [(member, f"std::exchange(other.{member}, nullptr)"), ("keepAlive_", "std::move(other.keepAlive_)")],
             (f"{c_name(name)}*", member, f"{member} != nullptr"),
             (f"{c_name(name)}* {camel(name)}, detail::KeepAlive keepAlive",
-             f"{member}({camel(name)}), keepAlive_(std::move(keepAlive))"),
+             f"{member}({camel(name)}), keepAlive_({keep_alive})"),
         )
 
     def handle_class(self, name: str) -> None:
@@ -536,15 +556,17 @@ class Renderer:
         destroy = f"{c_name(handle['destroy'])}({parent_member}, {member})"
         self.owner_class(
             name,
-            [f"    // Borrowed: the {pascal(parent)} that made this outlives it.",
-             f"    {c_name(parent)}* {parent_member} = nullptr;",
-             f"    {c_name(name)} {member}{{}};"],
+            [f"    {c_name(parent)}* {parent_member} = nullptr;",
+             f"    {c_name(name)} {member}{{}};",
+             f"    // Keeps the {pascal(parent)} that made this alive until this is destroyed.",
+             "    detail::KeepAlive keepAlive_;"],
             destroy,
             [(parent_member, f"std::exchange(other.{parent_member}, nullptr)"),
-             (member, f"std::exchange(other.{member}, {{}})")],
+             (member, f"std::exchange(other.{member}, {{}})"),
+             ("keepAlive_", "std::move(other.keepAlive_)")],
             (c_name(name), member, f"{member}.bits != 0"),
-            (f"{c_name(parent)}* {camel(parent)}, {c_name(name)} {camel(name)}",
-             f"{parent_member}({camel(parent)}), {member}({camel(name)})"),
+            (f"{c_name(parent)}* {camel(parent)}, {c_name(name)} {camel(name)}, detail::KeepAlive keepAlive",
+             f"{parent_member}({camel(parent)}), {member}({camel(name)}), keepAlive_(std::move(keepAlive))"),
         )
 
     def signature(self, method: Method) -> tuple[list[str], str, str]:
@@ -646,7 +668,7 @@ class Renderer:
             elif kind in api.objects:
                 self.emit(f"    return {pascal(kind)}{{{name}, {keep_alive}}};")
             elif kind in api.handles:
-                self.emit(f"    return {pascal(kind)}{{{camel(api.handles[kind]['parent'])}_, {name}}};")
+                self.emit(f"    return {pascal(kind)}{{{camel(api.handles[kind]['parent'])}_, {name}, keepAlive_}};")
             elif kind in api.structs:
                 self.emit(f"    return detail::fromC({name});")
             else:

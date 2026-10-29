@@ -235,6 +235,15 @@ enums:
       rotate_270: {value: 3, doc: Turned 270 degrees clockwise.}
       other: {value: 4, doc: "Mirrored, or left to the platform."}
 
+  window_system:
+    doc: >-
+      Which window system a bfr_window comes from, for the platforms that have
+      more than one.
+    values:
+      default: {value: 0, doc: "The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux."}
+      wayland: {value: 1, doc: Wayland. Linux only.}
+      headless: {value: 2, doc: No window. Images are presented nowhere; for tests and offscreen tools.}
+
 objects:
   instance:
     destroy: destroy_instance
@@ -251,7 +260,7 @@ objects:
 handles:
   swapchain:
     parent: device
-    destroy: device_destroy_swapchain
+    destroy: destroy_swapchain
     doc: >-
       The images presented to one window. Calls on one swapchain must not
       overlap, destroying it included; the caller synchronizes them. Different
@@ -291,16 +300,35 @@ structs:
       - {name: name, type: string, lifetime: instance}
       - {name: type, type: adapter_type}
 
+  window:
+    doc: >-
+      A window to present to. The caller's windowing code made it; the values
+      stay valid while it is open. All zero means no window.
+    members:
+      - name: window
+        type: opaque
+        doc: >-
+          The window: an HWND on Windows, a Window XID on X11 (as a pointer), a
+          wl_surface* on Wayland, a CAMetalLayer* on Apple.
+      - name: display
+        type: opaque
+        doc: The Display* on X11, the wl_display* on Wayland; unused elsewhere.
+      - {name: system, type: window_system}
+
   device_desc:
     doc: How to open an adapter.
     extensible: true
     members:
       - {name: adapter, type: u32, doc: Index into the instance's adapter list.}
+      - name: window
+        type: window
+        doc: The window the device must be able to present to; all zero opens it without presenting.
 
   swapchain_desc:
-    doc: How to create a swapchain. Chain exactly one window struct.
+    doc: How to create a swapchain.
     extensible: true
     members:
+      - {name: window, type: window, doc: The window to present to.}
       - {name: image_count, type: u32, doc: Images to request; 0 asks for 3.}
 
   swapchain_images:
@@ -311,9 +339,10 @@ structs:
       - {name: count, type: u32}
 
   surface_desc:
-    doc: Which window to ask about. Chain exactly one window struct.
+    doc: Which window to ask about.
     extensible: true
-    members: []
+    members:
+      - {name: window, type: window}
 
   caps_info:
     doc: What an adapter is.
@@ -583,43 +612,6 @@ structs:
       - {name: heap_count, type: u32}
       - {name: heaps, type: memory_budget_heap, fixed: 16, doc: The first heap_count are set.}
 
-  window_xlib:
-    doc: An Xlib window.
-    extends: [device_desc, swapchain_desc, surface_desc]
-    struct_type: 1
-    members:
-      - {name: display, type: opaque, doc: The Display*.}
-      - {name: window, type: u64, doc: The Window XID.}
-
-  window_wayland:
-    doc: A Wayland surface.
-    extends: [device_desc, swapchain_desc, surface_desc]
-    struct_type: 2
-    members:
-      - {name: display, type: opaque, doc: The wl_display*.}
-      - {name: surface, type: opaque, doc: The wl_surface*.}
-
-  window_win32:
-    doc: A Win32 window.
-    extends: [device_desc, swapchain_desc, surface_desc]
-    struct_type: 3
-    members:
-      - {name: instance, type: opaque, doc: The HINSTANCE.}
-      - {name: window, type: opaque, doc: The HWND.}
-
-  window_metal:
-    doc: A Core Animation Metal layer.
-    extends: [device_desc, swapchain_desc, surface_desc]
-    struct_type: 4
-    members:
-      - {name: layer, type: opaque, doc: The CAMetalLayer*.}
-
-  window_headless:
-    doc: No window. Images are presented nowhere; for tests and offscreen tools.
-    extends: [device_desc, swapchain_desc, surface_desc]
-    struct_type: 5
-    members: []
-
 functions:
   get_last_error:
     doc: >-
@@ -643,7 +635,7 @@ functions:
     params:
       - {name: instance, type: instance, optional: true}
 
-  instance_get_adapters:
+  get_adapters:
     doc: >-
       Lists the instance's adapters. With adapters null, writes how many
       there are to count. Otherwise writes up to count of them, sets count
@@ -677,7 +669,7 @@ functions:
 
   get_surface_caps:
     doc: >-
-      Writes what a swapchain for the window chained to desc may be on an
+      Writes what a swapchain for the window in desc may be on an
       adapter. Asks the window system each time, since the window changes.
       Fails with present_unsupported for a driver that would crash if asked.
     returns: result
@@ -689,9 +681,9 @@ functions:
 
   get_surface_formats:
     doc: >-
-      Lists the formats and color spaces a swapchain for the window chained to
-      desc may use on an adapter, the order the window system gives. Only those
-      BFR has names for. With formats null, writes how many there are to count.
+      Lists the formats and color spaces a swapchain for the window in desc
+      may use on an adapter, the order the window system gives. Only those BFR
+      has names for. With formats null, writes how many there are to count.
       Otherwise writes up to count of them, sets count to how many it wrote,
       and returns incomplete if there were more. Fails as bfr_get_surface_caps
       does.
@@ -712,21 +704,10 @@ functions:
       - {name: device, type: device}
       - {name: budget, type: memory_budget, pointer: out}
 
-  get_native:
+  create_device:
     doc: >-
-      Writes the backend's own object for an adapter, for what BFR does not
-      cover: a VkPhysicalDevice on Vulkan. It stays valid while the instance
-      lives.
-    returns: result
-    params:
-      - {name: instance, type: instance}
-      - {name: adapter, type: u32}
-      - {name: native, type: opaque, pointer: out}
-
-  instance_create_device:
-    doc: >-
-      Opens an adapter. Chain a window struct to pick a queue that can
-      present to it.
+      Opens an adapter. With a window in desc, picks a queue that can present
+      to it.
     returns: result
     params:
       - {name: instance, type: instance}
@@ -740,18 +721,18 @@ functions:
     params:
       - {name: device, type: device, optional: true}
 
-  device_create_swapchain:
+  create_swapchain:
     doc: >-
-      Creates a swapchain for the window chained to desc, which the device
+      Creates a swapchain for the window in desc, which the device
       must be able to present to. It has no images until the first
-      bfr_device_resize_swapchain gives it a size.
+      bfr_resize_swapchain gives it a size.
     returns: result
     params:
       - {name: device, type: device}
       - {name: desc, type: swapchain_desc, pointer: in}
       - {name: swapchain, type: swapchain, pointer: out}
 
-  device_resize_swapchain:
+  resize_swapchain:
     doc: Rebuilds a swapchain's images at a new size.
     returns: result
     params:
@@ -761,7 +742,7 @@ functions:
       - {name: height, type: u32}
       - {name: images, type: swapchain_images, pointer: out}
 
-  device_destroy_swapchain:
+  destroy_swapchain:
     doc: >-
       Waits for the GPU to finish with a swapchain and destroys it; when
       this returns, its window is no longer used. A handle that is already

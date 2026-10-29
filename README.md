@@ -58,12 +58,13 @@ auto instance = bfr::Instance::create({.backend = bfr::Backend::Vulkan});
 if (!instance) {
     return report(instance.error());
 }
-const bfr::WindowXlib window{.display = display, .window = xid};
-auto device = instance->createDevice({.adapter = 0}, window);
+// The handles your windowing code gave you: HWND, X11 Window, CAMetalLayer* and so on.
+const bfr::Window window{.window = nativeWindow, .display = nativeDisplay};
+auto device = instance->createDevice({.adapter = 0, .window = window});
 if (!device) {
     return report(device.error());
 }
-auto swapchain = device->createSwapchain({.imageCount = 3}, window);
+auto swapchain = device->createSwapchain({.window = window, .imageCount = 3});
 if (!swapchain) {
     return report(swapchain.error());
 }
@@ -74,7 +75,7 @@ A swapchain borrows the device that made it, so destroy it first.
 
 Ask what an adapter can do before opening it: `caps` returns its limits,
 features, memory and queues in one struct; `formats`, `surfaceCaps`,
-`surfaceFormats` and `native` answer the rest, and a device's `budget` gives
+`surfaceFormats` answer the rest, and a device's `budget` gives
 its memory use now.
 
 ```cpp
@@ -103,12 +104,12 @@ python3 tools/gen_c_api.py      # after editing api/bfr.yaml
 python3 tools/gen_cpp_api.py
 ```
 
-Presets: `debug`, `tsan`, `releasedebinfo`, `release`, `ci`.
+Presets: `debug`, `asan`, `tsan`, `releasedebinfo`, `release`, `ci`.
 
 | Option | Default | |
 |---|---|---|
 | `BFR_LOGGING` | `ON` | Compile log calls in |
-| `BFR_SANITIZE` | `address` in Debug | `address`, `thread` or `none` |
+| `BFR_SANITIZE` | `none` | `address`, `thread` or `none` |
 | `BFR_CLANG_TIDY` | `OFF` | Run clang-tidy on every source |
 | `BFR_BUILD_TESTS` | `ON` | Build the tests |
 | `BFR_BUILD_SAMPLES` | `ON` | Build the samples |

@@ -1,6 +1,6 @@
 # Configures the real project with nothing but its directories and compiler,
 # as a plain `cmake -B build` does, then checks the defaults it gets: the vcpkg
-# toolchain from VCPKG_ROOT, a Debug build, the sanitizers, the compile
+# toolchain from VCPKG_ROOT, a Debug build, no sanitizer, the compile
 # commands that clangd and clang-tidy read, and pattern-initialised locals.
 file(REMOVE_RECURSE ${BINARY_DIR})
 execute_process(
@@ -13,7 +13,7 @@ if(NOT configure_result EQUAL 0)
     message(FATAL_ERROR "configure failed:\n${configure_output}")
 endif()
 
-foreach(entry "CMAKE_BUILD_TYPE:STRING=Debug" "BFR_SANITIZE:STRING=address")
+foreach(entry "CMAKE_BUILD_TYPE:STRING=Debug" "BFR_SANITIZE:STRING=none")
     file(STRINGS ${BINARY_DIR}/CMakeCache.txt found REGEX "^${entry}$")
     if(NOT found)
         message(FATAL_ERROR "expected ${entry} in the cache")

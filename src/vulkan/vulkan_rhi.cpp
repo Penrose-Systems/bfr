@@ -4,6 +4,7 @@
 #include "device.h"
 #include "error.h"
 #include "format.h"
+#include "instance_table.h"
 #include "log.h"
 #include "queue_families.h"
 #include "rhi.h"
@@ -82,19 +83,20 @@ constexpr std::array kFloorExtensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 constexpr const char* kPortabilitySubset = "VK_KHR_portability_subset";
 
 // The device extensions adapter lists, or the call that failed.
-std::expected<std::vector<VkExtensionProperties>, VulkanFailure> deviceExtensions(VkPhysicalDevice adapter) {
+std::expected<std::vector<VkExtensionProperties>, VulkanFailure> deviceExtensions(const InstanceTable& vk,
+                                                                                  VkPhysicalDevice adapter) {
     return listAll<VkExtensionProperties>("vkEnumerateDeviceExtensionProperties",
-                                          [adapter](std::uint32_t* count, VkExtensionProperties* extensions) {
-                                              return vkEnumerateDeviceExtensionProperties(adapter, nullptr, count,
-                                                                                          extensions);
+                                          [&vk, adapter](std::uint32_t* count, VkExtensionProperties* extensions) {
+                                              return vk.vkEnumerateDeviceExtensionProperties(adapter, nullptr, count,
+                                                                                             extensions);
                                           });
 }
 
-std::vector<VkQueueFamilyProperties> queueFamilies(VkPhysicalDevice adapter) {
+std::vector<VkQueueFamilyProperties> queueFamilies(const InstanceTable& vk, VkPhysicalDevice adapter) {
     std::uint32_t count = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(adapter, &count, nullptr);
+    vk.vkGetPhysicalDeviceQueueFamilyProperties(adapter, &count, nullptr);
     std::vector<VkQueueFamilyProperties> families(count);
-    vkGetPhysicalDeviceQueueFamilyProperties(adapter, &count, families.data());
+    vk.vkGetPhysicalDeviceQueueFamilyProperties(adapter, &count, families.data());
     return families;
 }
 
@@ -128,12 +130,12 @@ std::string familyList(std::span<const VkDeviceQueueCreateInfo> queues) {
 
 // Why the adapter is below the floor, empty when it meets it. extensions are
 // the device extensions it lists.
-std::string belowFloor(VkPhysicalDevice adapter, const VkPhysicalDeviceProperties& properties,
+std::string belowFloor(const InstanceTable& vk, VkPhysicalDevice adapter, const VkPhysicalDeviceProperties& properties,
                        std::span<const VkExtensionProperties> extensions) {
     if (properties.apiVersion < kFloorVersion) {
         return std::format("Vulkan {}, needs {}", versionName(properties.apiVersion), versionName(kFloorVersion));
     }
-    const auto families = queueFamilies(adapter);
+    const auto families = queueFamilies(vk, adapter);
     const auto noFamilyRuns = [&families](VkQueueFlags operation) {
         return std::ranges::none_of(families, [operation](const VkQueueFamilyProperties& family) {
             return (family.queueFlags & operation) != 0;
@@ -151,7 +153,7 @@ std::string belowFloor(VkPhysicalDevice adapter, const VkPhysicalDevicePropertie
             missing.emplace_back(required);
         }
     }
-    std::ranges::move(missingFloorFeatures(adapter), std::back_inserter(missing));
+    std::ranges::move(missingFloorFeatures(vk, adapter), std::back_inserter(missing));
     return missing.empty() ? std::string{} : "lacks " + core::text::join(missing, ", ");
 }
 
@@ -187,13 +189,13 @@ std::string_view typeName(AdapterType type) {
 }
 
 // The adapter's driver, which only a Vulkan 1.2 adapter reports.
-VkPhysicalDeviceDriverProperties driverProperties(VkPhysicalDevice adapter) {
+VkPhysicalDeviceDriverProperties driverProperties(const InstanceTable& vk, VkPhysicalDevice adapter) {
     VkPhysicalDeviceDriverProperties driver{};
     driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
     VkPhysicalDeviceProperties2 chain{};
     chain.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
     chain.pNext = &driver;
-    vkGetPhysicalDeviceProperties2(adapter, &chain);
+    vk.vkGetPhysicalDeviceProperties2(adapter, &chain);
     return driver;
 }
 
@@ -205,10 +207,10 @@ constexpr std::uint32_t kLoaderAnswersForDrivers = VK_MAKE_API_VERSION(0, 1, 4, 
 
 // "name, type, driver, Vulkan version" for the log. Driver properties are core
 // from Vulkan 1.2, so an older adapter's description leaves the driver out.
-std::string describe(VkPhysicalDevice adapter, const VkPhysicalDeviceProperties& properties) {
+std::string describe(const InstanceTable& vk, VkPhysicalDevice adapter, const VkPhysicalDeviceProperties& properties) {
     std::string driverName;
     if (properties.apiVersion >= VK_API_VERSION_1_2) {
-        const VkPhysicalDeviceDriverProperties driver = driverProperties(adapter);
+        const VkPhysicalDeviceDriverProperties driver = driverProperties(vk, adapter);
         driverName = std::format(", {} {}", driver.driverName, driver.driverInfo);
     }
     return std::format("{}, {}{}, Vulkan {}", properties.deviceName, typeName(adapterType(properties.deviceType)),
@@ -381,14 +383,14 @@ VulkanRhi::VulkanRhi(const RhiConfig& config, core::Logger logger)
     : Rhi(config), messages_{.logger = std::move(logger)} {}
 
 VulkanRhi::~VulkanRhi() {
-    // Without a VkInstance, volk never loaded vkDestroyInstance.
+    // Without a VkInstance, there is no table to destroy it through.
     if (instance_ == VK_NULL_HANDLE) {
         return;
     }
     if (messenger_ != VK_NULL_HANDLE) {
-        vkDestroyDebugUtilsMessengerEXT(instance_, messenger_, nullptr);
+        vk_.vkDestroyDebugUtilsMessengerEXT(instance_, messenger_, nullptr);
     }
-    vkDestroyInstance(instance_, nullptr);
+    vk_.vkDestroyInstance(instance_, nullptr);
     BFR_LOG_DEBUG(logger(), "Vulkan instance destroyed");
 }
 
@@ -403,7 +405,7 @@ core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapte
     }
     const Adapter& listed = adapters_[adapter];
     VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
-    const auto properties = queueFamilies(physicalDevice);
+    const auto properties = queueFamilies(vk_, physicalDevice);
     const auto presenting = presentingFamilies(adapter, properties.size(), presentTo);
     if (!presenting) {
         return std::unexpected(presenting.error());
@@ -416,7 +418,7 @@ core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapte
         return core::failure(core::ErrorCode::RhiPresentUnsupported,
                              std::format("no queue family on {} presents to the window", listed.name));
     }
-    const auto available = deviceExtensions(physicalDevice);
+    const auto available = deviceExtensions(vk_, physicalDevice);
     if (!available) {
         return failure(core::ErrorCode::RhiDeviceFailed,
                        {.call = std::format("{} on {}", available.error().call, listed.name),
@@ -438,7 +440,7 @@ core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapte
     info.ppEnabledExtensionNames = extensions.data();
 
     VkDevice device = VK_NULL_HANDLE;
-    const VkResult result = vkCreateDevice(physicalDevice, &info, nullptr, &device);
+    const VkResult result = vk_.vkCreateDevice(physicalDevice, &info, nullptr, &device);
     if (result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed,
                        {.call = std::format("vkCreateDevice on {}", listed.name), .result = result});
@@ -452,7 +454,7 @@ core::Result<FormatCaps> VulkanRhi::formatCaps(std::size_t adapter, Format forma
     if (auto listed = checkAdapter(adapter); !listed) {
         return std::unexpected(std::move(listed.error()));
     }
-    return readFormatCaps(physicalDevices_[adapter], format);
+    return readFormatCaps(vk_, physicalDevices_[adapter], format);
 }
 
 core::Result<SurfaceCaps> VulkanRhi::surfaceCaps(std::size_t adapter, const core::window::NativeWindow& window) const {
@@ -462,13 +464,6 @@ core::Result<SurfaceCaps> VulkanRhi::surfaceCaps(std::size_t adapter, const core
 core::Result<std::vector<SurfaceFormat>> VulkanRhi::surfaceFormats(std::size_t adapter,
                                                                    const core::window::NativeWindow& window) const {
     return askAboutSurface(adapter, window, readSurfaceFormats);
-}
-
-core::Result<void*> VulkanRhi::native(std::size_t adapter) const {
-    if (auto listed = checkAdapter(adapter); !listed) {
-        return std::unexpected(std::move(listed.error()));
-    }
-    return physicalDevices_[adapter];
 }
 
 core::Result<void> VulkanRhi::checkAdapter(std::size_t adapter) const {
@@ -481,7 +476,7 @@ core::Result<void> VulkanRhi::checkAdapter(std::size_t adapter) const {
 
 template <class Query>
 auto VulkanRhi::askAboutSurface(std::size_t adapter, const core::window::NativeWindow& window, Query query) const
-    -> std::invoke_result_t<Query, VkPhysicalDevice, VkSurfaceKHR> {
+    -> std::invoke_result_t<Query, const InstanceTable&, VkPhysicalDevice, VkSurfaceKHR> {
     if (auto listed = checkAdapter(adapter); !listed) {
         return std::unexpected(std::move(listed.error()));
     }
@@ -496,7 +491,7 @@ auto VulkanRhi::askAboutSurface(std::size_t adapter, const core::window::NativeW
                                          "crash its driver",
                                          adapters_[adapter].name, versionName(loaderVersion_)));
     }
-    return query(physicalDevice, surface->handle());
+    return query(vk_, physicalDevice, surface->handle());
 }
 
 core::Result<std::vector<VkBool32>> VulkanRhi::presentingFamilies(std::size_t adapter, std::size_t familyCount,
@@ -529,7 +524,7 @@ core::Result<std::vector<VkBool32>> VulkanRhi::presentingFamilies(std::size_t ad
 }
 
 core::Result<VulkanSurface> VulkanRhi::surfaceFor(const core::window::NativeWindow& window) const {
-    return createSurface(instance_, extensions_, window);
+    return createSurface(instance_, vk_, extensions_, window);
 }
 
 core::Result<bool> VulkanRhi::presents(VkPhysicalDevice adapter, std::uint32_t family,
@@ -538,7 +533,7 @@ core::Result<bool> VulkanRhi::presents(VkPhysicalDevice adapter, std::uint32_t f
         return false;
     }
     VkBool32 supported = VK_FALSE;
-    if (const VkResult result = vkGetPhysicalDeviceSurfaceSupportKHR(adapter, family, surface.handle(), &supported);
+    if (const VkResult result = vk_.vkGetPhysicalDeviceSurfaceSupportKHR(adapter, family, surface.handle(), &supported);
         result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiSurfaceFailed,
                        {.call = "vkGetPhysicalDeviceSurfaceSupportKHR", .result = result});
@@ -548,7 +543,7 @@ core::Result<bool> VulkanRhi::presents(VkPhysicalDevice adapter, std::uint32_t f
 
 bool VulkanRhi::presentQueryCrashes(VkPhysicalDevice adapter, const VulkanSurface& surface) const {
     return loaderVersion_ < kLoaderAnswersForDrivers && surface.headless() &&
-           driverProperties(adapter).driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY;
+           driverProperties(vk_, adapter).driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY;
 }
 
 core::Result<void> VulkanRhi::createInstance() {
@@ -601,7 +596,7 @@ core::Result<void> VulkanRhi::createInstance() {
     }
     instance_ = handle;
     extensions_ = std::move(extensions);
-    volkLoadInstanceOnly(instance_);
+    vk_ = loadInstanceTable(instance_);
     BFR_LOG_INFO(logger(), "Vulkan instance {}, validation {}", versionName(kInstanceVersion),
                  config().validation ? "on" : "off");
 
@@ -611,7 +606,7 @@ core::Result<void> VulkanRhi::createInstance() {
 }
 
 core::Result<void> VulkanRhi::createMessenger(const VkDebugUtilsMessengerCreateInfoEXT& info) {
-    if (const VkResult result = vkCreateDebugUtilsMessengerEXT(instance_, &info, nullptr, &messenger_);
+    if (const VkResult result = vk_.vkCreateDebugUtilsMessengerEXT(instance_, &info, nullptr, &messenger_);
         result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiInstanceFailed,
                        {.call = "vkCreateDebugUtilsMessengerEXT", .result = result});
@@ -623,7 +618,7 @@ core::Result<void> VulkanRhi::createMessenger(const VkDebugUtilsMessengerCreateI
 core::Result<void> VulkanRhi::listAdapters() {
     const auto devices = listAll<VkPhysicalDevice>("vkEnumeratePhysicalDevices",
                                                    [this](std::uint32_t* count, VkPhysicalDevice* listed) {
-                                                       return vkEnumeratePhysicalDevices(instance_, count, listed);
+                                                       return vk_.vkEnumeratePhysicalDevices(instance_, count, listed);
                                                    });
     if (!devices) {
         return failure(core::ErrorCode::RhiInstanceFailed, devices.error());
@@ -634,16 +629,16 @@ core::Result<void> VulkanRhi::listAdapters() {
     std::vector<std::string> rejected;
     for (VkPhysicalDevice device : *devices) {
         VkPhysicalDeviceProperties properties{};
-        vkGetPhysicalDeviceProperties(device, &properties);
-        const auto extensions = deviceExtensions(device);
+        vk_.vkGetPhysicalDeviceProperties(device, &properties);
+        const auto extensions = deviceExtensions(vk_, device);
         if (!extensions) {
             const std::string why = "skipped, " + extensions.error().message();
-            BFR_LOG_WARN(logger(), "adapter {}: {}", describe(device, properties), why);
+            BFR_LOG_WARN(logger(), "adapter {}: {}", describe(vk_, device, properties), why);
             rejected.push_back(std::format("{}: {}", properties.deviceName, why));
             continue;
         }
-        const std::string reason = belowFloor(device, properties, *extensions);
-        BFR_LOG_INFO(logger(), "adapter {}: {}", describe(device, properties),
+        const std::string reason = belowFloor(vk_, device, properties, *extensions);
+        BFR_LOG_INFO(logger(), "adapter {}: {}", describe(vk_, device, properties),
                      reason.empty() ? std::string{"listed"} : "below the floor, " + reason);
         if (!reason.empty()) {
             rejected.push_back(std::format("{}: below the floor, {}", properties.deviceName, reason));
@@ -651,7 +646,7 @@ core::Result<void> VulkanRhi::listAdapters() {
         }
         adapters_.push_back({.name = properties.deviceName,
                              .type = adapterType(properties.deviceType),
-                             .caps = readCaps(device, *extensions)});
+                             .caps = readCaps(vk_, device, *extensions)});
         physicalDevices_.push_back(device);
         hasBudget_.push_back(lists(*extensions, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME));
     }

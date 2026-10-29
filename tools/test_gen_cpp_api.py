@@ -50,10 +50,14 @@ class RenderTests(unittest.TestCase):
         self.assertIn('    case Result::ErrorLost: return "error_lost";', self.header)
 
     def test_objects_and_handles_destroy_what_they_own(self) -> None:
-        self.assertIn("    ~Device() { bfr_destroy_device(device_); }", self.header)
         self.assertIn("    ~Buffer() { bfr_destroy_buffer(device_, buffer_); }", self.header)
-        self.assertIn("    // Borrowed: the Device that made this outlives it.\n    bfr_device* device_ = nullptr;",
-                      self.header)
+
+    def test_an_object_with_handles_lives_until_its_last_handle_is_destroyed(self) -> None:
+        self.assertIn("    ~Device() = default;", self.header)
+        self.assertIn("keepAlive_(detail::share(device, &bfr_destroy_device, std::move(keepAlive)))", self.header)
+        self.assertIn("A Device with Buffer objects left lives on until the last of them is destroyed", self.header)
+        self.assertIn("    // Keeps the Device that made this alive until this is destroyed.\n"
+                      "    detail::KeepAlive keepAlive_;", self.header)
 
     def test_a_method_returns_its_out_param_and_takes_extensions_after_its_desc(self) -> None:
         self.assertIn(
@@ -64,7 +68,7 @@ class RenderTests(unittest.TestCase):
             self.header,
         )
         self.assertIn("template <> inline constexpr bool kExtends<BufferName, BufferDesc> = true;", self.header)
-        self.assertIn("    return Buffer{device_, buffer};", self.header)
+        self.assertIn("    return Buffer{device_, buffer, keepAlive_};", self.header)
 
     def test_methods_on_objects_are_const_and_on_handles_are_not(self) -> None:
         self.assertIn("Expected<std::vector<Format>> formats() const;", self.header)

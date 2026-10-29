@@ -105,7 +105,7 @@ encoder switching needs lookahead.
   a GPU shouldn't mean opening each one. One call returns everything fixed
   (info, limits, bindless, compute, mesh, ray tracing, features, memory,
   queues) as one struct. Formats, a window's surface caps and formats, the
-  live memory budget and the native object are calls of their own: per
+  live memory budget are calls of their own: per
   format, per window, or changing while the app runs. A limit for a
   feature the adapter lacks is 0.
 - Queue types: graphics, compute, copy. Start with one graphics queue in the

@@ -306,23 +306,6 @@ TEST_CASE("Rhi refuses queries about an adapter it does not list", "[rhi][caps][
           bfr::core::ErrorCode::RhiAdapterOutOfRange);
     CHECK((*rhi)->surfaceFormats(missing, bfr::core::window::Headless{}).error().code ==
           bfr::core::ErrorCode::RhiAdapterOutOfRange);
-    CHECK((*rhi)->native(missing).error().code == bfr::core::ErrorCode::RhiAdapterOutOfRange);
-}
-
-TEST_CASE("Rhi gives each adapter's own VkPhysicalDevice", "[rhi][caps][gpu]") {
-    const auto rhi = Rhi::create({}, {});
-    INFO(failureOf(rhi));
-    REQUIRE(rhi.has_value());
-
-    std::vector<void*> natives;
-    for (std::size_t adapter = 0; adapter < (*rhi)->adapters().size(); ++adapter) {
-        const auto native = (*rhi)->native(adapter);
-        INFO(failureOf(native));
-        REQUIRE(native.has_value());
-        CHECK(*native != nullptr);
-        CHECK(std::ranges::find(natives, *native) == natives.end());
-        natives.push_back(*native);
-    }
 }
 
 TEST_CASE("Device reports its memory budget heap by heap", "[rhi][caps][gpu]") {

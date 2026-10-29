@@ -7,11 +7,20 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "BFR_SANITIZE": "none"
       }
     },
     {
       "name": "debug",
+      "inherits": "base",
+      "displayName": "Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "asan",
       "inherits": "base",
       "displayName": "Debug with AddressSanitizer, UndefinedBehaviorSanitizer and LeakSanitizer",
       "cacheVariables": {
@@ -59,6 +68,7 @@
   ],
   "buildPresets": [
     { "name": "debug", "configurePreset": "debug" },
+    { "name": "asan", "configurePreset": "asan" },
     { "name": "releasedebinfo", "configurePreset": "releasedebinfo" },
     { "name": "release", "configurePreset": "release" },
     { "name": "tsan", "configurePreset": "tsan" },
@@ -68,6 +78,12 @@
     {
       "name": "debug",
       "configurePreset": "debug",
+      "output": { "outputOnFailure": true },
+      "execution": { "timeout": 60 }
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
       "output": { "outputOnFailure": true },
       "execution": { "timeout": 60 }
     },

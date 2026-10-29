@@ -162,55 +162,47 @@ bfr::rhi::SwapchainHandle fromC(bfr_swapchain handle) {
     return bfr::rhi::SwapchainHandle::fromBits(handle.bits);
 }
 
-// The extension struct that chain heads. Every one starts with its bfr_chain,
-// so the two share an address; chain->type has said which struct it is.
-template <class Extension>
-const Extension* extension(const bfr_chain* chain) {
-    static_assert(offsetof(Extension, chain) == 0);
-    return reinterpret_cast<const Extension*>(chain); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
-}
-
-// The window chained to next: none, one, or an error for a second window or a
-// struct this desc does not take.
-std::optional<NativeWindow> windowIn(const bfr_chain* next, std::string& error) {
-    NativeWindow window;
-    for (; next != nullptr; next = next->next) {
-        const bool first = std::holds_alternative<std::monostate>(window);
-        switch (next->type) {
-            case BFR_STRUCT_TYPE_WINDOW_XLIB: {
-                const auto* xlib = extension<bfr_window_xlib>(next);
-                window = bfr::core::window::Xlib{.display = xlib->display, .window = xlib->window};
-                break;
+// The window in window, as the library keeps it: monostate for all zero,
+// which means no window. Fails for a window system this platform lacks, or a
+// window system with no window.
+std::optional<NativeWindow> windowIn(const bfr_window& window, std::string& error) {
+    switch (window.system) {
+        case BFR_WINDOW_SYSTEM_HEADLESS:
+            return bfr::core::window::Headless{};
+        case BFR_WINDOW_SYSTEM_DEFAULT:
+            if (window.window == nullptr && window.display == nullptr) {
+                return NativeWindow{};
             }
-            case BFR_STRUCT_TYPE_WINDOW_WAYLAND: {
-                const auto* wayland = extension<bfr_window_wayland>(next);
-                window = bfr::core::window::Wayland{.display = wayland->display, .surface = wayland->surface};
-                break;
+            break;
+        case BFR_WINDOW_SYSTEM_WAYLAND:
+#if defined(__linux__)
+            if (window.window != nullptr) {
+                return bfr::core::window::Wayland{.display = window.display, .surface = window.window};
             }
-            case BFR_STRUCT_TYPE_WINDOW_WIN32: {
-                const auto* win32 = extension<bfr_window_win32>(next);
-                window = bfr::core::window::Win32{.instance = win32->instance, .window = win32->window};
-                break;
-            }
-            case BFR_STRUCT_TYPE_WINDOW_METAL: {
-                const auto* metal = extension<bfr_window_metal>(next);
-                window = bfr::core::window::Metal{.layer = metal->layer};
-                break;
-            }
-            case BFR_STRUCT_TYPE_WINDOW_HEADLESS:
-                window = bfr::core::window::Headless{};
-                break;
-            case BFR_STRUCT_TYPE_FORCE32:
-            default:
-                error = std::format("struct type {} cannot be chained here", static_cast<std::int64_t>(next->type));
-                return std::nullopt;
-        }
-        if (!first) {
-            error = "more than one window is chained";
+#else
+            error = "this platform has no Wayland";
             return std::nullopt;
-        }
+#endif
+            break;
+        case BFR_WINDOW_SYSTEM_FORCE32:
+        default:
+            error = std::format("window system {} is not one BFR has", static_cast<std::int64_t>(window.system));
+            return std::nullopt;
     }
-    return window;
+    if (window.window == nullptr) {
+        error = "a window needs its window value set";
+        return std::nullopt;
+    }
+#if defined(_WIN32)
+    return bfr::core::window::Win32{.instance = nullptr, .window = window.window};
+#elif defined(__APPLE__)
+    return bfr::core::window::Metal{.layer = window.window};
+#else
+    // An X11 Window is an XID, carried in the pointer.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    const auto xid = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(window.window));
+    return bfr::core::window::Xlib{.display = window.display, .window = xid};
+#endif
 }
 
 bfr_adapter_type toC(bfr::rhi::AdapterType type) {
@@ -514,14 +506,14 @@ std::optional<bfr_result> checkAdapter(const bfr_instance& instance, std::uint32
     return std::nullopt;
 }
 
-// The window chained to a bfr_surface_desc, or the result for one that
-// chains none or something else.
+// The window in a bfr_surface_desc, or the result for one that has none or an
+// unusable one.
 std::optional<NativeWindow> surfaceWindow(const bfr_surface_desc& desc, bfr_result& failed) {
     std::string error;
-    auto window = windowIn(desc.next, error);
+    auto window = windowIn(desc.window, error);
     if (window && std::holds_alternative<std::monostate>(*window)) {
         window.reset();
-        error = "bfr_surface_desc needs a window chained to it";
+        error = "bfr_surface_desc needs a window";
     }
     if (!window) {
         failed = fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
@@ -591,7 +583,7 @@ void bfr_destroy_instance(bfr_instance* instance) {
     quietly([&] { std::unique_ptr<bfr_instance>{instance}.reset(); });
 }
 
-bfr_result bfr_instance_get_adapters(bfr_instance* instance, uint32_t* count, bfr_adapter_info* adapters) {
+bfr_result bfr_get_adapters(bfr_instance* instance, uint32_t* count, bfr_adapter_info* adapters) {
     return guarded([&] {
         if (instance == nullptr || count == nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instance and count must not be null");
@@ -613,14 +605,14 @@ bfr_result bfr_instance_get_adapters(bfr_instance* instance, uint32_t* count, bf
     });
 }
 
-bfr_result bfr_instance_create_device(bfr_instance* instance, const bfr_device_desc* desc, bfr_device** device) {
+bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc, bfr_device** device) {
     return guarded([&] {
         if (instance == nullptr || desc == nullptr || device == nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instance, desc and device must not be null");
         }
         *device = nullptr;
         std::string error;
-        const auto window = windowIn(desc->next, error);
+        const auto window = windowIn(desc->window, error);
         if (!window) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
@@ -639,19 +631,19 @@ void bfr_destroy_device(bfr_device* device) {
     quietly([&] { std::unique_ptr<bfr_device>{device}.reset(); });
 }
 
-bfr_result bfr_device_create_swapchain(bfr_device* device, const bfr_swapchain_desc* desc, bfr_swapchain* swapchain) {
+bfr_result bfr_create_swapchain(bfr_device* device, const bfr_swapchain_desc* desc, bfr_swapchain* swapchain) {
     return guarded([&] {
         if (device == nullptr || desc == nullptr || swapchain == nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and swapchain must not be null");
         }
         *swapchain = {};
         std::string error;
-        const auto window = windowIn(desc->next, error);
+        const auto window = windowIn(desc->window, error);
         if (!window) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
         if (std::holds_alternative<std::monostate>(*window)) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_swapchain_desc needs a window chained to it");
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_swapchain_desc needs a window");
         }
         const std::uint32_t images = desc->image_count == 0 ? kDefaultSwapchainImages : desc->image_count;
         const auto created = device->device->createSwapchain(*window, images);
@@ -663,7 +655,7 @@ bfr_result bfr_device_create_swapchain(bfr_device* device, const bfr_swapchain_d
     });
 }
 
-bfr_result bfr_device_resize_swapchain(bfr_device* device, bfr_swapchain swapchain, uint32_t width, uint32_t height,
+bfr_result bfr_resize_swapchain(bfr_device* device, bfr_swapchain swapchain, uint32_t width, uint32_t height,
                                        bfr_swapchain_images* images) {
     return guarded([&] {
         if (device == nullptr || images == nullptr) {
@@ -678,7 +670,7 @@ bfr_result bfr_device_resize_swapchain(bfr_device* device, bfr_swapchain swapcha
     });
 }
 
-void bfr_device_destroy_swapchain(bfr_device* device, bfr_swapchain swapchain) {
+void bfr_destroy_swapchain(bfr_device* device, bfr_swapchain swapchain) {
     quietly([&] {
         if (device == nullptr) {
             return;
@@ -807,24 +799,6 @@ bfr_result bfr_get_budget(bfr_device* device, bfr_memory_budget* budget) {
         for (const bfr::rhi::HeapBudget& heap : found->heaps | std::views::take(heaps.size())) {
             heaps[budget->heap_count++] = {.budget = heap.budget, .usage = heap.usage};
         }
-        return BFR_RESULT_SUCCESS;
-    });
-}
-
-bfr_result bfr_get_native(bfr_instance* instance, uint32_t adapter, void** native) {
-    return guarded([&] {
-        if (instance == nullptr || native == nullptr) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instance and native must not be null");
-        }
-        *native = nullptr;
-        if (const auto failed = checkAdapter(*instance, adapter)) {
-            return *failed;
-        }
-        const auto found = instance->rhi->native(adapter);
-        if (!found) {
-            return fail(found.error());
-        }
-        *native = *found;
         return BFR_RESULT_SUCCESS;
     });
 }

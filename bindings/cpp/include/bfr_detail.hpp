@@ -19,6 +19,16 @@ namespace bfr::detail {
 /// state, for as long as any object holding it lives.
 using KeepAlive = std::shared_ptr<const void>;
 
+/// Holds object until the last copy of the result is gone, then destroys it
+/// with destroy and lets go of inner, which goes after it. A handle that
+/// needs its object copies the result, so the object outlives the handle.
+template <class Object>
+[[nodiscard]] KeepAlive share(Object* object, void (*destroy)(Object*), KeepAlive inner) {
+    return KeepAlive{object, [destroy, inner = std::move(inner)](Object* owned) {
+                         destroy(owned);
+                     }};
+}
+
 /// Whether Extension may be passed after Desc; bfr.hpp says which may.
 template <class Extension, class Desc>
 inline constexpr bool kExtends = false;

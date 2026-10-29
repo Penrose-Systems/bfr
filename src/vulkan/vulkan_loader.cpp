@@ -8,6 +8,7 @@
 #include <bit>
 #include <expected>
 #include <format>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -104,6 +105,14 @@ void closeLibrary(Library library) {
 } // namespace
 
 core::Result<void> openLoader() {
+    // volkInitializeCustom rewrites volk's global functions, so it runs once
+    // and the rest see the same ones. A failure is tried again.
+    static std::mutex mutex;
+    static bool opened = false;
+    const std::scoped_lock lock{mutex};
+    if (opened) {
+        return {};
+    }
     std::vector<std::string> reasons;
     for (const char* name : libraries()) {
         auto library = openLibrary(name);
@@ -118,6 +127,7 @@ core::Result<void> openLoader() {
             continue;
         }
         volkInitializeCustom(*entry);
+        opened = true;
         return {};
     }
     return core::failure(core::ErrorCode::RhiLoaderFailed,

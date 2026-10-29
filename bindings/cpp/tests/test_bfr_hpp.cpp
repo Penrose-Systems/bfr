@@ -21,6 +21,7 @@ namespace {
 
 constexpr std::uint32_t kWidth = 64;
 constexpr std::uint32_t kHeight = 48;
+constexpr bfr::Window kHeadless{.system = bfr::WindowSystem::Headless};
 
 // Records every message an instance reports, from whichever thread reports it.
 // It outlives the instance and devices it records for.
@@ -62,7 +63,7 @@ bfr::Device headlessDevice(const bfr::Instance& instance) {
     const auto adapters = instance.adapters();
     REQUIRE(adapters.has_value());
     for (std::uint32_t adapter = 0; adapter < adapters->size(); ++adapter) {
-        auto device = instance.createDevice({.adapter = adapter}, bfr::WindowHeadless{});
+        auto device = instance.createDevice({.adapter = adapter, .window = kHeadless});
         if (device.has_value()) {
             return std::move(*device);
         }
@@ -72,12 +73,6 @@ bfr::Device headlessDevice(const bfr::Instance& instance) {
     FAIL("no adapter presents headless");
     return {};
 }
-
-// Whether a swapchain desc takes Extension after it.
-template <class Extension>
-concept SwapchainTakes = requires(const bfr::Device& device, const Extension& extension) {
-    device.createSwapchain(bfr::SwapchainDesc{}, extension);
-};
 
 } // namespace
 
@@ -97,13 +92,6 @@ TEST_CASE("C++ API objects that own nothing go quietly", "[cpp_api][unit]") {
     CHECK_FALSE(instance);
     CHECK_FALSE(device);
     CHECK_FALSE(swapchain);
-}
-
-TEST_CASE("C++ API takes after a desc only the extensions that extend it", "[cpp_api][unit]") {
-    STATIC_CHECK(SwapchainTakes<bfr::WindowHeadless>);
-    STATIC_CHECK(SwapchainTakes<bfr::WindowXlib>);
-    STATIC_CHECK_FALSE(SwapchainTakes<bfr::SwapchainImages>);
-    STATIC_CHECK_FALSE(SwapchainTakes<bfr::DeviceDesc>);
 }
 
 TEST_CASE("C++ API names enum values as bfr.yaml does", "[cpp_api][unit]") {
@@ -133,7 +121,7 @@ TEST_CASE("C++ API builds, resizes and destroys a headless swapchain", "[cpp_api
     {
         const bfr::Instance instance = validatedInstance(messages);
         const bfr::Device device = headlessDevice(instance);
-        auto swapchain = device.createSwapchain({.imageCount = kImages}, bfr::WindowHeadless{});
+        auto swapchain = device.createSwapchain({.window = kHeadless, .imageCount = kImages});
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         CHECK(*swapchain);
@@ -166,10 +154,10 @@ TEST_CASE("C++ API moves objects without destroying what they own", "[cpp_api][g
     {
         const bfr::Instance instance = validatedInstance(messages);
         bfr::Device device = headlessDevice(instance);
-        auto created = device.createSwapchain({.imageCount = 0}, bfr::WindowHeadless{});
+        auto created = device.createSwapchain({.window = kHeadless, .imageCount = 0});
         REQUIRE(created.has_value());
 
-        // A swapchain names the C device, so it outlives the C++ one it came from.
+        // A swapchain shares the device, so it can outlive the C++ Device it came from.
         const bfr::Device moved = std::move(device);
         bfr::Swapchain swapchain = std::move(*created);
         bfr::Swapchain assigned;
@@ -179,6 +167,23 @@ TEST_CASE("C++ API moves objects without destroying what they own", "[cpp_api][g
         CHECK_FALSE(swapchain); // NOLINT(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
         CHECK(moved);
         CHECK(assigned.resize(kWidth, kHeight).has_value());
+    }
+    CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C++ API keeps a device alive for the swapchains made from it", "[cpp_api][gpu]") {
+    Messages messages;
+    {
+        const bfr::Instance instance = validatedInstance(messages);
+        bfr::Swapchain swapchain;
+        {
+            const bfr::Device device = headlessDevice(instance);
+            auto created = device.createSwapchain({.window = kHeadless, .imageCount = 0});
+            REQUIRE(created.has_value());
+            swapchain = std::move(*created);
+        }
+
+        CHECK(swapchain.resize(kWidth, kHeight).has_value());
     }
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }
@@ -211,7 +216,7 @@ TEST_CASE("C++ API reports when a device holds all the swapchains it can", "[cpp
     bfr::Expected<bfr::Swapchain> swapchain;
 
     for (int i = 0; i < kTries && swapchain.has_value(); ++i) {
-        swapchain = device.createSwapchain({.imageCount = 0}, bfr::WindowHeadless{});
+        swapchain = device.createSwapchain({.window = kHeadless, .imageCount = 0});
         if (swapchain.has_value()) {
             made.push_back(std::move(*swapchain));
         }
@@ -236,7 +241,7 @@ TEST_CASE("C++ API creates and destroys swapchains on one device from many threa
             for (int thread = 0; thread < kThreads; ++thread) {
                 threads.emplace_back([&device, &failed] {
                     for (int i = 0; i < kEach; ++i) {
-                        auto swapchain = device.createSwapchain({.imageCount = 0}, bfr::WindowHeadless{});
+                        auto swapchain = device.createSwapchain({.window = kHeadless, .imageCount = 0});
                         if (!swapchain.has_value() || !swapchain->resize(kWidth, kHeight).has_value()) {
                             ++failed;
                         }
@@ -261,9 +266,8 @@ TEST_CASE("C++ API gives an adapter's caps, formats and surface caps", "[cpp_api
 
         const auto caps = instance.caps(adapter);
         const auto formats = instance.formats(adapter);
-        const auto surface = instance.surfaceCaps(adapter, {}, bfr::WindowHeadless{});
-        const auto surfaceFormats = instance.surfaceFormats(adapter, {}, bfr::WindowHeadless{});
-        const auto native = instance.native(adapter);
+        const auto surface = instance.surfaceCaps(adapter, {.window = kHeadless});
+        const auto surfaceFormats = instance.surfaceFormats(adapter, {.window = kHeadless});
 
         INFO(failureOf(caps) << failureOf(formats) << failureOf(surface) << failureOf(surfaceFormats));
         REQUIRE(caps.has_value());
@@ -279,8 +283,6 @@ TEST_CASE("C++ API gives an adapter's caps, formats and surface caps", "[cpp_api
         CHECK(surface->fifo);
         REQUIRE(surfaceFormats.has_value());
         CHECK_FALSE(surfaceFormats->empty());
-        REQUIRE(native.has_value());
-        CHECK(*native != nullptr);
     }
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }

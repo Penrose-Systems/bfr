@@ -316,13 +316,19 @@ typedef enum bfr_surface_rotation {
     BFR_SURFACE_ROTATION_FORCE32 = 0x7FFFFFFF
 } bfr_surface_rotation;
 
+// Which window system a bfr_window comes from, for the platforms that have more than one.
+typedef enum bfr_window_system {
+    // The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
+    BFR_WINDOW_SYSTEM_DEFAULT = 0,
+    // Wayland. Linux only.
+    BFR_WINDOW_SYSTEM_WAYLAND = 1,
+    // No window. Images are presented nowhere; for tests and offscreen tools.
+    BFR_WINDOW_SYSTEM_HEADLESS = 2,
+    BFR_WINDOW_SYSTEM_FORCE32 = 0x7FFFFFFF
+} bfr_window_system;
+
 // Which extension struct a bfr_chain begins.
 typedef enum bfr_struct_type {
-    BFR_STRUCT_TYPE_WINDOW_XLIB = 1,
-    BFR_STRUCT_TYPE_WINDOW_WAYLAND = 2,
-    BFR_STRUCT_TYPE_WINDOW_WIN32 = 3,
-    BFR_STRUCT_TYPE_WINDOW_METAL = 4,
-    BFR_STRUCT_TYPE_WINDOW_HEADLESS = 5,
     BFR_STRUCT_TYPE_FORCE32 = 0x7FFFFFFF
 } bfr_struct_type;
 
@@ -381,16 +387,31 @@ typedef struct bfr_adapter_info {
     bfr_adapter_type type;
 } bfr_adapter_info;
 
+// A window to present to. The caller's windowing code made it; the values stay valid while it is
+// open. All zero means no window.
+typedef struct bfr_window {
+    // The window: an HWND on Windows, a Window XID on X11 (as a pointer), a wl_surface* on Wayland,
+    // a CAMetalLayer* on Apple.
+    void* window;
+    // The Display* on X11, the wl_display* on Wayland; unused elsewhere.
+    void* display;
+    bfr_window_system system;
+} bfr_window;
+
 // How to open an adapter.
 typedef struct bfr_device_desc {
     const bfr_chain* next;
     // Index into the instance's adapter list.
     uint32_t adapter;
+    // The window the device must be able to present to; all zero opens it without presenting.
+    bfr_window window;
 } bfr_device_desc;
 
-// How to create a swapchain. Chain exactly one window struct.
+// How to create a swapchain.
 typedef struct bfr_swapchain_desc {
     const bfr_chain* next;
+    // The window to present to.
+    bfr_window window;
     // Images to request; 0 asks for 3.
     uint32_t image_count;
 } bfr_swapchain_desc;
@@ -402,9 +423,10 @@ typedef struct bfr_swapchain_images {
     uint32_t count;
 } bfr_swapchain_images;
 
-// Which window to ask about. Chain exactly one window struct.
+// Which window to ask about.
 typedef struct bfr_surface_desc {
     const bfr_chain* next;
+    bfr_window window;
 } bfr_surface_desc;
 
 // What an adapter is.
@@ -785,50 +807,6 @@ typedef struct bfr_memory_budget {
     bfr_memory_budget_heap heaps[16];
 } bfr_memory_budget;
 
-// An Xlib window. Extends bfr_device_desc, bfr_swapchain_desc, bfr_surface_desc; chain.type is
-// BFR_STRUCT_TYPE_WINDOW_XLIB.
-typedef struct bfr_window_xlib {
-    bfr_chain chain;
-    // The Display*.
-    void* display;
-    // The Window XID.
-    uint64_t window;
-} bfr_window_xlib;
-
-// A Wayland surface. Extends bfr_device_desc, bfr_swapchain_desc, bfr_surface_desc; chain.type is
-// BFR_STRUCT_TYPE_WINDOW_WAYLAND.
-typedef struct bfr_window_wayland {
-    bfr_chain chain;
-    // The wl_display*.
-    void* display;
-    // The wl_surface*.
-    void* surface;
-} bfr_window_wayland;
-
-// A Win32 window. Extends bfr_device_desc, bfr_swapchain_desc, bfr_surface_desc; chain.type is
-// BFR_STRUCT_TYPE_WINDOW_WIN32.
-typedef struct bfr_window_win32 {
-    bfr_chain chain;
-    // The HINSTANCE.
-    void* instance;
-    // The HWND.
-    void* window;
-} bfr_window_win32;
-
-// A Core Animation Metal layer. Extends bfr_device_desc, bfr_swapchain_desc, bfr_surface_desc;
-// chain.type is BFR_STRUCT_TYPE_WINDOW_METAL.
-typedef struct bfr_window_metal {
-    bfr_chain chain;
-    // The CAMetalLayer*.
-    void* layer;
-} bfr_window_metal;
-
-// No window. Images are presented nowhere; for tests and offscreen tools. Extends bfr_device_desc,
-// bfr_swapchain_desc, bfr_surface_desc; chain.type is BFR_STRUCT_TYPE_WINDOW_HEADLESS.
-typedef struct bfr_window_headless {
-    bfr_chain chain;
-} bfr_window_headless;
-
 // The message for the calling thread's last error. Valid until that thread's next BFR call.
 BFR_API bfr_string bfr_get_last_error(void);
 
@@ -845,7 +823,7 @@ BFR_API void bfr_destroy_instance(bfr_instance* instance);
 // writes up to count of them, sets count to how many it wrote, and returns incomplete if there were
 // more.
 // adapters: An array of count elements. May be null.
-BFR_API bfr_result bfr_instance_get_adapters(
+BFR_API bfr_result bfr_get_adapters(
     bfr_instance* instance,
     uint32_t* count,
     bfr_adapter_info* adapters);
@@ -864,19 +842,19 @@ BFR_API bfr_result bfr_get_formats(
     uint32_t* count,
     bfr_format_caps* formats);
 
-// Writes what a swapchain for the window chained to desc may be on an adapter. Asks the window
-// system each time, since the window changes. Fails with present_unsupported for a driver that
-// would crash if asked.
+// Writes what a swapchain for the window in desc may be on an adapter. Asks the window system each
+// time, since the window changes. Fails with present_unsupported for a driver that would crash if
+// asked.
 BFR_API bfr_result bfr_get_surface_caps(
     bfr_instance* instance,
     uint32_t adapter,
     const bfr_surface_desc* desc,
     bfr_surface_caps* caps);
 
-// Lists the formats and color spaces a swapchain for the window chained to desc may use on an
-// adapter, the order the window system gives. Only those BFR has names for. With formats null,
-// writes how many there are to count. Otherwise writes up to count of them, sets count to how many
-// it wrote, and returns incomplete if there were more. Fails as bfr_get_surface_caps does.
+// Lists the formats and color spaces a swapchain for the window in desc may use on an adapter, the
+// order the window system gives. Only those BFR has names for. With formats null, writes how many
+// there are to count. Otherwise writes up to count of them, sets count to how many it wrote, and
+// returns incomplete if there were more. Fails as bfr_get_surface_caps does.
 // formats: An array of count elements. May be null.
 BFR_API bfr_result bfr_get_surface_formats(
     bfr_instance* instance,
@@ -889,12 +867,8 @@ BFR_API bfr_result bfr_get_surface_formats(
 // driver cannot say.
 BFR_API bfr_result bfr_get_budget(bfr_device* device, bfr_memory_budget* budget);
 
-// Writes the backend's own object for an adapter, for what BFR does not cover: a VkPhysicalDevice
-// on Vulkan. It stays valid while the instance lives.
-BFR_API bfr_result bfr_get_native(bfr_instance* instance, uint32_t adapter, void** native);
-
-// Opens an adapter. Chain a window struct to pick a queue that can present to it.
-BFR_API bfr_result bfr_instance_create_device(
+// Opens an adapter. With a window in desc, picks a queue that can present to it.
+BFR_API bfr_result bfr_create_device(
     bfr_instance* instance,
     const bfr_device_desc* desc,
     bfr_device** device);
@@ -904,15 +878,15 @@ BFR_API bfr_result bfr_instance_create_device(
 // device: May be null.
 BFR_API void bfr_destroy_device(bfr_device* device);
 
-// Creates a swapchain for the window chained to desc, which the device must be able to present to.
-// It has no images until the first bfr_device_resize_swapchain gives it a size.
-BFR_API bfr_result bfr_device_create_swapchain(
+// Creates a swapchain for the window in desc, which the device must be able to present to. It has
+// no images until the first bfr_resize_swapchain gives it a size.
+BFR_API bfr_result bfr_create_swapchain(
     bfr_device* device,
     const bfr_swapchain_desc* desc,
     bfr_swapchain* swapchain);
 
 // Rebuilds a swapchain's images at a new size.
-BFR_API bfr_result bfr_device_resize_swapchain(
+BFR_API bfr_result bfr_resize_swapchain(
     bfr_device* device,
     bfr_swapchain swapchain,
     uint32_t width,
@@ -922,7 +896,7 @@ BFR_API bfr_result bfr_device_resize_swapchain(
 // Waits for the GPU to finish with a swapchain and destroys it; when this returns, its window is no
 // longer used. A handle that is already destroyed does nothing. Not while another thread is using
 // the swapchain.
-BFR_API void bfr_device_destroy_swapchain(bfr_device* device, bfr_swapchain swapchain);
+BFR_API void bfr_destroy_swapchain(bfr_device* device, bfr_swapchain swapchain);
 
 #ifdef __cplusplus
 }

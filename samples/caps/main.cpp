@@ -321,7 +321,7 @@ void printFormats(const bfr::Instance& instance, std::uint32_t adapter, const Op
 }
 
 void printSurface(const bfr::Instance& instance, std::uint32_t adapter) {
-    const auto caps = instance.surfaceCaps(adapter, {}, bfr::WindowHeadless{});
+    const auto caps = instance.surfaceCaps(adapter, {.window = {.system = bfr::WindowSystem::Headless}});
     if (!caps) {
         row("Window", "can't ask: " + caps.error().message);
         return;
@@ -337,7 +337,7 @@ void printSurface(const bfr::Instance& instance, std::uint32_t adapter) {
     row("Window", {std::format("{} to {} images", caps->minImageCount, most),
                    std::format("{}x{} to {}x{}", caps->minWidth, caps->minHeight, caps->maxWidth, caps->maxHeight)});
     row("Present", modes);
-    const auto formats = instance.surfaceFormats(adapter, {}, bfr::WindowHeadless{});
+    const auto formats = instance.surfaceFormats(adapter, {.window = {.system = bfr::WindowSystem::Headless}});
     if (!formats) {
         row("Swap formats", "can't list them: " + formats.error().message);
         return;

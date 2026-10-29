@@ -34,23 +34,17 @@ endif()
 
 option(BFR_LOGGING "Compile the BFR_LOG_* calls in" ON)
 
-# Debug is the default build, and Debug runs under the address sanitizers.
-# Only when BFR is the project being built: in a user's build, the build type
-# and sanitizers are the user's, and sanitizers must cover the whole program.
+# Debug is the default build. Only when BFR is the project being built: in a
+# user's build, the build type is the user's.
 get_property(multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(PROJECT_IS_TOP_LEVEL AND NOT multi_config AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
-endif()
-if(PROJECT_IS_TOP_LEVEL AND CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(sanitize_default address)
-else()
-    set(sanitize_default none)
 endif()
 
 include(CMakeDependentOption)
 cmake_dependent_option(BFR_BUILD_TESTS "Build the tests" ON "PROJECT_IS_TOP_LEVEL" OFF)
 cmake_dependent_option(BFR_BUILD_SAMPLES "Build the samples" ON "PROJECT_IS_TOP_LEVEL" OFF)
-set(BFR_SANITIZE ${sanitize_default} CACHE STRING
+set(BFR_SANITIZE none CACHE STRING
     "address (AddressSanitizer, UndefinedBehaviorSanitizer, LeakSanitizer), thread (ThreadSanitizer) or none")
 set_property(CACHE BFR_SANITIZE PROPERTY STRINGS address thread none)
 cmake_dependent_option(BFR_CLANG_TIDY "Compile our sources, tests included, through clang-tidy" OFF "PROJECT_IS_TOP_LEVEL" OFF)
@@ -93,6 +87,7 @@ find_package(VulkanUtilityLibraries CONFIG REQUIRED)
 add_library(bfr_objects OBJECT
     src/c_api.cpp
     src/error.cpp
+    src/vulkan/instance_table.cpp
     src/vulkan/queue_families.cpp
     src/vulkan/swapchain_settings.cpp
     src/vulkan/vulkan_caps.cpp

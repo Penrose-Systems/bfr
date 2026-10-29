@@ -1,6 +1,7 @@
 #include "vulkan_surface.h"
 
 #include "error.h"
+#include "instance_table.h"
 #include "vulkan_result.h"
 #include "window.h"
 
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <format>
 #include <span>
 #include <string_view>
@@ -72,8 +74,10 @@ public:
         info.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
         info.dpy = static_cast<Display*>(window.display);
         info.window = static_cast<Window>(window.window);
-        return make(VK_KHR_XLIB_SURFACE_EXTENSION_NAME, "vkCreateXlibSurfaceKHR",
-                    [&](VkSurfaceKHR* surface) { return vkCreateXlibSurfaceKHR(instance_, &info, nullptr, surface); });
+        return make<PFN_vkCreateXlibSurfaceKHR>(VK_KHR_XLIB_SURFACE_EXTENSION_NAME, "vkCreateXlibSurfaceKHR",
+                                                [&](auto create, VkSurfaceKHR* surface) {
+                                                    return create(instance_, &info, nullptr, surface);
+                                                });
     }
 #endif
 
@@ -83,9 +87,10 @@ public:
         info.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
         info.display = static_cast<wl_display*>(window.display);
         info.surface = static_cast<wl_surface*>(window.surface);
-        return make(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME, "vkCreateWaylandSurfaceKHR", [&](VkSurfaceKHR* surface) {
-            return vkCreateWaylandSurfaceKHR(instance_, &info, nullptr, surface);
-        });
+        return make<PFN_vkCreateWaylandSurfaceKHR>(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME, "vkCreateWaylandSurfaceKHR",
+                                                   [&](auto create, VkSurfaceKHR* surface) {
+                                                       return create(instance_, &info, nullptr, surface);
+                                                   });
     }
 #endif
 
@@ -93,10 +98,13 @@ public:
     Made operator()(const core::window::Win32& window) const {
         VkWin32SurfaceCreateInfoKHR info{};
         info.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-        info.hinstance = static_cast<HINSTANCE>(window.instance);
+        info.hinstance = window.instance != nullptr ? static_cast<HINSTANCE>(window.instance)
+                                                    : GetModuleHandleW(nullptr);
         info.hwnd = static_cast<HWND>(window.window);
-        return make(VK_KHR_WIN32_SURFACE_EXTENSION_NAME, "vkCreateWin32SurfaceKHR",
-                    [&](VkSurfaceKHR* surface) { return vkCreateWin32SurfaceKHR(instance_, &info, nullptr, surface); });
+        return make<PFN_vkCreateWin32SurfaceKHR>(VK_KHR_WIN32_SURFACE_EXTENSION_NAME, "vkCreateWin32SurfaceKHR",
+                                                 [&](auto create, VkSurfaceKHR* surface) {
+                                                     return create(instance_, &info, nullptr, surface);
+                                                 });
     }
 #endif
 
@@ -105,17 +113,21 @@ public:
         VkMetalSurfaceCreateInfoEXT info{};
         info.sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
         info.pLayer = static_cast<const CAMetalLayer*>(window.layer);
-        return make(VK_EXT_METAL_SURFACE_EXTENSION_NAME, "vkCreateMetalSurfaceEXT",
-                    [&](VkSurfaceKHR* surface) { return vkCreateMetalSurfaceEXT(instance_, &info, nullptr, surface); });
+        return make<PFN_vkCreateMetalSurfaceEXT>(VK_EXT_METAL_SURFACE_EXTENSION_NAME, "vkCreateMetalSurfaceEXT",
+                                                 [&](auto create, VkSurfaceKHR* surface) {
+                                                     return create(instance_, &info, nullptr, surface);
+                                                 });
     }
 #endif
 
     Made operator()(const core::window::Headless& /*window*/) const {
         VkHeadlessSurfaceCreateInfoEXT info{};
         info.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
-        return make(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME, "vkCreateHeadlessSurfaceEXT", [&](VkSurfaceKHR* surface) {
-            return vkCreateHeadlessSurfaceEXT(instance_, &info, nullptr, surface);
-        });
+        return make<PFN_vkCreateHeadlessSurfaceEXT>(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME,
+                                                    "vkCreateHeadlessSurfaceEXT",
+                                                    [&](auto create, VkSurfaceKHR* surface) {
+                                                        return create(instance_, &info, nullptr, surface);
+                                                    });
     }
 
     // A window system this build has no surface for.
@@ -126,13 +138,19 @@ public:
 
 private:
     // The surface create makes once the instance enabled extension, or why not.
-    template <class Create>
-    [[nodiscard]] Made make(std::string_view extension, std::string_view function, Create create) const {
+    // function is loaded for this instance, as the extension's functions are
+    // not in its table.
+    template <class Function, class Create>
+    [[nodiscard]] Made make(std::string_view extension, const char* function, Create create) const {
         if (std::ranges::none_of(extensions_, [extension](const char* name) { return name == extension; })) {
             return core::failure(core::ErrorCode::RhiSurfaceFailed, std::format("{} is not available", extension));
         }
+        const auto load = std::bit_cast<Function>(vkGetInstanceProcAddr(instance_, function));
+        if (load == nullptr) {
+            return core::failure(core::ErrorCode::RhiSurfaceFailed, std::format("{} is not available", function));
+        }
         VkSurfaceKHR surface = VK_NULL_HANDLE;
-        if (const VkResult result = create(&surface); result != VK_SUCCESS) {
+        if (const VkResult result = create(load, &surface); result != VK_SUCCESS) {
             return failure(core::ErrorCode::RhiSurfaceFailed, {.call = std::string{function}, .result = result});
         }
         return surface;
@@ -148,22 +166,26 @@ std::span<const char* const> surfaceExtensions() {
     return kSurfaceExtensions;
 }
 
-core::Result<VulkanSurface> createSurface(VkInstance instance, std::span<const char* const> extensions,
+core::Result<VulkanSurface> createSurface(VkInstance instance, const InstanceTable& vk,
+                                          std::span<const char* const> extensions,
                                           const core::window::NativeWindow& window) {
     return std::visit(Maker{instance, extensions}, window).transform([&](VkSurfaceKHR surface) {
-        return VulkanSurface{instance, surface, std::holds_alternative<core::window::Headless>(window)};
+        return VulkanSurface{instance, vk, surface, std::holds_alternative<core::window::Headless>(window)};
     });
 }
 
-VulkanSurface::VulkanSurface(VkInstance instance, VkSurfaceKHR surface, bool headless)
-    : instance_(instance), surface_(surface), headless_(headless) {}
+VulkanSurface::VulkanSurface(VkInstance instance, const InstanceTable& vk, VkSurfaceKHR surface, bool headless)
+    : instance_(instance), vk_(&vk), surface_(surface), headless_(headless) {}
 
 VulkanSurface::VulkanSurface(VulkanSurface&& other) noexcept
-    : instance_(other.instance_), surface_(std::exchange(other.surface_, VK_NULL_HANDLE)), headless_(other.headless_) {}
+    : instance_(other.instance_),
+      vk_(other.vk_),
+      surface_(std::exchange(other.surface_, VK_NULL_HANDLE)),
+      headless_(other.headless_) {}
 
 VulkanSurface::~VulkanSurface() {
     if (surface_ != VK_NULL_HANDLE) {
-        vkDestroySurfaceKHR(instance_, surface_, nullptr);
+        vk_->vkDestroySurfaceKHR(instance_, surface_, nullptr);
     }
 }
 

@@ -3,6 +3,7 @@
 #include "caps.h"
 #include "error.h"
 #include "format.h"
+#include "instance_table.h"
 #include "vulkan_list.h"
 #include "vulkan_result.h"
 
@@ -77,7 +78,7 @@ void link(void**& tail, Struct& next) {
 // extension's only when the adapter lists it, since chaining one it lacks is
 // invalid. The chain points into itself, so it stays where it is made.
 struct FeatureQuery {
-    FeatureQuery(VkPhysicalDevice adapter, std::span<const VkExtensionProperties> extensions) {
+    FeatureQuery(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const VkExtensionProperties> extensions) {
         core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         vulkan11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
         vulkan12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -108,7 +109,7 @@ struct FeatureQuery {
         linkIfListed(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME, atomicFloat);
         linkIfListed(VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME, imageAtomicInt64);
         linkIfListed(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME, barycentric);
-        vkGetPhysicalDeviceFeatures2(adapter, &core);
+        vk.vkGetPhysicalDeviceFeatures2(adapter, &core);
     }
     ~FeatureQuery() = default;
     FeatureQuery(const FeatureQuery&) = delete;
@@ -132,7 +133,8 @@ struct FeatureQuery {
 
 // The property structs one query fills, chained as FeatureQuery's are.
 struct PropertyQuery {
-    PropertyQuery(VkPhysicalDevice adapter, std::span<const VkExtensionProperties> extensions) {
+    PropertyQuery(const InstanceTable& vk, VkPhysicalDevice adapter,
+                  std::span<const VkExtensionProperties> extensions) {
         core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         vulkan11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES;
         vulkan12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
@@ -155,7 +157,7 @@ struct PropertyQuery {
         linkIfListed(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, rayTracingPipeline);
         linkIfListed(VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh);
         linkIfListed(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, shadingRate);
-        vkGetPhysicalDeviceProperties2(adapter, &core);
+        vk.vkGetPhysicalDeviceProperties2(adapter, &core);
     }
     ~PropertyQuery() = default;
     PropertyQuery(const PropertyQuery&) = delete;
@@ -362,9 +364,9 @@ Features featuresFrom(const FeatureQuery& features, const PropertyQuery& propert
     };
 }
 
-Memory memoryFrom(VkPhysicalDevice adapter, VkPhysicalDeviceType type) {
+Memory memoryFrom(const InstanceTable& vk, VkPhysicalDevice adapter, VkPhysicalDeviceType type) {
     VkPhysicalDeviceMemoryProperties properties{};
-    vkGetPhysicalDeviceMemoryProperties(adapter, &properties);
+    vk.vkGetPhysicalDeviceMemoryProperties(adapter, &properties);
     const auto vulkanTypes = std::span{properties.memoryTypes}.first(properties.memoryTypeCount);
     const auto vulkanHeaps = std::span{properties.memoryHeaps}.first(properties.memoryHeapCount);
     Memory memory{.heaps = {},
@@ -397,11 +399,11 @@ Memory memoryFrom(VkPhysicalDevice adapter, VkPhysicalDeviceType type) {
 // Graphics counts every family that runs graphics; compute, those that run
 // compute but not graphics; copy, those that run neither. Each kind's
 // timestamp bits are the most any of its families has.
-Queues queuesFrom(VkPhysicalDevice adapter) {
+Queues queuesFrom(const InstanceTable& vk, VkPhysicalDevice adapter) {
     std::uint32_t count = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(adapter, &count, nullptr);
+    vk.vkGetPhysicalDeviceQueueFamilyProperties(adapter, &count, nullptr);
     std::vector<VkQueueFamilyProperties> families(count);
-    vkGetPhysicalDeviceQueueFamilyProperties(adapter, &count, families.data());
+    vk.vkGetPhysicalDeviceQueueFamilyProperties(adapter, &count, families.data());
     Queues queues;
     for (const VkQueueFamilyProperties& family : families) {
         const VkQueueFlags flags = family.queueFlags;
@@ -617,8 +619,8 @@ FloorFeatures::FloorFeatures() {
     }
 }
 
-std::vector<std::string> missingFloorFeatures(VkPhysicalDevice adapter) {
-    const FeatureQuery features(adapter, {});
+std::vector<std::string> missingFloorFeatures(const InstanceTable& vk, VkPhysicalDevice adapter) {
+    const FeatureQuery features(vk, adapter, {});
     std::vector<std::string> missing;
     for (const auto& feature : kFloor12) {
         if (!on(features.vulkan12.*feature.member)) {
@@ -633,9 +635,9 @@ std::vector<std::string> missingFloorFeatures(VkPhysicalDevice adapter) {
     return missing;
 }
 
-Caps readCaps(VkPhysicalDevice adapter, std::span<const VkExtensionProperties> extensions) {
-    const FeatureQuery features(adapter, extensions);
-    const PropertyQuery properties(adapter, extensions);
+Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const VkExtensionProperties> extensions) {
+    const FeatureQuery features(vk, adapter, extensions);
+    const PropertyQuery properties(vk, adapter, extensions);
     return {
         .info = infoFrom(properties),
         .limits = limitsFrom(properties, features),
@@ -644,19 +646,19 @@ Caps readCaps(VkPhysicalDevice adapter, std::span<const VkExtensionProperties> e
         .mesh = meshFrom(properties, features),
         .rayTracing = rayTracingFrom(properties, features),
         .features = featuresFrom(features, properties, extensions),
-        .memory = memoryFrom(adapter, properties.core.properties.deviceType),
-        .queues = queuesFrom(adapter),
+        .memory = memoryFrom(vk, adapter, properties.core.properties.deviceType),
+        .queues = queuesFrom(vk, adapter),
     };
 }
 
-core::Result<FormatCaps> readFormatCaps(VkPhysicalDevice adapter, Format format) {
+core::Result<FormatCaps> readFormatCaps(const InstanceTable& vk, VkPhysicalDevice adapter, Format format) {
     const VkFormat vulkan = vulkanFormat(format);
     VkFormatProperties3 properties3{};
     properties3.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3;
     VkFormatProperties2 properties{};
     properties.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
     properties.pNext = &properties3;
-    vkGetPhysicalDeviceFormatProperties2(adapter, vulkan, &properties);
+    vk.vkGetPhysicalDeviceFormatProperties2(adapter, vulkan, &properties);
     const VkFormatFeatureFlags2 texture = properties3.optimalTilingFeatures;
     const VkFormatFeatureFlags2 buffer = properties3.bufferFeatures;
     FormatCaps caps{
@@ -687,7 +689,7 @@ core::Result<FormatCaps> readFormatCaps(VkPhysicalDevice adapter, Format format)
                                       : VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     VkImageFormatProperties2 image{};
     image.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
-    const VkResult result = vkGetPhysicalDeviceImageFormatProperties2(adapter, &info, &image);
+    const VkResult result = vk.vkGetPhysicalDeviceImageFormatProperties2(adapter, &info, &image);
     if (result == VK_SUCCESS) {
         caps.sampleCounts = image.imageFormatProperties.sampleCounts;
     }
@@ -698,18 +700,18 @@ core::Result<FormatCaps> readFormatCaps(VkPhysicalDevice adapter, Format format)
     return caps;
 }
 
-core::Result<SurfaceCaps> readSurfaceCaps(VkPhysicalDevice adapter, VkSurfaceKHR surface) {
+core::Result<SurfaceCaps> readSurfaceCaps(const InstanceTable& vk, VkPhysicalDevice adapter, VkSurfaceKHR surface) {
     VkSurfaceCapabilitiesKHR capabilities{};
-    if (const VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(adapter, surface, &capabilities);
+    if (const VkResult result = vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(adapter, surface, &capabilities);
         result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiSurfaceFailed,
                        {.call = "vkGetPhysicalDeviceSurfaceCapabilitiesKHR", .result = result});
     }
-    const auto modes = listAll<VkPresentModeKHR>("vkGetPhysicalDeviceSurfacePresentModesKHR",
-                                                 [adapter, surface](std::uint32_t* count, VkPresentModeKHR* listed) {
-                                                     return vkGetPhysicalDeviceSurfacePresentModesKHR(adapter, surface,
-                                                                                                      count, listed);
-                                                 });
+    const auto modes = listAll<VkPresentModeKHR>(
+        "vkGetPhysicalDeviceSurfacePresentModesKHR",
+        [&vk, adapter, surface](std::uint32_t* count, VkPresentModeKHR* listed) {
+            return vk.vkGetPhysicalDeviceSurfacePresentModesKHR(adapter, surface, count, listed);
+        });
     if (!modes) {
         return failure(core::ErrorCode::RhiSurfaceFailed, modes.error());
     }
@@ -738,11 +740,14 @@ core::Result<SurfaceCaps> readSurfaceCaps(VkPhysicalDevice adapter, VkSurfaceKHR
     };
 }
 
-core::Result<std::vector<SurfaceFormat>> readSurfaceFormats(VkPhysicalDevice adapter, VkSurfaceKHR surface) {
-    const auto listed = listAll<VkSurfaceFormatKHR>(
-        "vkGetPhysicalDeviceSurfaceFormatsKHR", [adapter, surface](std::uint32_t* count, VkSurfaceFormatKHR* formats) {
-            return vkGetPhysicalDeviceSurfaceFormatsKHR(adapter, surface, count, formats);
-        });
+core::Result<std::vector<SurfaceFormat>> readSurfaceFormats(const InstanceTable& vk, VkPhysicalDevice adapter,
+                                                            VkSurfaceKHR surface) {
+    const auto listed = listAll<VkSurfaceFormatKHR>("vkGetPhysicalDeviceSurfaceFormatsKHR",
+                                                    [&vk, adapter, surface](std::uint32_t* count,
+                                                                            VkSurfaceFormatKHR* formats) {
+                                                        return vk.vkGetPhysicalDeviceSurfaceFormatsKHR(adapter, surface,
+                                                                                                       count, formats);
+                                                    });
     if (!listed) {
         return failure(core::ErrorCode::RhiSurfaceFailed, listed.error());
     }
@@ -757,13 +762,13 @@ core::Result<std::vector<SurfaceFormat>> readSurfaceFormats(VkPhysicalDevice ada
     return formats;
 }
 
-MemoryBudget readBudget(VkPhysicalDevice adapter) {
+MemoryBudget readBudget(const InstanceTable& vk, VkPhysicalDevice adapter) {
     VkPhysicalDeviceMemoryBudgetPropertiesEXT budgets{};
     budgets.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
     VkPhysicalDeviceMemoryProperties2 properties{};
     properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
     properties.pNext = &budgets;
-    vkGetPhysicalDeviceMemoryProperties2(adapter, &properties);
+    vk.vkGetPhysicalDeviceMemoryProperties2(adapter, &properties);
     const std::uint32_t heaps = properties.memoryProperties.memoryHeapCount;
     const auto budget = std::span{budgets.heapBudget}.first(heaps);
     const auto usage = std::span{budgets.heapUsage}.first(heaps);

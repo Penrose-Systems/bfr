@@ -90,10 +90,6 @@ public:
     [[nodiscard]] virtual core::Result<std::vector<SurfaceFormat>> surfaceFormats(
         std::size_t adapter, const core::window::NativeWindow& window) const = 0;
 
-    /// The API's own object for adapters()[adapter], valid while this Rhi
-    /// lives: a VkPhysicalDevice on Vulkan.
-    [[nodiscard]] virtual core::Result<void*> native(std::size_t adapter) const = 0;
-
 protected:
     explicit Rhi(const RhiConfig& config) : config_(config) {}
 

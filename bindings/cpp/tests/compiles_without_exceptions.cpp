@@ -16,16 +16,13 @@ namespace {
         return false;
     }
     const auto adapters = instance->adapters();
-    auto device = instance->createDevice({.adapter = 0}, bfr::WindowHeadless{});
+    const bfr::Window headlessWindow{.system = bfr::WindowSystem::Headless};
+    auto device = instance->createDevice({.adapter = 0, .window = headlessWindow});
     if (!adapters || !device) {
         return false;
     }
-    const auto xlib = device->createSwapchain({.imageCount = 0}, bfr::WindowXlib{});
-    const auto wayland = device->createSwapchain({.imageCount = 0}, bfr::WindowWayland{});
-    const auto win32 = device->createSwapchain({.imageCount = 0}, bfr::WindowWin32{});
-    const auto metal = device->createSwapchain({.imageCount = 0}, bfr::WindowMetal{});
-    auto headless = device->createSwapchain({.imageCount = 0}, bfr::WindowHeadless{});
-    if (!xlib || !wayland || !win32 || !metal || !headless) {
+    auto headless = device->createSwapchain({.window = headlessWindow, .imageCount = 0});
+    if (!headless) {
         return false;
     }
     return headless->resize(1, 1).has_value();

@@ -3,6 +3,7 @@
 #include "caps.h"
 #include "error.h"
 #include "format.h"
+#include "instance_table.h"
 
 #include <volk.h>
 
@@ -12,6 +13,8 @@
 #include <vector>
 
 namespace bfr::rhi::vulkan {
+
+// Each query below goes through vk, the table of the instance adapter belongs to.
 
 /// The floor's features, which every listed adapter has and every device turns
 /// on. vulkan12.pNext points at vulkan13, so a create info chains vulkan12.
@@ -32,27 +35,30 @@ private:
 };
 
 /// The floor's features adapter lacks, by their Vulkan names.
-[[nodiscard]] std::vector<std::string> missingFloorFeatures(VkPhysicalDevice adapter);
+[[nodiscard]] std::vector<std::string> missingFloorFeatures(const InstanceTable& vk, VkPhysicalDevice adapter);
 
 /// Everything about adapter that stays the same while it runs. extensions are
 /// the device extensions it lists. These queries can't fail.
-[[nodiscard]] Caps readCaps(VkPhysicalDevice adapter, std::span<const VkExtensionProperties> extensions);
+[[nodiscard]] Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter,
+                            std::span<const VkExtensionProperties> extensions);
 
 /// What adapter does with format. Fails with RhiQueryFailed, or as codeFor
 /// says, when the API fails other than to say the format is unsupported.
-[[nodiscard]] core::Result<FormatCaps> readFormatCaps(VkPhysicalDevice adapter, Format format);
+[[nodiscard]] core::Result<FormatCaps> readFormatCaps(const InstanceTable& vk, VkPhysicalDevice adapter, Format format);
 
 /// What a swapchain for surface may be on adapter. Fails with
 /// RhiSurfaceFailed, or as codeFor says, when the query fails.
-[[nodiscard]] core::Result<SurfaceCaps> readSurfaceCaps(VkPhysicalDevice adapter, VkSurfaceKHR surface);
+[[nodiscard]] core::Result<SurfaceCaps> readSurfaceCaps(const InstanceTable& vk, VkPhysicalDevice adapter,
+                                                        VkSurfaceKHR surface);
 
 /// The formats a swapchain for surface may use on adapter, those with names
 /// here. Fails as readSurfaceCaps does.
-[[nodiscard]] core::Result<std::vector<SurfaceFormat>> readSurfaceFormats(VkPhysicalDevice adapter,
+[[nodiscard]] core::Result<std::vector<SurfaceFormat>> readSurfaceFormats(const InstanceTable& vk,
+                                                                          VkPhysicalDevice adapter,
                                                                           VkSurfaceKHR surface);
 
 /// The heaps' budget and usage, which needs VK_EXT_memory_budget on adapter.
-[[nodiscard]] MemoryBudget readBudget(VkPhysicalDevice adapter);
+[[nodiscard]] MemoryBudget readBudget(const InstanceTable& vk, VkPhysicalDevice adapter);
 
 [[nodiscard]] VkFormat vulkanFormat(Format format);
 

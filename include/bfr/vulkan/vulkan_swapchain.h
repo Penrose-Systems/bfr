@@ -1,6 +1,7 @@
 #pragma once
 
 #include "error.h"
+#include "instance_table.h"
 #include "log.h"
 #include "swapchain.h"
 #include "vulkan_surface.h"
@@ -16,10 +17,11 @@ namespace bfr::rhi::vulkan {
 /// until built.
 class VulkanSwapchain {
 public:
-    /// Builds on surface, which it takes over, through device's table, asking
-    /// for imageCount images each time. It reports to logger, which outlives it.
-    VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, VulkanSurface surface, std::uint32_t imageCount,
-                    const core::Logger& logger);
+    /// Builds on surface, which it takes over, through device's table and the
+    /// table of the instance the adapter belongs to, asking for imageCount
+    /// images each time. It reports to logger; the tables and logger outlive it.
+    VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, const InstanceTable& instanceTable,
+                    VulkanSurface surface, std::uint32_t imageCount, const core::Logger& logger);
     ~VulkanSwapchain();
     VulkanSwapchain(const VulkanSwapchain&) = delete;
     VulkanSwapchain& operator=(const VulkanSwapchain&) = delete;
@@ -41,6 +43,7 @@ public:
 private:
     VkDevice device_;
     const VolkDeviceTable* table_;
+    const InstanceTable* instanceTable_;
     const core::Logger* logger_;
     VulkanSurface surface_;
     std::uint32_t imageCount_;

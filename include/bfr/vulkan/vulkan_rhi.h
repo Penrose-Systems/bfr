@@ -4,6 +4,7 @@
 #include "device.h"
 #include "error.h"
 #include "format.h"
+#include "instance_table.h"
 #include "log.h"
 #include "rhi.h"
 #include "rhi_config.h"
@@ -49,12 +50,14 @@ public:
                                                         const core::window::NativeWindow& window) const override;
     [[nodiscard]] core::Result<std::vector<SurfaceFormat>> surfaceFormats(
         std::size_t adapter, const core::window::NativeWindow& window) const override;
-    [[nodiscard]] core::Result<void*> native(std::size_t adapter) const override;
 
     using Rhi::config;
 
     /// Where the Rhi and its devices send their messages.
     [[nodiscard]] const core::Logger& logger() const { return messages_.logger; }
+
+    /// The instance's functions, which this Rhi and its devices call through.
+    [[nodiscard]] const InstanceTable& instanceTable() const { return vk_; }
 
     /// A surface on window, which goes before this Rhi. Fails as
     /// Device::createSwapchain describes.
@@ -78,7 +81,7 @@ private:
     // RhiPresentUnsupported for a driver the query would crash.
     template <class Query>
     [[nodiscard]] auto askAboutSurface(std::size_t adapter, const core::window::NativeWindow& window, Query query) const
-        -> std::invoke_result_t<Query, VkPhysicalDevice, VkSurfaceKHR>;
+        -> std::invoke_result_t<Query, const InstanceTable&, VkPhysicalDevice, VkSurfaceKHR>;
     // Which of adapters()[adapter]'s familyCount queue families present to
     // presentTo, index-aligned; empty without a window.
     [[nodiscard]] core::Result<std::vector<VkBool32>> presentingFamilies(
@@ -90,6 +93,7 @@ private:
     // a fixed address, from before the VkInstance exists until after it goes.
     MessageSink messages_;
     VkInstance instance_ = VK_NULL_HANDLE;
+    InstanceTable vk_;
     VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;
     // What the instance enabled; each name has static storage.
     std::vector<const char*> extensions_;
