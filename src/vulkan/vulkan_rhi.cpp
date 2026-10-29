@@ -486,10 +486,11 @@ auto VulkanRhi::askAboutSurface(std::size_t adapter, const core::window::NativeW
     }
     VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
     if (presentQueryCrashes(physicalDevice, *surface)) {
+        BFR_LOG_INFO(logger(),
+                     "{} does not present to headless surfaces; not asked, since loader {} would crash its driver",
+                     adapters_[adapter].name, versionName(loaderVersion_));
         return core::failure(core::ErrorCode::RhiPresentUnsupported,
-                             std::format("{} does not present to headless surfaces; not asked, since loader {} would "
-                                         "crash its driver",
-                                         adapters_[adapter].name, versionName(loaderVersion_)));
+                             std::format("{} can't present to this window", adapters_[adapter].name));
     }
     return query(vk_, physicalDevice, surface->handle());
 }

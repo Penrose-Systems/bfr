@@ -720,7 +720,7 @@ functions:
     doc: >-
       Writes what a swapchain for the window in desc may be on an
       adapter. Asks the window system each time, since the window changes.
-      Fails with present_unsupported for a driver that would crash if asked.
+      Fails with present_unsupported when the adapter can't present to the window.
     returns: result
     params:
       - {name: instance, type: instance}

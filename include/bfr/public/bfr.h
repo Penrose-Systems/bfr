@@ -887,8 +887,8 @@ BFR_API bfr_result bfr_get_formats(
     bfr_format_caps* formats);
 
 // Writes what a swapchain for the window in desc may be on an adapter. Asks the window system each
-// time, since the window changes. Fails with present_unsupported for a driver that would crash if
-// asked.
+// time, since the window changes. Fails with present_unsupported when the adapter can't present to
+// the window.
 BFR_API bfr_result bfr_get_surface_caps(
     bfr_instance* instance,
     uint32_t adapter,

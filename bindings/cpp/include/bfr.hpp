@@ -1447,8 +1447,8 @@ public:
     [[nodiscard]] Expected<std::vector<FormatCaps>> formats(std::uint32_t adapter) const;
 
     /// Writes what a swapchain for the window in desc may be on an adapter. Asks the window system
-    /// each time, since the window changes. Fails with present_unsupported for a driver that would
-    /// crash if asked.
+    /// each time, since the window changes. Fails with present_unsupported when the adapter can't
+    /// present to the window.
     [[nodiscard]] Expected<SurfaceCaps> surfaceCaps(std::uint32_t adapter, const SurfaceDesc& desc) const;
 
     /// Lists the formats and color spaces a swapchain for the window in desc may use on an adapter,

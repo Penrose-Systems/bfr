@@ -291,8 +291,8 @@ TEST_CASE("Rhi doesn't ask NVIDIA's driver about a headless window's swapchain o
 
     REQUIRE_FALSE(caps.has_value());
     CHECK(caps.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
-    CHECK_THAT(caps.error().message, Catch::Matchers::ContainsSubstring(
-                                         "does not present to headless surfaces; not asked, since loader 1.4.318"));
+    CHECK_THAT(caps.error().message, Catch::Matchers::ContainsSubstring("can't present to this window"));
+    CHECK_THAT(caps.error().message, !Catch::Matchers::ContainsSubstring("loader"));
 }
 
 TEST_CASE("Rhi refuses queries about an adapter it does not list", "[rhi][caps][gpu]") {

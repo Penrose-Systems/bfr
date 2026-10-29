@@ -13,6 +13,16 @@ devices and swapchains.
 Planned: the rest of the core API below, a render graph, D3D12 and Metal
 backends, and the C#, Rust and Python wrappers.
 
+## Known issues
+
+**NVIDIA and headless windows (Vulkan).** NVIDIA's proprietary driver has no
+headless surfaces, and a Vulkan loader older than 1.4.319 crashes the driver if
+it is asked about one. BFR doesn't ask: on that driver and loader, a headless
+window fails with `present_unsupported` ("can't present to this window"), as
+the call that took it would on any adapter that can't present there. The log
+says why. With loader 1.4.319 or newer, BFR asks and the driver answers. Use a
+real window on NVIDIA, or another adapter for headless.
+
 ## Design
 
 - **Core**: explicit barriers and submission order; GPU memory is freed only
