@@ -208,12 +208,17 @@ TEST_CASE("Device fails with RhiInvalidHandle for a forged swapchain handle", "[
 
 TEST_CASE("Device builds the image count its swapchain was created with", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
-    // More than the default and than a CPU driver's minimum.
-    constexpr std::uint32_t kImages = 6;
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages), kValidation};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, {.imageCount = kImages});
+        const auto surface = headless.rhi->surfaceCaps(headlessAdapter(*headless.rhi), kHeadless);
+        INFO(failureOf(surface));
+        REQUIRE(surface.has_value());
+        // One more than the window's least, more than the default, when the
+        // window allows that many.
+        const bool roomForMore = surface->maxImageCount == 0 || surface->maxImageCount > surface->minImageCount;
+        const std::uint32_t wanted = surface->minImageCount + (roomForMore ? 1 : 0);
+        const auto swapchain = headless.device->createSwapchain(kHeadless, {.imageCount = wanted});
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 
@@ -221,7 +226,7 @@ TEST_CASE("Device builds the image count its swapchain was created with", "[rhi]
 
         INFO(failureOf(images));
         REQUIRE(images.has_value());
-        CHECK(images->count >= kImages);
+        CHECK(images->count >= wanted);
         CHECK(headless.device->destroySwapchain(*swapchain).has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
