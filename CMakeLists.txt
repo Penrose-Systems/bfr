@@ -36,6 +36,7 @@ option(BFR_LOGGING "Compile the BFR_LOG_* calls in" ON)
 # Each backend is a build option. Rhi::create dispatches on those turned on
 # and refuses the rest with RhiBackendUnavailable.
 option(BFR_BACKEND_VULKAN "Build the Vulkan backend" ON)
+option(BFR_BACKEND_D3D12 "Build the D3D12 backend; needs the Windows SDK" OFF)
 option(BFR_BACKEND_METAL "Build the Metal backend; needs metal-cpp" OFF)
 
 # Debug is the default build. Only when BFR is the project being built: in a
@@ -102,7 +103,8 @@ target_include_directories(bfr_objects
 target_link_libraries(bfr_objects PRIVATE ${CMAKE_DL_LIBS})
 target_compile_definitions(bfr_objects
     PUBLIC BFR_LOGGING_ENABLED=$<BOOL:${BFR_LOGGING}>
-    PRIVATE BFR_BUILDING BFR_HAS_VULKAN=$<BOOL:${BFR_BACKEND_VULKAN}> BFR_HAS_METAL=$<BOOL:${BFR_BACKEND_METAL}>)
+    PRIVATE BFR_BUILDING BFR_HAS_VULKAN=$<BOOL:${BFR_BACKEND_VULKAN}> BFR_HAS_D3D12=$<BOOL:${BFR_BACKEND_D3D12}>
+    BFR_HAS_METAL=$<BOOL:${BFR_BACKEND_METAL}>)
 # Position independent for the shared library, and hidden, so that it exports
 # only the BFR_API entry points.
 set_target_properties(bfr_objects PROPERTIES
@@ -144,6 +146,22 @@ if(BFR_BACKEND_VULKAN)
     target_compile_definitions(bfr_volk PRIVATE ${bfr_vulkan_platforms})
     set_target_properties(bfr_volk PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
     list(APPEND bfr_backend_objects bfr_volk)
+endif()
+
+if(BFR_BACKEND_D3D12)
+    if(NOT WIN32)
+        message(FATAL_ERROR "The D3D12 backend builds only on Windows")
+    endif()
+    target_sources(bfr_objects PRIVATE
+        src/backends/d3d12/d3d12_caps.cpp
+        src/backends/d3d12/d3d12_device.cpp
+        src/backends/d3d12/d3d12_formats.cpp
+        src/backends/d3d12/d3d12_rhi.cpp
+        src/backends/d3d12/d3d12_swapchain.cpp)
+    # The Windows headers define macros, min and max among them, that would
+    # leak into every file that includes a backend's header.
+    target_compile_definitions(bfr_objects PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_link_libraries(bfr_objects PRIVATE d3d12 dxgi)
 endif()
 
 if(BFR_BACKEND_METAL)
