@@ -25,6 +25,10 @@ function(bfr_discover_tests target)
         catch_discover_tests(${target} TEST_SPEC "[agnostic]" TEST_SUFFIX " (vulkan)"
             EXTRA_ARGS --backend vulkan PROPERTIES LABELS gpu)
     endif()
+    if(BFR_BACKEND_METAL)
+        catch_discover_tests(${target} TEST_SPEC "[agnostic]" TEST_SUFFIX " (metal)"
+            EXTRA_ARGS --backend metal PROPERTIES LABELS gpu)
+    endif()
 endfunction()
 
 # The tests under rhi speak only to the interface and run on every backend

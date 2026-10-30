@@ -36,6 +36,7 @@ option(BFR_LOGGING "Compile the BFR_LOG_* calls in" ON)
 # Each backend is a build option. Rhi::create dispatches on those turned on
 # and refuses the rest with RhiBackendUnavailable.
 option(BFR_BACKEND_VULKAN "Build the Vulkan backend" ON)
+option(BFR_BACKEND_METAL "Build the Metal backend; needs metal-cpp" OFF)
 
 # Debug is the default build. Only when BFR is the project being built: in a
 # user's build, the build type is the user's.
@@ -101,7 +102,7 @@ target_include_directories(bfr_objects
 target_link_libraries(bfr_objects PRIVATE ${CMAKE_DL_LIBS})
 target_compile_definitions(bfr_objects
     PUBLIC BFR_LOGGING_ENABLED=$<BOOL:${BFR_LOGGING}>
-    PRIVATE BFR_BUILDING BFR_HAS_VULKAN=$<BOOL:${BFR_BACKEND_VULKAN}>)
+    PRIVATE BFR_BUILDING BFR_HAS_VULKAN=$<BOOL:${BFR_BACKEND_VULKAN}> BFR_HAS_METAL=$<BOOL:${BFR_BACKEND_METAL}>)
 # Position independent for the shared library, and hidden, so that it exports
 # only the BFR_API entry points.
 set_target_properties(bfr_objects PROPERTIES
@@ -143,6 +144,30 @@ if(BFR_BACKEND_VULKAN)
     target_compile_definitions(bfr_volk PRIVATE ${bfr_vulkan_platforms})
     set_target_properties(bfr_volk PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
     list(APPEND bfr_backend_objects bfr_volk)
+endif()
+
+if(BFR_BACKEND_METAL)
+    if(NOT APPLE)
+        message(FATAL_ERROR "The Metal backend builds only on Apple platforms")
+    endif()
+    # metal-cpp, Apple's header-only C++ wrapper of Metal: the directory that
+    # holds Metal/Metal.hpp. Found through CMAKE_PREFIX_PATH or
+    # BFR_METAL_CPP_INCLUDE_DIR.
+    find_path(BFR_METAL_CPP_INCLUDE_DIR Metal/Metal.hpp REQUIRED)
+    target_sources(bfr_objects PRIVATE
+        src/backends/metal/metal_caps.cpp
+        src/backends/metal/metal_device.cpp
+        src/backends/metal/metal_formats.cpp
+        src/backends/metal/metal_rhi.cpp
+        src/backends/metal/metal_swapchain.cpp)
+    target_include_directories(bfr_objects SYSTEM PRIVATE ${BFR_METAL_CPP_INCLUDE_DIR})
+    target_link_libraries(bfr_objects PRIVATE "-framework Foundation" "-framework Metal" "-framework QuartzCore"
+        "-framework CoreGraphics")
+    # metal-cpp wants exactly one source to define its implementation.
+    add_library(bfr_metal_cpp OBJECT src/backends/metal/metal_cpp.cpp)
+    target_include_directories(bfr_metal_cpp SYSTEM PRIVATE ${BFR_METAL_CPP_INCLUDE_DIR})
+    set_target_properties(bfr_metal_cpp PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
+    list(APPEND bfr_backend_objects bfr_metal_cpp)
 endif()
 
 # The static library: the C API, and the C++ classes behind it that the tests
