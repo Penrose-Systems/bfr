@@ -2,7 +2,6 @@
 
 #include "bfr/core/error.h"
 #include "bfr/rhi/rhi_config.h"
-#include "null/null_rhi.h"
 #if BFR_HAS_VULKAN
     #include "vulkan/vulkan_rhi.h"
 #endif
@@ -20,14 +19,12 @@ namespace {
 
 // Each backend this build has, in Backend order. The only list of backends
 // outside the build files: every other file speaks to one backend or to the
-// interface. The null backend is in every build, for the tests; the C API
-// leaves it out.
-constexpr std::size_t kBackendCount = BFR_HAS_VULKAN + 1;
+// interface.
+constexpr std::size_t kBackendCount = BFR_HAS_VULKAN;
 constexpr std::array<Backend, kBackendCount> kBackends{
 #if BFR_HAS_VULKAN
     Backend::Vulkan,
 #endif
-    Backend::Null,
 };
 
 } // namespace
@@ -38,8 +35,6 @@ std::span<const Backend> backends() noexcept {
 
 core::Result<std::unique_ptr<Rhi>> Rhi::create(const RhiDesc& desc, const RhiConfig& config) {
     switch (desc.backend) {
-        case Backend::Null:
-            return null::NullRhi::create(desc, config);
 #if BFR_HAS_VULKAN
         case Backend::Vulkan:
             return vulkan::VulkanRhi::create(desc, config);

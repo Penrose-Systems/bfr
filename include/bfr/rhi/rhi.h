@@ -40,10 +40,6 @@ enum class Backend : std::uint8_t {
     Vulkan = 1,
     D3D12 = 2,
     Metal = 3,
-    /// No GPU: one adapter that reports nothing, a device that accepts every
-    /// call and draws nothing. In every build, inside the library only: the
-    /// agnostic tests run on it, and the C API neither lists nor accepts it.
-    Null = 4,
 };
 
 [[nodiscard]] constexpr std::string_view name(Backend backend) noexcept {
@@ -54,8 +50,6 @@ enum class Backend : std::uint8_t {
             return "d3d12";
         case Backend::Metal:
             return "metal";
-        case Backend::Null:
-            return "null";
     }
     return "unknown";
 }

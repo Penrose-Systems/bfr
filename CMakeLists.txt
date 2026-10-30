@@ -85,15 +85,13 @@ include(cmake/bfr_build.cmake)
 # BFR's code, compiled once for both libraries below. include/bfr is its
 # public API: bfr.h, the C API, and the C++ layers behind it, bfr/core and
 # bfr/rhi. Each backend is one directory under src/backends, private, and
-# only src/rhi/rhi.cpp names them. The null backend is in every build: the
-# second implementation every agnostic test runs on.
+# only src/rhi/rhi.cpp names them. The null backend is the tests' own, built
+# into them alone.
 add_library(bfr_objects OBJECT
     src/c_api/c_api.cpp
     src/core/error.cpp
     src/rhi/rhi.cpp
-    src/rhi/swapchain_build.cpp
-    src/backends/null/null_device.cpp
-    src/backends/null/null_rhi.cpp)
+    src/rhi/swapchain_build.cpp)
 bfr_apply_compiler_flags(bfr_objects)
 # Private headers are named from src: "rhi/swapchain_build.h",
 # "vulkan/vulkan_rhi.h".

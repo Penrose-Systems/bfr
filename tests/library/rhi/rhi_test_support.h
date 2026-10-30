@@ -9,6 +9,7 @@
 #include "bfr/rhi/rhi.h"
 #include "bfr/rhi/rhi_config.h"
 #include "bfr/rhi/swapchain.h"
+#include "null/null_rhi.h"
 #include "test_backends.h"
 
 #include <catch2/catch_message.hpp>
@@ -20,6 +21,7 @@
 #include <cstddef>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -35,15 +37,48 @@ inline const core::window::NativeWindow kNoWindow{};
 /// What a test swapchain asks for: the defaults.
 inline constexpr SwapchainRequest kSwapchainRequest{};
 
+/// A backend the agnostic cases run on: one the build has, or the null one,
+/// which only these tests reach and which has no Backend.
+struct TestBackend {
+    std::string_view name;
+    std::optional<Backend> backend;
+};
+
+[[nodiscard]] inline std::string_view name(const TestBackend& backend) {
+    return backend.name;
+}
+
+/// What createRhi needs to make an Rhi on a TestBackend.
+struct TestRhiDesc {
+    RhiDesc desc;
+    bool null = false;
+};
+
 /// Each backend the agnostic cases run on (test_backends.h), for a test case
-/// that runs once on each: `const Backend backend = GENERATE(eachBackend());`.
+/// that runs once on each: `const TestBackend backend = GENERATE(eachBackend());`.
 inline auto eachBackend() {
-    std::vector<Backend> chosen;
-    std::ranges::copy_if(backends(), std::back_inserter(chosen),
-                         [](Backend backend) { return bfr::test::runsOnBackend(name(backend)); });
+    std::vector<TestBackend> chosen;
+    for (const Backend backend : backends()) {
+        chosen.push_back({.name = name(backend), .backend = backend});
+    }
+    chosen.push_back({.name = "null", .backend = std::nullopt});
+    std::erase_if(chosen, [](const TestBackend& backend) { return !bfr::test::runsOnBackend(backend.name); });
     INFO("no backend --backend named is in this build");
     REQUIRE_FALSE(chosen.empty());
     return Catch::Generators::from_range(chosen);
+}
+
+/// An Rhi on backend: the null one when it has no Backend.
+[[nodiscard]] inline core::Result<std::unique_ptr<Rhi>> createRhi(const TestRhiDesc& test, const RhiConfig& config) {
+    if (test.null) {
+        return null::NullRhi::create(test.desc, config);
+    }
+    return Rhi::create(test.desc, config);
+}
+
+/// A description on backend, with nothing recorded.
+inline TestRhiDesc describe(const TestBackend& backend) {
+    return {.desc = {.backend = backend.backend.value_or(Backend{})}, .null = !backend.backend.has_value()};
 }
 
 /// A description on backend that records every warning and error the Rhi and
@@ -52,6 +87,11 @@ inline RhiDesc recordingInto(Backend backend, std::vector<std::string>& messages
     return {.backend = backend,
             .logger = {[&messages](core::Severity, std::string_view message) { messages.emplace_back(message); },
                        core::Severity::Warning}};
+}
+
+/// recordingInto on a TestBackend.
+inline TestRhiDesc recordingInto(const TestBackend& backend, std::vector<std::string>& messages) {
+    return {.desc = recordingInto(backend.backend.value_or(Backend{}), messages), .null = !backend.backend.has_value()};
 }
 
 /// A description on backend that records only errors: a backend's loader may

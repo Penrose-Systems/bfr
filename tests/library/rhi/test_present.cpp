@@ -37,8 +37,8 @@ constexpr RenderingDesc kClear{.loadOp = LoadOp::Clear, .storeOp = StoreOp::Stor
 // An Rhi made with desc, a device that presents to a headless window, and a
 // swapchain on it built at kWidth by kHeight.
 struct HeadlessSwapchain {
-    explicit HeadlessSwapchain(const RhiDesc& desc) {
-        auto created = Rhi::create(desc, kValidation);
+    explicit HeadlessSwapchain(const TestRhiDesc& desc) {
+        auto created = createRhi(desc, kValidation);
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         rhi = std::move(*created);
@@ -65,7 +65,7 @@ struct HeadlessSwapchain {
 } // namespace
 
 TEST_CASE("Device clears and presents a headless swapchain, frame after frame", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
         const HeadlessSwapchain headless{recordingInto(backend, messages)};
@@ -92,7 +92,7 @@ TEST_CASE("Device clears and presents a headless swapchain, frame after frame", 
 }
 
 TEST_CASE("Device refuses to acquire from a swapchain with no images, and says to resize it", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
         const HeadlessSwapchain headless{recordingInto(backend, messages)};
@@ -108,7 +108,7 @@ TEST_CASE("Device refuses to acquire from a swapchain with no images, and says t
 }
 
 TEST_CASE("Device refuses calls out of order with RhiInvalidCall", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
         const HeadlessSwapchain headless{recordingInto(backend, messages)};

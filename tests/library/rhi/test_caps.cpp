@@ -102,9 +102,9 @@ std::vector<std::string> budgetProblems(const Device& device, const Memory& memo
 } // namespace
 
 TEST_CASE("Rhi reads each adapter's caps, consistent and 0 for each feature it lacks", "[rhi][caps][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
-    const auto rhi = Rhi::create(recordingInto(backend, messages), kValidation);
+    const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -117,9 +117,9 @@ TEST_CASE("Rhi reads each adapter's caps, consistent and 0 for each feature it l
 }
 
 TEST_CASE("Rhi reports what every adapter does with each format", "[rhi][caps][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
-    const auto rhi = Rhi::create(recordingInto(backend, messages), kValidation);
+    const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -131,9 +131,9 @@ TEST_CASE("Rhi reports what every adapter does with each format", "[rhi][caps][a
 }
 
 TEST_CASE("Rhi reports what a swapchain for a headless window may be", "[rhi][caps][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
-    const auto rhi = Rhi::create(recordingInto(backend, messages), kValidation);
+    const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
     const std::size_t adapter = headlessAdapter(**rhi);
@@ -155,8 +155,8 @@ TEST_CASE("Rhi reports what a swapchain for a headless window may be", "[rhi][ca
 }
 
 TEST_CASE("Rhi refuses queries about an adapter it does not list", "[rhi][caps][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
-    const auto rhi = Rhi::create({.backend = backend}, {});
+    const TestBackend backend = GENERATE(eachBackend());
+    const auto rhi = createRhi(describe(backend), {});
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
     const std::size_t missing = (*rhi)->adapters().size();
@@ -169,9 +169,9 @@ TEST_CASE("Rhi refuses queries about an adapter it does not list", "[rhi][caps][
 }
 
 TEST_CASE("Device reports its memory budget heap by heap", "[rhi][caps][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
-    const auto rhi = Rhi::create(recordingInto(backend, messages), kValidation);
+    const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
 

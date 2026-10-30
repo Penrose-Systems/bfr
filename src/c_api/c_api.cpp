@@ -325,9 +325,6 @@ bfr_backend toC(bfr::rhi::Backend backend) {
             return BFR_BACKEND_D3D12;
         case bfr::rhi::Backend::Metal:
             return BFR_BACKEND_METAL;
-        case bfr::rhi::Backend::Null:
-            // Inside the library only; bfr_get_backends leaves it out.
-            break;
     }
     return BFR_BACKEND_FORCE32;
 }
@@ -712,13 +709,7 @@ bfr_result bfr_get_backends(uint32_t* count, bfr_backend* backends) {
         if (count == nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "count must not be null");
         }
-        // The null backend is the library's own, for its tests; it is not offered.
-        std::vector<bfr::rhi::Backend> listed;
-        for (const bfr::rhi::Backend backend : bfr::rhi::backends()) {
-            if (backend != bfr::rhi::Backend::Null) {
-                listed.push_back(backend);
-            }
-        }
+        const auto listed = bfr::rhi::backends();
         const auto total = static_cast<std::uint32_t>(listed.size());
         if (backends == nullptr) {
             *count = total;

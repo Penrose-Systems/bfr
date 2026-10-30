@@ -39,11 +39,14 @@ add_executable(bfr_tests
     rhi/test_present.cpp
     rhi/test_rhi.cpp
     rhi/test_swapchain.cpp
-    rhi/test_swapchain_build.cpp)
+    rhi/test_swapchain_build.cpp
+    ${PROJECT_SOURCE_DIR}/src/backends/null/null_device.cpp
+    ${PROJECT_SOURCE_DIR}/src/backends/null/null_rhi.cpp)
 bfr_apply_compiler_flags(bfr_tests)
 # Test helpers shared across the tests, such as scoped_env.h, and the
-# library's private headers under src.
-target_include_directories(bfr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src)
+# library's private headers under src, the null backend's among them.
+target_include_directories(bfr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/backends)
 target_link_libraries(bfr_tests PRIVATE bfr bfr_test_main bfr_sanitizer_options Catch2::Catch2)
 bfr_discover_tests(bfr_tests)
 
@@ -67,7 +70,6 @@ target_sources(bfr_tests PRIVATE
     backends/vulkan/test_vulkan_rhi.cpp
     backends/vulkan/test_vulkan_surface.cpp
     backends/vulkan/test_vulkan_swapchain.cpp)
-target_include_directories(bfr_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/backends)
 target_link_libraries(bfr_tests PRIVATE volk::volk_headers)
 # vcpkg's validation layer manifest names its library without a path, so the
 # loader finds a system copy of the layer, or none. The tests use a copy of the

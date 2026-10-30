@@ -38,8 +38,8 @@ const bfr::core::window::NativeWindow kHeadless = bfr::core::window::Headless{};
 // An Rhi made with desc, whose recording outlives it, and a device that
 // presents to a headless window.
 struct HeadlessDevice {
-    explicit HeadlessDevice(const RhiDesc& desc, const RhiConfig& config = kValidation) {
-        auto created = Rhi::create(desc, config);
+    explicit HeadlessDevice(const TestRhiDesc& desc, const RhiConfig& config = kValidation) {
+        auto created = createRhi(desc, config);
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         rhi = std::move(*created);
@@ -54,7 +54,7 @@ struct HeadlessDevice {
 } // namespace
 
 TEST_CASE("Device builds a headless swapchain at the size asked for", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages)};
@@ -75,7 +75,7 @@ TEST_CASE("Device builds a headless swapchain at the size asked for", "[rhi][agn
 }
 
 TEST_CASE("Device rebuilds a swapchain at a new size", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages)};
@@ -98,7 +98,7 @@ TEST_CASE("Device rebuilds a swapchain at a new size", "[rhi][agnostic]") {
 }
 
 TEST_CASE("Device destroys the swapchains left when it goes, and says so", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages)};
@@ -121,7 +121,7 @@ TEST_CASE("Device destroys the swapchains left when it goes, and says so", "[rhi
 }
 
 TEST_CASE("Device empties a swapchain for a window with no area", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages)};
@@ -145,7 +145,7 @@ TEST_CASE("Device empties a swapchain for a window with no area", "[rhi][agnosti
 }
 
 TEST_CASE("Device fails with RhiInvalidHandle on a destroyed swapchain", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(backend, messages)};
     const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainRequest);
@@ -163,7 +163,7 @@ TEST_CASE("Device fails with RhiInvalidHandle on a destroyed swapchain", "[rhi][
 }
 
 TEST_CASE("Device destroying a null swapchain does nothing", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(backend, messages)};
 
@@ -171,7 +171,7 @@ TEST_CASE("Device destroying a null swapchain does nothing", "[rhi][agnostic]") 
 }
 
 TEST_CASE("Device fails with RhiSurfaceFailed for a swapchain without a window", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(backend, messages)};
 
@@ -183,7 +183,7 @@ TEST_CASE("Device fails with RhiSurfaceFailed for a swapchain without a window",
 }
 
 TEST_CASE("Device fails with RhiInvalidHandle for a forged swapchain handle", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     // Past the pool's capacity; an unused slot with a live generation; the used
     // slot with a generation it never had; the used slot with a free one.
     const SwapchainHandle forged = GENERATE(SwapchainHandle{100000, 1}, SwapchainHandle{3, 1}, SwapchainHandle{0, 7},
@@ -207,7 +207,7 @@ TEST_CASE("Device fails with RhiInvalidHandle for a forged swapchain handle", "[
 }
 
 TEST_CASE("Device builds the image count its swapchain was created with", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     // More than the default and than a CPU driver's minimum.
     constexpr std::uint32_t kImages = 6;
     std::vector<std::string> messages;

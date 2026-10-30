@@ -77,10 +77,10 @@ option. Several instances of different backends may coexist in one process.
 Reason: Windows has two backends and tools may want both; one indirect call
 per command is small next to driver cost.
 
-A null backend is in every build, inside the library: one adapter that
+A null backend is built into the library's tests alone: one adapter that
 reports nothing (every limit 0, no heaps, no queues, no optional feature), a
-device that accepts every call and draws nothing. The C API neither lists nor
-accepts it. Reason: every agnostic test then runs on two backends on every
+device that accepts every call and draws nothing. The library does not
+contain it. Reason: every agnostic test then runs on two backends on every
 machine, and anything shaped like one API fails against the other; to an app
 a backend that draws nothing is no use. BFR promises no numeric minimum: an
 app reads the caps and decides.

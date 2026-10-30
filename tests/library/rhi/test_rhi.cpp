@@ -22,15 +22,14 @@
 using namespace bfr::rhi;
 using namespace bfr::rhi::test;
 
-TEST_CASE("Rhi has the null backend in every build, and a name for each backend", "[rhi][unit]") {
-    CHECK(std::ranges::contains(backends(), Backend::Null));
+TEST_CASE("Rhi has a name for each backend", "[rhi][unit]") {
     for (const Backend backend : backends()) {
         CHECK(name(backend) != "unknown");
     }
 }
 
 TEST_CASE("Rhi fails with RhiBackendUnavailable for a backend this build lacks", "[rhi][unit]") {
-    for (const Backend backend : {Backend::Vulkan, Backend::D3D12, Backend::Metal, Backend::Null}) {
+    for (const Backend backend : {Backend::Vulkan, Backend::D3D12, Backend::Metal}) {
         if (std::ranges::contains(backends(), backend)) {
             continue;
         }
@@ -53,10 +52,10 @@ TEST_CASE("Rhi fails with RhiBackendUnavailable for a value that is no backend",
 }
 
 TEST_CASE("Rhi with validation lists an adapter and reports nothing", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
 
-    const auto rhi = Rhi::create(recordingInto(backend, messages), kValidation);
+    const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
 
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
@@ -68,9 +67,9 @@ TEST_CASE("Rhi with validation lists an adapter and reports nothing", "[rhi][agn
 }
 
 TEST_CASE("Rhi fails to create a device on an adapter it does not list", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
-    const auto rhi = Rhi::create(recordingInto(backend, messages), kValidation);
+    const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -82,9 +81,9 @@ TEST_CASE("Rhi fails to create a device on an adapter it does not list", "[rhi][
 }
 
 TEST_CASE("Rhi creates a device on every adapter it lists", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
-    const auto rhi = Rhi::create(recordingInto(backend, messages), kValidation);
+    const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
     REQUIRE_FALSE((*rhi)->adapters().empty());
@@ -99,10 +98,10 @@ TEST_CASE("Rhi creates a device on every adapter it lists", "[rhi][agnostic]") {
 }
 
 TEST_CASE("Rhi creates a device that presents to a headless window", "[rhi][agnostic]") {
-    const Backend backend = GENERATE(eachBackend());
+    const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const auto rhi = Rhi::create(recordingInto(backend, messages), kValidation);
+        const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
         INFO(name(backend) << ' ' << failureOf(rhi));
         REQUIRE(rhi.has_value());
 
