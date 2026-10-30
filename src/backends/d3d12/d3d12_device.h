@@ -39,16 +39,15 @@ struct D3D12CommandList {
 class D3D12Device final : public Device {
 public:
     /// A device on device, which rhi listed from adapter, with heapCount memory
-    /// heaps and a largest 2D texture of maxTexture2d pixels. Fails with
-    /// RhiDeviceFailed when D3D12 gives no queue, fence, or the lists a frame
-    /// needs.
+    /// heaps. Fails with RhiDeviceFailed when D3D12 gives no queue, fence, or
+    /// the lists a frame needs.
     [[nodiscard]] static core::Result<std::unique_ptr<D3D12Device>> create(
         D3D12Rhi& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device, Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter,
-        std::size_t heapCount, std::uint32_t maxTexture2d);
+        std::size_t heapCount);
 
     /// For create.
     D3D12Device(D3D12Rhi& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device,
-                Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter, std::size_t heapCount, std::uint32_t maxTexture2d);
+                Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter, std::size_t heapCount);
     ~D3D12Device() override;
     D3D12Device(const D3D12Device&) = delete;
     D3D12Device& operator=(const D3D12Device&) = delete;
@@ -103,7 +102,6 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
     Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter_;
     std::size_t heapCount_;
-    std::uint32_t maxTexture2d_;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue_;
     // Signaled by the queue after each submit, to the value submitted_ counts.
     Microsoft::WRL::ComPtr<ID3D12Fence> fence_;

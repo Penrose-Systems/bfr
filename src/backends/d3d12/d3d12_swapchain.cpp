@@ -91,19 +91,17 @@ core::Result<void> checkWindow(const core::window::NativeWindow& window) {
 
 D3D12Swapchain::D3D12Swapchain(ComPtr<ID3D12Device> device, ComPtr<IDXGIFactory2> factory,
                                ComPtr<ID3D12CommandQueue> queue, const core::window::NativeWindow& window,
-                               const SwapchainRequest& request, std::uint32_t maxTexture2d, bool tearing,
-                               const core::Logger& logger)
+                               const SwapchainRequest& request, bool tearing, const core::Logger& logger)
     : device_(std::move(device)),
       factory_(std::move(factory)),
       queue_(std::move(queue)),
       window_(handleOf(window)),
       request_(request),
-      maxTexture2d_(maxTexture2d),
       tearing_(tearing),
       logger_(&logger) {}
 
 core::Result<void> D3D12Swapchain::check() const {
-    const auto build = swapchainBuildFor(surfaceCapsFor(maxTexture2d_, tearing_), surfaceFormats(), Extent{}, request_);
+    const auto build = swapchainBuildFor(surfaceCapsFor(tearing_), surfaceFormats(), Extent{}, request_);
     if (!build) {
         return std::unexpected(build.error());
     }
@@ -193,7 +191,7 @@ core::Result<DXGI_SWAP_CHAIN_DESC1> D3D12Swapchain::makeImages() {
 
 core::Result<SwapchainImages> D3D12Swapchain::build(Extent size) {
     release();
-    const auto settings = swapchainBuildFor(surfaceCapsFor(maxTexture2d_, tearing_), surfaceFormats(), size, request_);
+    const auto settings = swapchainBuildFor(surfaceCapsFor(tearing_), surfaceFormats(), size, request_);
     if (!settings) {
         return std::unexpected(settings.error());
     }

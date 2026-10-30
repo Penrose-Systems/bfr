@@ -26,14 +26,12 @@ namespace bfr::rhi::d3d12 {
 /// headless one.
 class D3D12Swapchain {
 public:
-    /// A swapchain on window, which checkWindow allowed, for a device whose
-    /// largest 2D texture is maxTexture2d pixels, built as request says each
+    /// A swapchain on window, which checkWindow allowed, built as request says each
     /// time. It presents through queue, with tearing when DXGI allows it, and
     /// reports to logger, which outlives it.
     D3D12Swapchain(Microsoft::WRL::ComPtr<ID3D12Device> device, Microsoft::WRL::ComPtr<IDXGIFactory2> factory,
                    Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue, const core::window::NativeWindow& window,
-                   const SwapchainRequest& request, std::uint32_t maxTexture2d, bool tearing,
-                   const core::Logger& logger);
+                   const SwapchainRequest& request, bool tearing, const core::Logger& logger);
     ~D3D12Swapchain() = default;
     D3D12Swapchain(const D3D12Swapchain&) = delete;
     D3D12Swapchain& operator=(const D3D12Swapchain&) = delete;
@@ -88,7 +86,6 @@ private:
     // Null for a headless window.
     HWND window_ = nullptr;
     SwapchainRequest request_;
-    std::uint32_t maxTexture2d_;
     bool tearing_;
     const core::Logger* logger_;
     // Made by the first build; the images change under it afterwards.

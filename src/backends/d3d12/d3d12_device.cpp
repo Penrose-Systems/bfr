@@ -54,9 +54,8 @@ D3D12_RESOURCE_BARRIER transition(ID3D12Resource* image, D3D12_RESOURCE_STATES b
 } // namespace
 
 core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Rhi& rhi, ComPtr<ID3D12Device> device,
-                                                               ComPtr<IDXGIAdapter3> adapter, std::size_t heapCount,
-                                                               std::uint32_t maxTexture2d) {
-    auto made = std::make_unique<D3D12Device>(rhi, std::move(device), std::move(adapter), heapCount, maxTexture2d);
+                                                               ComPtr<IDXGIAdapter3> adapter, std::size_t heapCount) {
+    auto made = std::make_unique<D3D12Device>(rhi, std::move(device), std::move(adapter), heapCount);
     if (auto opened = made->open(); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
@@ -64,12 +63,11 @@ core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Rhi& rhi, Co
 }
 
 D3D12Device::D3D12Device(D3D12Rhi& rhi, ComPtr<ID3D12Device> device, ComPtr<IDXGIAdapter3> adapter,
-                         std::size_t heapCount, std::uint32_t maxTexture2d)
+                         std::size_t heapCount)
     : rhi_(&rhi),
       device_(std::move(device)),
       adapter_(std::move(adapter)),
       heapCount_(heapCount),
-      maxTexture2d_(maxTexture2d),
       swapchains_("swapchains", kSwapchainCapacity, kSwapchainLimit, rhi.logger()),
       commandLists_("command lists", kFramesInFlight, kFramesInFlight, rhi.logger()) {}
 
@@ -196,8 +194,7 @@ core::Result<SwapchainHandle> D3D12Device::createSwapchain(const core::window::N
         return std::unexpected(std::move(checked.error()));
     }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, ComPtr<IDXGIFactory2>{rhi_->factory()}, queue_,
-                                                          window, request, maxTexture2d_, rhi_->tearing(),
-                                                          rhi_->logger());
+                                                          window, request, rhi_->tearing(), rhi_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("a device holds at most {} swapchains", kSwapchainLimit));

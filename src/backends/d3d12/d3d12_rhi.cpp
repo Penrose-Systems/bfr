@@ -21,7 +21,6 @@
 #include <windows.h>
 #include <wrl/client.h>
 
-#include <array>
 #include <cstddef>
 #include <expected>
 #include <format>
@@ -140,15 +139,9 @@ core::Result<void> D3D12Rhi::reportMessages(D3D12Adapter& native) {
     if (!logger_.wants(core::Severity::Trace)) {
         quiet.push_back(D3D12_MESSAGE_SEVERITY_MESSAGE);
     }
-    // BFR clears a swapchain's image with a color the image was not made for,
-    // which D3D12 warns about; Godot's rendering_device_driver_d3d12.cpp
-    // (_initialize_device) leaves the same warning out.
-    std::array<D3D12_MESSAGE_ID, 1> ignored{D3D12_MESSAGE_ID_CLEARRENDERTARGETVIEW_MISMATCHINGCLEARVALUE};
     D3D12_INFO_QUEUE_FILTER filter{};
     filter.DenyList.NumSeverities = static_cast<UINT>(quiet.size());
     filter.DenyList.pSeverityList = quiet.data();
-    filter.DenyList.NumIDs = static_cast<UINT>(ignored.size());
-    filter.DenyList.pIDList = ignored.data();
     if (const HRESULT result = native.messages->PushStorageFilter(&filter); FAILED(result)) {
         return unavailable("ID3D12InfoQueue::PushStorageFilter", result);
     }
@@ -246,8 +239,7 @@ core::Result<std::unique_ptr<Device>> D3D12Rhi::createDevice(std::size_t adapter
     }
     const D3D12Adapter& native = native_[adapter];
     const Caps& caps = adapters_[adapter].caps;
-    return D3D12Device::create(*this, native.device, native.adapter, caps.memory.heaps.size(),
-                               caps.limits.maxTexture2d);
+    return D3D12Device::create(*this, native.device, native.adapter, caps.memory.heaps.size());
 }
 
 core::Result<FormatCaps> D3D12Rhi::formatCaps(std::size_t adapter, Format format) const {
@@ -264,7 +256,7 @@ core::Result<SurfaceCaps> D3D12Rhi::surfaceCaps(std::size_t adapter, const core:
     if (auto checked = checkWindow(window); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    return surfaceCapsFor(adapters_[adapter].caps.limits.maxTexture2d, tearing_);
+    return surfaceCapsFor(tearing_);
 }
 
 core::Result<std::vector<SurfaceFormat>> D3D12Rhi::surfaceFormats(std::size_t adapter,

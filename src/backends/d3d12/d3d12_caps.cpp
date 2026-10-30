@@ -22,11 +22,6 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
-// Every limit below that the device is not asked is the one d3d12.h names.
-constexpr std::uint32_t kMaxViewports = D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-constexpr std::uint32_t kMaxUniformBufferRange = D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16;
-// A thread group's shared memory is counted in 4-byte registers.
-constexpr std::uint32_t kSharedMemory = D3D12_CS_TGSM_REGISTER_COUNT * 4;
 constexpr double kNanosecondsPerSecond = 1e9;
 // A feature level holds its major from bit 12 and its minor in the 4 bits from
 // bit 8: 0xc100 is 12_1.
@@ -89,6 +84,7 @@ std::uint32_t sampleCountsOf(ID3D12Device* device, Format format) {
     return caps ? caps->sampleCounts : 0;
 }
 
+// The limits d3d12.h defines are each the macro whose name says what it limits.
 Limits limitsOf(ID3D12Device* device, const D3D12_FEATURE_DATA_D3D12_OPTIONS6& options6) {
     Limits limits;
     limits.maxTexture1d = D3D12_REQ_TEXTURE1D_U_DIMENSION;
@@ -97,39 +93,27 @@ Limits limitsOf(ID3D12Device* device, const D3D12_FEATURE_DATA_D3D12_OPTIONS6& o
     limits.maxTextureCube = D3D12_REQ_TEXTURECUBE_DIMENSION;
     limits.maxTextureLayers = D3D12_REQ_TEXTURE2D_ARRAY_AXIS_DIMENSION;
     limits.maxSamplerObjects = D3D12_REQ_SAMPLER_OBJECT_COUNT_PER_DEVICE;
-    limits.maxUniformBufferRange = kMaxUniformBufferRange;
     limits.maxColorAttachments = D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT;
-    limits.maxRenderWidth = D3D12_REQ_RENDER_TO_BUFFER_WINDOW_WIDTH;
-    limits.maxRenderHeight = D3D12_REQ_RENDER_TO_BUFFER_WINDOW_WIDTH;
-    limits.maxRenderLayers = D3D12_REQ_TEXTURE2D_ARRAY_AXIS_DIMENSION;
+    limits.maxViewports = D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    limits.maxSamplerAnisotropy = D3D12_REQ_MAXANISOTROPY;
+    limits.maxSamplerLodBias = D3D12_MIP_LOD_BIAS_MAX;
+    limits.minUniformBufferAlignment = D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT;
+    limits.copyOffsetAlignment = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT;
+    limits.copyRowPitchAlignment = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
     limits.colorSampleCounts = sampleCountsOf(device, Format::Rgba8Unorm);
     limits.integerSampleCounts = sampleCountsOf(device, Format::Rgba8Uint);
     limits.depthSampleCounts = sampleCountsOf(device, Format::D32Float);
     limits.stencilSampleCounts = sampleCountsOf(device, Format::D24UnormS8Uint);
-    limits.maxViewports = kMaxViewports;
-    limits.maxViewportWidth = D3D12_VIEWPORT_BOUNDS_MAX;
-    limits.maxViewportHeight = D3D12_VIEWPORT_BOUNDS_MAX;
-    limits.maxSamplerAnisotropy = D3D12_REQ_MAXANISOTROPY;
-    limits.maxSamplerLodBias = D3D12_MIP_LOD_BIAS_MAX;
     if (options6.VariableShadingRateTier >= D3D12_VARIABLE_SHADING_RATE_TIER_2) {
         limits.minShadingRateTile = options6.ShadingRateImageTileSize;
         limits.maxShadingRateTile = options6.ShadingRateImageTileSize;
     }
-    limits.minUniformBufferAlignment = D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT;
-    limits.copyOffsetAlignment = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT;
-    limits.copyRowPitchAlignment = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
     limits.timestampPeriod = timestampPeriodOf(device);
     return limits;
 }
 
 BindlessLimits bindlessOf() {
     BindlessLimits bindless;
-    // One shader-visible heap holds every resource descriptor; samplers have a
-    // heap of their own.
-    bindless.maxTextures = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1;
-    bindless.maxStorageTextures = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1;
-    bindless.maxStorageBuffers = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1;
-    bindless.maxUniformBuffers = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1;
     bindless.maxSamplers = D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE;
     return bindless;
 }
@@ -140,7 +124,6 @@ ComputeLimits computeOf(ID3D12Device* device) {
     compute.maxWorkgroupCount = {kGroups, kGroups, kGroups};
     compute.maxWorkgroupSize = {D3D12_CS_THREAD_GROUP_MAX_X, D3D12_CS_THREAD_GROUP_MAX_Y, D3D12_CS_THREAD_GROUP_MAX_Z};
     compute.maxWorkgroupInvocations = D3D12_CS_THREAD_GROUP_MAX_THREADS_PER_GROUP;
-    compute.maxSharedMemory = kSharedMemory;
     D3D12_FEATURE_DATA_D3D12_OPTIONS1 options1{};
     if (query(device, D3D12_FEATURE_D3D12_OPTIONS1, options1) && options1.WaveOps != FALSE) {
         compute.subgroupSize = options1.WaveLaneCountMin;
@@ -217,9 +200,8 @@ Features featuresOf(ID3D12Device* device) {
     return features;
 }
 
-// A device that shares memory with the machine has one pool; one with a
-// memory of its own has that and the machine's. The heap types are D3D12's:
-// default, upload and readback.
+// The sizes of the adapter's own memory and of the machine's memory it may
+// use, as DXGI describes them, and whether the two are the same memory.
 Memory memoryOf(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
     Memory memory;
     D3D12_FEATURE_DATA_ARCHITECTURE architecture{.NodeIndex = 0,
@@ -227,20 +209,8 @@ Memory memoryOf(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
                                                  .UMA = FALSE,
                                                  .CacheCoherentUMA = FALSE};
     memory.unified = query(device, D3D12_FEATURE_ARCHITECTURE, architecture) && architecture.UMA != FALSE;
-    if (memory.unified) {
-        memory.heaps.push_back(
-            {.size = desc.DedicatedVideoMemory + desc.SharedSystemMemory, .deviceLocal = true, .hostVisible = true});
-        memory.types.push_back({.heap = 0, .deviceLocal = true});
-        memory.types.push_back({.heap = 0, .deviceLocal = true, .hostVisible = true, .hostCoherent = true});
-        memory.types.push_back(
-            {.heap = 0, .deviceLocal = true, .hostVisible = true, .hostCoherent = true, .hostCached = true});
-        return memory;
-    }
     memory.heaps.push_back({.size = desc.DedicatedVideoMemory, .deviceLocal = true});
     memory.heaps.push_back({.size = desc.SharedSystemMemory, .hostVisible = true});
-    memory.types.push_back({.heap = 0, .deviceLocal = true});
-    memory.types.push_back({.heap = 1, .hostVisible = true, .hostCoherent = true});
-    memory.types.push_back({.heap = 1, .hostVisible = true, .hostCoherent = true, .hostCached = true});
     return memory;
 }
 
@@ -302,8 +272,6 @@ Caps readCaps(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
     caps.compute = computeOf(device);
     caps.features = featuresOf(device);
     caps.memory = memoryOf(desc, device);
-    // BFR makes one direct queue, which runs graphics.
-    caps.queues.graphics = 1;
     return caps;
 }
 

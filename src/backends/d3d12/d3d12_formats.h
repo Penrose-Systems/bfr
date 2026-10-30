@@ -29,11 +29,13 @@ struct DxgiFormats {
 /// format DXGI lacks. Fails with RhiQueryFailed when the device won't say.
 [[nodiscard]] core::Result<FormatCaps> formatCapsFor(ID3D12Device* device, Format format);
 
-/// What a swapchain may be on a device whose largest 2D texture is maxTexture2d
-/// pixels, with tearing when DXGI allows it.
-[[nodiscard]] SurfaceCaps surfaceCapsFor(std::uint32_t maxTexture2d, bool tearing);
+/// What DXGI says a swapchain may be: at most DXGI_MAX_SWAP_CHAIN_BUFFERS
+/// images, and presenting at once when it allows tearing. DXGI has no call for
+/// the rest.
+[[nodiscard]] SurfaceCaps surfaceCapsFor(bool tearing);
 
-/// The formats and color spaces a DXGI swapchain presents in, BFR's names only.
+/// The formats and color spaces a DXGI swapchain presents in: none, since DXGI
+/// has no call that lists them.
 [[nodiscard]] std::span<const SurfaceFormat> surfaceFormats();
 
 /// How a swapchain is made to present format in colorSpace.
@@ -42,7 +44,8 @@ struct SwapchainFormat {
     DXGI_COLOR_SPACE_TYPE colorSpace = DXGI_COLOR_SPACE_RESERVED;
 };
 
-/// The swapchain setup for a pair surfaceFormats() lists; unset for any other.
+/// How DXGI is asked to present format in colorSpace; unset for a pair it has
+/// no setting for.
 [[nodiscard]] SwapchainFormat swapchainFormatFor(Format format, ColorSpace colorSpace);
 
 } // namespace bfr::rhi::d3d12

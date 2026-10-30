@@ -4,7 +4,6 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/format.h"
 #include "d3d12/d3d12_result.h"
-#include "rhi/swapchain_build.h"
 
 #include <d3d12.h>
 #include <dxgicommon.h>
@@ -20,12 +19,6 @@
 namespace bfr::rhi::d3d12 {
 
 namespace {
-
-constexpr std::array kSurfaceFormats{
-    SurfaceFormat{.format = Format::Bgra8Unorm, .colorSpace = ColorSpace::Srgb},
-    SurfaceFormat{.format = Format::Rgba8Unorm, .colorSpace = ColorSpace::Srgb},
-    SurfaceFormat{.format = Format::Rgba16Float, .colorSpace = ColorSpace::SrgbExtendedLinear},
-};
 
 // The DXGI formats of each BFR format DXGI has one for. Bgr10a2Unorm, S8Uint,
 // ETC2, EAC and ASTC are left out: DXGI has no format for them.
@@ -191,31 +184,12 @@ core::Result<FormatCaps> formatCapsFor(ID3D12Device* device, Format format) {
     return caps;
 }
 
-SurfaceCaps surfaceCapsFor(std::uint32_t maxTexture2d, bool tearing) {
-    return {.minImageCount = 2,
-            .maxImageCount = DXGI_MAX_SWAP_CHAIN_BUFFERS,
-            .width = kSizeFromSwapchain,
-            .height = kSizeFromSwapchain,
-            .minWidth = 1,
-            .minHeight = 1,
-            .maxWidth = maxTexture2d,
-            .maxHeight = maxTexture2d,
-            .rotation = SurfaceRotation::None,
-            .fifo = true,
-            .fifoRelaxed = false,
-            // Godot's rendering_device_driver_d3d12.cpp (swap_chain_resize)
-            // presents a mailbox swapchain with a sync interval of 1 and
-            // DXGI_PRESENT_RESTART.
-            .mailbox = true,
-            .immediate = tearing,
-            .alphaOpaque = true,
-            .alphaPremultiplied = false,
-            .alphaPostmultiplied = false,
-            .alphaInherit = false};
+SurfaceCaps surfaceCapsFor(bool tearing) {
+    return {.maxImageCount = DXGI_MAX_SWAP_CHAIN_BUFFERS, .immediate = tearing};
 }
 
 std::span<const SurfaceFormat> surfaceFormats() {
-    return kSurfaceFormats;
+    return {};
 }
 
 SwapchainFormat swapchainFormatFor(Format format, ColorSpace colorSpace) {
