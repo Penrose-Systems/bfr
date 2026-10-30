@@ -33,11 +33,10 @@ namespace bfr::rhi::metal {
 /// built.
 class MetalSwapchain {
 public:
-    /// A swapchain on layer, for a device whose largest 2D texture is
-    /// maxTexture2d pixels, built as request says each time. It reports to
+    /// A swapchain on layer, built as request says each time. It reports to
     /// logger, which outlives it.
     MetalSwapchain(Ref<MTL::Device> device, Ref<CA::MetalLayer> layer, const SwapchainRequest& request,
-                   std::uint32_t maxTexture2d, const core::Logger& logger);
+                   const core::Logger& logger);
     ~MetalSwapchain() = default;
     MetalSwapchain(const MetalSwapchain&) = delete;
     MetalSwapchain& operator=(const MetalSwapchain&) = delete;
@@ -78,7 +77,6 @@ private:
     Ref<MTL::Device> device_;
     Ref<CA::MetalLayer> layer_;
     SwapchainRequest request_;
-    std::uint32_t maxTexture2d_;
     const core::Logger* logger_;
     // How many images the layer was last set up with; 0 while empty.
     std::uint32_t count_ = 0;

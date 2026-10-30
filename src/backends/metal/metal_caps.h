@@ -20,9 +20,8 @@ namespace bfr::rhi::metal {
 /// or later, with Metal 4.
 [[nodiscard]] std::string belowFloor(MTL::Device* device);
 
-/// What device is and does, from what Metal answers about it and from the
-/// limits and features Godot's drivers/metal/metal_device_properties.cpp lists
-/// for Apple GPU families. A field neither gives is 0 or false.
+/// What device is and does, from what Metal answers about it. A field Metal
+/// has no call for is 0 or false.
 [[nodiscard]] Caps readCaps(MTL::Device* device);
 
 } // namespace bfr::rhi::metal

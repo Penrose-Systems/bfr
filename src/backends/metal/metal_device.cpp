@@ -65,19 +65,17 @@ core::Result<void> deviceFailed(const char* what) {
 
 } // namespace
 
-core::Result<std::unique_ptr<MetalDevice>> MetalDevice::create(MetalRhi& rhi, Ref<MTL::Device> device,
-                                                               std::uint32_t maxTexture2d) {
-    auto made = std::make_unique<MetalDevice>(rhi, std::move(device), maxTexture2d);
+core::Result<std::unique_ptr<MetalDevice>> MetalDevice::create(MetalRhi& rhi, Ref<MTL::Device> device) {
+    auto made = std::make_unique<MetalDevice>(rhi, std::move(device));
     if (auto opened = made->open(); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
     return made;
 }
 
-MetalDevice::MetalDevice(MetalRhi& rhi, Ref<MTL::Device> device, std::uint32_t maxTexture2d)
+MetalDevice::MetalDevice(MetalRhi& rhi, Ref<MTL::Device> device)
     : rhi_(&rhi),
       device_(std::move(device)),
-      maxTexture2d_(maxTexture2d),
       swapchains_("swapchains", kSwapchainCapacity, kSwapchainLimit, rhi.logger()),
       commandLists_("command lists", kFramesInFlight, kFramesInFlight, rhi.logger()) {}
 
@@ -186,7 +184,7 @@ core::Result<SwapchainHandle> MetalDevice::createSwapchain(const core::window::N
     if (!layer) {
         return std::unexpected(std::move(layer.error()));
     }
-    const SwapchainHandle swapchain = swapchains_.emplace(device_, *layer, request, maxTexture2d_, rhi_->logger());
+    const SwapchainHandle swapchain = swapchains_.emplace(device_, *layer, request, rhi_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("a device holds at most {} swapchains", kSwapchainLimit));

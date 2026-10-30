@@ -41,14 +41,12 @@ struct MetalCommandList {
 
 class MetalDevice final : public Device {
 public:
-    /// A device on device, which rhi listed and whose largest 2D texture is
-    /// maxTexture2d pixels. Fails with RhiDeviceFailed when Metal gives no
+    /// A device on device, which rhi listed. Fails with RhiDeviceFailed when Metal gives no
     /// queue, event, or the buffers a frame needs.
-    [[nodiscard]] static core::Result<std::unique_ptr<MetalDevice>> create(MetalRhi& rhi, Ref<MTL::Device> device,
-                                                                           std::uint32_t maxTexture2d);
+    [[nodiscard]] static core::Result<std::unique_ptr<MetalDevice>> create(MetalRhi& rhi, Ref<MTL::Device> device);
 
     /// For create.
-    MetalDevice(MetalRhi& rhi, Ref<MTL::Device> device, std::uint32_t maxTexture2d);
+    MetalDevice(MetalRhi& rhi, Ref<MTL::Device> device);
     ~MetalDevice() override;
     MetalDevice(const MetalDevice&) = delete;
     MetalDevice& operator=(const MetalDevice&) = delete;
@@ -101,7 +99,6 @@ private:
 
     MetalRhi* rhi_;
     Ref<MTL::Device> device_;
-    std::uint32_t maxTexture2d_;
     Ref<MTL4::CommandQueue> queue_;
     // Signaled by the queue after each submit, to the value submitted_ counts.
     Ref<MTL::SharedEvent> event_;

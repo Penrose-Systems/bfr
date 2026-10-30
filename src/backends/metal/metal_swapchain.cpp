@@ -65,15 +65,11 @@ core::Result<Ref<CA::MetalLayer>> layerFor(const core::window::NativeWindow& win
 }
 
 MetalSwapchain::MetalSwapchain(Ref<MTL::Device> device, Ref<CA::MetalLayer> layer, const SwapchainRequest& request,
-                               std::uint32_t maxTexture2d, const core::Logger& logger)
-    : device_(std::move(device)),
-      layer_(std::move(layer)),
-      request_(request),
-      maxTexture2d_(maxTexture2d),
-      logger_(&logger) {}
+                               const core::Logger& logger)
+    : device_(std::move(device)), layer_(std::move(layer)), request_(request), logger_(&logger) {}
 
 core::Result<void> MetalSwapchain::check() const {
-    const auto build = swapchainBuildFor(surfaceCapsFor(maxTexture2d_), surfaceFormats(), Extent{}, request_);
+    const auto build = swapchainBuildFor(surfaceCapsFor(), surfaceFormats(), Extent{}, request_);
     if (!build) {
         return std::unexpected(build.error());
     }
@@ -84,7 +80,7 @@ core::Result<SwapchainImages> MetalSwapchain::build(Extent size) {
     drawable_.reset();
     submitted_ = false;
     count_ = 0;
-    const auto settings = swapchainBuildFor(surfaceCapsFor(maxTexture2d_), surfaceFormats(), size, request_);
+    const auto settings = swapchainBuildFor(surfaceCapsFor(), surfaceFormats(), size, request_);
     if (!settings) {
         return std::unexpected(settings.error());
     }

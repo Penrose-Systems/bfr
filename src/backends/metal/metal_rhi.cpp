@@ -104,14 +104,15 @@ core::Result<std::unique_ptr<Device>> MetalRhi::createDevice(std::size_t adapter
             return std::unexpected(std::move(checked.error()));
         }
     }
-    return MetalDevice::create(*this, devices_[adapter], adapters_[adapter].caps.limits.maxTexture2d);
+    return MetalDevice::create(*this, devices_[adapter]);
 }
 
 core::Result<FormatCaps> MetalRhi::formatCaps(std::size_t adapter, Format format) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    return formatCapsFor(devices_[adapter].get(), format);
+    // Metal has no call for what a format does, so every field is false.
+    return FormatCaps{.format = format};
 }
 
 core::Result<SurfaceCaps> MetalRhi::surfaceCaps(std::size_t adapter, const core::window::NativeWindow& window) const {
@@ -121,7 +122,7 @@ core::Result<SurfaceCaps> MetalRhi::surfaceCaps(std::size_t adapter, const core:
     if (auto checked = checkWindow(window); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    return surfaceCapsFor(adapters_[adapter].caps.limits.maxTexture2d);
+    return surfaceCapsFor();
 }
 
 core::Result<std::vector<SurfaceFormat>> MetalRhi::surfaceFormats(std::size_t adapter,
