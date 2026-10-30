@@ -33,6 +33,9 @@ if(BFR_USE_CCACHE)
 endif()
 
 option(BFR_LOGGING "Compile the BFR_LOG_* calls in" ON)
+# Each backend is a build option. Rhi::create dispatches on those turned on
+# and refuses the rest with RhiBackendUnavailable.
+option(BFR_BACKEND_VULKAN "Build the Vulkan backend" ON)
 
 # Debug is the default build. Only when BFR is the project being built: in a
 # user's build, the build type is the user's.
@@ -79,72 +82,87 @@ add_compile_options($<$<CONFIG:Debug>:-ftrivial-auto-var-init=pattern>)
 
 include(cmake/bfr_build.cmake)
 
-find_package(volk CONFIG REQUIRED)
-find_package(VulkanUtilityLibraries CONFIG REQUIRED)
-
-# BFR's code, compiled once for both libraries below. Its public API is
-# include/bfr/public; the rest of include/bfr is its private headers.
+# BFR's code, compiled once for both libraries below. include/bfr is its
+# public API: bfr.h, the C API, and the C++ layers behind it, bfr/core and
+# bfr/rhi. Each backend is one directory under src/backends, private, and
+# only src/rhi/rhi.cpp names them. The null backend is in every build: the
+# second implementation every agnostic test runs on.
 add_library(bfr_objects OBJECT
-    src/c_api.cpp
-    src/error.cpp
-    src/vulkan/instance_table.cpp
-    src/vulkan/queue_families.cpp
-    src/vulkan/swapchain_settings.cpp
-    src/vulkan/vulkan_caps.cpp
-    src/vulkan/vulkan_device.cpp
-    src/vulkan/vulkan_loader.cpp
-    src/vulkan/vulkan_rhi.cpp
-    src/vulkan/vulkan_surface.cpp
-    src/vulkan/vulkan_swapchain.cpp)
+    src/c_api/c_api.cpp
+    src/core/error.cpp
+    src/rhi/rhi.cpp
+    src/rhi/swapchain_build.cpp
+    src/backends/null/null_device.cpp
+    src/backends/null/null_rhi.cpp)
 bfr_apply_compiler_flags(bfr_objects)
+# Private headers are named from src: "rhi/swapchain_build.h",
+# "vulkan/vulkan_rhi.h".
 target_include_directories(bfr_objects
-    PUBLIC include/bfr/public
-    PRIVATE include/bfr include/bfr/vulkan)
-target_link_libraries(bfr_objects
-    PRIVATE volk::volk_headers Vulkan::UtilityHeaders ${CMAKE_DL_LIBS})
+    PUBLIC include
+    PRIVATE src src/backends)
+target_link_libraries(bfr_objects PRIVATE ${CMAKE_DL_LIBS})
 target_compile_definitions(bfr_objects
     PUBLIC BFR_LOGGING_ENABLED=$<BOOL:${BFR_LOGGING}>
-    PRIVATE BFR_BUILDING)
+    PRIVATE BFR_BUILDING BFR_HAS_VULKAN=$<BOOL:${BFR_BACKEND_VULKAN}>)
 # Position independent for the shared library, and hidden, so that it exports
 # only the BFR_API entry points.
 set_target_properties(bfr_objects PROPERTIES
     POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 
-# The window systems the Vulkan backend makes surfaces on. Only volk and the
-# surface code see them: the Xlib and Windows headers they pull in define
-# macros that would leak into the rest. volk keeps its tables the same layout
-# without them.
-if(WIN32)
-    set(bfr_vulkan_platforms VK_USE_PLATFORM_WIN32_KHR WIN32_LEAN_AND_MEAN NOMINMAX)
-elseif(APPLE)
-    set(bfr_vulkan_platforms VK_USE_PLATFORM_METAL_EXT)
-else()
-    set(bfr_vulkan_platforms VK_USE_PLATFORM_XLIB_KHR VK_USE_PLATFORM_WAYLAND_KHR)
+# Third-party code each backend brings, built without our warnings or
+# clang-tidy, and linked into both libraries beside bfr_objects.
+set(bfr_backend_objects "")
+
+if(BFR_BACKEND_VULKAN)
+    find_package(volk CONFIG REQUIRED)
+    find_package(VulkanUtilityLibraries CONFIG REQUIRED)
+    target_sources(bfr_objects PRIVATE
+        src/backends/vulkan/instance_table.cpp
+        src/backends/vulkan/queue_families.cpp
+        src/backends/vulkan/swapchain_settings.cpp
+        src/backends/vulkan/vulkan_caps.cpp
+        src/backends/vulkan/vulkan_device.cpp
+        src/backends/vulkan/vulkan_loader.cpp
+        src/backends/vulkan/vulkan_rhi.cpp
+        src/backends/vulkan/vulkan_surface.cpp
+        src/backends/vulkan/vulkan_swapchain.cpp)
+    target_link_libraries(bfr_objects PRIVATE volk::volk_headers Vulkan::UtilityHeaders)
+    # The window systems the Vulkan backend makes surfaces on. Only volk and
+    # the surface code see them: the Xlib and Windows headers they pull in
+    # define macros that would leak into the rest. volk keeps its tables the
+    # same layout without them.
+    if(WIN32)
+        set(bfr_vulkan_platforms VK_USE_PLATFORM_WIN32_KHR WIN32_LEAN_AND_MEAN NOMINMAX)
+    elseif(APPLE)
+        set(bfr_vulkan_platforms VK_USE_PLATFORM_METAL_EXT)
+    else()
+        set(bfr_vulkan_platforms VK_USE_PLATFORM_XLIB_KHR VK_USE_PLATFORM_WAYLAND_KHR)
+    endif()
+    set_source_files_properties(src/backends/vulkan/vulkan_surface.cpp
+        PROPERTIES COMPILE_DEFINITIONS "${bfr_vulkan_platforms}")
+    add_library(bfr_volk OBJECT src/backends/vulkan/volk.cpp)
+    target_link_libraries(bfr_volk PRIVATE volk::volk_headers)
+    target_compile_definitions(bfr_volk PRIVATE ${bfr_vulkan_platforms})
+    set_target_properties(bfr_volk PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
+    list(APPEND bfr_backend_objects bfr_volk)
 endif()
-set_source_files_properties(src/vulkan/vulkan_surface.cpp
-    PROPERTIES COMPILE_DEFINITIONS "${bfr_vulkan_platforms}")
-# Third-party code: without our warnings or clang-tidy.
-add_library(bfr_volk OBJECT src/vulkan/volk.cpp)
-target_link_libraries(bfr_volk PRIVATE volk::volk_headers)
-target_compile_definitions(bfr_volk PRIVATE ${bfr_vulkan_platforms})
-set_target_properties(bfr_volk PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
 
 # The static library: the C API, and the C++ classes behind it that the tests
 # use.
 add_library(bfr STATIC)
-target_link_libraries(bfr PUBLIC bfr_objects PRIVATE bfr_volk)
+target_link_libraries(bfr PUBLIC bfr_objects PRIVATE ${bfr_backend_objects})
 target_compile_definitions(bfr INTERFACE BFR_STATIC)
 set_target_properties(bfr PROPERTIES OUTPUT_NAME bfr_static)
-bfr_add_header_check(bfr ${CMAKE_CURRENT_SOURCE_DIR}/include/bfr/public)
-bfr_add_c_header_check(bfr bfr.h)
+bfr_add_header_check(bfr ${CMAKE_CURRENT_SOURCE_DIR}/include)
+bfr_add_c_header_check(bfr bfr/bfr.h)
 
 # The shared library the language bindings load. It exports only bfr_*.
 # Hidden visibility is not enough on its own: libstdc++ gives its templates
 # default visibility, so the linker is told the list too.
 add_library(bfr_shared SHARED)
-target_link_libraries(bfr_shared PRIVATE bfr_objects bfr_volk)
+target_link_libraries(bfr_shared PRIVATE bfr_objects ${bfr_backend_objects})
 # Its users see bfr.h and nothing of the C++ behind it.
-target_include_directories(bfr_shared INTERFACE include/bfr/public)
+target_include_directories(bfr_shared INTERFACE include)
 set_target_properties(bfr_shared PROPERTIES OUTPUT_NAME bfr)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(exports ${CMAKE_CURRENT_SOURCE_DIR}/cmake/bfr_exports.map)

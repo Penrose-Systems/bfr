@@ -1,4 +1,4 @@
-#include "error.h"
+#include "bfr/core/error.h"
 
 int main() {
     return bfr::core::name(bfr::core::ErrorCode::RhiDeviceFailed).empty() ? 1 : 0;

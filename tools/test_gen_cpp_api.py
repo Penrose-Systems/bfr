@@ -25,6 +25,14 @@ def with_more(spec: dict) -> dict:
             {"name": "device", "type": "device", "pointer": "out"},
         ],
     }
+    spec["functions"]["get_results"] = {
+        "doc": "Lists every result. With results null, writes the count.",
+        "returns": "result",
+        "params": [
+            {"name": "count", "type": "u32", "pointer": "inout"},
+            {"name": "results", "type": "result", "array": "count", "pointer": "out", "optional": True},
+        ],
+    }
     spec["functions"]["device_get_formats"] = {
         "doc": "Lists the formats. With formats null, writes the count.",
         "returns": "result",
@@ -35,6 +43,11 @@ def with_more(spec: dict) -> dict:
         ],
     }
     return spec
+
+
+def comments(header: str) -> str:
+    """The header's /// comments as one line each, however the generator wraps them."""
+    return "\n".join(line.strip().removeprefix("/// ") for line in header.splitlines() if line.strip().startswith("///"))
 
 
 class RenderTests(unittest.TestCase):
@@ -52,10 +65,16 @@ class RenderTests(unittest.TestCase):
     def test_objects_and_handles_destroy_what_they_own(self) -> None:
         self.assertIn("    ~Buffer() { bfr_destroy_buffer(device_, buffer_); }", self.header)
 
+    def test_a_list_that_belongs_to_no_object_is_a_free_function_named_for_what_it_lists(self) -> None:
+        self.assertIn("[[nodiscard]] inline Expected<std::vector<Result>> results() {", self.header)
+        self.assertIn("bfr_get_results(&count, nullptr)", self.header)
+        self.assertIn("results.push_back(static_cast<Result>(resultsC[i]));", self.header)
+
     def test_an_object_with_handles_lives_until_its_last_handle_is_destroyed(self) -> None:
         self.assertIn("    ~Device() = default;", self.header)
         self.assertIn("keepAlive_(detail::share(device, &bfr_destroy_device, std::move(keepAlive)))", self.header)
-        self.assertIn("A Device with Buffer objects left lives on until the last of them is destroyed", self.header)
+        self.assertIn("A Device with Buffer objects left lives on until the last of them is destroyed",
+                      comments(self.header).replace("\n", " "))
         self.assertIn("    // Keeps the Device that made this alive until this is destroyed.\n"
                       "    detail::KeepAlive keepAlive_;", self.header)
 

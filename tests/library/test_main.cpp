@@ -1,28 +1,42 @@
+#include "test_backends.h"
+
 #include <catch2/catch_session.hpp>
 
-#include <cstdlib>
+#include <algorithm>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace {
 
-// Sets name unless the caller's environment already has it.
-void setDefault(const char* name, const char* value) {
-    constexpr int kKeepExisting = 0;
-    setenv(name, value, kKeepExisting);
+// The backends --backend named; empty for every backend the build has.
+std::vector<std::string>& chosenBackends() {
+    static std::vector<std::string> chosen;
+    return chosen;
 }
 
 } // namespace
 
-// Every test sees the same environment however it is started (ctest, the binary
-// directly, a debugger), and a variable the caller set always wins.
+namespace bfr::test {
+
+bool runsOnBackend(std::string_view backend) {
+    const auto& chosen = chosenBackends();
+    return chosen.empty() || std::ranges::find(chosen, backend) != chosen.end();
+}
+
+} // namespace bfr::test
+
+// The main every test program runs. A backend that needs its environment set
+// up does so from its own tests/library/backends/<name>/test_environment.cpp,
+// linked beside this.
 int main(int argc, char* argv[]) {
-    // The loader takes vcpkg's validation layer ahead of an older system one. It
-    // keeps drivers loaded after the instance goes: unloading one strands the
-    // memory its globals still hold, which LeakSanitizer then reports as leaked.
-    setDefault("VK_ADD_LAYER_PATH", BFR_TEST_LAYER_PATH);
-    setDefault("VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING", "1");
-#ifdef BFR_TEST_DRIVER_FILES
-    // NVIDIA's driver crashes ThreadSanitizer; lavapipe runs clean under it.
-    setDefault("VK_DRIVER_FILES", BFR_TEST_DRIVER_FILES);
-#endif
-    return Catch::Session().run(argc, argv);
+    Catch::Session session;
+    session.cli(session.cli() | Catch::Clara::Opt(chosenBackends(), "name")["--backend"](
+                                    "run the agnostic cases on this backend; repeat for several. "
+                                    "Without it, they run on every backend the build has."));
+    const int parsed = session.applyCommandLine(argc, argv);
+    if (parsed != 0) {
+        return parsed;
+    }
+    return session.run();
 }

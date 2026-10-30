@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the C API header from the API description.
 
-    python3 tools/gen_c_api.py           # write include/bfr/public/bfr.h
+    python3 tools/gen_c_api.py           # write include/bfr/bfr.h
     python3 tools/gen_c_api.py --check   # fail if bfr.h is out of date
     python3 tools/gen_c_api.py --functions   # list the C functions, one a line
 
@@ -30,7 +30,7 @@ from bfr_api import (
     macro,
 )
 
-HEADER = REPO_ROOT / "include" / "bfr" / "public" / "bfr.h"
+HEADER = REPO_ROOT / "include" / "bfr" / "bfr.h"
 
 
 def c_type(api: Api, field: dict[str, Any]) -> str:

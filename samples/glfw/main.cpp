@@ -1,10 +1,13 @@
-// Opens a GLFW window and makes a BFR swapchain for it, resizing the swapchain
-// as the window resizes. Close the window to exit.
+// Opens a GLFW window, makes a BFR swapchain for it and clears and presents it
+// every frame, resizing the swapchain as the window resizes. Close the window
+// to exit.
+#include "bfr.hpp"
 #include "native_window.h"
 #include "window_sample.hpp"
 
 #include <GLFW/glfw3.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 
@@ -12,11 +15,14 @@ namespace {
 
 constexpr int kWidth = 1280;
 constexpr int kHeight = 720;
-constexpr double kWaitSeconds = 0.1;
 
 } // namespace
 
-int main() {
+int main(int argc, char* argv[]) {
+    const auto backend = sample::backendFrom({argv, static_cast<std::size_t>(argc)});
+    if (!backend) {
+        return 2;
+    }
     if (glfwInit() == GLFW_FALSE) {
         std::cerr << "can't start GLFW\n";
         return 1;
@@ -34,11 +40,13 @@ int main() {
     {
         const NativeWindow native = nativeWindow(window);
         result = sample::show(
+            *backend,
             {.window = native.window,
              .display = native.display,
              .system = native.wayland ? bfr::WindowSystem::Wayland : bfr::WindowSystem::Default},
             [window] {
-                glfwWaitEventsTimeout(kWaitSeconds);
+                // Presenting paces the loop, so events are polled, not waited for.
+                glfwPollEvents();
                 return glfwWindowShouldClose(window) == GLFW_FALSE;
             },
             [window] {

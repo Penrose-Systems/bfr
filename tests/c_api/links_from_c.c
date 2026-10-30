@@ -1,6 +1,6 @@
 // Calls the shared library from C: the entry points link by their C names and
 // report errors through bfr_get_last_error.
-#include "bfr.h"
+#include "bfr/bfr.h"
 
 #include <stdio.h>
 

@@ -16,16 +16,17 @@ function(bfr_apply_compiler_flags target)
 endfunction()
 
 # Every public header compiles on its own: <target>_headers compiles one
-# generated source per header in public_dir that includes only that header,
-# with what linking target provides and nothing else. It is not part of target.
+# generated source per header under public_dir that includes only that header,
+# by its path from public_dir, with what linking target provides and nothing
+# else. It is not part of target.
 function(bfr_add_header_check target public_dir)
-    file(GLOB headers CONFIGURE_DEPENDS ${public_dir}/*.h)
+    file(GLOB_RECURSE headers CONFIGURE_DEPENDS ${public_dir}/*.h)
     if(NOT headers)
         return()
     endif()
     set(checks "")
     foreach(header ${headers})
-        get_filename_component(name ${header} NAME)
+        file(RELATIVE_PATH name ${public_dir} ${header})
         set(check ${CMAKE_CURRENT_BINARY_DIR}/header_checks/${target}/${name}.cpp)
         file(CONFIGURE OUTPUT ${check} CONTENT "#include \"${name}\" // IWYU pragma: keep\n")
         list(APPEND checks ${check})

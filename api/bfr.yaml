@@ -1,4 +1,4 @@
-# The BFR API. tools/gen_c_api.py generates include/bfr/public/bfr.h from this
+# The BFR API. tools/gen_c_api.py generates include/bfr/bfr.h from this
 # file, and the wrappers are generated from it too.
 #
 # Names are snake_case without the bfr_ prefix; the generator adds it.
@@ -32,7 +32,7 @@ enums:
     values:
       success: {value: 0, doc: The call did what was asked.}
       incomplete: {value: 1, doc: The caller's array was too small; the count says how many were written.}
-      error_invalid_argument: {value: -1, doc: A required pointer was null or a value was out of range.}
+      error_invalid_argument: {value: -1, doc: "A required pointer was null, a value was out of range, or a call came out of order."}
       error_out_of_memory: {value: -2, doc: An allocation failed.}
       error_instance_failed: {value: -3, doc: The backend refused to create the instance.}
       error_loader_failed: {value: -4, doc: The backend's library could not be loaded.}
@@ -255,6 +255,19 @@ enums:
       postmultiplied: {value: 2, doc: "The window multiplies colors by alpha."}
       inherit: {value: 3, doc: The window system decides how alpha blends.}
 
+  load_op:
+    doc: What an attachment holds when rendering begins.
+    values:
+      load: {value: 0, doc: What the image held before.}
+      clear: {value: 1, doc: The clear color.}
+      dont_care: {value: 2, doc: Anything; the renderer writes every pixel.}
+
+  store_op:
+    doc: What becomes of an attachment when rendering ends.
+    values:
+      store: {value: 0, doc: What was rendered is kept.}
+      dont_care: {value: 1, doc: It may be dropped.}
+
   window_system:
     doc: >-
       Which window system a bfr_window comes from, for the platforms that have
@@ -285,6 +298,14 @@ handles:
       The images presented to one window. Calls on one swapchain must not
       overlap, destroying it included; the caller synchronizes them. Different
       swapchains may be used from different threads at once.
+
+  command_list:
+    parent: device
+    destroy: destroy_command_list
+    doc: >-
+      Commands recorded for the GPU, from bfr_begin_commands until bfr_submit
+      sends them. Calls on one command list must not overlap; the caller
+      synchronizes them.
 
 callbacks:
   message_callback:
@@ -386,6 +407,14 @@ structs:
       - {name: color_space, type: color_space}
       - {name: present_mode, type: present_mode}
       - {name: alpha_mode, type: alpha_mode}
+
+  rendering_desc:
+    doc: How to begin rendering to a swapchain's acquired image.
+    extensible: true
+    members:
+      - {name: load_op, type: load_op, doc: What the image holds at the start; 0 is load.}
+      - {name: store_op, type: store_op, doc: What becomes of it at the end; 0 is store.}
+      - {name: clear_color, type: f32, fixed: 4, doc: "Red, green, blue and alpha, 0 to 1, when load_op is clear."}
 
   surface_desc:
     doc: Which window to ask about.
@@ -669,6 +698,17 @@ functions:
     returns: string
     params: []
 
+  get_backends:
+    doc: >-
+      Lists the backends this build has, in bfr_backend order. With backends
+      null, writes how many there are to count. Otherwise writes up to count
+      of them, sets count to how many it wrote, and returns incomplete if
+      there were more.
+    returns: result
+    params:
+      - {name: count, type: u32, pointer: inout}
+      - {name: backends, type: backend, array: count, pointer: out, optional: true}
+
   create_instance:
     doc: Creates an instance and lists its adapters.
     returns: result
@@ -800,3 +840,67 @@ functions:
     params:
       - {name: device, type: device}
       - {name: swapchain, type: swapchain}
+
+  acquire:
+    doc: >-
+      Takes the swapchain's next image, for bfr_begin_rendering. Fails with
+      error_out_of_date when the swapchain has no images or no longer matches
+      its window; bfr_resize_swapchain then gives it new ones.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: swapchain, type: swapchain}
+
+  present:
+    doc: >-
+      Shows the acquired image once what bfr_submit sent for it is done. Fails
+      with error_out_of_date when the swapchain no longer matches its window;
+      the image was still presented when it could be.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: swapchain, type: swapchain}
+
+  begin_commands:
+    doc: >-
+      Starts recording commands. The device holds a few command lists at once
+      and waits for the GPU to finish the oldest before reusing it.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list, pointer: out}
+
+  begin_rendering:
+    doc: >-
+      Begins rendering to the image bfr_acquire took from swapchain, as desc
+      says. Ends with bfr_end_rendering.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: swapchain, type: swapchain}
+      - {name: desc, type: rendering_desc, pointer: in}
+
+  end_rendering:
+    doc: Ends the rendering bfr_begin_rendering began; the image is then ready to present.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+
+  submit:
+    doc: >-
+      Sends the recorded commands to the GPU, which runs them in the order
+      submitted. The command list is gone afterwards.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+
+  destroy_command_list:
+    doc: >-
+      Discards a command list that was not submitted. A handle that is
+      already submitted or destroyed does nothing.
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}

@@ -8,7 +8,11 @@ namespace {
 
 // Whether every call succeeded.
 [[maybe_unused]] bool callEverything() {
-    auto instance = bfr::Instance::create({.backend = bfr::Backend::Vulkan,
+    const auto backends = bfr::backends();
+    if (!backends || backends->empty()) {
+        return false;
+    }
+    auto instance = bfr::Instance::create({.backend = backends->front(),
                                            .validation = false,
                                            .messageCallback = [](bfr::MessageSeverity, std::string_view) {
                                            }});

@@ -2,7 +2,7 @@
 
 // What the generated bfr.hpp is built on. Nothing here is part of the API.
 
-#include "bfr.h"
+#include "bfr/bfr.h"
 
 #include <algorithm>
 #include <array>

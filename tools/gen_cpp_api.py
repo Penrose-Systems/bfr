@@ -13,7 +13,8 @@ Where each function goes follows from api/bfr.yaml:
 - A function whose params start with a handle's parent and then the handle
   is a method on the handle; one whose first param is an object, a method on
   that object; one that creates an object from no other, a static method on
-  the object it creates.
+  the object it creates; a list that belongs to no object, a free function
+  named for what it lists.
 - A function returning result with one out param returns that param. One
   with an optional out array whose count is inout lists: the method asks
   until the list stops growing and returns a std::vector.
@@ -70,9 +71,14 @@ def first_sentence(text: str) -> str:
     return text if end == -1 else text[: end + 1]
 
 
+# The owner of a free function.
+FREE = ""
+
+
 @dataclass
 class Method:
-    """One function, as a method of the class named owner."""
+    """One function, as a method of the class named owner, or a free function
+    when owner is FREE."""
 
     function: str
     owner: str
@@ -94,7 +100,7 @@ class Plan:
         if "result" not in api.enums or "get_last_error" not in api.functions:
             raise SpecError("the C++ wrapper needs the result enum and get_last_error")
         self.destroys = {entry["destroy"] for entry in [*api.objects.values(), *api.handles.values()]}
-        self.methods: dict[str, list[Method]] = {name: [] for name in [*api.objects, *api.handles]}
+        self.methods: dict[str, list[Method]] = {name: [] for name in [*api.objects, *api.handles, FREE]}
         for name, function in api.functions.items():
             if name in self.destroys or name == "get_last_error":
                 continue
@@ -133,10 +139,15 @@ class Plan:
             method = Method(name, types[0], self._method_name(name, types[0], None), self_params=params[:1])
         else:
             created = [p["type"] for p in params if p.get("pointer") == "out" and p["type"] in api.objects]
-            if len(created) != 1:
+            if len(created) == 1:
+                stem = name.removesuffix(f"_{created[0]}")
+                method = Method(name, created[0], camel(stem), static=True)
+            elif any(p.get("array") for p in params):
+                # A list that belongs to no object is a free function, named
+                # for what it lists.
+                method = Method(name, FREE, camel(name.removeprefix("get_")))
+            else:
                 raise SpecError(f"{name}: the C++ generator cannot tell which class it belongs to")
-            stem = name.removesuffix(f"_{created[0]}")
-            method = Method(name, created[0], camel(stem), static=True)
         rest = params[len(method.self_params) :]
 
         lists = [p for p in rest if p.get("array") and p.get("pointer") == "out"]
@@ -162,6 +173,10 @@ class Plan:
                 raise SpecError(f"{name}.{param['name']}: the C++ generator does not yet handle this param")
             if param.get("pointer") == "in" and param["type"] not in api.structs:
                 raise SpecError(f"{name}.{param['name']}: only structs are passed by pointer")
+            if param["type"] in api.handles:
+                device = api.handles[method.owner]["parent"] if method.owner in api.handles else method.owner
+                if api.handles[param["type"]]["parent"] != device:
+                    raise SpecError(f"{name}.{param['name']}: a handle passed in is made by the same parent")
         return method
 
     def _method_name(self, name: str, owner: str, handle: str | None) -> str:
@@ -320,7 +335,7 @@ class Renderer:
             "// NOLINTBEGIN",
             "#pragma once",
             "",
-            '#include "bfr.h"',
+            '#include "bfr/bfr.h"',
             '#include "bfr_detail.hpp"',
             "",
             "#include <array>",
@@ -474,6 +489,9 @@ class Renderer:
                 partner = next(c for c in callbacks if c["type"] == member["user_data"]
                                or c["name"] == member["user_data"])
                 fields.append(f".{member['name']} = {camel(partner['name'])}")
+            elif member.get("fixed"):
+                elements = ", ".join(f"value.{camel(member['name'])}[{i}]" for i in range(member["fixed"]))
+                fields.append(f".{member['name']} = {{{elements}}}")
             else:
                 fields.append(f".{member['name']} = {to_c(api, member['type'], 'value.' + camel(member['name']))}")
         self.emit("", f"inline {c_name(name)} toC({', '.join(params)}) {{", *initializer(fields), "}")
@@ -582,6 +600,8 @@ class Renderer:
                     template = ["template <class... Extensions>",
                                 f"    requires(detail::kExtends<Extensions, {pascal(kind)}> && ...)"]
                     params.append("const Extensions&... extensions")
+            elif kind in api.handles:
+                params.append(f"const {pascal(kind)}& {camel(param['name'])}")
             else:
                 params.append(f"{cpp_type(api, kind)} {camel(param['name'])}")
         if method.returned is None:
@@ -616,13 +636,20 @@ class Renderer:
         self.emit("")
         self.emit(*template)
         inline = "" if template else "inline "
-        self.emit(f"{inline}{returns} {pascal(owner)}::{method.name}({params}){const} {{")
+        if owner == FREE:
+            self.emit(*doc(first_sentence(function["doc"])))
+            self.emit(f"[[nodiscard]] {inline}{returns} {method.name}({params}) {{")
+        else:
+            self.emit(f"{inline}{returns} {pascal(owner)}::{method.name}({params}){const} {{")
 
         args = [f"{camel(p['type'])}_" for p in method.self_params]
         # The state of a callback the desc names, which the object made keeps.
         callback_state = None
         for param in method.inputs:
             kind, name = param["type"], camel(param["name"])
+            if kind in api.handles:
+                args.append(f"{name}.get()")
+                continue
             if param.get("pointer") != "in":
                 args.append(to_c(api, kind, name))
                 continue
@@ -696,6 +723,7 @@ class Renderer:
         count_name = camel(count["name"])
         asking = self.ordered_args(method, args, {count["name"]: f"&{count_name}", array["name"]: "nullptr"})
         filling = self.ordered_args(method, args, {count["name"]: f"&{count_name}", array["name"]: f"{listed}.data()"})
+        element = f"detail::fromC({listed}[i])" if kind in api.structs else from_c(api, kind, f"{listed}[i]")
         self.emit(
             f"    std::vector<{c_name(kind)}> {listed};",
             f"    std::uint32_t {count_name} = 0;",
@@ -717,7 +745,7 @@ class Renderer:
             f"    std::vector<{pascal(kind)}> {camel(array['name'])};",
             f"    {camel(array['name'])}.reserve({count_name});",
             f"    for (std::uint32_t i = 0; i < {count_name}; ++i) {{",
-            f"        {camel(array['name'])}.push_back(detail::fromC({listed}[i]));",
+            f"        {camel(array['name'])}.push_back({element});",
             "    }",
             f"    return {camel(array['name'])};",
         )

@@ -64,7 +64,7 @@ class RepositoryTests(unittest.TestCase):
 
     def test_the_implementation_s_formats_match_the_description(self) -> None:
         # format.h repeats the format enum for the C++ code behind the C API.
-        text = (REPO_ROOT / "include" / "bfr" / "public" / "format.h").read_text(encoding="utf-8")
+        text = (REPO_ROOT / "include" / "bfr" / "rhi" / "format.h").read_text(encoding="utf-8")
         enum = text[text.index("enum class Format") : text.index("};")]
         declared = re.findall(r"^    (\w+) = (\d+),$", enum, re.MULTILINE)
         listed = re.findall(r"Format::(\w+)", text[text.index("kFormats") :])

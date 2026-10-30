@@ -6,7 +6,7 @@
 // NOLINTBEGIN
 #pragma once
 
-#include "bfr.h"
+#include "bfr/bfr.h"
 #include "bfr_detail.hpp"
 
 #include <array>
@@ -29,7 +29,7 @@ enum class Result : std::int32_t {
     Success = BFR_RESULT_SUCCESS,
     /// The caller's array was too small; the count says how many were written.
     Incomplete = BFR_RESULT_INCOMPLETE,
-    /// A required pointer was null or a value was out of range.
+    /// A required pointer was null, a value was out of range, or a call came out of order.
     ErrorInvalidArgument = BFR_RESULT_ERROR_INVALID_ARGUMENT,
     /// An allocation failed.
     ErrorOutOfMemory = BFR_RESULT_ERROR_OUT_OF_MEMORY,
@@ -563,6 +563,43 @@ enum class AlphaMode : std::int32_t {
     return {};
 }
 
+/// What an attachment holds when rendering begins.
+enum class LoadOp : std::int32_t {
+    /// What the image held before.
+    Load = BFR_LOAD_OP_LOAD,
+    /// The clear color.
+    Clear = BFR_LOAD_OP_CLEAR,
+    /// Anything; the renderer writes every pixel.
+    DontCare = BFR_LOAD_OP_DONT_CARE,
+};
+
+/// value's name in bfr.yaml; empty for a value LoadOp doesn't have.
+[[nodiscard]] constexpr std::string_view name(LoadOp value) {
+    switch (value) {
+    case LoadOp::Load: return "load";
+    case LoadOp::Clear: return "clear";
+    case LoadOp::DontCare: return "dont_care";
+    }
+    return {};
+}
+
+/// What becomes of an attachment when rendering ends.
+enum class StoreOp : std::int32_t {
+    /// What was rendered is kept.
+    Store = BFR_STORE_OP_STORE,
+    /// It may be dropped.
+    DontCare = BFR_STORE_OP_DONT_CARE,
+};
+
+/// value's name in bfr.yaml; empty for a value StoreOp doesn't have.
+[[nodiscard]] constexpr std::string_view name(StoreOp value) {
+    switch (value) {
+    case StoreOp::Store: return "store";
+    case StoreOp::DontCare: return "dont_care";
+    }
+    return {};
+}
+
 /// Which window system a bfr_window comes from, for the platforms that have more than one.
 enum class WindowSystem : std::int32_t {
     /// The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -604,6 +641,8 @@ class Instance;
 class Device;
 
 class Swapchain;
+
+class CommandList;
 
 /// How to create an instance.
 struct InstanceDesc {
@@ -672,6 +711,16 @@ struct SwapchainImages {
     ColorSpace colorSpace{};
     PresentMode presentMode{};
     AlphaMode alphaMode{};
+};
+
+/// How to begin rendering to a swapchain's acquired image.
+struct RenderingDesc {
+    /// What the image holds at the start; 0 is load.
+    LoadOp loadOp{};
+    /// What becomes of it at the end; 0 is store.
+    StoreOp storeOp{};
+    /// Red, green, blue and alpha, 0 to 1, when load_op is clear.
+    std::array<float, 4> clearColor{};
 };
 
 /// Which window to ask about.
@@ -1102,6 +1151,15 @@ inline bfr_swapchain_desc toC(const SwapchainDesc& value, const bfr_chain* next)
     };
 }
 
+inline bfr_rendering_desc toC(const RenderingDesc& value, const bfr_chain* next) {
+    return {
+        .next = next,
+        .load_op = static_cast<bfr_load_op>(value.loadOp),
+        .store_op = static_cast<bfr_store_op>(value.storeOp),
+        .clear_color = {value.clearColor[0], value.clearColor[1], value.clearColor[2], value.clearColor[3]},
+    };
+}
+
 inline bfr_surface_desc toC(const SurfaceDesc& value, const bfr_chain* next) {
     return {.next = next, .window = toC(value.window)};
 }
@@ -1475,8 +1533,8 @@ public:
     /// Owns nothing, as a moved-from Device does.
     Device() = default;
     /// Destroys a device once the GPU has finished with it, with every handle it still owns. Null
-    /// does nothing. A Device with Swapchain objects left lives on until the last of them is
-    /// destroyed, so they may be destroyed in any order.
+    /// does nothing. A Device with CommandList or Swapchain objects left lives on until the last of
+    /// them is destroyed, so they may be destroyed in any order.
     ~Device() = default;
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
@@ -1500,6 +1558,10 @@ public:
     /// Creates a swapchain for the window in desc, which the device must be able to present to. It
     /// has no images until the first bfr_resize_swapchain gives it a size.
     [[nodiscard]] Expected<Swapchain> createSwapchain(const SwapchainDesc& desc) const;
+
+    /// Starts recording commands. The device holds a few command lists at once and waits for the
+    /// GPU to finish the oldest before reusing it.
+    [[nodiscard]] Expected<CommandList> beginCommands() const;
 
 private:
     Device(bfr_device* device, detail::KeepAlive keepAlive) : device_(device), keepAlive_(detail::share(device, &bfr_destroy_device, std::move(keepAlive))) {}
@@ -1542,12 +1604,69 @@ public:
     /// Rebuilds a swapchain's images at a new size.
     [[nodiscard]] Expected<SwapchainImages> resize(std::uint32_t width, std::uint32_t height);
 
+    /// Takes the swapchain's next image, for bfr_begin_rendering. Fails with error_out_of_date when
+    /// the swapchain has no images or no longer matches its window; bfr_resize_swapchain then gives
+    /// it new ones.
+    [[nodiscard]] Expected<void> acquire();
+
+    /// Shows the acquired image once what bfr_submit sent for it is done. Fails with
+    /// error_out_of_date when the swapchain no longer matches its window; the image was still
+    /// presented when it could be.
+    [[nodiscard]] Expected<void> present();
+
 private:
     Swapchain(bfr_device* device, bfr_swapchain swapchain, detail::KeepAlive keepAlive) : device_(device), swapchain_(swapchain), keepAlive_(std::move(keepAlive)) {}
     friend class Device;
 
     bfr_device* device_ = nullptr;
     bfr_swapchain swapchain_{};
+    // Keeps the Device that made this alive until this is destroyed.
+    detail::KeepAlive keepAlive_;
+};
+
+/// Commands recorded for the GPU, from bfr_begin_commands until bfr_submit sends them. Calls on one
+/// command list must not overlap; the caller synchronizes them.
+class CommandList {
+public:
+    /// Owns nothing, as a moved-from CommandList does.
+    CommandList() = default;
+    /// Discards a command list that was not submitted. A handle that is already submitted or
+    /// destroyed does nothing.
+    ~CommandList() { bfr_destroy_command_list(device_, commandList_); }
+    CommandList(const CommandList&) = delete;
+    CommandList& operator=(const CommandList&) = delete;
+    CommandList(CommandList&& other) noexcept : device_(std::exchange(other.device_, nullptr)), commandList_(std::exchange(other.commandList_, {})), keepAlive_(std::move(other.keepAlive_)) {}
+    CommandList& operator=(CommandList&& other) noexcept {
+        if (this != &other) {
+            bfr_destroy_command_list(device_, commandList_);
+            device_ = std::exchange(other.device_, nullptr);
+            commandList_ = std::exchange(other.commandList_, {});
+            keepAlive_ = std::move(other.keepAlive_);
+        }
+        return *this;
+    }
+
+    /// The C value, for calls bfr.hpp does not wrap; this still owns it.
+    [[nodiscard]] bfr_command_list get() const { return commandList_; }
+    [[nodiscard]] explicit operator bool() const { return commandList_.bits != 0; }
+
+    /// Begins rendering to the image bfr_acquire took from swapchain, as desc says. Ends with
+    /// bfr_end_rendering.
+    [[nodiscard]] Expected<void> beginRendering(const Swapchain& swapchain, const RenderingDesc& desc);
+
+    /// Ends the rendering bfr_begin_rendering began; the image is then ready to present.
+    [[nodiscard]] Expected<void> endRendering();
+
+    /// Sends the recorded commands to the GPU, which runs them in the order submitted. The command
+    /// list is gone afterwards.
+    [[nodiscard]] Expected<void> submit();
+
+private:
+    CommandList(bfr_device* device, bfr_command_list commandList, detail::KeepAlive keepAlive) : device_(device), commandList_(commandList), keepAlive_(std::move(keepAlive)) {}
+    friend class Device;
+
+    bfr_device* device_ = nullptr;
+    bfr_command_list commandList_{};
     // Keeps the Device that made this alive until this is destroyed.
     detail::KeepAlive keepAlive_;
 };
@@ -1684,12 +1803,83 @@ inline Expected<Swapchain> Device::createSwapchain(const SwapchainDesc& desc) co
     return Swapchain{device_, swapchain, keepAlive_};
 }
 
+inline Expected<CommandList> Device::beginCommands() const {
+    bfr_command_list commandList{};
+    if (const bfr_result result = bfr_begin_commands(device_, &commandList); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return CommandList{device_, commandList, keepAlive_};
+}
+
 inline Expected<SwapchainImages> Swapchain::resize(std::uint32_t width, std::uint32_t height) {
     bfr_swapchain_images images{};
     if (const bfr_result result = bfr_resize_swapchain(device_, swapchain_, width, height, &images); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return detail::fromC(images);
+}
+
+inline Expected<void> Swapchain::acquire() {
+    if (const bfr_result result = bfr_acquire(device_, swapchain_); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Swapchain::present() {
+    if (const bfr_result result = bfr_present(device_, swapchain_); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> CommandList::beginRendering(const Swapchain& swapchain, const RenderingDesc& desc) {
+    const bfr_rendering_desc cDesc = detail::toC(desc, nullptr);
+    if (const bfr_result result = bfr_begin_rendering(device_, commandList_, swapchain.get(), &cDesc); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> CommandList::endRendering() {
+    if (const bfr_result result = bfr_end_rendering(device_, commandList_); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> CommandList::submit() {
+    if (const bfr_result result = bfr_submit(device_, commandList_); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+/// Lists the backends this build has, in bfr_backend order.
+[[nodiscard]] inline Expected<std::vector<Backend>> backends() {
+    std::vector<bfr_backend> backendsC;
+    std::uint32_t count = 0;
+    // Asked again while the list grows between the two calls.
+    for (;;) {
+        bfr_result result = bfr_get_backends(&count, nullptr);
+        if (result < 0) {
+            return std::unexpected(detail::failure(result));
+        }
+        backendsC.resize(count);
+        result = bfr_get_backends(&count, backendsC.data());
+        if (result < 0) {
+            return std::unexpected(detail::failure(result));
+        }
+        if (result != BFR_RESULT_INCOMPLETE) {
+            break;
+        }
+    }
+    std::vector<Backend> backends;
+    backends.reserve(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        backends.push_back(static_cast<Backend>(backendsC[i]));
+    }
+    return backends;
 }
 
 } // namespace bfr

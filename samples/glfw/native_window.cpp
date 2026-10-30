@@ -19,8 +19,9 @@ NativeWindow nativeWindow(GLFWwindow* window) {
         return {.window = glfwGetWaylandWindow(window), .display = glfwGetWaylandDisplay(), .wayland = true};
     }
     // An X11 window is a number, which BFR takes as a pointer.
-    return {.window = reinterpret_cast<void*>(static_cast<std::uintptr_t>(glfwGetX11Window(window))),
-            .display = glfwGetX11Display()};
+    const auto xid = static_cast<std::uintptr_t>(glfwGetX11Window(window));
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast,performance-no-int-to-ptr)
+    return {.window = reinterpret_cast<void*>(xid), .display = glfwGetX11Display()};
 #else
     return {};
 #endif

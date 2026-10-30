@@ -1,7 +1,7 @@
-#include "handle.h"
-#include "log.h"
+#include "bfr/core/handle.h"
+#include "bfr/core/log.h"
+#include "bfr/core/pool.h"
 #include "log_capture.h"
-#include "pool.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>

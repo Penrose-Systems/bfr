@@ -5,7 +5,7 @@ for C++, C#, Rust and Python.
 
 ## Status (2026-10-26)
 
-Early. Today: a C API, [`bfr.h`](include/bfr/public/bfr.h), and its C++
+Early. Today: a C API, [`bfr.h`](include/bfr/bfr.h), and its C++
 wrapper, [`bfr.hpp`](bindings/cpp/include/bfr.hpp), over a Vulkan backend
 tested on Linux. They cover instances, adapters and what each can do,
 devices and swapchains.

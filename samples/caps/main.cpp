@@ -595,18 +595,28 @@ int run(std::span<char*> args) {
             return 2;
         }
     }
-    const auto instance = bfr::Instance::create({.backend = bfr::Backend::Vulkan});
-    if (!instance) {
-        std::cerr << "can't create an instance: " << instance.error().message << "\n";
+    // Every backend the build has, each adapter of each.
+    const auto backends = bfr::backends();
+    if (!backends) {
+        std::cerr << "can't list backends: " << backends.error().message << "\n";
         return 1;
     }
-    const auto adapters = instance->adapters();
-    if (!adapters) {
-        std::cerr << "can't list adapters: " << adapters.error().message << "\n";
-        return 1;
-    }
-    for (std::uint32_t adapter = 0; adapter < adapters->size(); ++adapter) {
-        printAdapter(*instance, adapter, options);
+    for (const bfr::Backend backend : *backends) {
+        const auto instance = bfr::Instance::create({.backend = backend});
+        // A backend that won't start on this machine is said, and the next
+        // is tried.
+        if (!instance) {
+            std::cerr << "can't create a " << bfr::name(backend) << " instance: " << instance.error().message << "\n";
+            continue;
+        }
+        const auto adapters = instance->adapters();
+        if (!adapters) {
+            std::cerr << "can't list adapters: " << adapters.error().message << "\n";
+            continue;
+        }
+        for (std::uint32_t adapter = 0; adapter < adapters->size(); ++adapter) {
+            printAdapter(*instance, adapter, options);
+        }
     }
     return 0;
 }

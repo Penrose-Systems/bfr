@@ -2,13 +2,17 @@
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <catch2/generators/catch_generators_range.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -50,12 +54,39 @@ std::string failureOf(const bfr::Expected<T>& result) {
     return result.has_value() ? std::string{} : result.error().message;
 }
 
-bfr::Instance validatedInstance(Messages& messages) {
+// Each backend this build has, for a case that runs on each:
+// `const bfr::Backend backend = GENERATE(eachBackend());`.
+auto eachBackend() {
+    const auto backends = bfr::backends();
+    REQUIRE(backends.has_value());
+    INFO("this build has no backend");
+    REQUIRE_FALSE(backends->empty());
+    return Catch::Generators::from_range(*backends);
+}
+
+bfr::Instance validatedInstance(bfr::Backend backend, Messages& messages) {
     auto instance = bfr::Instance::create(
-        {.backend = bfr::Backend::Vulkan, .validation = true, .messageCallback = messages.callback()});
-    INFO(failureOf(instance));
+        {.backend = backend, .validation = true, .messageCallback = messages.callback()});
+    INFO(bfr::name(backend) << ' ' << failureOf(instance));
     REQUIRE(instance.has_value());
     return std::move(*instance);
+}
+
+// The first adapter that presents to a headless window. An adapter may not
+// present to one at all: NVIDIA's driver has no headless surfaces.
+std::uint32_t headlessAdapter(const bfr::Instance& instance) {
+    const auto adapters = instance.adapters();
+    REQUIRE(adapters.has_value());
+    for (std::uint32_t adapter = 0; adapter < adapters->size(); ++adapter) {
+        const auto caps = instance.surfaceCaps(adapter, {.window = kHeadless});
+        if (caps.has_value()) {
+            return adapter;
+        }
+        INFO((*adapters)[adapter].name << ' ' << caps.error().message);
+        REQUIRE(caps.error().code == bfr::Result::ErrorPresentUnsupported);
+    }
+    FAIL("no adapter presents to a headless window");
+    return 0;
 }
 
 // A device on the first adapter that presents headless.
@@ -76,8 +107,26 @@ bfr::Device headlessDevice(const bfr::Instance& instance) {
 
 } // namespace
 
+TEST_CASE("C++ API lists the build's backends, each with a name", "[cpp_api][unit]") {
+    const auto backends = bfr::backends();
+
+    REQUIRE(backends.has_value());
+    for (const bfr::Backend backend : *backends) {
+        CHECK(bfr::name(backend) != "unknown");
+    }
+}
+
 TEST_CASE("C++ API reports a failed call's result and message", "[cpp_api][unit]") {
-    const auto instance = bfr::Instance::create({.backend = bfr::Backend::D3d12});
+    const auto backends = bfr::backends();
+    REQUIRE(backends.has_value());
+    // One of the real backends is always missing: no build has all three.
+    constexpr std::array kReal{bfr::Backend::Vulkan, bfr::Backend::D3d12, bfr::Backend::Metal};
+    const auto* const missing = std::ranges::find_if_not(kReal, [&backends](bfr::Backend backend) {
+        return std::ranges::contains(*backends, backend);
+    });
+    REQUIRE(missing != kReal.end());
+
+    const auto instance = bfr::Instance::create({.backend = *missing});
 
     REQUIRE_FALSE(instance.has_value());
     CHECK(instance.error().code == bfr::Result::ErrorBackendUnavailable);
@@ -101,9 +150,10 @@ TEST_CASE("C++ API names enum values as bfr.yaml does", "[cpp_api][unit]") {
 }
 
 TEST_CASE("C++ API lists adapters", "[cpp_api][gpu]") {
+    const bfr::Backend backend = GENERATE(eachBackend());
     Messages messages;
     {
-        const bfr::Instance instance = validatedInstance(messages);
+        const bfr::Instance instance = validatedInstance(backend, messages);
 
         const auto adapters = instance.adapters();
 
@@ -115,11 +165,12 @@ TEST_CASE("C++ API lists adapters", "[cpp_api][gpu]") {
 }
 
 TEST_CASE("C++ API builds, resizes and destroys a headless swapchain", "[cpp_api][gpu]") {
-    // More than the default and than lavapipe's minimum.
+    const bfr::Backend backend = GENERATE(eachBackend());
+    // More than the default and than a CPU adapter's minimum.
     constexpr std::uint32_t kImages = 5;
     Messages messages;
     {
-        const bfr::Instance instance = validatedInstance(messages);
+        const bfr::Instance instance = validatedInstance(backend, messages);
         const bfr::Device device = headlessDevice(instance);
         auto swapchain = device.createSwapchain({.window = kHeadless, .imageCount = kImages});
         INFO(failureOf(swapchain));
@@ -137,9 +188,42 @@ TEST_CASE("C++ API builds, resizes and destroys a headless swapchain", "[cpp_api
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("C++ API passes on the C API's refusal of a swapchain without a window", "[cpp_api][gpu]") {
+TEST_CASE("C++ API clears and presents a headless swapchain", "[cpp_api][gpu]") {
+    const bfr::Backend backend = GENERATE(eachBackend());
     Messages messages;
-    const bfr::Instance instance = validatedInstance(messages);
+    {
+        const bfr::Instance instance = validatedInstance(backend, messages);
+        const bfr::Device device = headlessDevice(instance);
+        auto swapchain = device.createSwapchain({.window = kHeadless});
+        REQUIRE(swapchain.has_value());
+        REQUIRE(swapchain->resize(kWidth, kHeight).has_value());
+
+        for (int frame = 0; frame < 2; ++frame) {
+            INFO("frame " << frame);
+            const auto acquired = swapchain->acquire();
+            INFO(failureOf(acquired));
+            REQUIRE(acquired.has_value());
+            auto commands = device.beginCommands();
+            INFO(failureOf(commands));
+            REQUIRE(commands.has_value());
+            CHECK(commands->beginRendering(*swapchain, {.loadOp = bfr::LoadOp::Clear, .clearColor = {1, 0, 0, 1}})
+                      .has_value());
+            CHECK(commands->endRendering().has_value());
+            const auto submitted = commands->submit();
+            INFO(failureOf(submitted));
+            REQUIRE(submitted.has_value());
+            const auto presented = swapchain->present();
+            INFO(failureOf(presented));
+            CHECK(presented.has_value());
+        }
+    }
+    CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C++ API passes on the C API's refusal of a swapchain without a window", "[cpp_api][gpu]") {
+    const bfr::Backend backend = GENERATE(eachBackend());
+    Messages messages;
+    const bfr::Instance instance = validatedInstance(backend, messages);
     const bfr::Device device = headlessDevice(instance);
 
     const auto swapchain = device.createSwapchain({.imageCount = 0});
@@ -150,9 +234,10 @@ TEST_CASE("C++ API passes on the C API's refusal of a swapchain without a window
 }
 
 TEST_CASE("C++ API moves objects without destroying what they own", "[cpp_api][gpu]") {
+    const bfr::Backend backend = GENERATE(eachBackend());
     Messages messages;
     {
-        const bfr::Instance instance = validatedInstance(messages);
+        const bfr::Instance instance = validatedInstance(backend, messages);
         bfr::Device device = headlessDevice(instance);
         auto created = device.createSwapchain({.window = kHeadless, .imageCount = 0});
         REQUIRE(created.has_value());
@@ -172,9 +257,10 @@ TEST_CASE("C++ API moves objects without destroying what they own", "[cpp_api][g
 }
 
 TEST_CASE("C++ API keeps a device alive for the swapchains made from it", "[cpp_api][gpu]") {
+    const bfr::Backend backend = GENERATE(eachBackend());
     Messages messages;
     {
-        const bfr::Instance instance = validatedInstance(messages);
+        const bfr::Instance instance = validatedInstance(backend, messages);
         bfr::Swapchain swapchain;
         {
             const bfr::Device device = headlessDevice(instance);
@@ -189,9 +275,10 @@ TEST_CASE("C++ API keeps a device alive for the swapchains made from it", "[cpp_
 }
 
 TEST_CASE("C++ API presents as the mode asked for or says the window doesn't allow it", "[cpp_api][gpu]") {
+    const bfr::Backend backend = GENERATE(eachBackend());
     Messages messages;
     {
-        const bfr::Instance instance = validatedInstance(messages);
+        const bfr::Instance instance = validatedInstance(backend, messages);
         const bfr::Device device = headlessDevice(instance);
         const auto fifo = device.createSwapchain({.window = kHeadless, .presentMode = bfr::PresentMode::Fifo});
         const auto immediate = device.createSwapchain(
@@ -208,10 +295,11 @@ TEST_CASE("C++ API presents as the mode asked for or says the window doesn't all
 }
 
 TEST_CASE("C++ API keeps the message callback alive while a device lives", "[cpp_api][gpu]") {
+    const bfr::Backend backend = GENERATE(eachBackend());
     auto state = std::make_shared<int>(0);
     const std::weak_ptr<int> watched = state;
     auto instance = bfr::Instance::create(
-        {.backend = bfr::Backend::Vulkan,
+        {.backend = backend,
          .messageCallback = [state](bfr::MessageSeverity /*severity*/, std::string_view /*message*/) {
          }});
     state.reset();
@@ -226,10 +314,11 @@ TEST_CASE("C++ API keeps the message callback alive while a device lives", "[cpp
 }
 
 TEST_CASE("C++ API reports when a device holds all the swapchains it can", "[cpp_api][gpu]") {
+    const bfr::Backend backend = GENERATE(eachBackend());
     // Far past any limit a device sets, so the loop always ends.
     constexpr int kTries = 4096;
     Messages messages;
-    const bfr::Instance instance = validatedInstance(messages);
+    const bfr::Instance instance = validatedInstance(backend, messages);
     const bfr::Device device = headlessDevice(instance);
     std::vector<bfr::Swapchain> made;
     bfr::Expected<bfr::Swapchain> swapchain;
@@ -247,11 +336,12 @@ TEST_CASE("C++ API reports when a device holds all the swapchains it can", "[cpp
 }
 
 TEST_CASE("C++ API creates and destroys swapchains on one device from many threads", "[cpp_api][gpu]") {
+    const bfr::Backend backend = GENERATE(eachBackend());
     constexpr int kThreads = 4;
     constexpr int kEach = 8;
     Messages messages;
     {
-        const bfr::Instance instance = validatedInstance(messages);
+        const bfr::Instance instance = validatedInstance(backend, messages);
         const bfr::Device device = headlessDevice(instance);
         std::atomic<int> failed{0};
         {
@@ -274,14 +364,14 @@ TEST_CASE("C++ API creates and destroys swapchains on one device from many threa
 }
 
 TEST_CASE("C++ API gives an adapter's caps, formats and surface caps", "[cpp_api][gpu]") {
+    const bfr::Backend backend = GENERATE(eachBackend());
     Messages messages;
     {
-        const bfr::Instance instance = validatedInstance(messages);
+        const bfr::Instance instance = validatedInstance(backend, messages);
         const auto adapters = instance.adapters();
         REQUIRE(adapters.has_value());
-        const auto cpu = std::ranges::find(*adapters, bfr::AdapterType::Cpu, &bfr::AdapterInfo::type);
-        REQUIRE(cpu != adapters->end());
-        const auto adapter = static_cast<std::uint32_t>(cpu - adapters->begin());
+        const auto adapter = headlessAdapter(instance);
+        const bfr::AdapterInfo& listed = (*adapters)[adapter];
 
         const auto caps = instance.caps(adapter);
         const auto formats = instance.formats(adapter);
@@ -290,12 +380,8 @@ TEST_CASE("C++ API gives an adapter's caps, formats and surface caps", "[cpp_api
 
         INFO(failureOf(caps) << failureOf(formats) << failureOf(surface) << failureOf(surfaceFormats));
         REQUIRE(caps.has_value());
-        CHECK(caps->info.name == cpu->name);
-        CHECK(caps->info.type == bfr::AdapterType::Cpu);
-        CHECK(caps->limits.maxTexture2d >= 4096);
-        CHECK(caps->compute.maxWorkgroupSize[0] >= 128);
-        CHECK(caps->memory.heapCount > 0);
-        CHECK(caps->memory.heaps[0].size > 0);
+        CHECK(caps->info.name == listed.name);
+        CHECK(caps->info.type == listed.type);
         REQUIRE(formats.has_value());
         CHECK(formats->front().format == bfr::Format::R8Unorm);
         REQUIRE(surface.has_value());
@@ -307,15 +393,21 @@ TEST_CASE("C++ API gives an adapter's caps, formats and surface caps", "[cpp_api
 }
 
 TEST_CASE("C++ API gives a device's memory budget or says the driver can't", "[cpp_api][gpu]") {
+    const bfr::Backend backend = GENERATE(eachBackend());
     Messages messages;
     {
-        const bfr::Instance instance = validatedInstance(messages);
-        const bfr::Device device = headlessDevice(instance);
+        const bfr::Instance instance = validatedInstance(backend, messages);
+        const auto adapter = headlessAdapter(instance);
+        const auto caps = instance.caps(adapter);
+        REQUIRE(caps.has_value());
+        auto device = instance.createDevice({.adapter = adapter, .window = kHeadless});
+        INFO(failureOf(device));
+        REQUIRE(device.has_value());
 
-        const auto budget = device.budget();
+        const auto budget = device->budget();
 
         if (budget.has_value()) {
-            CHECK(budget->heapCount > 0);
+            CHECK(budget->heapCount == caps->memory.heapCount);
         }
         else {
             CHECK(budget.error().code == bfr::Result::ErrorUnsupported);

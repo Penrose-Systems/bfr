@@ -1,4 +1,4 @@
-#include "log.h"
+#include "bfr/core/log.h"
 #include "log_capture.h"
 
 #include <catch2/catch_test_macros.hpp>

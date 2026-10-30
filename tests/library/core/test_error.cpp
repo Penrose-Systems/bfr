@@ -1,4 +1,4 @@
-#include "error.h"
+#include "bfr/core/error.h"
 
 #include <catch2/catch_test_macros.hpp>
 
