@@ -225,6 +225,9 @@ core::Result<void> VulkanDevice::destroySwapchain(SwapchainHandle swapchain) {
     if (swapchain.isNull()) {
         return {};
     }
+    if (auto found = swapchainFor(swapchain); !found) {
+        return std::unexpected(std::move(found.error()));
+    }
     // Its window is the caller's to close once this returns, so the GPU is
     // waited for now, not retired against.
     if (auto idle = waitIdle(); !idle) {
@@ -255,12 +258,17 @@ core::Result<void> VulkanDevice::present(SwapchainHandle swapchain) {
 
 core::Result<CommandListHandle> VulkanDevice::beginCommands() {
     const std::scoped_lock lock{queues_};
-    Frame& frame = frames_[nextFrame_];
-    if (frame.recording) {
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("{} command lists are already recording; submit or destroy one",
-                                         kFramesInFlight));
+    // The oldest frame, or the next one when that is still recording.
+    std::uint32_t index = nextFrame_;
+    while (frames_[index].recording) {
+        index = (index + 1) % kFramesInFlight;
+        if (index == nextFrame_) {
+            return core::failure(core::ErrorCode::RhiLimitReached,
+                                 std::format("{} command lists are already recording; submit or destroy one",
+                                             kFramesInFlight));
+        }
     }
+    Frame& frame = frames_[index];
     if (auto waited = waitFrame(frame); !waited) {
         return std::unexpected(std::move(waited.error()));
     }
@@ -274,12 +282,12 @@ core::Result<CommandListHandle> VulkanDevice::beginCommands() {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkBeginCommandBuffer", .result = result});
     }
     const CommandListHandle commandList = commandLists_.emplace(
-        VulkanCommandList{.buffer = frame.buffer, .frame = nextFrame_, .rendering = {}, .rendered = {}});
+        VulkanCommandList{.buffer = frame.buffer, .frame = index, .rendering = {}, .rendered = {}});
     if (commandList.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached, "no command list is free");
     }
     frame.recording = true;
-    nextFrame_ = (nextFrame_ + 1) % kFramesInFlight;
+    nextFrame_ = (index + 1) % kFramesInFlight;
     return commandList;
 }
 
@@ -304,8 +312,12 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
     if (!image) {
         return std::unexpected(image.error());
     }
+    // Rendered to earlier in this list, the image is where that left it; else
+    // where the last submit did.
+    const auto rendered = std::ranges::find((*list)->rendered, swapchain, &RenderedSwapchain::swapchain);
+    const VkImageLayout before = rendered == (*list)->rendered.end() ? image->layout : rendered->layout;
     VkCommandBuffer buffer = (*list)->buffer;
-    recordBarrier(table_, buffer, layoutBarrier(image->image, image->layout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL));
+    recordBarrier(table_, buffer, layoutBarrier(image->image, before, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL));
 
     VkRenderingAttachmentInfo color{};
     color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -322,10 +334,12 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
     rendering.pColorAttachments = &color;
     table_.vkCmdBeginRendering(buffer, &rendering);
 
-    (*chain)->setLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     (*list)->rendering = swapchain;
-    if (std::ranges::find((*list)->rendered, swapchain) == (*list)->rendered.end()) {
-        (*list)->rendered.push_back(swapchain);
+    if (rendered == (*list)->rendered.end()) {
+        (*list)->rendered.push_back({.swapchain = swapchain, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+    }
+    else {
+        rendered->layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     }
     return {};
 }
@@ -348,8 +362,10 @@ core::Result<void> VulkanDevice::endRendering(CommandListHandle commandList) {
     }
     VkCommandBuffer buffer = (*list)->buffer;
     table_.vkCmdEndRendering(buffer);
-    recordBarrier(table_, buffer, layoutBarrier(image->image, image->layout, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR));
-    (*chain)->setLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    // Rendering is open on it, so beginRendering listed it.
+    const auto rendered = std::ranges::find((*list)->rendered, *(*list)->rendering, &RenderedSwapchain::swapchain);
+    recordBarrier(table_, buffer, layoutBarrier(image->image, rendered->layout, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR));
+    rendered->layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     (*list)->rendering.reset();
     return {};
 }
@@ -367,9 +383,9 @@ core::Result<void> VulkanDevice::submit(CommandListHandle commandList) {
     // present semaphore signaled.
     std::vector<VkSemaphoreSubmitInfo> waits;
     std::vector<VkSemaphoreSubmitInfo> signals;
-    std::vector<VulkanSwapchain*> chains;
-    for (const SwapchainHandle swapchain : (*list)->rendered) {
-        auto chain = swapchainFor(swapchain);
+    std::vector<std::pair<VulkanSwapchain*, VkImageLayout>> chains;
+    for (const RenderedSwapchain& rendered : (*list)->rendered) {
+        auto chain = swapchainFor(rendered.swapchain);
         if (!chain) {
             return std::unexpected(std::move(chain.error()));
         }
@@ -391,7 +407,7 @@ core::Result<void> VulkanDevice::submit(CommandListHandle commandList) {
         signal.semaphore = image->presentSemaphore;
         signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         signals.push_back(signal);
-        chains.push_back(*chain);
+        chains.emplace_back(*chain, rendered.layout);
     }
     Frame& frame = frames_[(*list)->frame];
     // The list is done either way; the pool reset before its next recording
@@ -416,7 +432,9 @@ core::Result<void> VulkanDevice::submit(CommandListHandle commandList) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkQueueSubmit2", .result = result});
     }
     frame.pending = true;
-    for (VulkanSwapchain* chain : chains) {
+    // The GPU now has the transitions, so the images are in these layouts.
+    for (const auto& [chain, layout] : chains) {
+        chain->setLayout(layout);
         chain->setSubmitted();
     }
     return {};

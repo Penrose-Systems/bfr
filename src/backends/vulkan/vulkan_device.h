@@ -23,6 +23,13 @@ namespace bfr::rhi::vulkan {
 
 class VulkanRhi;
 
+/// A swapchain a command list rendered to, and the layout its image is in
+/// after the commands so far; the swapchain takes it once the submit is sent.
+struct RenderedSwapchain {
+    SwapchainHandle swapchain;
+    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+};
+
 /// Commands recorded on one frame's buffer: the swapchain rendering is open
 /// on, and every swapchain rendered to, whose images the submit waits for and
 /// signals.
@@ -30,7 +37,7 @@ struct VulkanCommandList {
     VkCommandBuffer buffer = VK_NULL_HANDLE;
     std::uint32_t frame = 0;
     std::optional<SwapchainHandle> rendering;
-    std::vector<SwapchainHandle> rendered;
+    std::vector<RenderedSwapchain> rendered;
 };
 
 class VulkanDevice final : public Device {

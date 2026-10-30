@@ -16,6 +16,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -165,10 +166,13 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     const auto started = std::chrono::steady_clock::now();
     Size last;
     bool resize = true;
+    // With nothing to present, the loop waits instead of spinning.
+    constexpr std::chrono::milliseconds kIdle{10};
     while (poll()) {
         const Size now = size();
         // A minimised window has no size to make a swapchain for.
         if (now.width == 0 || now.height == 0) {
+            std::this_thread::sleep_for(kIdle);
             continue;
         }
         if (resize || now.width != last.width || now.height != last.height) {
@@ -183,6 +187,7 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
                                       std::format("{} presenting", bfr::name(images->presentMode)),
                                       std::format("{} alpha", bfr::name(images->alphaMode))});
             if (images->count == 0) {
+                std::this_thread::sleep_for(kIdle);
                 continue;
             }
         }

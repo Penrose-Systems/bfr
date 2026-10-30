@@ -25,7 +25,8 @@ struct AcquiredImage {
     VkImage image = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     VkExtent2D extent{};
-    /// The image's layout now: undefined until first rendered to, then present.
+    /// The image's layout after the last submit that rendered to it: undefined
+    /// until then, then present.
     VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
     /// Signaled when the image is ready; the submit that renders to it waits
     /// on this.
@@ -68,7 +69,7 @@ public:
     /// The acquired image. Fails with RhiInvalidCall when none is.
     [[nodiscard]] core::Result<AcquiredImage> acquired() const;
 
-    /// Records the acquired image's layout after a barrier.
+    /// Records the acquired image's layout once a submit that leaves it so is sent.
     void setLayout(VkImageLayout layout);
 
     /// Whether a submit already signals the acquired image's present semaphore.
