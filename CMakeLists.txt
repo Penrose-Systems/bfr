@@ -33,11 +33,14 @@ if(BFR_USE_CCACHE)
 endif()
 
 option(BFR_LOGGING "Compile the BFR_LOG_* calls in" ON)
-# Each backend is a build option. Rhi::create dispatches on those turned on
-# and refuses the rest with RhiBackendUnavailable.
+# Each backend is a build option, on wherever the platform has it, so a build
+# holds every backend it can and a program picks one at run time. Rhi::create
+# dispatches on those turned on and refuses the rest with RhiBackendUnavailable.
+# Turning one on where the platform lacks it is an error. WIN32 and APPLE are
+# empty elsewhere.
 option(BFR_BACKEND_VULKAN "Build the Vulkan backend" ON)
-option(BFR_BACKEND_D3D12 "Build the D3D12 backend; needs the Windows SDK" OFF)
-option(BFR_BACKEND_METAL "Build the Metal backend; needs metal-cpp" OFF)
+option(BFR_BACKEND_D3D12 "Build the D3D12 backend; needs the Windows SDK" ${WIN32})
+option(BFR_BACKEND_METAL "Build the Metal backend; needs metal-cpp" ${APPLE})
 
 # Debug is the default build. Only when BFR is the project being built: in a
 # user's build, the build type is the user's.
