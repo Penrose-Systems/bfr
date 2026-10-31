@@ -1,17 +1,18 @@
 # C++ code style
 
-Rules tools can't check. `.clang-format` and `.clang-tidy` are authoritative and not restated.
-Tags name the enforcement: [tool] clang-format or clang-tidy, [build] CMake or the compiler, [CI] CI builds, [tests], [script], [review]
-
-## Language
+## Version
 - C++23
-- Use `std::span`, `std::expected`, concepts, designated initialisers; ranges only to replace a loop. No modules, no coroutines. [review]
-- Strings through `std::string`, `std::string_view` and their functions; no C string functions such as `strlen`, `strcmp` or `atoi`. [review]
+
+`.clang-format` and `.clang-tidy` are authoritative and not restated.
+
+## Rules
 - Aim to use std:: functions wherever possible [review]
-- 
-## Values (important)
-- No hard-coded numbers in code; a named `const` or `constexpr` is allowed. Markup values and field defaults count as named. [tool, review]
-- Prefer every tunable value configurable from an external file, so it can be changed without recompiling. [review]
+- Use `std::span`, `std::expected`, concepts, designated initialisers;
+- Ranges only to replace a loop. [review]
+- Strings through `std::string`, `std::string_view` and their functions.
+- No C string functions such as `strlen`, `strcmp` or `atoi` etc. [review]
+- No hard-coded (magic) numbers in code; a named `const` or `constexpr` is required. Markup values and field defaults count as named. [tool, review]
+- Create interfaces by using abstract classes: no prefix or suffix, virtual destructor, protected constructor, no data.
 
 ## Files
 - snake_case `.h` and `.cpp`; one primary abstraction per file. [script, review]
@@ -50,11 +51,6 @@ The measured fastest correct layout beats textbook idiom.
 - Flagged code outside the task gets an issue and `// PERF(#issue): …`. [loop]
 - No unreferenced `PERF` marker reaches a PR. [script]
 
-## Interfaces
-- Abstract classes: no prefix or suffix, virtual destructor, protected constructor, no data, static factory returning `std::unique_ptr`. The one exception: the RHI's `Rhi` holds the `RhiConfig` every backend runs with. [review]
-
-## Errors and text
-- User-facing text is `LocalizedText` from a message ID; diagnostics stay English with stable codes. [build]
 
 ## Comments
 - The code is the comment: names and structure explain it. [review]
@@ -69,12 +65,12 @@ The measured fastest correct layout beats textbook idiom.
 - Test doubles only for non-GPU dependencies, and always Trompeloeil mocks; no hand-written fakes or spies. [review]
 
 ## Build
-- CMake 3.28; `VESPER_` options via `cmake_dependent_option`; no `file(GLOB_RECURSE)`. [build, script]
+- CMake 3.28; options via `cmake_dependent_option`; no `file(GLOB_RECURSE)`. [build, script]
 
 ## Dependencies
 - Prefer a mature open-source library to writing our own, when it meets these rules. [review]
 - OSI-approved permissive licences only; never copyleft (GPL, LGPL, AGPL, MPL). [script]
-- It must support every target platform and keep our hot-path rules. [CI, audit]
+- It must support every target platform. [CI]
 - One module owns it behind a Vesper interface; its reason is in that module's doc. Test and build tools are exempt. [script, review]
 
 ## Patterns
