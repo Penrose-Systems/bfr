@@ -79,7 +79,8 @@ TEST_CASE("Vulkan device fails with RhiSurfaceFailed when the API refuses a swap
     INFO(failureOf(device));
     REQUIRE(device.has_value());
 
-    const auto swapchain = (*device)->createSwapchain(kHeadless, kSwapchainRequest);
+    // The request is never used: making the swapchain fails first.
+    const auto swapchain = (*device)->createSwapchain(kHeadless, SwapchainRequest{});
 
     REQUIRE_FALSE(swapchain.has_value());
     CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiSurfaceFailed);
@@ -98,35 +99,15 @@ TEST_CASE("Vulkan device fails with RhiPresentUnsupported when it can't present 
     INFO(failureOf(device));
     REQUIRE(device.has_value());
 
-    const auto swapchain = (*device)->createSwapchain(kHeadless, kSwapchainRequest);
+    // The request is never used: making the swapchain fails first.
+    const auto swapchain = (*device)->createSwapchain(kHeadless, SwapchainRequest{});
 
     REQUIRE_FALSE(swapchain.has_value());
     CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
 }
 
-// Validation sits above the failing call in these two, so it checks what the
-// RHI does with the failure and with the junk the call leaves.
-TEST_CASE("Vulkan device reports a failed surface query when making a swapchain and leaves nothing behind",
-          "[vulkan][gpu]") {
-    // Making the swapchain asks what the surface allows.
-    const std::string function = GENERATE("vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
-                                          "vkGetPhysicalDeviceSurfaceFormatsKHR");
-    INFO(function);
-    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
-    const ScopedEnv failing("BFR_FAIL", function);
-    std::vector<std::string> errors;
-    {
-        const HeadlessDevice headless{recordingErrorsInto(errors)};
-
-        const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainRequest);
-
-        REQUIRE_FALSE(swapchain.has_value());
-        CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiSwapchainFailed);
-        CHECK_THAT(swapchain.error().message, Catch::Matchers::ContainsSubstring(function + ": VK_ERROR_UNKNOWN"));
-    }
-    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
-}
-
+// Validation sits above the failing call, so it checks what the RHI does with
+// the failure and with the junk the call leaves.
 TEST_CASE("Vulkan device reports a failed call when building a swapchain's images and leaves nothing behind",
           "[vulkan][gpu]") {
     // Building the images makes the rest of the calls.
@@ -137,7 +118,7 @@ TEST_CASE("Vulkan device reports a failed call when building a swapchain's image
     std::vector<std::string> errors;
     {
         const HeadlessDevice headless{recordingErrorsInto(errors)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainRequest);
+        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.rhi));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 
@@ -146,21 +127,6 @@ TEST_CASE("Vulkan device reports a failed call when building a swapchain's image
         REQUIRE_FALSE(images.has_value());
         CHECK(images.error().code == bfr::core::ErrorCode::RhiSwapchainFailed);
         CHECK_THAT(images.error().message, Catch::Matchers::ContainsSubstring(function + ": VK_ERROR_UNKNOWN"));
-    }
-    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
-}
-
-TEST_CASE("Vulkan device fails with RhiSwapchainFailed for a surface that lists no formats", "[vulkan][gpu]") {
-    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
-    const ScopedEnv noFormats("BFR_SURFACE_NO_FORMATS", "1");
-    std::vector<std::string> errors;
-    {
-        const HeadlessDevice headless{recordingErrorsInto(errors)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainRequest);
-
-        REQUIRE_FALSE(swapchain.has_value());
-        CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiSwapchainFailed);
-        CHECK_THAT(swapchain.error().message, Catch::Matchers::ContainsSubstring("no formats"));
     }
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
@@ -178,7 +144,8 @@ TEST_CASE("Vulkan device reports a failed present query as the failure it is", "
         INFO(failureOf(device));
         REQUIRE(device.has_value());
 
-        const auto swapchain = (*device)->createSwapchain(kHeadless, kSwapchainRequest);
+        // The request is never used: making the swapchain fails first.
+        const auto swapchain = (*device)->createSwapchain(kHeadless, SwapchainRequest{});
 
         REQUIRE_FALSE(swapchain.has_value());
         CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiSurfaceFailed);
@@ -197,7 +164,7 @@ TEST_CASE("Vulkan device keeps running out of memory, a lost device and a lost s
     INFO(result);
     const AdapterOverrideLayer adapterOverride;
     const HeadlessDevice headless{kVulkan, {}};
-    const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainRequest);
+    const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.rhi));
     INFO(failureOf(swapchain));
     REQUIRE(swapchain.has_value());
     const ScopedEnv failing("BFR_FAIL", "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
@@ -213,15 +180,14 @@ TEST_CASE("Vulkan device keeps running out of memory, a lost device and a lost s
 }
 
 TEST_CASE("Vulkan device builds a swapchain once a call the API refused succeeds again", "[vulkan][gpu]") {
-    const std::string function = GENERATE("vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
-                                          "vkGetPhysicalDeviceSurfaceFormatsKHR", "vkCreateSwapchainKHR",
-                                          "vkGetSwapchainImagesKHR");
+    const std::string function =
+        GENERATE("vkGetPhysicalDeviceSurfaceCapabilitiesKHR", "vkCreateSwapchainKHR", "vkGetSwapchainImagesKHR");
     INFO(function);
     const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
     std::vector<std::string> errors;
     {
         const HeadlessDevice headless{recordingErrorsInto(errors)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, kSwapchainRequest);
+        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.rhi));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         {
@@ -253,7 +219,7 @@ TEST_CASE("Vulkan device presents from a queue family of its own when no graphic
         const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kHeadless);
         INFO(failureOf(device));
         REQUIRE(device.has_value());
-        const auto swapchain = (*device)->createSwapchain(kHeadless, kSwapchainRequest);
+        const auto swapchain = (*device)->createSwapchain(kHeadless, swapchainRequest(**rhi));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 

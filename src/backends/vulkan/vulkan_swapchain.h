@@ -14,12 +14,6 @@
 
 namespace bfr::rhi::vulkan {
 
-/// Whether surface lets adapter present as request says, asked on vk. Fails
-/// with RhiUnsupported, and says what the surface allows, when it doesn't take
-/// something in request; the size is not asked, as the window can change it.
-[[nodiscard]] core::Result<void> checkSwapchainRequest(const InstanceTable& vk, VkPhysicalDevice adapter,
-                                                       VkSurfaceKHR surface, const SwapchainRequest& request);
-
 /// A swapchain's acquired image, for rendering to and presenting.
 struct AcquiredImage {
     VkImage image = VK_NULL_HANDLE;

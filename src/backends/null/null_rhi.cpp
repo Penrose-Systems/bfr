@@ -9,7 +9,6 @@
 #include "bfr/rhi/rhi.h"
 #include "bfr/rhi/rhi_config.h"
 #include "null/null_device.h"
-#include "rhi/swapchain_build.h"
 
 #include <array>
 #include <cstddef>
@@ -29,6 +28,9 @@ namespace {
 
 // The least images a swapchain on the null adapter may have.
 constexpr std::uint32_t kMinImages = 2;
+
+// SurfaceCaps::width and height when the swapchain's size sets the window's.
+constexpr std::uint32_t kSizeFromSwapchain = 0xFFFFFFFF;
 
 // The null adapter draws nothing, so a window on it has no largest size.
 constexpr std::uint32_t kNoLargest = std::numeric_limits<std::uint32_t>::max();

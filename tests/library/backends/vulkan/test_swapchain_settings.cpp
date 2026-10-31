@@ -1,7 +1,5 @@
-// The Vulkan names of what rhi::swapchainBuildFor decided. What is allowed
-// and refused is every backend's, tested in rhi/test_swapchain_build.cpp.
+// The Vulkan names of a swapchain request, each value as given.
 
-#include "bfr/core/error.h"
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/swapchain.h"
 #include "vulkan/swapchain_settings.h"
@@ -10,7 +8,6 @@
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 
-#include <array>
 #include <cstdint>
 #include <limits>
 
@@ -37,38 +34,30 @@ VkSurfaceCapabilitiesKHR capabilities() {
     return surface;
 }
 
-constexpr VkSurfaceFormatKHR srgb(VkFormat format) {
-    return {.format = format, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
-}
-
-const auto kSurfaceFormats = std::to_array({srgb(VK_FORMAT_B8G8R8A8_UNORM), srgb(VK_FORMAT_R8G8B8A8_UNORM)});
-const auto kModes = std::to_array({VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR});
-
 } // namespace
 
-TEST_CASE("Vulkan swapchain settings name what was decided in Vulkan's terms", "[vulkan][unit]") {
-    const auto settings = swapchainSettingsFor(capabilities(), kSurfaceFormats, kModes, kWindow,
-                                               {.imageCount = 2,
-                                                .presentMode = PresentMode::Immediate,
-                                                .format = Format::Rgba8Unorm,
-                                                .alphaMode = AlphaMode::Premultiplied});
+TEST_CASE("Vulkan swapchain settings name the request in Vulkan's terms", "[vulkan][unit]") {
+    const SwapchainSettings settings = swapchainSettingsFor(capabilities(), kWindow,
+                                                            {.imageCount = 2,
+                                                             .presentMode = PresentMode::Immediate,
+                                                             .format = Format::Rgba8Unorm,
+                                                             .alphaMode = AlphaMode::Premultiplied});
 
-    REQUIRE(settings.has_value());
-    CHECK(settings->format.format == VK_FORMAT_R8G8B8A8_UNORM);
-    CHECK(settings->format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
-    CHECK(settings->imageCount == 2);
-    CHECK(settings->extent.width == kWindow.width);
-    CHECK(settings->extent.height == kWindow.height);
-    CHECK(settings->presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR);
-    CHECK(settings->compositeAlpha == VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR);
+    CHECK(settings.format.format == VK_FORMAT_R8G8B8A8_UNORM);
+    CHECK(settings.format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
+    CHECK(settings.imageCount == 2);
+    CHECK(settings.extent.width == kWindow.width);
+    CHECK(settings.extent.height == kWindow.height);
+    CHECK(settings.presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR);
+    CHECK(settings.compositeAlpha == VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR);
 }
 
-TEST_CASE("Vulkan swapchain settings pass on a refusal", "[vulkan][unit]") {
-    const auto settings = swapchainSettingsFor(capabilities(), kSurfaceFormats, kModes, kWindow,
-                                               {.presentMode = PresentMode::Mailbox});
+TEST_CASE("Vulkan swapchain settings pass on what the surface does not allow", "[vulkan][unit]") {
+    const SwapchainSettings settings = swapchainSettingsFor(
+        capabilities(), kWindow, {.imageCount = kMaxImages + 1, .alphaMode = AlphaMode::Inherit});
 
-    REQUIRE_FALSE(settings.has_value());
-    CHECK(settings.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    CHECK(settings.imageCount == kMaxImages + 1);
+    CHECK(settings.compositeAlpha == VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR);
 }
 
 TEST_CASE("Vulkan swapchain settings take the surface's extent when it reports one", "[vulkan][unit]") {
@@ -76,11 +65,10 @@ TEST_CASE("Vulkan swapchain settings take the surface's extent when it reports o
     VkSurfaceCapabilitiesKHR surface = capabilities();
     surface.currentExtent = kReported;
 
-    const auto settings = swapchainSettingsFor(surface, kSurfaceFormats, kModes, kWindow, {});
+    const SwapchainSettings settings = swapchainSettingsFor(surface, kWindow, {});
 
-    REQUIRE(settings.has_value());
-    CHECK(settings->extent.width == kReported.width);
-    CHECK(settings->extent.height == kReported.height);
+    CHECK(settings.extent.width == kReported.width);
+    CHECK(settings.extent.height == kReported.height);
 }
 
 TEST_CASE("Vulkan present modes and composite alphas are named one to one", "[vulkan][unit]") {

@@ -465,19 +465,19 @@ typedef struct bfr_swapchain_desc {
     const bfr_chain* next;
     // The window to present to.
     bfr_window window;
-    // Images to request; 0 asks for the fewest the window allows. Fails with error_unsupported when
-    // the window does not allow that many. bfr_swapchain_images says how many it made.
+    // Images to request, passed to the backend as given. bfr_swapchain_images says how many it
+    // made.
     uint32_t image_count;
-    // How to present; 0 is fifo. Fails with error_unsupported when the window does not allow it;
-    // bfr_get_surface_caps says which it allows.
+    // How to present; 0 is fifo. Fails with error_unsupported when the backend has no setting for
+    // it.
     bfr_present_mode present_mode;
-    // The images' format; 0 is bgra8_unorm. Fails with error_unsupported when the window does not
-    // list it with color_space; bfr_get_surface_formats lists what it does.
+    // The images' format; 0 is bgra8_unorm. Fails with error_unsupported when the backend has no
+    // setting for it with color_space.
     bfr_format format;
     // How the display reads the images; 0 is srgb.
     bfr_color_space color_space;
-    // How the window blends alpha; 0 is opaque. Fails with error_unsupported when the window does
-    // not allow it.
+    // How the window blends alpha; 0 is opaque. Fails with error_unsupported when the backend has
+    // no setting for it.
     bfr_alpha_mode alpha_mode;
 } bfr_swapchain_desc;
 
@@ -973,7 +973,9 @@ BFR_API bfr_result bfr_create_swapchain(
     const bfr_swapchain_desc* desc,
     bfr_swapchain* swapchain);
 
-// Rebuilds a swapchain's images at a new size.
+// Rebuilds a swapchain's images at a new size, as its desc says. Fails with error_unsupported when
+// the backend has no setting for a value of the desc, and error_swapchain_failed when the backend
+// refuses; bfr_get_last_error gives the backend's call and result.
 BFR_API bfr_result bfr_resize_swapchain(
     bfr_device* device,
     bfr_swapchain swapchain,

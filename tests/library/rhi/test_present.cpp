@@ -43,7 +43,7 @@ struct HeadlessSwapchain {
         REQUIRE(created.has_value());
         rhi = std::move(*created);
         device = presentingDevice(*rhi, kHeadless);
-        auto made = device->createSwapchain(kHeadless, kSwapchainRequest);
+        auto made = device->createSwapchain(kHeadless, swapchainRequest(*rhi));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         swapchain = *made;

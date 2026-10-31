@@ -189,11 +189,6 @@ core::Result<SwapchainHandle> MetalDevice::createSwapchain(const core::window::N
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("a device holds at most {} swapchains", kSwapchainLimit));
     }
-    // The request is refused now, not when the first image is wanted.
-    if (auto checked = swapchains_.find(swapchain)->check(); !checked) {
-        swapchains_.erase(swapchain);
-        return std::unexpected(std::move(checked.error()));
-    }
     // The layer's drawables are resident for the queue that renders to them.
     if (MTL::ResidencySet* residency = (*layer)->residencySet(); residency != nullptr) {
         const std::scoped_lock lock{lock_};
@@ -212,7 +207,7 @@ core::Result<SwapchainImages> MetalDevice::resizeSwapchain(SwapchainHandle swapc
     if (auto idle = waitIdle(); !idle) {
         return std::unexpected(std::move(idle.error()));
     }
-    return (*found)->build({.width = width, .height = height});
+    return (*found)->build(width, height);
 }
 
 core::Result<void> MetalDevice::destroySwapchain(SwapchainHandle swapchain) {

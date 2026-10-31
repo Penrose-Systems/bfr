@@ -14,7 +14,6 @@
 //   does nothing but present, the only one that presents; vkCreateDevice drops
 //   its queue, since the driver underneath lacks the family.
 // - BFR_PRESENT_UNSUPPORTED: no queue family presents to any surface.
-// - BFR_SURFACE_NO_FORMATS: surfaces list no formats, which Vulkan forbids.
 // - BFR_FAIL: the named function fails with VK_ERROR_UNKNOWN, or the result
 //   BFR_FAIL_RESULT names (VK_ERROR_OUT_OF_HOST_MEMORY, VK_ERROR_DEVICE_LOST,
 //   VK_ERROR_SURFACE_LOST_KHR or VK_ERROR_FORMAT_NOT_SUPPORTED), and leaves
@@ -430,10 +429,6 @@ VKAPI_ATTR VkResult VKAPI_CALL getSurfaceFormats(VkPhysicalDevice device, VkSurf
                                                  VkSurfaceFormatKHR* formats) {
     if (failing("vkGetPhysicalDeviceSurfaceFormatsKHR")) {
         return failure();
-    }
-    if (std::getenv("BFR_SURFACE_NO_FORMATS") != nullptr) {
-        *count = 0;
-        return VK_SUCCESS;
     }
     return nextGetSurfaceFormats(device, surface, count, formats);
 }

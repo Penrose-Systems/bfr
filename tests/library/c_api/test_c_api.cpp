@@ -104,6 +104,10 @@ struct HeadlessDevice {
             }
         }
         REQUIRE(device != nullptr);
+        const bfr_surface_desc surface{.next = nullptr, .window = kHeadless};
+        bfr_surface_caps caps{};
+        REQUIRE(bfr_get_surface_caps(instance, adapter, &surface, &caps) == BFR_RESULT_SUCCESS);
+        images = caps.min_image_count;
     }
     ~HeadlessDevice() { bfr_destroy_device(device); }
     HeadlessDevice(const HeadlessDevice&) = delete;
@@ -114,6 +118,8 @@ struct HeadlessDevice {
     bfr_device* device = nullptr;
     // The adapter the device is on.
     std::uint32_t adapter = 0;
+    // The fewest images the window takes, which a swapchain on the device asks for.
+    std::uint32_t images = 0;
 };
 
 } // namespace
@@ -276,34 +282,31 @@ constexpr std::array kModes{
     Mode{.mode = BFR_PRESENT_MODE_IMMEDIATE, .allowed = &bfr_surface_caps::immediate, .name = "immediate"},
 };
 
-// Makes a swapchain on device in mode, and checks it is made when caps allows
-// the mode and refused, naming the mode, when not.
+// Makes a swapchain on device in mode, which caps allows, and checks it is made.
 void checkPresentMode(bfr_device* device, const bfr_surface_caps& caps, const Mode& mode) {
     const bfr_swapchain_desc desc{.next = nullptr,
                                   .window = kHeadless,
-                                  .image_count = 0,
+                                  .image_count = caps.min_image_count,
                                   .present_mode = mode.mode,
                                   .format = {},
                                   .color_space = {},
                                   .alpha_mode = {}};
     bfr_swapchain swapchain{};
+    bfr_swapchain_images images{};
 
     const bfr_result created = bfr_create_swapchain(device, &desc, &swapchain);
+    const bfr_result resized = bfr_resize_swapchain(device, swapchain, kWidth, kHeight, &images);
 
     INFO(mode.name << ": " << lastError());
-    if (caps.*mode.allowed != BFR_FALSE) {
-        CHECK(created == BFR_RESULT_SUCCESS);
-        bfr_destroy_swapchain(device, swapchain);
-        return;
-    }
-    CHECK(created == BFR_RESULT_ERROR_UNSUPPORTED);
-    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring(mode.name));
-    CHECK(swapchain.bits == 0);
+    CHECK(created == BFR_RESULT_SUCCESS);
+    CHECK(resized == BFR_RESULT_SUCCESS);
+    CHECK(images.present_mode == mode.mode);
+    bfr_destroy_swapchain(device, swapchain);
 }
 
 } // namespace
 
-TEST_CASE("C API presents as each mode the window allows and refuses the others", "[c_api][gpu]") {
+TEST_CASE("C API presents as each mode the window allows", "[c_api][gpu]") {
     const bfr_backend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
@@ -314,7 +317,9 @@ TEST_CASE("C API presents as each mode the window allows and refuses the others"
         REQUIRE(bfr_get_surface_caps(instance.instance, device.adapter, &surface, &caps) == BFR_RESULT_SUCCESS);
 
         for (const Mode& mode : kModes) {
-            checkPresentMode(device.device, caps, mode);
+            if (caps.*mode.allowed != BFR_FALSE) {
+                checkPresentMode(device.device, caps, mode);
+            }
         }
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
@@ -328,7 +333,7 @@ TEST_CASE("C API builds a swapchain as asked and reports what it is", "[c_api][g
         const HeadlessDevice device{instance.instance};
         const bfr_swapchain_desc defaults{.next = nullptr,
                                           .window = kHeadless,
-                                          .image_count = 0,
+                                          .image_count = device.images,
                                           .present_mode = {},
                                           .format = {},
                                           .color_space = {},
@@ -346,57 +351,6 @@ TEST_CASE("C API builds a swapchain as asked and reports what it is", "[c_api][g
         CHECK(images.present_mode == BFR_PRESENT_MODE_FIFO);
         CHECK(images.alpha_mode == BFR_ALPHA_MODE_OPAQUE);
         bfr_destroy_swapchain(device.device, swapchain);
-    }
-    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
-}
-
-TEST_CASE("C API refuses a swapchain with more images than the window allows, and says so", "[c_api][gpu]") {
-    const bfr_backend backend = GENERATE(eachBackend());
-    std::vector<std::string> messages;
-    {
-        const Instance instance{backend, messages};
-        const HeadlessDevice device{instance.instance};
-        const bfr_surface_desc surface{.next = nullptr, .window = kHeadless};
-        bfr_surface_caps caps{};
-        REQUIRE(bfr_get_surface_caps(instance.instance, device.adapter, &surface, &caps) == BFR_RESULT_SUCCESS);
-        if (caps.max_image_count == 0) {
-            SKIP("the window allows any number of images");
-        }
-        const bfr_swapchain_desc desc{.next = nullptr,
-                                      .window = kHeadless,
-                                      .image_count = caps.max_image_count + 1,
-                                      .present_mode = {},
-                                      .format = {},
-                                      .color_space = {},
-                                      .alpha_mode = {}};
-        bfr_swapchain swapchain{};
-
-        CHECK(bfr_create_swapchain(device.device, &desc, &swapchain) == BFR_RESULT_ERROR_UNSUPPORTED);
-        CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("images"));
-        CHECK(swapchain.bits == 0);
-    }
-    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
-}
-
-TEST_CASE("C API refuses a swapchain in a color space the window doesn't list, and says so", "[c_api][gpu]") {
-    const bfr_backend backend = GENERATE(eachBackend());
-    std::vector<std::string> messages;
-    {
-        const Instance instance{backend, messages};
-        const HeadlessDevice device{instance.instance};
-        // A color space that no window lists with bgra8_unorm here.
-        const bfr_swapchain_desc desc{.next = nullptr,
-                                      .window = kHeadless,
-                                      .image_count = 0,
-                                      .present_mode = {},
-                                      .format = {},
-                                      .color_space = BFR_COLOR_SPACE_DOLBY_VISION,
-                                      .alpha_mode = {}};
-        bfr_swapchain swapchain{};
-
-        CHECK(bfr_create_swapchain(device.device, &desc, &swapchain) == BFR_RESULT_ERROR_UNSUPPORTED);
-        CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("does not list the format"));
-        CHECK(swapchain.bits == 0);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -453,7 +407,7 @@ TEST_CASE("C API reports a destroyed swapchain as invalid and destroys it again 
     const HeadlessDevice device{instance.instance};
     const bfr_swapchain_desc desc{.next = nullptr,
                                   .window = kHeadless,
-                                  .image_count = 0,
+                                  .image_count = device.images,
                                   .present_mode = BFR_PRESENT_MODE_FIFO,
                                   .format = {},
                                   .color_space = {},
@@ -476,7 +430,7 @@ TEST_CASE("C API keeps an instance alive until its last device is destroyed", "[
     instance.reset();
     const bfr_swapchain_desc desc{.next = nullptr,
                                   .window = kHeadless,
-                                  .image_count = 0,
+                                  .image_count = device.images,
                                   .present_mode = BFR_PRESENT_MODE_FIFO,
                                   .format = {},
                                   .color_space = {},
@@ -502,7 +456,7 @@ TEST_CASE("C API creates and destroys swapchains on one device from many threads
             threads.emplace_back([&device, &failed] {
                 const bfr_swapchain_desc desc{.next = nullptr,
                                               .window = kHeadless,
-                                              .image_count = 0,
+                                              .image_count = device.images,
                                               .present_mode = BFR_PRESENT_MODE_FIFO,
                                               .format = {},
                                               .color_space = {},
@@ -534,7 +488,7 @@ TEST_CASE("C API reports when a device holds all the swapchains it can", "[c_api
     const HeadlessDevice device{instance.instance};
     const bfr_swapchain_desc desc{.next = nullptr,
                                   .window = kHeadless,
-                                  .image_count = 0,
+                                  .image_count = device.images,
                                   .present_mode = BFR_PRESENT_MODE_FIFO,
                                   .format = {},
                                   .color_space = {},

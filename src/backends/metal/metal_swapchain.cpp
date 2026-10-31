@@ -6,7 +6,6 @@
 #include "bfr/rhi/swapchain.h"
 #include "metal/metal_formats.h"
 #include "metal/metal_util.h"
-#include "rhi/swapchain_build.h"
 
 #include <CoreGraphics/CGColorSpace.h>
 #include <CoreGraphics/CGGeometry.h>
@@ -17,6 +16,7 @@
 
 #include <cstdint>
 #include <expected>
+#include <format>
 #include <utility>
 #include <variant>
 
@@ -46,6 +46,27 @@ struct Checker {
     }
 };
 
+// Whether the layer waits for the display to present, as mode says. Fails with
+// RhiUnsupported for a mode the layer has no setting for.
+core::Result<bool> displaySyncFor(PresentMode mode) {
+    switch (mode) {
+        case PresentMode::Fifo:
+            return true;
+        case PresentMode::Immediate:
+#if TARGET_OS_OSX
+            return false;
+#else
+            // Display sync is only a Mac layer's to switch; others always wait.
+            break;
+#endif
+        case PresentMode::FifoRelaxed:
+        case PresentMode::Mailbox:
+            break;
+    }
+    return core::failure(core::ErrorCode::RhiUnsupported,
+                         std::format("the layer has no setting for {} presenting", name(mode)));
+}
+
 } // namespace
 
 core::Result<void> checkWindow(const core::window::NativeWindow& window) {
@@ -68,22 +89,10 @@ MetalSwapchain::MetalSwapchain(Ref<MTL::Device> device, Ref<CA::MetalLayer> laye
                                const core::Logger& logger)
     : device_(std::move(device)), layer_(std::move(layer)), request_(request), logger_(&logger) {}
 
-core::Result<void> MetalSwapchain::check() const {
-    const auto build = swapchainBuildFor(surfaceCapsFor(), surfaceFormats(), Extent{}, request_);
-    if (!build) {
-        return std::unexpected(build.error());
-    }
-    return {};
-}
-
-core::Result<SwapchainImages> MetalSwapchain::build(Extent size) {
+core::Result<SwapchainImages> MetalSwapchain::build(std::uint32_t width, std::uint32_t height) {
     drawable_.reset();
     submitted_ = false;
     count_ = 0;
-    const auto settings = swapchainBuildFor(surfaceCapsFor(), surfaceFormats(), size, request_);
-    if (!settings) {
-        return std::unexpected(settings.error());
-    }
     const auto imagesOf = [this](std::uint32_t width, std::uint32_t height, std::uint32_t count) {
         return SwapchainImages{.width = width,
                                .height = height,
@@ -93,12 +102,24 @@ core::Result<SwapchainImages> MetalSwapchain::build(Extent size) {
                                .presentMode = request_.presentMode,
                                .alphaMode = request_.alphaMode};
     };
-    if (settings->extent.width == 0 || settings->extent.height == 0) {
+    if (width == 0 || height == 0) {
         BFR_LOG_DEBUG(*logger_, "swapchain left empty: the window has no area");
         return imagesOf(0, 0, 0);
     }
 
     const LayerFormat format = layerFormatFor(request_.format, request_.colorSpace);
+    if (format.pixelFormat == MTL::PixelFormatInvalid) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the layer has no setting for the format with the color space that were asked");
+    }
+    const auto displaySync = displaySyncFor(request_.presentMode);
+    if (!displaySync) {
+        return std::unexpected(displaySync.error());
+    }
+    if (request_.alphaMode != AlphaMode::Opaque) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             std::format("the layer has no setting for {} alpha", name(request_.alphaMode)));
+    }
     layer_->setDevice(device_.get());
     layer_->setPixelFormat(format.pixelFormat);
     CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(format.colorSpaceName);
@@ -106,19 +127,16 @@ core::Result<SwapchainImages> MetalSwapchain::build(Extent size) {
     CGColorSpaceRelease(colorSpace);
     setLayerFlag(layer_.get(), "setWantsExtendedDynamicRangeContent:", format.extendedRange);
     layer_->setFramebufferOnly(true);
-    setLayerFlag(layer_.get(), "setOpaque:", request_.alphaMode == AlphaMode::Opaque);
-    layer_->setDrawableSize(CGSize{.width = static_cast<CGFloat>(settings->extent.width),
-                                   .height = static_cast<CGFloat>(settings->extent.height)});
-    layer_->setMaximumDrawableCount(settings->imageCount);
+    setLayerFlag(layer_.get(), "setOpaque:", true);
+    layer_->setDrawableSize(CGSize{.width = static_cast<CGFloat>(width), .height = static_cast<CGFloat>(height)});
+    layer_->setMaximumDrawableCount(request_.imageCount);
 #if TARGET_OS_OSX
-    // Display sync is only a Mac layer's to switch; others always wait.
-    layer_->setDisplaySyncEnabled(request_.presentMode != PresentMode::Immediate);
+    layer_->setDisplaySyncEnabled(*displaySync);
 #endif
     layer_->setAllowsNextDrawableTimeout(true);
-    count_ = settings->imageCount;
-    BFR_LOG_INFO(*logger_, "swapchain {}x{}, {} images, {}", settings->extent.width, settings->extent.height, count_,
-                 name(request_.presentMode));
-    return imagesOf(settings->extent.width, settings->extent.height, count_);
+    count_ = static_cast<std::uint32_t>(layer_->maximumDrawableCount());
+    BFR_LOG_INFO(*logger_, "swapchain {}x{}, {} images, {}", width, height, count_, name(request_.presentMode));
+    return imagesOf(width, height, count_);
 }
 
 core::Result<void> MetalSwapchain::acquire() {

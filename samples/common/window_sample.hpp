@@ -159,7 +159,7 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     }
     detail::printSurface(*caps, *formats);
 
-    auto swapchain = device.createSwapchain({.window = window});
+    auto swapchain = device.createSwapchain({.window = window, .imageCount = caps->minImageCount});
     if (!swapchain) {
         return detail::fail("can't create a swapchain", swapchain.error());
     }

@@ -1,15 +1,12 @@
 #include "vulkan/swapchain_settings.h"
 
-#include "bfr/core/error.h"
 #include "bfr/rhi/swapchain.h"
-#include "rhi/swapchain_build.h"
 #include "vulkan/vulkan_caps.h"
 
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 
-#include <expected>
-#include <span>
+#include <cstdint>
 
 namespace bfr::rhi::vulkan {
 
@@ -41,21 +38,15 @@ VkCompositeAlphaFlagBitsKHR compositeAlphaFor(AlphaMode mode) {
     return VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 }
 
-core::Result<SwapchainSettings> swapchainSettingsFor(const VkSurfaceCapabilitiesKHR& capabilities,
-                                                     std::span<const VkSurfaceFormatKHR> formats,
-                                                     std::span<const VkPresentModeKHR> presentModes, VkExtent2D size,
-                                                     const SwapchainRequest& request) {
-    // The surface's answers in every backend's terms decide; only the Vulkan
-    // names of what was decided are this backend's.
-    const auto build = swapchainBuildFor(surfaceCapsOf(capabilities, presentModes), surfaceFormatsOf(formats),
-                                         {.width = size.width, .height = size.height}, request);
-    if (!build) {
-        return std::unexpected(build.error());
-    }
+SwapchainSettings swapchainSettingsFor(const VkSurfaceCapabilitiesKHR& capabilities, VkExtent2D size,
+                                       const SwapchainRequest& request) {
+    // A current extent of 0xFFFFFFFF says the swapchain's size sets the window's.
+    constexpr std::uint32_t kSizeFromSwapchain = 0xFFFFFFFF;
+    const VkExtent2D extent = capabilities.currentExtent.width == kSizeFromSwapchain ? size : capabilities.currentExtent;
     return SwapchainSettings{
         .format = {.format = vulkanFormat(request.format), .colorSpace = vulkanColorSpace(request.colorSpace)},
-        .extent = {.width = build->extent.width, .height = build->extent.height},
-        .imageCount = build->imageCount,
+        .extent = extent,
+        .imageCount = request.imageCount,
         .compositeAlpha = compositeAlphaFor(request.alphaMode),
         .presentMode = presentModeFor(request.presentMode),
     };

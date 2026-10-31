@@ -6,7 +6,6 @@
 #include "bfr/rhi/swapchain.h"
 #include "d3d12/d3d12_formats.h"
 #include "d3d12/d3d12_result.h"
-#include "rhi/swapchain_build.h"
 
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -16,6 +15,7 @@
 
 #include <cstdint>
 #include <expected>
+#include <format>
 #include <utility>
 #include <variant>
 
@@ -64,19 +64,29 @@ struct PresentSetup {
     UINT creationFlags = 0;
 };
 
-PresentSetup presentSetupFor(PresentMode mode) {
+// Fails with RhiUnsupported for a mode DXGI has no setting for.
+core::Result<PresentSetup> presentSetupFor(PresentMode mode) {
     switch (mode) {
-        case PresentMode::Mailbox:
-            return {.syncInterval = 1, .presentFlags = DXGI_PRESENT_RESTART, .creationFlags = 0};
-        case PresentMode::Immediate:
-            return {.syncInterval = 0,
-                    .presentFlags = DXGI_PRESENT_ALLOW_TEARING,
-                    .creationFlags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING};
         case PresentMode::Fifo:
+            return PresentSetup{};
+        case PresentMode::Immediate:
+            return PresentSetup{.syncInterval = 0,
+                                .presentFlags = DXGI_PRESENT_ALLOW_TEARING,
+                                .creationFlags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING};
         case PresentMode::FifoRelaxed:
+        case PresentMode::Mailbox:
             break;
     }
-    return {};
+    return core::failure(core::ErrorCode::RhiUnsupported,
+                         std::format("DXGI has no setting for {} presenting", name(mode)));
+}
+
+// Fails with RhiUnsupported for a mode DXGI has no setting for.
+core::Result<DXGI_ALPHA_MODE> alphaModeFor(AlphaMode mode) {
+    if (mode == AlphaMode::Opaque) {
+        return DXGI_ALPHA_MODE_IGNORE;
+    }
+    return core::failure(core::ErrorCode::RhiUnsupported, std::format("DXGI has no setting for {} alpha", name(mode)));
 }
 
 std::unexpected<core::Error> swapchainFailed(const char* call, HRESULT result) {
@@ -91,22 +101,13 @@ core::Result<void> checkWindow(const core::window::NativeWindow& window) {
 
 D3D12Swapchain::D3D12Swapchain(ComPtr<ID3D12Device> device, ComPtr<IDXGIFactory2> factory,
                                ComPtr<ID3D12CommandQueue> queue, const core::window::NativeWindow& window,
-                               const SwapchainRequest& request, bool tearing, const core::Logger& logger)
+                               const SwapchainRequest& request, const core::Logger& logger)
     : device_(std::move(device)),
       factory_(std::move(factory)),
       queue_(std::move(queue)),
       window_(handleOf(window)),
       request_(request),
-      tearing_(tearing),
       logger_(&logger) {}
-
-core::Result<void> D3D12Swapchain::check() const {
-    const auto build = swapchainBuildFor(surfaceCapsFor(tearing_), surfaceFormats(), Extent{}, request_);
-    if (!build) {
-        return std::unexpected(build.error());
-    }
-    return {};
-}
 
 void D3D12Swapchain::release() {
     acquired_.reset();
@@ -116,29 +117,39 @@ void D3D12Swapchain::release() {
     viewHeap_.Reset();
 }
 
-core::Result<void> D3D12Swapchain::makeChain(const SwapchainBuild& settings) {
+core::Result<void> D3D12Swapchain::makeChain(std::uint32_t width, std::uint32_t height) {
     const SwapchainFormat format = swapchainFormatFor(request_.format, request_.colorSpace);
-    const PresentSetup setup = presentSetupFor(request_.presentMode);
+    if (format.format == DXGI_FORMAT_UNKNOWN) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "DXGI has no setting for the format with the color space that were asked");
+    }
+    const auto setup = presentSetupFor(request_.presentMode);
+    if (!setup) {
+        return std::unexpected(setup.error());
+    }
+    const auto alpha = alphaModeFor(request_.alphaMode);
+    if (!alpha) {
+        return std::unexpected(alpha.error());
+    }
     if (chain_) {
-        if (const HRESULT resized = chain_->ResizeBuffers(settings.imageCount, settings.extent.width,
-                                                          settings.extent.height, DXGI_FORMAT_UNKNOWN,
-                                                          setup.creationFlags);
+        if (const HRESULT resized = chain_->ResizeBuffers(request_.imageCount, width, height, DXGI_FORMAT_UNKNOWN,
+                                                          setup->creationFlags);
             FAILED(resized)) {
             return swapchainFailed("IDXGISwapChain::ResizeBuffers", resized);
         }
         return {};
     }
-    const DXGI_SWAP_CHAIN_DESC1 desc{.Width = settings.extent.width,
-                                     .Height = settings.extent.height,
+    const DXGI_SWAP_CHAIN_DESC1 desc{.Width = width,
+                                     .Height = height,
                                      .Format = format.format,
                                      .Stereo = FALSE,
                                      .SampleDesc = {.Count = 1, .Quality = 0},
                                      .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                                     .BufferCount = settings.imageCount,
+                                     .BufferCount = request_.imageCount,
                                      .Scaling = DXGI_SCALING_STRETCH,
                                      .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
-                                     .AlphaMode = DXGI_ALPHA_MODE_IGNORE,
-                                     .Flags = setup.creationFlags};
+                                     .AlphaMode = *alpha,
+                                     .Flags = setup->creationFlags};
     ComPtr<IDXGISwapChain1> created;
     if (window_ != nullptr) {
         if (const HRESULT result = factory_->CreateSwapChainForHwnd(queue_.Get(), window_, &desc, nullptr, nullptr,
@@ -189,12 +200,8 @@ core::Result<DXGI_SWAP_CHAIN_DESC1> D3D12Swapchain::makeImages() {
     return built;
 }
 
-core::Result<SwapchainImages> D3D12Swapchain::build(Extent size) {
+core::Result<SwapchainImages> D3D12Swapchain::build(std::uint32_t width, std::uint32_t height) {
     release();
-    const auto settings = swapchainBuildFor(surfaceCapsFor(tearing_), surfaceFormats(), size, request_);
-    if (!settings) {
-        return std::unexpected(settings.error());
-    }
     const auto imagesOf = [this](std::uint32_t width, std::uint32_t height, std::uint32_t count) {
         return SwapchainImages{.width = width,
                                .height = height,
@@ -204,11 +211,11 @@ core::Result<SwapchainImages> D3D12Swapchain::build(Extent size) {
                                .presentMode = request_.presentMode,
                                .alphaMode = request_.alphaMode};
     };
-    if (settings->extent.width == 0 || settings->extent.height == 0) {
+    if (width == 0 || height == 0) {
         BFR_LOG_DEBUG(*logger_, "swapchain left empty: the window has no area");
         return imagesOf(0, 0, 0);
     }
-    if (auto made = makeChain(*settings); !made) {
+    if (auto made = makeChain(width, height); !made) {
         return std::unexpected(std::move(made.error()));
     }
     const auto built = makeImages();
@@ -251,8 +258,11 @@ core::Result<void> D3D12Swapchain::present() {
     if (!acquired_.has_value()) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
     }
-    const PresentSetup setup = presentSetupFor(request_.presentMode);
-    const HRESULT result = chain_->Present(setup.syncInterval, setup.presentFlags);
+    const auto setup = presentSetupFor(request_.presentMode);
+    if (!setup) {
+        return std::unexpected(setup.error());
+    }
+    const HRESULT result = chain_->Present(setup->syncInterval, setup->presentFlags);
     acquired_.reset();
     submitted_ = false;
     if (FAILED(result)) {

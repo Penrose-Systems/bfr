@@ -25,7 +25,11 @@ namespace {
     if (!adapters || !device) {
         return false;
     }
-    auto headless = device->createSwapchain({.window = headlessWindow, .imageCount = 0});
+    const auto surface = instance->surfaceCaps(0, {.window = headlessWindow});
+    if (!surface) {
+        return false;
+    }
+    auto headless = device->createSwapchain({.window = headlessWindow, .imageCount = surface->minImageCount});
     if (!headless) {
         return false;
     }

@@ -1,12 +1,10 @@
 #pragma once
 
-#include "bfr/core/error.h"
 #include "bfr/rhi/swapchain.h"
 
 #include <volk.h>
 
 #include <cstdint>
-#include <span>
 
 namespace bfr::rhi::vulkan {
 
@@ -26,14 +24,9 @@ struct SwapchainSettings {
 /// The Vulkan composite alpha that is mode.
 [[nodiscard]] VkCompositeAlphaFlagBitsKHR compositeAlphaFor(AlphaMode mode);
 
-/// request as the surface would build it, or why it won't, as
-/// rhi::swapchainBuildFor decides for every backend: RhiUnsupported, with a
-/// message that says what the surface allows. formats and presentModes are
-/// the surface's lists. size is the window's size in pixels, which the
-/// surface's own extent overrides when it reports one.
-[[nodiscard]] core::Result<SwapchainSettings> swapchainSettingsFor(const VkSurfaceCapabilitiesKHR& capabilities,
-                                                                   std::span<const VkSurfaceFormatKHR> formats,
-                                                                   std::span<const VkPresentModeKHR> presentModes,
-                                                                   VkExtent2D size, const SwapchainRequest& request);
+/// request in Vulkan's names, each value as given. size is the window's size in
+/// pixels, which the surface's current extent overrides when it reports one.
+[[nodiscard]] SwapchainSettings swapchainSettingsFor(const VkSurfaceCapabilitiesKHR& capabilities, VkExtent2D size,
+                                                     const SwapchainRequest& request);
 
 } // namespace bfr::rhi::vulkan

@@ -95,11 +95,9 @@ include(cmake/bfr_build.cmake)
 add_library(bfr_objects OBJECT
     src/c_api/c_api.cpp
     src/core/error.cpp
-    src/rhi/rhi.cpp
-    src/rhi/swapchain_build.cpp)
+    src/rhi/rhi.cpp)
 bfr_apply_compiler_flags(bfr_objects)
-# Private headers are named from src: "rhi/swapchain_build.h",
-# "vulkan/vulkan_rhi.h".
+# Private headers are named from src: "vulkan/vulkan_rhi.h".
 target_include_directories(bfr_objects
     PUBLIC include
     PRIVATE src src/backends)

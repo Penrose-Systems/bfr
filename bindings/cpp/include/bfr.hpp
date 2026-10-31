@@ -684,19 +684,19 @@ struct DeviceDesc {
 struct SwapchainDesc {
     /// The window to present to.
     Window window{};
-    /// Images to request; 0 asks for the fewest the window allows. Fails with error_unsupported
-    /// when the window does not allow that many. bfr_swapchain_images says how many it made.
+    /// Images to request, passed to the backend as given. bfr_swapchain_images says how many it
+    /// made.
     std::uint32_t imageCount{};
-    /// How to present; 0 is fifo. Fails with error_unsupported when the window does not allow it;
-    /// bfr_get_surface_caps says which it allows.
+    /// How to present; 0 is fifo. Fails with error_unsupported when the backend has no setting for
+    /// it.
     PresentMode presentMode{};
-    /// The images' format; 0 is bgra8_unorm. Fails with error_unsupported when the window does not
-    /// list it with color_space; bfr_get_surface_formats lists what it does.
+    /// The images' format; 0 is bgra8_unorm. Fails with error_unsupported when the backend has no
+    /// setting for it with color_space.
     Format format{};
     /// How the display reads the images; 0 is srgb.
     ColorSpace colorSpace{};
-    /// How the window blends alpha; 0 is opaque. Fails with error_unsupported when the window does
-    /// not allow it.
+    /// How the window blends alpha; 0 is opaque. Fails with error_unsupported when the backend has
+    /// no setting for it.
     AlphaMode alphaMode{};
 };
 
@@ -1601,7 +1601,9 @@ public:
     [[nodiscard]] bfr_swapchain get() const { return swapchain_; }
     [[nodiscard]] explicit operator bool() const { return swapchain_.bits != 0; }
 
-    /// Rebuilds a swapchain's images at a new size.
+    /// Rebuilds a swapchain's images at a new size, as its desc says. Fails with error_unsupported
+    /// when the backend has no setting for a value of the desc, and error_swapchain_failed when the
+    /// backend refuses; bfr_get_last_error gives the backend's call and result.
     [[nodiscard]] Expected<SwapchainImages> resize(std::uint32_t width, std::uint32_t height);
 
     /// Takes the swapchain's next image, for bfr_begin_rendering. Fails with error_out_of_date when

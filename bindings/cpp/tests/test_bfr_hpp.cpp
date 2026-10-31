@@ -89,6 +89,14 @@ std::uint32_t headlessAdapter(const bfr::Instance& instance) {
     return 0;
 }
 
+// The fewest images a headless window takes on headlessAdapter, which a
+// swapchain on it must ask for.
+std::uint32_t fewestImages(const bfr::Instance& instance) {
+    const auto caps = instance.surfaceCaps(headlessAdapter(instance), {.window = kHeadless});
+    REQUIRE(caps.has_value());
+    return caps->minImageCount;
+}
+
 // A device on the first adapter that presents headless.
 bfr::Device headlessDevice(const bfr::Instance& instance) {
     const auto adapters = instance.adapters();
@@ -194,7 +202,7 @@ TEST_CASE("C++ API clears and presents a headless swapchain", "[cpp_api][gpu]") 
     {
         const bfr::Instance instance = validatedInstance(backend, messages);
         const bfr::Device device = headlessDevice(instance);
-        auto swapchain = device.createSwapchain({.window = kHeadless});
+        auto swapchain = device.createSwapchain({.window = kHeadless, .imageCount = fewestImages(instance)});
         REQUIRE(swapchain.has_value());
         REQUIRE(swapchain->resize(kWidth, kHeight).has_value());
 
@@ -239,7 +247,7 @@ TEST_CASE("C++ API moves objects without destroying what they own", "[cpp_api][g
     {
         const bfr::Instance instance = validatedInstance(backend, messages);
         bfr::Device device = headlessDevice(instance);
-        auto created = device.createSwapchain({.window = kHeadless, .imageCount = 0});
+        auto created = device.createSwapchain({.window = kHeadless, .imageCount = fewestImages(instance)});
         REQUIRE(created.has_value());
 
         // A swapchain shares the device, so it can outlive the C++ Device it came from.
@@ -264,7 +272,7 @@ TEST_CASE("C++ API keeps a device alive for the swapchains made from it", "[cpp_
         bfr::Swapchain swapchain;
         {
             const bfr::Device device = headlessDevice(instance);
-            auto created = device.createSwapchain({.window = kHeadless, .imageCount = 0});
+            auto created = device.createSwapchain({.window = kHeadless, .imageCount = fewestImages(instance)});
             REQUIRE(created.has_value());
             swapchain = std::move(*created);
         }
@@ -274,22 +282,22 @@ TEST_CASE("C++ API keeps a device alive for the swapchains made from it", "[cpp_
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("C++ API presents as the mode asked for or says the window doesn't allow it", "[cpp_api][gpu]") {
+TEST_CASE("C++ API presents as the mode asked for", "[cpp_api][gpu]") {
     const bfr::Backend backend = GENERATE(eachBackend());
     Messages messages;
     {
         const bfr::Instance instance = validatedInstance(backend, messages);
         const bfr::Device device = headlessDevice(instance);
-        const auto fifo = device.createSwapchain({.window = kHeadless, .presentMode = bfr::PresentMode::Fifo});
-        const auto immediate = device.createSwapchain(
-            {.window = kHeadless, .presentMode = bfr::PresentMode::Immediate});
-
+        auto fifo = device.createSwapchain(
+            {.window = kHeadless, .imageCount = fewestImages(instance), .presentMode = bfr::PresentMode::Fifo});
         INFO(failureOf(fifo));
-        CHECK(fifo.has_value());
-        if (!immediate.has_value()) {
-            CHECK(immediate.error().code == bfr::Result::ErrorUnsupported);
-            CHECK_THAT(immediate.error().message, Catch::Matchers::ContainsSubstring("immediate"));
-        }
+        REQUIRE(fifo.has_value());
+
+        const auto images = fifo->resize(kWidth, kHeight);
+
+        INFO(failureOf(images));
+        REQUIRE(images.has_value());
+        CHECK(images->presentMode == bfr::PresentMode::Fifo);
     }
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }
@@ -323,8 +331,9 @@ TEST_CASE("C++ API reports when a device holds all the swapchains it can", "[cpp
     std::vector<bfr::Swapchain> made;
     bfr::Expected<bfr::Swapchain> swapchain;
 
+    const std::uint32_t images = fewestImages(instance);
     for (int i = 0; i < kTries && swapchain.has_value(); ++i) {
-        swapchain = device.createSwapchain({.window = kHeadless, .imageCount = 0});
+        swapchain = device.createSwapchain({.window = kHeadless, .imageCount = images});
         if (swapchain.has_value()) {
             made.push_back(std::move(*swapchain));
         }
@@ -347,10 +356,11 @@ TEST_CASE("C++ API creates and destroys swapchains on one device from many threa
         {
             std::vector<std::jthread> threads;
             threads.reserve(kThreads);
+            const std::uint32_t images = fewestImages(instance);
             for (int thread = 0; thread < kThreads; ++thread) {
-                threads.emplace_back([&device, &failed] {
+                threads.emplace_back([&device, &failed, images] {
                     for (int i = 0; i < kEach; ++i) {
-                        auto swapchain = device.createSwapchain({.window = kHeadless, .imageCount = 0});
+                        auto swapchain = device.createSwapchain({.window = kHeadless, .imageCount = images});
                         if (!swapchain.has_value() || !swapchain->resize(kWidth, kHeight).has_value()) {
                             ++failed;
                         }

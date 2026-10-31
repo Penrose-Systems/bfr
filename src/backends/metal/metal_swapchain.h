@@ -5,7 +5,6 @@
 #include "bfr/core/window.h"
 #include "bfr/rhi/swapchain.h"
 #include "metal/metal_util.h"
-#include "rhi/swapchain_build.h"
 
 #include <CoreGraphics/CGColorSpace.h>
 #include <CoreGraphics/CGGeometry.h>
@@ -43,14 +42,11 @@ public:
     MetalSwapchain(MetalSwapchain&&) = delete;
     MetalSwapchain& operator=(MetalSwapchain&&) = delete;
 
-    /// Whether the layer allows the request, or why not: RhiUnsupported, saying
-    /// what it allows.
-    [[nodiscard]] core::Result<void> check() const;
-
-    /// Sets the layer up as the request says, at size in pixels, dropping any
-    /// image acquired; a window with no area leaves it empty. Fails with
-    /// RhiUnsupported when the layer no longer allows the request.
-    [[nodiscard]] core::Result<SwapchainImages> build(Extent size);
+    /// Sets the layer up as the request says, at width by height pixels,
+    /// dropping any image acquired; a window with no area leaves it empty.
+    /// Fails with RhiUnsupported when the layer has no setting for a value of
+    /// the request.
+    [[nodiscard]] core::Result<SwapchainImages> build(std::uint32_t width, std::uint32_t height);
 
     /// Takes the layer's next drawable. Fails with RhiOutOfDate when the
     /// swapchain has no images, RhiInvalidCall when an image is already

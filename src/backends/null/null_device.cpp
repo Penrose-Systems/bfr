@@ -6,7 +6,6 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/swapchain.h"
 #include "null/null_rhi.h"
-#include "rhi/swapchain_build.h"
 
 #include <cstdint>
 #include <expected>
@@ -33,10 +32,6 @@ core::Result<SwapchainHandle> NullDevice::createSwapchain(const core::window::Na
                                                           const SwapchainRequest& request) {
     if (std::holds_alternative<std::monostate>(window)) {
         return core::failure(core::ErrorCode::RhiSurfaceFailed, "there is no window");
-    }
-    // The size is not asked: the window can change it before the first build.
-    if (auto build = swapchainBuildFor(nullSurfaceCaps(), nullSurfaceFormats(), {}, request); !build) {
-        return std::unexpected(std::move(build.error()));
     }
     const SwapchainHandle swapchain = swapchains_.emplace(NullSwapchain{
         .request = request,
@@ -78,16 +73,11 @@ core::Result<SwapchainImages> NullDevice::resizeSwapchain(SwapchainHandle swapch
         return std::unexpected(std::move(found.error()));
     }
     NullSwapchain& chain = **found;
-    const auto build = swapchainBuildFor(nullSurfaceCaps(), nullSurfaceFormats(), {.width = width, .height = height},
-                                         chain.request);
-    if (!build) {
-        return std::unexpected(build.error());
-    }
-    // A zero extent is a window with no area, which leaves the swapchain empty.
-    const bool empty = build->extent.width == 0 || build->extent.height == 0;
-    chain.images.width = build->extent.width;
-    chain.images.height = build->extent.height;
-    chain.images.count = empty ? 0 : build->imageCount;
+    // A zero size is a window with no area, which leaves the swapchain empty.
+    const bool empty = width == 0 || height == 0;
+    chain.images.width = empty ? 0 : width;
+    chain.images.height = empty ? 0 : height;
+    chain.images.count = empty ? 0 : chain.request.imageCount;
     chain.acquired = false;
     return chain.images;
 }

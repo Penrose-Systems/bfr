@@ -196,9 +196,6 @@ core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::
         return core::failure(core::ErrorCode::RhiPresentUnsupported,
                              "the device's present queue doesn't present to the window");
     }
-    if (auto checked = checkSwapchainRequest(rhi_->instanceTable(), adapter_, surface->handle(), request); !checked) {
-        return std::unexpected(std::move(checked.error()));
-    }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, rhi_->instanceTable(), std::move(*surface),
                                                           request, rhi_->logger());
     if (swapchain.isNull()) {

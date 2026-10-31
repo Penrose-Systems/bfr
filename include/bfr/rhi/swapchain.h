@@ -69,10 +69,10 @@ enum class AlphaMode : std::uint8_t {
     return "unknown";
 }
 
-/// What a swapchain is asked to be. Each value is used exactly or refused: the
-/// window decides nothing the caller set.
+/// What a swapchain is asked to be. Each value is passed to the backend as
+/// given; the backend accepts or refuses it.
 struct SwapchainRequest {
-    /// 0 asks for the fewest the window allows.
+    /// The caller sets it; it is passed to the backend as given.
     std::uint32_t imageCount = 0;
     PresentMode presentMode = PresentMode::Fifo;
     Format format = Format::Bgra8Unorm;

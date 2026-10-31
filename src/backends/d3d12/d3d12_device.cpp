@@ -194,15 +194,10 @@ core::Result<SwapchainHandle> D3D12Device::createSwapchain(const core::window::N
         return std::unexpected(std::move(checked.error()));
     }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, ComPtr<IDXGIFactory2>{rhi_->factory()}, queue_,
-                                                          window, request, rhi_->tearing(), rhi_->logger());
+                                                          window, request, rhi_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("a device holds at most {} swapchains", kSwapchainLimit));
-    }
-    // The request is refused now, not when the first image is wanted.
-    if (auto checked = swapchains_.find(swapchain)->check(); !checked) {
-        swapchains_.erase(swapchain);
-        return std::unexpected(std::move(checked.error()));
     }
     return swapchain;
 }
@@ -217,7 +212,7 @@ core::Result<SwapchainImages> D3D12Device::resizeSwapchain(SwapchainHandle swapc
     if (auto idle = waitIdle(); !idle) {
         return std::unexpected(std::move(idle.error()));
     }
-    return (*found)->build({.width = width, .height = height});
+    return (*found)->build(width, height);
 }
 
 core::Result<void> D3D12Device::destroySwapchain(SwapchainHandle swapchain) {

@@ -66,9 +66,6 @@ public:
     /// The DXGI factory swapchains are made with.
     [[nodiscard]] IDXGIFactory6* factory() const { return factory_.Get(); }
 
-    /// Whether DXGI lets a swapchain present without waiting for the display.
-    [[nodiscard]] bool tearing() const { return tearing_; }
-
 private:
     [[nodiscard]] static core::Result<void> enableDebugLayer();
     [[nodiscard]] core::Result<void> createFactory();

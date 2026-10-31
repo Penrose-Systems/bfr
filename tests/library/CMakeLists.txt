@@ -47,7 +47,6 @@ add_executable(bfr_tests
     rhi/test_present.cpp
     rhi/test_rhi.cpp
     rhi/test_swapchain.cpp
-    rhi/test_swapchain_build.cpp
     ${PROJECT_SOURCE_DIR}/src/backends/null/null_device.cpp
     ${PROJECT_SOURCE_DIR}/src/backends/null/null_rhi.cpp)
 bfr_apply_compiler_flags(bfr_tests)

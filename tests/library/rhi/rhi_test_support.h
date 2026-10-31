@@ -34,9 +34,6 @@ inline const RhiConfig kValidation{.validation = true};
 /// For a device that presents to no window yet.
 inline const core::window::NativeWindow kNoWindow{};
 
-/// What a test swapchain asks for: the defaults.
-inline constexpr SwapchainRequest kSwapchainRequest{};
-
 /// A backend the agnostic cases run on: one the build has, or the null one,
 /// which only these tests reach and which has no Backend.
 struct TestBackend {
@@ -122,6 +119,15 @@ inline std::size_t headlessAdapter(const Rhi& rhi) {
     }
     FAIL("no adapter presents to a headless window");
     return 0;
+}
+
+/// What a test swapchain on a headless window of rhi asks for: the defaults,
+/// with the fewest images the surface reports it takes, as a caller must set.
+inline SwapchainRequest swapchainRequest(const Rhi& rhi) {
+    const auto caps = rhi.surfaceCaps(headlessAdapter(rhi), core::window::Headless{});
+    INFO(failureOf(caps));
+    REQUIRE(caps.has_value());
+    return {.imageCount = caps->minImageCount};
 }
 
 /// A device on the first adapter that presents to window. An adapter may not
