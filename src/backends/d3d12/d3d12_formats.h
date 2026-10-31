@@ -32,20 +32,20 @@ struct DxgiFormats {
 /// What DXGI says a swapchain may be: at most DXGI_MAX_SWAP_CHAIN_BUFFERS
 /// images, and presenting at once when it allows tearing. DXGI has no call for
 /// the rest.
-[[nodiscard]] SurfaceCaps surfaceCapsFor(bool tearing);
+[[nodiscard]] SwapchainCaps surfaceCapsFor(bool tearing);
 
 /// The formats and color spaces a DXGI swapchain presents in: none, since DXGI
 /// has no call that lists them.
-[[nodiscard]] std::span<const SurfaceFormat> surfaceFormats();
+[[nodiscard]] std::span<const SwapchainFormat> swapchainFormats();
 
 /// How a swapchain is made to present format in colorSpace.
-struct SwapchainFormat {
+struct DxgiSwapchainFormat {
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
     DXGI_COLOR_SPACE_TYPE colorSpace = DXGI_COLOR_SPACE_RESERVED;
 };
 
 /// How DXGI is asked to present format in colorSpace; unset for a pair it has
 /// no setting for.
-[[nodiscard]] SwapchainFormat swapchainFormatFor(Format format, ColorSpace colorSpace);
+[[nodiscard]] DxgiSwapchainFormat swapchainFormatFor(Format format, ColorSpace colorSpace);
 
 } // namespace bfr::rhi::d3d12

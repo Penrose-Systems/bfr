@@ -69,13 +69,13 @@ struct HeadlessDevice {
 
 } // namespace
 
-TEST_CASE("Vulkan device fails with RhiSurfaceFailed when the API refuses a swapchain's surface", "[vulkan][gpu]") {
+TEST_CASE("Vulkan device fails with RhiWindowFailed when the API refuses a swapchain's surface", "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv refused("BFR_FAIL", "vkCreateHeadlessSurfaceEXT");
     const auto rhi = Rhi::create(kVulkan, {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
-    const auto device = (*rhi)->createDevice(0, kNoWindow);
+    const auto device = (*rhi)->createDevice(0, kNoWindow, {});
     INFO(failureOf(device));
     REQUIRE(device.has_value());
 
@@ -83,7 +83,7 @@ TEST_CASE("Vulkan device fails with RhiSurfaceFailed when the API refuses a swap
     const auto swapchain = (*device)->createSwapchain(kHeadless, SwapchainRequest{});
 
     REQUIRE_FALSE(swapchain.has_value());
-    CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiSurfaceFailed);
+    CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiWindowFailed);
     CHECK_THAT(swapchain.error().message,
                Catch::Matchers::ContainsSubstring("vkCreateHeadlessSurfaceEXT: VK_ERROR_UNKNOWN"));
 }
@@ -95,7 +95,7 @@ TEST_CASE("Vulkan device fails with RhiPresentUnsupported when it can't present 
     const auto rhi = Rhi::create(kVulkan, {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
-    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow);
+    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow, {});
     INFO(failureOf(device));
     REQUIRE(device.has_value());
 
@@ -140,7 +140,7 @@ TEST_CASE("Vulkan device reports a failed present query as the failure it is", "
         const auto rhi = Rhi::create(recordingErrorsInto(errors), kValidation);
         INFO(failureOf(rhi));
         REQUIRE(rhi.has_value());
-        const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow);
+        const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow, {});
         INFO(failureOf(device));
         REQUIRE(device.has_value());
 
@@ -148,7 +148,7 @@ TEST_CASE("Vulkan device reports a failed present query as the failure it is", "
         const auto swapchain = (*device)->createSwapchain(kHeadless, SwapchainRequest{});
 
         REQUIRE_FALSE(swapchain.has_value());
-        CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiSurfaceFailed);
+        CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiWindowFailed);
         CHECK_THAT(swapchain.error().message,
                    Catch::Matchers::ContainsSubstring("vkGetPhysicalDeviceSurfaceSupportKHR: VK_ERROR_UNKNOWN"));
     }
@@ -160,7 +160,7 @@ TEST_CASE("Vulkan device keeps running out of memory, a lost device and a lost s
     using bfr::core::ErrorCode;
     const auto [result, code] = GENERATE(std::pair{"VK_ERROR_OUT_OF_HOST_MEMORY", ErrorCode::RhiOutOfMemory},
                                          std::pair{"VK_ERROR_DEVICE_LOST", ErrorCode::RhiDeviceLost},
-                                         std::pair{"VK_ERROR_SURFACE_LOST_KHR", ErrorCode::RhiSurfaceLost});
+                                         std::pair{"VK_ERROR_SURFACE_LOST_KHR", ErrorCode::RhiWindowLost});
     INFO(result);
     const AdapterOverrideLayer adapterOverride;
     const HeadlessDevice headless{kVulkan, {}};
@@ -180,8 +180,8 @@ TEST_CASE("Vulkan device keeps running out of memory, a lost device and a lost s
 }
 
 TEST_CASE("Vulkan device builds a swapchain once a call the API refused succeeds again", "[vulkan][gpu]") {
-    const std::string function =
-        GENERATE("vkGetPhysicalDeviceSurfaceCapabilitiesKHR", "vkCreateSwapchainKHR", "vkGetSwapchainImagesKHR");
+    const std::string function = GENERATE("vkGetPhysicalDeviceSurfaceCapabilitiesKHR", "vkCreateSwapchainKHR",
+                                          "vkGetSwapchainImagesKHR");
     INFO(function);
     const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
     std::vector<std::string> errors;
@@ -216,7 +216,7 @@ TEST_CASE("Vulkan device presents from a queue family of its own when no graphic
         const auto rhi = Rhi::create(errorsAndLogInto(errors, log), kValidation);
         INFO(failureOf(rhi));
         REQUIRE(rhi.has_value());
-        const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kHeadless);
+        const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kHeadless, {});
         INFO(failureOf(device));
         REQUIRE(device.has_value());
         const auto swapchain = (*device)->createSwapchain(kHeadless, swapchainRequest(**rhi));

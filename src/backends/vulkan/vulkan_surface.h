@@ -38,7 +38,7 @@ private:
 };
 
 /// A surface on window, made with instance, which has enabled extensions.
-/// Fails with RhiSurfaceFailed when there is no window, when its window
+/// Fails with RhiWindowFailed when there is no window, when its window
 /// system's surface extension is unavailable, or when the API refuses the
 /// surface.
 [[nodiscard]] core::Result<VulkanSurface> createSurface(VkInstance instance, const InstanceTable& vk,

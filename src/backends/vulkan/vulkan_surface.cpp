@@ -65,7 +65,7 @@ public:
         : instance_(instance), extensions_(extensions) {}
 
     Made operator()(std::monostate /*none*/) const {
-        return core::failure(core::ErrorCode::RhiSurfaceFailed, "there is no window");
+        return core::failure(core::ErrorCode::RhiWindowFailed, "there is no window");
     }
 
 #ifdef VK_USE_PLATFORM_XLIB_KHR
@@ -133,7 +133,7 @@ public:
     // A window system this build has no surface for.
     template <class Handles>
     Made operator()(const Handles& /*window*/) const {
-        return core::failure(core::ErrorCode::RhiSurfaceFailed, "this build has no surface for the window's system");
+        return core::failure(core::ErrorCode::RhiWindowFailed, "this build has no surface for the window's system");
     }
 
 private:
@@ -143,15 +143,15 @@ private:
     template <class Function, class Create>
     [[nodiscard]] Made make(std::string_view extension, const char* function, Create create) const {
         if (std::ranges::none_of(extensions_, [extension](const char* name) { return name == extension; })) {
-            return core::failure(core::ErrorCode::RhiSurfaceFailed, std::format("{} is not available", extension));
+            return core::failure(core::ErrorCode::RhiWindowFailed, std::format("{} is not available", extension));
         }
         const auto load = std::bit_cast<Function>(vkGetInstanceProcAddr(instance_, function));
         if (load == nullptr) {
-            return core::failure(core::ErrorCode::RhiSurfaceFailed, std::format("{} is not available", function));
+            return core::failure(core::ErrorCode::RhiWindowFailed, std::format("{} is not available", function));
         }
         VkSurfaceKHR surface = VK_NULL_HANDLE;
         if (const VkResult result = create(load, &surface); result != VK_SUCCESS) {
-            return failure(core::ErrorCode::RhiSurfaceFailed, {.call = std::string{function}, .result = result});
+            return failure(core::ErrorCode::RhiWindowFailed, {.call = std::string{function}, .result = result});
         }
         return surface;
     }

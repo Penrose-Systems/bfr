@@ -201,7 +201,7 @@ can hand resources between each other safely.
   freed only after every queue passes the work submitted before the call.
   You never track that yourself.
 - Destroying something an unsubmitted command list still uses is an error;
-  validation reports it.
+  a usage check reports it.
 - Destroying a view frees its bindless slot under the same rule, and updates
   residency.
 
@@ -217,9 +217,10 @@ can hand resources between each other safely.
 ## When things go wrong
 
 - Creation returns either the handle or an error with a reason.
-- Recording calls return nothing. Misuse is caught by validation, which
-  reports through your message callback.
-- Window resize and surface loss come back as results from acquire and
+- Recording calls return nothing. A usage check reports misuse through your
+  message callback. The backend's validation layers are separate, slow, and
+  on only when you ask for them at instance creation.
+- Window resize and window loss come back as results from acquire and
   present, not as fatal errors.
 - Device loss is sticky: every later call reports it, and your callback
   fires once.
@@ -233,7 +234,7 @@ can hand resources between each other safely.
 | Bindless table | One descriptor set, descriptor indexing | Shader-visible descriptor heap (SM 6.6) | Argument buffer |
 | Push constants | Push constants | Root constants | Copied into the command pool's upload ring; its GPU address bound in the argument table per draw |
 | Rendering scope | Dynamic rendering | Render passes | Render command encoder |
-| Command pool | Command pool | Command allocator | Command allocator |
+| Command pool | Command pool | Command allocators, one per list recording | Command allocators, one per list recording |
 | Heap | Device memory | Heap | Heap |
 | Residency | Not needed | Resident by default | Residency set |
 | Swapchain | Swapchain | DXGI swapchain | Metal layer drawables |

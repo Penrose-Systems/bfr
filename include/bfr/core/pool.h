@@ -178,6 +178,18 @@ public:
     /// Live values: made and not yet retired.
     [[nodiscard]] std::uint32_t size() const { return size_.load(std::memory_order_relaxed); }
 
+    /// Calls fn on every live value, under the lock, so fn must not call the
+    /// pool.
+    template <class Fn>
+    void forEach(Fn&& fn) {
+        const std::scoped_lock lock{mutex_};
+        for (std::uint32_t index = 0; index < pageCount_ * kPageSize; ++index) {
+            if ((generationAt(index).load(std::memory_order_relaxed) & 1U) != 0) {
+                fn(entryAt(index).value);
+            }
+        }
+    }
+
     [[nodiscard]] std::uint32_t capacity() const {
         const std::scoped_lock lock{mutex_};
         return pageCount_ * kPageSize;

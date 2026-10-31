@@ -15,6 +15,7 @@
 #include <expected>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -47,10 +48,10 @@ enum class Result : std::int32_t {
     ErrorDeviceLost = BFR_RESULT_ERROR_DEVICE_LOST,
     /// A handle is stale or destroyed.
     ErrorInvalidHandle = BFR_RESULT_ERROR_INVALID_HANDLE,
-    /// The API refused a surface for the window, or failed when asked about it.
-    ErrorSurfaceFailed = BFR_RESULT_ERROR_SURFACE_FAILED,
-    /// The window's surface is gone; recreate the swapchain.
-    ErrorSurfaceLost = BFR_RESULT_ERROR_SURFACE_LOST,
+    /// The backend refused the window, or failed when asked about it.
+    ErrorWindowFailed = BFR_RESULT_ERROR_WINDOW_FAILED,
+    /// The window is gone to the backend; recreate the swapchain.
+    ErrorWindowLost = BFR_RESULT_ERROR_WINDOW_LOST,
     /// The device's queue cannot present to the window.
     ErrorPresentUnsupported = BFR_RESULT_ERROR_PRESENT_UNSUPPORTED,
     /// The backend refused to create or resize the swapchain.
@@ -83,8 +84,8 @@ enum class Result : std::int32_t {
     case Result::ErrorDeviceFailed: return "error_device_failed";
     case Result::ErrorDeviceLost: return "error_device_lost";
     case Result::ErrorInvalidHandle: return "error_invalid_handle";
-    case Result::ErrorSurfaceFailed: return "error_surface_failed";
-    case Result::ErrorSurfaceLost: return "error_surface_lost";
+    case Result::ErrorWindowFailed: return "error_window_failed";
+    case Result::ErrorWindowLost: return "error_window_lost";
     case Result::ErrorPresentUnsupported: return "error_present_unsupported";
     case Result::ErrorSwapchainFailed: return "error_swapchain_failed";
     case Result::ErrorOutOfDate: return "error_out_of_date";
@@ -492,32 +493,32 @@ enum class ColorSpace : std::int32_t {
 }
 
 /// How a window's display is turned relative to its natural orientation.
-enum class SurfaceRotation : std::int32_t {
+enum class DisplayRotation : std::int32_t {
     /// Not turned.
-    None = BFR_SURFACE_ROTATION_NONE,
+    None = BFR_DISPLAY_ROTATION_NONE,
     /// Turned 90 degrees clockwise.
-    Rotate90 = BFR_SURFACE_ROTATION_ROTATE_90,
+    Rotate90 = BFR_DISPLAY_ROTATION_ROTATE_90,
     /// Turned 180 degrees.
-    Rotate180 = BFR_SURFACE_ROTATION_ROTATE_180,
+    Rotate180 = BFR_DISPLAY_ROTATION_ROTATE_180,
     /// Turned 270 degrees clockwise.
-    Rotate270 = BFR_SURFACE_ROTATION_ROTATE_270,
+    Rotate270 = BFR_DISPLAY_ROTATION_ROTATE_270,
     /// Mirrored, or left to the platform.
-    Other = BFR_SURFACE_ROTATION_OTHER,
+    Other = BFR_DISPLAY_ROTATION_OTHER,
 };
 
-/// value's name in bfr.yaml; empty for a value SurfaceRotation doesn't have.
-[[nodiscard]] constexpr std::string_view name(SurfaceRotation value) {
+/// value's name in bfr.yaml; empty for a value DisplayRotation doesn't have.
+[[nodiscard]] constexpr std::string_view name(DisplayRotation value) {
     switch (value) {
-    case SurfaceRotation::None: return "none";
-    case SurfaceRotation::Rotate90: return "rotate_90";
-    case SurfaceRotation::Rotate180: return "rotate_180";
-    case SurfaceRotation::Rotate270: return "rotate_270";
-    case SurfaceRotation::Other: return "other";
+    case DisplayRotation::None: return "none";
+    case DisplayRotation::Rotate90: return "rotate_90";
+    case DisplayRotation::Rotate180: return "rotate_180";
+    case DisplayRotation::Rotate270: return "rotate_270";
+    case DisplayRotation::Other: return "other";
     }
     return {};
 }
 
-/// How a swapchain presents. Which ones a window allows is in bfr_surface_caps.
+/// How a swapchain presents. Which ones a window allows is in bfr_swapchain_caps.
 enum class PresentMode : std::int32_t {
     /// Presents wait for vertical blank and queue up. Always available.
     Fifo = BFR_PRESENT_MODE_FIFO,
@@ -540,7 +541,7 @@ enum class PresentMode : std::int32_t {
     return {};
 }
 
-/// How a window blends a swapchain's alpha. Which ones a window allows is in bfr_surface_caps.
+/// How a window blends a swapchain's alpha. Which ones a window allows is in bfr_swapchain_caps.
 enum class AlphaMode : std::int32_t {
     /// The window ignores alpha.
     Opaque = BFR_ALPHA_MODE_OPAQUE,
@@ -559,6 +560,26 @@ enum class AlphaMode : std::int32_t {
     case AlphaMode::Premultiplied: return "premultiplied";
     case AlphaMode::Postmultiplied: return "postmultiplied";
     case AlphaMode::Inherit: return "inherit";
+    }
+    return {};
+}
+
+/// What a queue runs.
+enum class QueueType : std::int32_t {
+    /// Graphics, compute and copies.
+    Graphics = BFR_QUEUE_TYPE_GRAPHICS,
+    /// Compute and copies, beside the graphics queue.
+    Compute = BFR_QUEUE_TYPE_COMPUTE,
+    /// Copies alone.
+    Copy = BFR_QUEUE_TYPE_COPY,
+};
+
+/// value's name in bfr.yaml; empty for a value QueueType doesn't have.
+[[nodiscard]] constexpr std::string_view name(QueueType value) {
+    switch (value) {
+    case QueueType::Graphics: return "graphics";
+    case QueueType::Compute: return "compute";
+    case QueueType::Copy: return "copy";
     }
     return {};
 }
@@ -642,6 +663,8 @@ class Device;
 
 class Swapchain;
 
+class CommandPool;
+
 class CommandList;
 
 /// How to create an instance.
@@ -672,12 +695,18 @@ struct Window {
     WindowSystem system{};
 };
 
-/// How to open an adapter.
+/// How to open an adapter. The device's queues are numbered: the graphics queue is 0, then the
+/// compute queues, then the copy queues, in the order asked for here.
 struct DeviceDesc {
     /// Index into the instance's adapter list.
     std::uint32_t adapter{};
     /// The window the device must be able to present to; all zero opens it without presenting.
     Window window{};
+    /// Compute queues to open beside the graphics queue; 0 is none. Fails with error_unsupported
+    /// when the adapter has fewer; bfr_caps.queues says how many it has.
+    std::uint32_t computeQueues{};
+    /// Copy queues to open; 0 is none. Fails with error_unsupported when the adapter has fewer.
+    std::uint32_t copyQueues{};
 };
 
 /// How to create a swapchain.
@@ -723,8 +752,32 @@ struct RenderingDesc {
     std::array<float, 4> clearColor{};
 };
 
+/// How to create a command pool.
+struct CommandPoolDesc {
+    /// The queue its lists record for; 0 is the graphics queue.
+    std::uint32_t queue{};
+};
+
+/// A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was
+/// submitted has run. An all-zero token has already completed.
+struct Token {
+    /// Index of the queue on the device; 0 is the graphics queue.
+    std::uint32_t queue{};
+    std::uint64_t value{};
+};
+
+/// What to send to a queue.
+struct SubmitDesc {
+    /// The queue to send to; 0 is the graphics queue.
+    std::uint32_t queue{};
+    /// Recorded from pools on the same queue; the GPU runs them in this order.
+    std::span<const CommandList> commandLists{};
+    /// The GPU passes these before it runs the lists.
+    std::span<const Token> waits{};
+};
+
 /// Which window to ask about.
-struct SurfaceDesc {
+struct SwapchainQuery {
     Window window{};
 };
 
@@ -1054,7 +1107,7 @@ struct FormatCaps {
 };
 
 /// What a window's swapchain may be, on one adapter.
-struct SurfaceCaps {
+struct SwapchainCaps {
     std::uint32_t minImageCount{};
     /// 0 for no limit.
     std::uint32_t maxImageCount{};
@@ -1066,7 +1119,7 @@ struct SurfaceCaps {
     std::uint32_t maxWidth{};
     std::uint32_t maxHeight{};
     /// How the display is turned now; on phones the app may render turned to match.
-    SurfaceRotation rotation{};
+    DisplayRotation rotation{};
     /// Presents wait for vertical blank and queue up. Always there.
     bool fifo{};
     /// As fifo, but a late frame presents at once, and may tear.
@@ -1084,7 +1137,7 @@ struct SurfaceCaps {
 };
 
 /// A format and color space a window's swapchain may use.
-struct SurfaceFormat {
+struct SwapchainFormat {
     Format format{};
     ColorSpace colorSpace{};
 };
@@ -1136,7 +1189,13 @@ inline bfr_window toC(const Window& value) {
 }
 
 inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
-    return {.next = next, .adapter = value.adapter, .window = toC(value.window)};
+    return {
+        .next = next,
+        .adapter = value.adapter,
+        .window = toC(value.window),
+        .compute_queues = value.computeQueues,
+        .copy_queues = value.copyQueues,
+    };
 }
 
 inline bfr_swapchain_desc toC(const SwapchainDesc& value, const bfr_chain* next) {
@@ -1160,7 +1219,15 @@ inline bfr_rendering_desc toC(const RenderingDesc& value, const bfr_chain* next)
     };
 }
 
-inline bfr_surface_desc toC(const SurfaceDesc& value, const bfr_chain* next) {
+inline bfr_command_pool_desc toC(const CommandPoolDesc& value, const bfr_chain* next) {
+    return {.next = next, .queue = value.queue};
+}
+
+inline bfr_token toC(const Token& value) {
+    return {.queue = value.queue, .value = value.value};
+}
+
+inline bfr_swapchain_query toC(const SwapchainQuery& value, const bfr_chain* next) {
     return {.next = next, .window = toC(value.window)};
 }
 
@@ -1181,6 +1248,10 @@ inline SwapchainImages fromC(const bfr_swapchain_images& value) {
         .presentMode = static_cast<PresentMode>(value.present_mode),
         .alphaMode = static_cast<AlphaMode>(value.alpha_mode),
     };
+}
+
+inline Token fromC(const bfr_token& value) {
+    return {.queue = value.queue, .value = value.value};
 }
 
 inline CapsInfo fromC(const bfr_caps_info& value) {
@@ -1423,7 +1494,7 @@ inline FormatCaps fromC(const bfr_format_caps& value) {
     };
 }
 
-inline SurfaceCaps fromC(const bfr_surface_caps& value) {
+inline SwapchainCaps fromC(const bfr_swapchain_caps& value) {
     return {
         .minImageCount = value.min_image_count,
         .maxImageCount = value.max_image_count,
@@ -1433,7 +1504,7 @@ inline SurfaceCaps fromC(const bfr_surface_caps& value) {
         .minHeight = value.min_height,
         .maxWidth = value.max_width,
         .maxHeight = value.max_height,
-        .rotation = static_cast<SurfaceRotation>(value.rotation),
+        .rotation = static_cast<DisplayRotation>(value.rotation),
         .fifo = value.fifo != BFR_FALSE,
         .fifoRelaxed = value.fifo_relaxed != BFR_FALSE,
         .mailbox = value.mailbox != BFR_FALSE,
@@ -1445,7 +1516,7 @@ inline SurfaceCaps fromC(const bfr_surface_caps& value) {
     };
 }
 
-inline SurfaceFormat fromC(const bfr_surface_format& value) {
+inline SwapchainFormat fromC(const bfr_swapchain_format& value) {
     return {
         .format = static_cast<Format>(value.format),
         .colorSpace = static_cast<ColorSpace>(value.color_space),
@@ -1507,11 +1578,11 @@ public:
     /// Writes what a swapchain for the window in desc may be on an adapter. Asks the window system
     /// each time, since the window changes. Fails with present_unsupported when the adapter can't
     /// present to the window.
-    [[nodiscard]] Expected<SurfaceCaps> surfaceCaps(std::uint32_t adapter, const SurfaceDesc& desc) const;
+    [[nodiscard]] Expected<SwapchainCaps> swapchainCaps(std::uint32_t adapter, const SwapchainQuery& desc) const;
 
     /// Lists the formats and color spaces a swapchain for the window in desc may use on an adapter,
     /// the order the window system gives.
-    [[nodiscard]] Expected<std::vector<SurfaceFormat>> surfaceFormats(std::uint32_t adapter, const SurfaceDesc& desc) const;
+    [[nodiscard]] Expected<std::vector<SwapchainFormat>> swapchainFormats(std::uint32_t adapter, const SwapchainQuery& desc) const;
 
     /// Opens an adapter. With a window in desc, picks a queue that can present to it.
     [[nodiscard]] Expected<Device> createDevice(const DeviceDesc& desc) const;
@@ -1533,8 +1604,8 @@ public:
     /// Owns nothing, as a moved-from Device does.
     Device() = default;
     /// Destroys a device once the GPU has finished with it, with every handle it still owns. Null
-    /// does nothing. A Device with CommandList or Swapchain objects left lives on until the last of
-    /// them is destroyed, so they may be destroyed in any order.
+    /// does nothing. A Device with CommandList or CommandPool or Swapchain objects left lives on
+    /// until the last of them is destroyed, so they may be destroyed in any order.
     ~Device() = default;
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
@@ -1559,9 +1630,20 @@ public:
     /// has no images until the first bfr_resize_swapchain gives it a size.
     [[nodiscard]] Expected<Swapchain> createSwapchain(const SwapchainDesc& desc) const;
 
-    /// Starts recording commands. The device holds a few command lists at once and waits for the
-    /// GPU to finish the oldest before reusing it.
-    [[nodiscard]] Expected<CommandList> beginCommands() const;
+    /// Creates a command pool, as desc says.
+    [[nodiscard]] Expected<CommandPool> createCommandPool(const CommandPoolDesc& desc) const;
+
+    /// Sends recorded command lists to a queue, which runs them after what it was sent before and
+    /// after the GPU passes the waits, and writes the token their completion signals. The command
+    /// lists are gone afterwards. Calls on one queue must not overlap; the caller synchronizes
+    /// them. Different queues may be sent to from different threads at once.
+    [[nodiscard]] Expected<Token> submit(const SubmitDesc& desc) const;
+
+    /// Blocks until the GPU has passed token, whichever queue it is on.
+    [[nodiscard]] Expected<void> wait(const Token& token) const;
+
+    /// Writes whether the GPU has passed token, without blocking.
+    [[nodiscard]] Expected<bool> poll(const Token& token) const;
 
 private:
     Device(bfr_device* device, detail::KeepAlive keepAlive) : device_(device), keepAlive_(detail::share(device, &bfr_destroy_device, std::move(keepAlive))) {}
@@ -1626,8 +1708,56 @@ private:
     detail::KeepAlive keepAlive_;
 };
 
-/// Commands recorded for the GPU, from bfr_begin_commands until bfr_submit sends them. Calls on one
-/// command list must not overlap; the caller synchronizes them.
+/// Where command lists for one queue are recorded from: the memory they record into, given back to
+/// the pool by bfr_reset_command_pool once the GPU has run them. Calls on one pool, and recording
+/// on the lists it made, must not overlap; the caller synchronizes them. Different pools may be
+/// used from different threads at once.
+class CommandPool {
+public:
+    /// Owns nothing, as a moved-from CommandPool does.
+    CommandPool() = default;
+    /// Destroys a command pool and every list it made, once the GPU has finished with them; the
+    /// handles are invalid at once. A handle that is already destroyed does nothing. Not while
+    /// another thread is using the pool.
+    ~CommandPool() { bfr_destroy_command_pool(device_, commandPool_); }
+    CommandPool(const CommandPool&) = delete;
+    CommandPool& operator=(const CommandPool&) = delete;
+    CommandPool(CommandPool&& other) noexcept : device_(std::exchange(other.device_, nullptr)), commandPool_(std::exchange(other.commandPool_, {})), keepAlive_(std::move(other.keepAlive_)) {}
+    CommandPool& operator=(CommandPool&& other) noexcept {
+        if (this != &other) {
+            bfr_destroy_command_pool(device_, commandPool_);
+            device_ = std::exchange(other.device_, nullptr);
+            commandPool_ = std::exchange(other.commandPool_, {});
+            keepAlive_ = std::move(other.keepAlive_);
+        }
+        return *this;
+    }
+
+    /// The C value, for calls bfr.hpp does not wrap; this still owns it.
+    [[nodiscard]] bfr_command_pool get() const { return commandPool_; }
+    [[nodiscard]] explicit operator bool() const { return commandPool_.bits != 0; }
+
+    /// Gives every list the pool made back to it, so bfr_begin_commands may use their memory again.
+    /// Fails with error_invalid_argument while a list from the pool is recording, or while the GPU
+    /// has not passed the token of the pool's last submit; bfr_wait on it first.
+    [[nodiscard]] Expected<void> reset();
+
+    /// Starts recording a command list from the pool.
+    [[nodiscard]] Expected<CommandList> beginCommands();
+
+private:
+    CommandPool(bfr_device* device, bfr_command_pool commandPool, detail::KeepAlive keepAlive) : device_(device), commandPool_(commandPool), keepAlive_(std::move(keepAlive)) {}
+    friend class Device;
+
+    bfr_device* device_ = nullptr;
+    bfr_command_pool commandPool_{};
+    // Keeps the Device that made this alive until this is destroyed.
+    detail::KeepAlive keepAlive_;
+};
+
+/// Commands recorded for the GPU, from bfr_begin_commands until bfr_submit sends them to the queue
+/// of the pool they came from. Calls on one command list must not overlap; the caller synchronizes
+/// them.
 class CommandList {
 public:
     /// Owns nothing, as a moved-from CommandList does.
@@ -1659,19 +1789,30 @@ public:
     /// Ends the rendering bfr_begin_rendering began; the image is then ready to present.
     [[nodiscard]] Expected<void> endRendering();
 
-    /// Sends the recorded commands to the GPU, which runs them in the order submitted. The command
-    /// list is gone afterwards.
-    [[nodiscard]] Expected<void> submit();
-
 private:
     CommandList(bfr_device* device, bfr_command_list commandList, detail::KeepAlive keepAlive) : device_(device), commandList_(commandList), keepAlive_(std::move(keepAlive)) {}
-    friend class Device;
+    friend class CommandPool;
 
     bfr_device* device_ = nullptr;
     bfr_command_list commandList_{};
     // Keeps the Device that made this alive until this is destroyed.
     detail::KeepAlive keepAlive_;
 };
+
+namespace detail {
+
+inline bfr_submit_desc toC(const SubmitDesc& value, const bfr_chain* next, detail::SmallBuffer<bfr_command_list>& commandLists, detail::SmallBuffer<bfr_token>& waits) {
+    return {
+        .next = next,
+        .queue = value.queue,
+        .command_lists = commandLists.fill(value.commandLists, [](const CommandList& element) { return element.get(); }),
+        .command_list_count = static_cast<uint32_t>(value.commandLists.size()),
+        .waits = waits.fill(value.waits, [](const Token& element) { return toC(element); }),
+        .wait_count = static_cast<uint32_t>(value.waits.size()),
+    };
+}
+
+} // namespace detail
 
 inline Expected<Instance> Instance::create(const InstanceDesc& desc) {
     auto messageCallback = desc.messageCallback ? std::make_shared<MessageCallback>(desc.messageCallback) : nullptr;
@@ -1743,27 +1884,27 @@ inline Expected<std::vector<FormatCaps>> Instance::formats(std::uint32_t adapter
     return formats;
 }
 
-inline Expected<SurfaceCaps> Instance::surfaceCaps(std::uint32_t adapter, const SurfaceDesc& desc) const {
-    const bfr_surface_desc cDesc = detail::toC(desc, nullptr);
-    bfr_surface_caps caps{};
-    if (const bfr_result result = bfr_get_surface_caps(instance_, adapter, &cDesc, &caps); result < 0) {
+inline Expected<SwapchainCaps> Instance::swapchainCaps(std::uint32_t adapter, const SwapchainQuery& desc) const {
+    const bfr_swapchain_query cDesc = detail::toC(desc, nullptr);
+    bfr_swapchain_caps caps{};
+    if (const bfr_result result = bfr_get_swapchain_caps(instance_, adapter, &cDesc, &caps); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return detail::fromC(caps);
 }
 
-inline Expected<std::vector<SurfaceFormat>> Instance::surfaceFormats(std::uint32_t adapter, const SurfaceDesc& desc) const {
-    const bfr_surface_desc cDesc = detail::toC(desc, nullptr);
-    std::vector<bfr_surface_format> formatsC;
+inline Expected<std::vector<SwapchainFormat>> Instance::swapchainFormats(std::uint32_t adapter, const SwapchainQuery& desc) const {
+    const bfr_swapchain_query cDesc = detail::toC(desc, nullptr);
+    std::vector<bfr_swapchain_format> formatsC;
     std::uint32_t count = 0;
     // Asked again while the list grows between the two calls.
     for (;;) {
-        bfr_result result = bfr_get_surface_formats(instance_, adapter, &cDesc, &count, nullptr);
+        bfr_result result = bfr_get_swapchain_formats(instance_, adapter, &cDesc, &count, nullptr);
         if (result < 0) {
             return std::unexpected(detail::failure(result));
         }
         formatsC.resize(count);
-        result = bfr_get_surface_formats(instance_, adapter, &cDesc, &count, formatsC.data());
+        result = bfr_get_swapchain_formats(instance_, adapter, &cDesc, &count, formatsC.data());
         if (result < 0) {
             return std::unexpected(detail::failure(result));
         }
@@ -1771,7 +1912,7 @@ inline Expected<std::vector<SurfaceFormat>> Instance::surfaceFormats(std::uint32
             break;
         }
     }
-    std::vector<SurfaceFormat> formats;
+    std::vector<SwapchainFormat> formats;
     formats.reserve(count);
     for (std::uint32_t i = 0; i < count; ++i) {
         formats.push_back(detail::fromC(formatsC[i]));
@@ -1805,12 +1946,41 @@ inline Expected<Swapchain> Device::createSwapchain(const SwapchainDesc& desc) co
     return Swapchain{device_, swapchain, keepAlive_};
 }
 
-inline Expected<CommandList> Device::beginCommands() const {
-    bfr_command_list commandList{};
-    if (const bfr_result result = bfr_begin_commands(device_, &commandList); result < 0) {
+inline Expected<CommandPool> Device::createCommandPool(const CommandPoolDesc& desc) const {
+    const bfr_command_pool_desc cDesc = detail::toC(desc, nullptr);
+    bfr_command_pool commandPool{};
+    if (const bfr_result result = bfr_create_command_pool(device_, &cDesc, &commandPool); result < 0) {
         return std::unexpected(detail::failure(result));
     }
-    return CommandList{device_, commandList, keepAlive_};
+    return CommandPool{device_, commandPool, keepAlive_};
+}
+
+inline Expected<Token> Device::submit(const SubmitDesc& desc) const {
+    detail::SmallBuffer<bfr_command_list> cDescCommandLists;
+    detail::SmallBuffer<bfr_token> cDescWaits;
+    const bfr_submit_desc cDesc = detail::toC(desc, nullptr, cDescCommandLists, cDescWaits);
+    bfr_token token{};
+    if (const bfr_result result = bfr_submit(device_, &cDesc, &token); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(token);
+}
+
+inline Expected<void> Device::wait(const Token& token) const {
+    const bfr_token cToken = detail::toC(token);
+    if (const bfr_result result = bfr_wait(device_, &cToken); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<bool> Device::poll(const Token& token) const {
+    const bfr_token cToken = detail::toC(token);
+    bfr_bool complete{};
+    if (const bfr_result result = bfr_poll(device_, &cToken, &complete); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return complete != BFR_FALSE;
 }
 
 inline Expected<SwapchainImages> Swapchain::resize(std::uint32_t width, std::uint32_t height) {
@@ -1835,6 +2005,21 @@ inline Expected<void> Swapchain::present() {
     return {};
 }
 
+inline Expected<void> CommandPool::reset() {
+    if (const bfr_result result = bfr_reset_command_pool(device_, commandPool_); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<CommandList> CommandPool::beginCommands() {
+    bfr_command_list commandList{};
+    if (const bfr_result result = bfr_begin_commands(device_, commandPool_, &commandList); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return CommandList{device_, commandList, keepAlive_};
+}
+
 inline Expected<void> CommandList::beginRendering(const Swapchain& swapchain, const RenderingDesc& desc) {
     const bfr_rendering_desc cDesc = detail::toC(desc, nullptr);
     if (const bfr_result result = bfr_begin_rendering(device_, commandList_, swapchain.get(), &cDesc); result < 0) {
@@ -1845,13 +2030,6 @@ inline Expected<void> CommandList::beginRendering(const Swapchain& swapchain, co
 
 inline Expected<void> CommandList::endRendering() {
     if (const bfr_result result = bfr_end_rendering(device_, commandList_); result < 0) {
-        return std::unexpected(detail::failure(result));
-    }
-    return {};
-}
-
-inline Expected<void> CommandList::submit() {
-    if (const bfr_result result = bfr_submit(device_, commandList_); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return {};

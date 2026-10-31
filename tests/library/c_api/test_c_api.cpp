@@ -95,7 +95,8 @@ struct HeadlessDevice {
         std::uint32_t count = 0;
         REQUIRE(bfr_get_adapters(instance, &count, nullptr) == BFR_RESULT_SUCCESS);
         for (std::uint32_t adapter = 0; adapter < count && device == nullptr; ++adapter) {
-            const bfr_device_desc desc{.next = nullptr, .adapter = adapter, .window = kHeadless};
+            const bfr_device_desc desc{
+                .next = nullptr, .adapter = adapter, .window = kHeadless, .compute_queues = 0, .copy_queues = 0};
             const bfr_result result = bfr_create_device(instance, &desc, &device);
             INFO(lastError());
             REQUIRE((result == BFR_RESULT_SUCCESS || result == BFR_RESULT_ERROR_PRESENT_UNSUPPORTED));
@@ -104,9 +105,9 @@ struct HeadlessDevice {
             }
         }
         REQUIRE(device != nullptr);
-        const bfr_surface_desc surface{.next = nullptr, .window = kHeadless};
-        bfr_surface_caps caps{};
-        REQUIRE(bfr_get_surface_caps(instance, adapter, &surface, &caps) == BFR_RESULT_SUCCESS);
+        const bfr_swapchain_query surface{.next = nullptr, .window = kHeadless};
+        bfr_swapchain_caps caps{};
+        REQUIRE(bfr_get_swapchain_caps(instance, adapter, &surface, &caps) == BFR_RESULT_SUCCESS);
         images = caps.min_image_count;
     }
     ~HeadlessDevice() { bfr_destroy_device(device); }
@@ -271,19 +272,19 @@ namespace {
 
 struct Mode {
     bfr_present_mode mode;
-    bfr_bool bfr_surface_caps::* allowed;
+    bfr_bool bfr_swapchain_caps::* allowed;
     const char* name;
 };
 
 constexpr std::array kModes{
-    Mode{.mode = BFR_PRESENT_MODE_FIFO, .allowed = &bfr_surface_caps::fifo, .name = "fifo"},
-    Mode{.mode = BFR_PRESENT_MODE_FIFO_RELAXED, .allowed = &bfr_surface_caps::fifo_relaxed, .name = "fifo_relaxed"},
-    Mode{.mode = BFR_PRESENT_MODE_MAILBOX, .allowed = &bfr_surface_caps::mailbox, .name = "mailbox"},
-    Mode{.mode = BFR_PRESENT_MODE_IMMEDIATE, .allowed = &bfr_surface_caps::immediate, .name = "immediate"},
+    Mode{.mode = BFR_PRESENT_MODE_FIFO, .allowed = &bfr_swapchain_caps::fifo, .name = "fifo"},
+    Mode{.mode = BFR_PRESENT_MODE_FIFO_RELAXED, .allowed = &bfr_swapchain_caps::fifo_relaxed, .name = "fifo_relaxed"},
+    Mode{.mode = BFR_PRESENT_MODE_MAILBOX, .allowed = &bfr_swapchain_caps::mailbox, .name = "mailbox"},
+    Mode{.mode = BFR_PRESENT_MODE_IMMEDIATE, .allowed = &bfr_swapchain_caps::immediate, .name = "immediate"},
 };
 
 // Makes a swapchain on device in mode, which caps allows, and checks it is made.
-void checkPresentMode(bfr_device* device, const bfr_surface_caps& caps, const Mode& mode) {
+void checkPresentMode(bfr_device* device, const bfr_swapchain_caps& caps, const Mode& mode) {
     const bfr_swapchain_desc desc{.next = nullptr,
                                   .window = kHeadless,
                                   .image_count = caps.min_image_count,
@@ -312,9 +313,9 @@ TEST_CASE("C API presents as each mode the window allows", "[c_api][gpu]") {
     {
         const Instance instance{backend, messages};
         const HeadlessDevice device{instance.instance};
-        const bfr_surface_desc surface{.next = nullptr, .window = kHeadless};
-        bfr_surface_caps caps{};
-        REQUIRE(bfr_get_surface_caps(instance.instance, device.adapter, &surface, &caps) == BFR_RESULT_SUCCESS);
+        const bfr_swapchain_query surface{.next = nullptr, .window = kHeadless};
+        bfr_swapchain_caps caps{};
+        REQUIRE(bfr_get_swapchain_caps(instance.instance, device.adapter, &surface, &caps) == BFR_RESULT_SUCCESS);
 
         for (const Mode& mode : kModes) {
             if (caps.*mode.allowed != BFR_FALSE) {
@@ -623,10 +624,10 @@ std::vector<std::string> capsProblems(const bfr_caps& caps, const bfr_adapter_in
 std::uint32_t headlessAdapter(bfr_instance* instance) {
     std::uint32_t count = 0;
     REQUIRE(bfr_get_adapters(instance, &count, nullptr) == BFR_RESULT_SUCCESS);
-    const bfr_surface_desc headless{.next = nullptr, .window = kHeadless};
+    const bfr_swapchain_query headless{.next = nullptr, .window = kHeadless};
     for (std::uint32_t adapter = 0; adapter < count; ++adapter) {
-        bfr_surface_caps caps{};
-        const bfr_result result = bfr_get_surface_caps(instance, adapter, &headless, &caps);
+        bfr_swapchain_caps caps{};
+        const bfr_result result = bfr_get_swapchain_caps(instance, adapter, &headless, &caps);
         if (result == BFR_RESULT_SUCCESS) {
             return adapter;
         }
@@ -664,14 +665,14 @@ TEST_CASE("C API refuses caps queries with null arguments", "[c_api][gpu]") {
     std::vector<std::string> messages;
     const Instance instance{backend, messages};
     bfr_caps caps{};
-    bfr_surface_caps surfaceCaps{};
+    bfr_swapchain_caps swapchainCaps{};
 
     const std::vector<bfr_result> results{
         bfr_get_caps(nullptr, 0, &caps),
         bfr_get_caps(instance.instance, 0, nullptr),
         bfr_get_formats(instance.instance, 0, nullptr, nullptr),
-        bfr_get_surface_caps(instance.instance, 0, nullptr, &surfaceCaps),
-        bfr_get_surface_formats(instance.instance, 0, nullptr, nullptr, nullptr),
+        bfr_get_swapchain_caps(instance.instance, 0, nullptr, &swapchainCaps),
+        bfr_get_swapchain_formats(instance.instance, 0, nullptr, nullptr, nullptr),
         bfr_get_budget(nullptr, nullptr),
     };
 
@@ -687,13 +688,13 @@ TEST_CASE("C API refuses caps queries about an adapter it does not list", "[c_ap
     REQUIRE(bfr_get_adapters(instance.instance, &count, nullptr) == BFR_RESULT_SUCCESS);
     bfr_caps caps{};
     std::uint32_t formats = 0;
-    const bfr_surface_desc surface{.next = nullptr, .window = kHeadless};
-    bfr_surface_caps surfaceCaps{};
+    const bfr_swapchain_query surface{.next = nullptr, .window = kHeadless};
+    bfr_swapchain_caps swapchainCaps{};
 
     const std::vector<bfr_result> results{
         bfr_get_formats(instance.instance, count, &formats, nullptr),
-        bfr_get_surface_caps(instance.instance, count, &surface, &surfaceCaps),
-        bfr_get_surface_formats(instance.instance, count, &surface, &formats, nullptr),
+        bfr_get_swapchain_caps(instance.instance, count, &surface, &swapchainCaps),
+        bfr_get_swapchain_formats(instance.instance, count, &surface, &formats, nullptr),
         bfr_get_caps(instance.instance, count, &caps),
     };
 
@@ -727,20 +728,20 @@ TEST_CASE("C API reports what a swapchain for a headless window may be", "[c_api
     std::vector<std::string> messages;
     const Instance instance{backend, messages};
     const std::uint32_t adapter = headlessAdapter(instance.instance);
-    const bfr_surface_desc desc{.next = nullptr, .window = kHeadless};
-    bfr_surface_caps caps{};
+    const bfr_swapchain_query desc{.next = nullptr, .window = kHeadless};
+    bfr_swapchain_caps caps{};
     std::uint32_t count = 0;
 
-    CHECK(bfr_get_surface_caps(instance.instance, adapter, &desc, &caps) == BFR_RESULT_SUCCESS);
-    CHECK(bfr_get_surface_formats(instance.instance, adapter, &desc, &count, nullptr) == BFR_RESULT_SUCCESS);
+    CHECK(bfr_get_swapchain_caps(instance.instance, adapter, &desc, &caps) == BFR_RESULT_SUCCESS);
+    CHECK(bfr_get_swapchain_formats(instance.instance, adapter, &desc, &count, nullptr) == BFR_RESULT_SUCCESS);
 
     INFO(lastError());
     CHECK(caps.min_image_count >= 1);
     CHECK(caps.fifo == BFR_TRUE);
     REQUIRE(count > 0);
-    std::vector<bfr_surface_format> formats(count);
-    CHECK(bfr_get_surface_formats(instance.instance, adapter, &desc, &count, formats.data()) == BFR_RESULT_SUCCESS);
-    CHECK(std::ranges::any_of(formats, [](const bfr_surface_format& format) {
+    std::vector<bfr_swapchain_format> formats(count);
+    CHECK(bfr_get_swapchain_formats(instance.instance, adapter, &desc, &count, formats.data()) == BFR_RESULT_SUCCESS);
+    CHECK(std::ranges::any_of(formats, [](const bfr_swapchain_format& format) {
         return format.color_space == BFR_COLOR_SPACE_SRGB;
     }));
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
@@ -750,17 +751,17 @@ TEST_CASE("C API needs a usable window to ask about a surface", "[c_api][gpu]") 
     const bfr_backend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     const Instance instance{backend, messages};
-    bfr_surface_caps caps{};
+    bfr_swapchain_caps caps{};
 
-    const bfr_surface_desc none{.next = nullptr, .window = {}};
-    CHECK(bfr_get_surface_caps(instance.instance, 0, &none, &caps) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    const bfr_swapchain_query none{.next = nullptr, .window = {}};
+    CHECK(bfr_get_swapchain_caps(instance.instance, 0, &none, &caps) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("needs a window"));
 
-    const bfr_surface_desc unknown{.next = nullptr,
-                                   .window = {.window = nullptr,
-                                              .display = nullptr,
-                                              .system = static_cast<bfr_window_system>(99)}};
-    CHECK(bfr_get_surface_caps(instance.instance, 0, &unknown, &caps) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    const bfr_swapchain_query unknown{.next = nullptr,
+                                      .window = {.window = nullptr,
+                                                 .display = nullptr,
+                                                 .system = static_cast<bfr_window_system>(99)}};
+    CHECK(bfr_get_swapchain_caps(instance.instance, 0, &unknown, &caps) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("not one BFR has"));
 }
 

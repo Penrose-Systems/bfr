@@ -310,7 +310,7 @@ void printFormats(const bfr::Instance& instance, std::uint32_t adapter, const Op
 }
 
 void printSurface(const bfr::Instance& instance, std::uint32_t adapter) {
-    const auto caps = instance.surfaceCaps(adapter, {.window = {.system = bfr::WindowSystem::Headless}});
+    const auto caps = instance.swapchainCaps(adapter, {.window = {.system = bfr::WindowSystem::Headless}});
     if (!caps) {
         row("Window", "can't ask: " + caps.error().message);
         return;
@@ -326,13 +326,13 @@ void printSurface(const bfr::Instance& instance, std::uint32_t adapter) {
     row("Window", {std::format("{} to {} images", caps->minImageCount, most),
                    std::format("{}x{} to {}x{}", caps->minWidth, caps->minHeight, caps->maxWidth, caps->maxHeight)});
     row("Present", modes);
-    const auto formats = instance.surfaceFormats(adapter, {.window = {.system = bfr::WindowSystem::Headless}});
+    const auto formats = instance.swapchainFormats(adapter, {.window = {.system = bfr::WindowSystem::Headless}});
     if (!formats) {
         row("Swap formats", "can't list them: " + formats.error().message);
         return;
     }
     std::vector<std::string> names;
-    for (const bfr::SurfaceFormat& format : *formats) {
+    for (const bfr::SwapchainFormat& format : *formats) {
         names.push_back(std::format("{} {}", bfr::name(format.format), bfr::name(format.colorSpace)));
     }
     row("Swap formats", names);

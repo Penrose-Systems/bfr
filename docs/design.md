@@ -43,9 +43,13 @@ else. [`research.md`](research.md) has what other engines and RHIs do.
   either way; backends implement only the core.
 - One authority per resource at a time. A resource the graph did not create
   is imported with its current state and exported with its final state.
-- No automatic barrier tracker. Reason: the graph already holds every access
-  a tracker would infer; a second convenience path doubles the sync code to
-  test. Upload and readback helpers issue their own barriers in the core.
+- No automatic barrier tracker in the first cut; one is planned later, as an
+  opt-in layer over the explicit barriers that a command list can switch off
+  (NVRHI's `setEnableAutomaticBarriers` is the model). Reason: the graph
+  already holds every access a tracker would infer, so the graph and the
+  explicit path ship first; a tracker is a third authority over a resource
+  and must follow the same import and export rule. Upload and readback
+  helpers issue their own barriers in the core.
 
 ## Core RHI (draft)
 
@@ -112,12 +116,17 @@ encoder switching needs lookahead.
   optional features are asked for when the device is created, and choosing
   a GPU shouldn't mean opening each one. One call returns everything fixed
   (info, limits, bindless, compute, mesh, ray tracing, features, memory,
-  queues) as one struct. Formats, a window's surface caps and formats, the
+  queues) as one struct. Formats, a window's swapchain caps and formats, the
   live memory budget are calls of their own: per
   format, per window, or changing while the app runs. A limit for a
   feature the adapter lacks is 0.
-- Queue types: graphics, compute, copy. Start with one graphics queue in the
-  first backend; async compute and copy queues come later on the same model.
+- Queue types: graphics, compute, copy. A device opens one graphics queue
+  and the compute and copy queues its desc asks for, refused when the adapter
+  has fewer; caps say how many it has. Queues are numbered: graphics is 0,
+  then compute, then copy. A pool records for one queue; a submit names the
+  queue, the lists in order and the tokens to wait on, and returns the token
+  it signals. Each queue has its own timeline and is externally synchronized,
+  so submits to different queues never contend.
 
 ### Synchronization
 
@@ -157,7 +166,7 @@ encoder switching needs lookahead.
   application cannot observe. Destroying a swapchain is rare, so the wait
   costs nothing that matters.
 - Destroying an object an unsubmitted command list references is a usage
-  error, caught by validation.
+  error, which a usage check reports.
 - Residency is part of the core contract, not a backend detail. Bindless
   means shaders reach resources the API never sees per draw; Metal 4 needs
   them in a residency set. The device keeps a residency set of all live
@@ -212,7 +221,11 @@ encoder switching needs lookahead.
 ### Command recording
 
 - A `CommandPool` belongs to one thread and one frame slot; it is reset once
-  its work completes. `CommandList`s from it are recorded by that thread only.
+  its work completes, which the caller knows from the completion token its
+  last submit returned. Resetting earlier is a usage error. `CommandList`s
+  from it are recorded by that thread only. D3D12 and Metal 4 let one list
+  record from an allocator at a time, so there a pool holds one allocator per
+  list recording.
 - Lists recorded on many threads are submitted in the order given to
   `submit`; recording order across threads means nothing.
 - Rendering scopes carry attachments and load and store actions explicitly.
@@ -231,7 +244,7 @@ encoder switching needs lookahead.
 - Vulkan: one present semaphore per image, so binary semaphores are never
   reused while the presentation engine holds them; use swapchain
   maintenance extensions where present.
-- Resize and surface loss are reported as results, not fatal errors.
+- Resize and window loss are reported as results, not fatal errors.
 
 ### Ray tracing
 
@@ -284,8 +297,9 @@ encoder switching needs lookahead.
 
 - Creation returns a `bfr_result` and writes the object through an out
   parameter; `bfr_get_last_error` gives the calling thread's message for its
-  last failure. Recording calls return nothing; misuse is caught by
-  validation. Wrappers turn failures into their language's errors.
+  last failure. Recording calls return nothing; a usage check reports misuse
+  through the message callback. Wrappers turn failures into their language's
+  errors.
 - Device loss is sticky: every later call reports it, and a host callback
   fires once, until the device is rebuilt (see Backend selection).
 - Validation is configured at instance creation; messages go to a host

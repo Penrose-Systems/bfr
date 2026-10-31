@@ -12,13 +12,20 @@
 #include <format>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace bfr::rhi::null {
 
-NullDevice::NullDevice(NullRhi& rhi)
+NullDevice::NullDevice(NullRhi& rhi, const DeviceQueues& queues)
     : rhi_(&rhi),
       swapchains_("swapchains", kSwapchainCapacity, kSwapchainLimit, rhi.logger()),
-      commandLists_("command lists", kCommandListLimit, kCommandListLimit, rhi.logger()) {}
+      commandPools_("command pools", kCommandPoolCapacity, kCommandPoolLimit, rhi.logger()),
+      commandLists_("command lists", kCommandListCapacity, kCommandListLimit, rhi.logger()) {
+    queues_.push_back(QueueType::Graphics);
+    queues_.insert(queues_.end(), queues.compute, QueueType::Compute);
+    queues_.insert(queues_.end(), queues.copy, QueueType::Copy);
+    submitted_.assign(queues_.size(), 0);
+}
 
 NullDevice::~NullDevice() {
     // Swapchains are the device's children, so they go first.
@@ -31,7 +38,7 @@ NullDevice::~NullDevice() {
 core::Result<SwapchainHandle> NullDevice::createSwapchain(const core::window::NativeWindow& window,
                                                           const SwapchainRequest& request) {
     if (std::holds_alternative<std::monostate>(window)) {
-        return core::failure(core::ErrorCode::RhiSurfaceFailed, "there is no window");
+        return core::failure(core::ErrorCode::RhiWindowFailed, "there is no window");
     }
     const SwapchainHandle swapchain = swapchains_.emplace(NullSwapchain{
         .request = request,
@@ -122,13 +129,86 @@ core::Result<void> NullDevice::present(SwapchainHandle swapchain) {
     return {};
 }
 
-core::Result<CommandListHandle> NullDevice::beginCommands() {
-    const CommandListHandle commandList = commandLists_.emplace();
+core::Result<NullCommandPool*> NullDevice::commandPoolFor(CommandPoolHandle commandPool) {
+    NullCommandPool* found = commandPools_.find(commandPool);
+    if (found == nullptr) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the command pool handle is stale");
+    }
+    return found;
+}
+
+core::Result<void> NullDevice::checkQueue(std::uint32_t queue) const {
+    if (queue >= queues_.size()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             std::format("the device has no queue {}; it has {}", queue, queues_.size()));
+    }
+    return {};
+}
+
+core::Result<void> NullDevice::checkToken(Token token) const {
+    if (auto checked = checkQueue(token.queue); !checked) {
+        return checked;
+    }
+    if (token.value > submitted_[token.queue]) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             std::format("no submit has returned token {} on queue {}; the last is {}", token.value,
+                                         token.queue, submitted_[token.queue]));
+    }
+    return {};
+}
+
+core::Result<CommandPoolHandle> NullDevice::createCommandPool(std::uint32_t queue) {
+    if (auto checked = checkQueue(queue); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    const CommandPoolHandle commandPool = commandPools_.emplace(NullCommandPool{.queue = queue, .recording = {}});
+    if (commandPool.isNull()) {
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             std::format("the device holds at most {} command pools", kCommandPoolLimit));
+    }
+    return commandPool;
+}
+
+core::Result<void> NullDevice::resetCommandPool(CommandPoolHandle commandPool) {
+    auto pool = commandPoolFor(commandPool);
+    if (!pool) {
+        return std::unexpected(std::move(pool.error()));
+    }
+    if (!(*pool)->recording.empty()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             std::format("{} lists from the pool are still recording; submit or destroy them",
+                                         (*pool)->recording.size()));
+    }
+    return {};
+}
+
+core::Result<void> NullDevice::destroyCommandPool(CommandPoolHandle commandPool) {
+    if (commandPool.isNull()) {
+        return {};
+    }
+    auto pool = commandPoolFor(commandPool);
+    if (!pool) {
+        return std::unexpected(std::move(pool.error()));
+    }
+    for (const CommandListHandle list : (*pool)->recording) {
+        commandLists_.erase(list);
+    }
+    commandPools_.erase(commandPool);
+    return {};
+}
+
+core::Result<CommandListHandle> NullDevice::beginCommands(CommandPoolHandle commandPool) {
+    auto pool = commandPoolFor(commandPool);
+    if (!pool) {
+        return std::unexpected(std::move(pool.error()));
+    }
+    const CommandListHandle commandList = commandLists_.emplace(
+        NullCommandList{.pool = commandPool, .rendering = false});
     if (commandList.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("{} command lists are already recording; submit or destroy one",
-                                         kCommandListLimit));
+                             std::format("the device holds at most {} command lists", kCommandListLimit));
     }
+    (*pool)->recording.push_back(commandList);
     return commandList;
 }
 
@@ -164,27 +244,64 @@ core::Result<void> NullDevice::endRendering(CommandListHandle commandList) {
     return {};
 }
 
-core::Result<void> NullDevice::submit(CommandListHandle commandList) {
-    auto list = commandListFor(commandList);
-    if (!list) {
-        return std::unexpected(std::move(list.error()));
+core::Result<Token> NullDevice::submit(const SubmitDesc& desc) {
+    if (auto checked = checkQueue(desc.queue); !checked) {
+        return std::unexpected(std::move(checked.error()));
     }
-    if ((*list)->rendering) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is still open; end it first");
+    for (const Token wait : desc.waits) {
+        if (auto checked = checkToken(wait); !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
     }
-    // Nothing runs; the list is done.
-    commandLists_.erase(commandList);
-    return {};
+    for (const CommandListHandle commandList : desc.commandLists) {
+        auto list = commandListFor(commandList);
+        if (!list) {
+            return std::unexpected(std::move(list.error()));
+        }
+        if ((*list)->rendering) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is still open; end it first");
+        }
+        const NullCommandPool* pool = commandPools_.find((*list)->pool);
+        if (pool != nullptr && pool->queue != desc.queue) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 std::format("the list was recorded for queue {}, not {}", pool->queue, desc.queue));
+        }
+    }
+    for (const CommandListHandle commandList : desc.commandLists) {
+        if (NullCommandList* list = commandLists_.find(commandList); list != nullptr) {
+            if (NullCommandPool* pool = commandPools_.find(list->pool); pool != nullptr) {
+                std::erase(pool->recording, commandList);
+            }
+        }
+        commandLists_.erase(commandList);
+    }
+    return Token{.queue = desc.queue, .value = ++submitted_[desc.queue]};
+}
+
+core::Result<void> NullDevice::wait(Token token) {
+    return checkToken(token);
+}
+
+core::Result<bool> NullDevice::poll(Token token) {
+    if (auto checked = checkToken(token); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    return true;
 }
 
 core::Result<void> NullDevice::destroyCommandList(CommandListHandle commandList) {
     if (commandList.isNull()) {
         return {};
     }
-    if (commandLists_.erase(commandList)) {
-        return {};
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
     }
-    return core::failure(core::ErrorCode::RhiInvalidHandle, "the command list handle is stale");
+    if (NullCommandPool* pool = commandPools_.find((*list)->pool); pool != nullptr) {
+        std::erase(pool->recording, commandList);
+    }
+    commandLists_.erase(commandList);
+    return {};
 }
 
 core::Result<MemoryBudget> NullDevice::budget() const {

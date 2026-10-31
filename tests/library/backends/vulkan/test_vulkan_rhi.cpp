@@ -281,25 +281,24 @@ TEST_CASE("Vulkan fails with RhiPresentUnsupported when no queue family presents
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), bfr::core::window::Headless{});
+    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), bfr::core::window::Headless{}, {});
 
     REQUIRE_FALSE(device.has_value());
     CHECK(device.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
     CHECK_THAT(device.error().message, Catch::Matchers::ContainsSubstring("presents to the window"));
 }
 
-TEST_CASE("Vulkan fails with RhiSurfaceFailed when the API refuses a surface for the device's window",
-          "[vulkan][gpu]") {
+TEST_CASE("Vulkan fails with RhiWindowFailed when the API refuses a surface for the device's window", "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv refused("BFR_FAIL", "vkCreateHeadlessSurfaceEXT");
     const auto rhi = Rhi::create(kVulkan, {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto device = (*rhi)->createDevice(0, bfr::core::window::Headless{});
+    const auto device = (*rhi)->createDevice(0, bfr::core::window::Headless{}, {});
 
     REQUIRE_FALSE(device.has_value());
-    CHECK(device.error().code == bfr::core::ErrorCode::RhiSurfaceFailed);
+    CHECK(device.error().code == bfr::core::ErrorCode::RhiWindowFailed);
     CHECK_THAT(device.error().message,
                Catch::Matchers::ContainsSubstring("vkCreateHeadlessSurfaceEXT: VK_ERROR_UNKNOWN"));
 }
@@ -317,7 +316,7 @@ TEST_CASE("Vulkan doesn't ask NVIDIA's driver about a headless window on a loade
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), bfr::core::window::Headless{});
+    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), bfr::core::window::Headless{}, {});
 
     REQUIRE_FALSE(device.has_value());
     CHECK(device.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
@@ -335,7 +334,7 @@ TEST_CASE("Vulkan asks NVIDIA's driver about a headless window on a loader that 
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), bfr::core::window::Headless{});
+    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), bfr::core::window::Headless{}, {});
 
     INFO(failureOf(device));
     CHECK(device.has_value());
@@ -351,7 +350,7 @@ TEST_CASE("Vulkan fails with RhiDeviceFailed when the API refuses the device and
         INFO(failureOf(rhi));
         REQUIRE(rhi.has_value());
 
-        const auto device = (*rhi)->createDevice(0, kNoWindow);
+        const auto device = (*rhi)->createDevice(0, kNoWindow, {});
 
         REQUIRE_FALSE(device.has_value());
         CHECK(device.error().code == bfr::core::ErrorCode::RhiDeviceFailed);
@@ -373,7 +372,7 @@ TEST_CASE("Vulkan creates a valid device on an adapter that lists VK_KHR_portabi
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto device = (*rhi)->createDevice(0, kNoWindow);
+    const auto device = (*rhi)->createDevice(0, kNoWindow, {});
 
     INFO(failureOf(device));
     REQUIRE(device.has_value());
@@ -438,7 +437,7 @@ TEST_CASE("Vulkan logs the device it creates, its queue families and its extensi
     REQUIRE(rhi.has_value());
 
     // lavapipe has one queue family.
-    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow);
+    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow, {});
 
     INFO(failureOf(device));
     REQUIRE(device.has_value());

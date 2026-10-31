@@ -20,7 +20,7 @@
 namespace bfr::rhi::metal {
 
 /// Whether a swapchain can be made on window: a CAMetalLayer or no window at
-/// all. Fails with RhiSurfaceFailed as Device::createSwapchain describes.
+/// all. Fails with RhiWindowFailed as Device::createSwapchain describes.
 [[nodiscard]] core::Result<void> checkWindow(const core::window::NativeWindow& window);
 
 /// The layer a swapchain on window presents to: the caller's CAMetalLayer, or a

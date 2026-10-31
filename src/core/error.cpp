@@ -29,8 +29,8 @@ std::string_view name(ErrorCode code) noexcept {
             return "RhiDeviceFailed";
         case ErrorCode::RhiNoAdapter:
             return "RhiNoAdapter";
-        case ErrorCode::RhiSurfaceFailed:
-            return "RhiSurfaceFailed";
+        case ErrorCode::RhiWindowFailed:
+            return "RhiWindowFailed";
         case ErrorCode::RhiInvalidHandle:
             return "RhiInvalidHandle";
         case ErrorCode::RhiPresentUnsupported:
@@ -43,8 +43,8 @@ std::string_view name(ErrorCode code) noexcept {
             return "RhiOutOfMemory";
         case ErrorCode::RhiDeviceLost:
             return "RhiDeviceLost";
-        case ErrorCode::RhiSurfaceLost:
-            return "RhiSurfaceLost";
+        case ErrorCode::RhiWindowLost:
+            return "RhiWindowLost";
         case ErrorCode::RhiUnsupported:
             return "RhiUnsupported";
         case ErrorCode::RhiQueryFailed:

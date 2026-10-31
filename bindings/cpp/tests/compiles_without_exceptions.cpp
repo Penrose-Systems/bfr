@@ -25,7 +25,7 @@ namespace {
     if (!adapters || !device) {
         return false;
     }
-    const auto surface = instance->surfaceCaps(0, {.window = headlessWindow});
+    const auto surface = instance->swapchainCaps(0, {.window = headlessWindow});
     if (!surface) {
         return false;
     }

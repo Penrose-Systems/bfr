@@ -22,11 +22,11 @@ namespace bfr::rhi::metal {
 
 /// What a swapchain on a CAMetalLayer may be: nothing, since Metal has no call
 /// that says.
-[[nodiscard]] SurfaceCaps surfaceCapsFor();
+[[nodiscard]] SwapchainCaps surfaceCapsFor();
 
 /// The formats and color spaces a CAMetalLayer presents in: none, since Metal
 /// has no call that lists them.
-[[nodiscard]] std::span<const SurfaceFormat> surfaceFormats();
+[[nodiscard]] std::span<const SwapchainFormat> swapchainFormats();
 
 /// How a layer is set up to present format in colorSpace.
 struct LayerFormat {

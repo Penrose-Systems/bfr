@@ -186,17 +186,68 @@ class PlacementTests(unittest.TestCase):
 
         self.assert_rejected(change, "made by a method of its parent")
 
-    def test_a_struct_passed_in_and_out_is_rejected(self) -> None:
-        self.assert_rejected(
-            lambda s: s["functions"].update(
-                device_set_format={
-                    "doc": "Sets a format.",
-                    "returns": "result",
-                    "params": [{"name": "device", "type": "device"}, {"name": "format", "type": "format", "pointer": "in"}],
-                }
-            ),
-            "both in and out",
-        )
+    def test_a_struct_with_a_string_passed_in_and_out_is_rejected(self) -> None:
+        def change(spec: dict) -> None:
+            spec["structs"]["label"] = {"doc": "A label.", "members": [{"name": "text", "type": "string"}]}
+            spec["functions"]["device_get_label"] = {
+                "doc": "Reads.",
+                "returns": "result",
+                "params": [{"name": "device", "type": "device"}, {"name": "label", "type": "label", "pointer": "out"}],
+            }
+            spec["functions"]["device_set_label"] = {
+                "doc": "Writes.",
+                "returns": "result",
+                "params": [{"name": "device", "type": "device"}, {"name": "label", "type": "label", "pointer": "in"}],
+            }
+
+        self.assert_rejected(change, "both in and out")
+
+    def test_an_array_member_passed_in_becomes_a_span(self) -> None:
+        spec = with_more(MINIMAL)
+        spec["structs"]["batch"] = {
+            "doc": "Buffers to send.",
+            "members": [
+                {"name": "buffers", "type": "buffer", "array": "buffer_count", "pointer": "in"},
+                {"name": "buffer_count", "type": "u32"},
+            ],
+        }
+        spec["functions"]["device_send"] = {
+            "doc": "Sends.",
+            "returns": "result",
+            "params": [{"name": "device", "type": "device"}, {"name": "batch", "type": "batch", "pointer": "in"}],
+        }
+        rendered = render(Api(spec))
+        self.assertIn("std::span<const Buffer> buffers{};", rendered)
+        self.assertNotIn("bufferCount{}", rendered)
+        self.assertIn("detail::SmallBuffer<bfr_buffer> cBatchBuffers;", rendered)
+        self.assertIn(".buffer_count = static_cast<uint32_t>(value.buffers.size())", rendered)
+
+    def test_an_array_member_passed_out_is_rejected(self) -> None:
+        def change(spec: dict) -> None:
+            spec["structs"]["batch"] = {
+                "doc": "Buffers.",
+                "members": [
+                    {"name": "buffers", "type": "buffer", "array": "buffer_count", "pointer": "in"},
+                    {"name": "buffer_count", "type": "u32"},
+                ],
+            }
+            spec["functions"]["device_get_batch"] = {
+                "doc": "Reads.",
+                "returns": "result",
+                "params": [{"name": "device", "type": "device"}, {"name": "batch", "type": "batch", "pointer": "out"}],
+            }
+
+        self.assert_rejected(change, "only passed in")
+
+    def test_a_struct_of_numbers_may_pass_in_and_out(self) -> None:
+        spec = with_more(MINIMAL)
+        spec["functions"]["device_set_format"] = {
+            "doc": "Sets a format.",
+            "returns": "result",
+            "params": [{"name": "device", "type": "device"}, {"name": "format", "type": "format", "pointer": "in"}],
+        }
+        rendered = render(Api(spec))
+        self.assertIn("Expected<void> Device::setFormat(const Format& format) const", rendered)
 
 
 class DeterminismTests(unittest.TestCase):

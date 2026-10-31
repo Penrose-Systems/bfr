@@ -17,7 +17,7 @@
 namespace bfr::rhi::d3d12 {
 
 /// Whether a swapchain can be made on window: a Win32 window or a headless
-/// one. Fails with RhiSurfaceFailed as Device::createSwapchain describes.
+/// one. Fails with RhiWindowFailed as Device::createSwapchain describes.
 [[nodiscard]] core::Result<void> checkWindow(const core::window::NativeWindow& window);
 
 /// One DXGI swapchain, and what it was last built as; empty until built. It

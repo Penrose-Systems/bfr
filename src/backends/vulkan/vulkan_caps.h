@@ -47,22 +47,22 @@ private:
 [[nodiscard]] core::Result<FormatCaps> readFormatCaps(const InstanceTable& vk, VkPhysicalDevice adapter, Format format);
 
 /// What a swapchain for surface may be on adapter. Fails with
-/// RhiSurfaceFailed, or as codeFor says, when the query fails.
-[[nodiscard]] core::Result<SurfaceCaps> readSurfaceCaps(const InstanceTable& vk, VkPhysicalDevice adapter,
-                                                        VkSurfaceKHR surface);
+/// RhiWindowFailed, or as codeFor says, when the query fails.
+[[nodiscard]] core::Result<SwapchainCaps> readSurfaceCaps(const InstanceTable& vk, VkPhysicalDevice adapter,
+                                                          VkSurfaceKHR surface);
 
-/// capabilities and presentModes, as a surface reports them, as SurfaceCaps.
-[[nodiscard]] SurfaceCaps surfaceCapsOf(const VkSurfaceCapabilitiesKHR& capabilities,
-                                        std::span<const VkPresentModeKHR> presentModes);
+/// capabilities and presentModes, as a surface reports them, as SwapchainCaps.
+[[nodiscard]] SwapchainCaps surfaceCapsOf(const VkSurfaceCapabilitiesKHR& capabilities,
+                                          std::span<const VkPresentModeKHR> presentModes);
 
 /// formats, as a surface lists them, those with names here.
-[[nodiscard]] std::vector<SurfaceFormat> surfaceFormatsOf(std::span<const VkSurfaceFormatKHR> formats);
+[[nodiscard]] std::vector<SwapchainFormat> surfaceFormatsOf(std::span<const VkSurfaceFormatKHR> formats);
 
 /// The formats a swapchain for surface may use on adapter, those with names
 /// here. Fails as readSurfaceCaps does.
-[[nodiscard]] core::Result<std::vector<SurfaceFormat>> readSurfaceFormats(const InstanceTable& vk,
-                                                                          VkPhysicalDevice adapter,
-                                                                          VkSurfaceKHR surface);
+[[nodiscard]] core::Result<std::vector<SwapchainFormat>> readSurfaceFormats(const InstanceTable& vk,
+                                                                            VkPhysicalDevice adapter,
+                                                                            VkSurfaceKHR surface);
 
 /// The heaps' budget and usage, which needs VK_EXT_memory_budget on adapter.
 [[nodiscard]] MemoryBudget readBudget(const InstanceTable& vk, VkPhysicalDevice adapter);

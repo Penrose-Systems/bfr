@@ -90,12 +90,26 @@ void recordBarrier(const VolkDeviceTable& table, VkCommandBuffer buffer, const V
 
 core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanRhi& rhi, VkPhysicalDevice adapter,
                                                                  VkDevice device, const QueueFamilies& families,
-                                                                 bool hasBudget) {
+                                                                 const DeviceQueues& queues, bool hasBudget) {
     auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, families, hasBudget);
-    if (auto opened = made->openFrames(); !opened) {
+    if (auto opened = made->openQueues(families, queues); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
     return made;
+}
+
+VulkanCommandPool::VulkanCommandPool(VkDevice device, const VolkDeviceTable& table, VkCommandPool pool,
+                                     std::uint32_t queue)
+    : pool(pool), queue(queue), device_(device), table_(&table) {}
+
+VulkanCommandPool::~VulkanCommandPool() {
+    if (pool != VK_NULL_HANDLE) {
+        table_->vkDestroyCommandPool(device_, pool, nullptr);
+    }
+}
+
+VkCommandPool VulkanCommandPool::release() {
+    return std::exchange(pool, VK_NULL_HANDLE);
 }
 
 VulkanDevice::VulkanDevice(VulkanRhi& rhi, VkPhysicalDevice adapter, VkDevice device, const QueueFamilies& families,
@@ -107,58 +121,107 @@ VulkanDevice::VulkanDevice(VulkanRhi& rhi, VkPhysicalDevice adapter, VkDevice de
       presentFamily_(families.present.value_or(families.graphics)),
       hasBudget_(hasBudget),
       swapchains_("swapchains", kSwapchainCapacity, kSwapchainLimit, rhi.logger()),
-      commandLists_("command lists", kFramesInFlight, kFramesInFlight, rhi.logger()) {
+      commandPools_("command pools", kCommandPoolCapacity, kCommandPoolLimit, rhi.logger()),
+      commandLists_("command lists", kCommandListCapacity, kCommandListLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
-    table_.vkGetDeviceQueue(device_, graphicsFamily_, 0, &graphicsQueue_);
     table_.vkGetDeviceQueue(device_, presentFamily_, 0, &presentQueue_);
 }
 
-core::Result<void> VulkanDevice::openFrames() {
-    for (Frame& frame : frames_) {
-        VkCommandPoolCreateInfo pool{};
-        pool.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        pool.queueFamilyIndex = graphicsFamily_;
-        if (const VkResult result = table_.vkCreateCommandPool(device_, &pool, nullptr, &frame.pool);
+core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const DeviceQueues& queues) {
+    const auto open = [this](QueueType type, std::uint32_t family, std::uint32_t index) -> core::Result<void> {
+        auto queue = std::make_unique<VulkanQueue>();
+        queue->type = type;
+        queue->family = family;
+        table_.vkGetDeviceQueue(device_, family, index, &queue->queue);
+        VkSemaphoreTypeCreateInfo timeline{};
+        timeline.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+        timeline.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        timeline.initialValue = 0;
+        VkSemaphoreCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        info.pNext = &timeline;
+        if (const VkResult result = table_.vkCreateSemaphore(device_, &info, nullptr, &queue->timeline);
             result != VK_SUCCESS) {
-            return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateCommandPool", .result = result});
+            return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateSemaphore", .result = result});
         }
-        VkCommandBufferAllocateInfo buffer{};
-        buffer.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        buffer.commandPool = frame.pool;
-        buffer.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        buffer.commandBufferCount = 1;
-        if (const VkResult result = table_.vkAllocateCommandBuffers(device_, &buffer, &frame.buffer);
-            result != VK_SUCCESS) {
-            return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkAllocateCommandBuffers", .result = result});
+        queues_.push_back(std::move(queue));
+        return {};
+    };
+    if (auto opened = open(QueueType::Graphics, families.graphics, 0); !opened) {
+        return opened;
+    }
+    for (std::uint32_t index = 0; index < queues.compute; ++index) {
+        if (auto opened = open(QueueType::Compute, families.compute, index); !opened) {
+            return opened;
         }
-        VkFenceCreateInfo fence{};
-        fence.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        if (const VkResult result = table_.vkCreateFence(device_, &fence, nullptr, &frame.fence);
-            result != VK_SUCCESS) {
-            return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateFence", .result = result});
+    }
+    for (std::uint32_t index = 0; index < queues.copy; ++index) {
+        if (auto opened = open(QueueType::Copy, families.transfer, index); !opened) {
+            return opened;
+        }
+    }
+    for (const auto& queue : queues_) {
+        if (queue->queue == presentQueue_) {
+            presentOn_ = queue.get();
         }
     }
     return {};
 }
 
-core::Result<void> VulkanDevice::waitFrame(Frame& frame) {
-    if (!frame.pending) {
-        return {};
-    }
-    if (const VkResult result = table_.vkWaitForFences(device_, 1, &frame.fence, VK_TRUE,
-                                                       std::numeric_limits<std::uint64_t>::max());
+core::Result<std::uint64_t> VulkanDevice::completedValue(const VulkanQueue& queue) const {
+    std::uint64_t value = 0;
+    if (const VkResult result = table_.vkGetSemaphoreCounterValue(device_, queue.timeline, &value);
         result != VK_SUCCESS) {
-        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkWaitForFences", .result = result});
+        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkGetSemaphoreCounterValue", .result = result});
     }
-    if (const VkResult result = table_.vkResetFences(device_, 1, &frame.fence); result != VK_SUCCESS) {
-        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkResetFences", .result = result});
+    return value;
+}
+
+core::Result<void> VulkanDevice::checkQueue(std::uint32_t queue) const {
+    if (queue >= queues_.size()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             std::format("the device has no queue {}; it has {}", queue, queues_.size()));
     }
-    frame.pending = false;
     return {};
+}
+
+core::Result<void> VulkanDevice::checkToken(Token token) const {
+    if (auto checked = checkQueue(token.queue); !checked) {
+        return checked;
+    }
+    const std::uint64_t submitted = queues_[token.queue]->submitted.load(std::memory_order_acquire);
+    if (token.value > submitted) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             std::format("no submit has returned token {} on queue {}; the last is {}", token.value,
+                                         token.queue, submitted));
+    }
+    return {};
+}
+
+void VulkanDevice::collectPools(VulkanQueue& queue) {
+    if (queue.retired.empty()) {
+        return;
+    }
+    const auto completed = completedValue(queue);
+    if (!completed) {
+        return;
+    }
+    std::erase_if(queue.retired, [this, completed](const std::pair<VkCommandPool, std::uint64_t>& retired) {
+        if (retired.second > *completed) {
+            return false;
+        }
+        table_.vkDestroyCommandPool(device_, retired.first, nullptr);
+        return true;
+    });
+    queue.retiredCount.store(static_cast<std::uint32_t>(queue.retired.size()), std::memory_order_release);
 }
 
 core::Result<void> VulkanDevice::waitIdle() {
-    const std::scoped_lock lock{queues_};
+    std::vector<std::unique_lock<std::mutex>> locks;
+    locks.reserve(queues_.size());
+    for (const auto& queue : queues_) {
+        locks.emplace_back(queue->lock);
+    }
     if (const VkResult result = table_.vkDeviceWaitIdle(device_); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkDeviceWaitIdle", .result = result});
     }
@@ -169,6 +232,14 @@ core::Result<VulkanSwapchain*> VulkanDevice::swapchainFor(SwapchainHandle swapch
     VulkanSwapchain* found = swapchains_.find(swapchain);
     if (found == nullptr) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the swapchain handle is stale");
+    }
+    return found;
+}
+
+core::Result<VulkanCommandPool*> VulkanDevice::commandPoolFor(CommandPoolHandle commandPool) {
+    VulkanCommandPool* found = commandPools_.find(commandPool);
+    if (found == nullptr) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the command pool handle is stale");
     }
     return found;
 }
@@ -249,42 +320,114 @@ core::Result<void> VulkanDevice::present(SwapchainHandle swapchain) {
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    const std::scoped_lock lock{queues_};
+    if (presentOn_ != nullptr) {
+        const std::scoped_lock lock{presentOn_->lock};
+        return (*found)->present(presentQueue_);
+    }
     return (*found)->present(presentQueue_);
 }
 
-core::Result<CommandListHandle> VulkanDevice::beginCommands() {
-    const std::scoped_lock lock{queues_};
-    // The oldest frame, or the next one when that is still recording.
-    std::uint32_t index = nextFrame_;
-    while (frames_[index].recording) {
-        index = (index + 1) % kFramesInFlight;
-        if (index == nextFrame_) {
-            return core::failure(core::ErrorCode::RhiLimitReached,
-                                 std::format("{} command lists are already recording; submit or destroy one",
-                                             kFramesInFlight));
-        }
+core::Result<CommandPoolHandle> VulkanDevice::createCommandPool(std::uint32_t queue) {
+    if (auto checked = checkQueue(queue); !checked) {
+        return std::unexpected(std::move(checked.error()));
     }
-    Frame& frame = frames_[index];
-    if (auto waited = waitFrame(frame); !waited) {
-        return std::unexpected(std::move(waited.error()));
+    VkCommandPoolCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    info.queueFamilyIndex = queues_[queue]->family;
+    VkCommandPool pool = VK_NULL_HANDLE;
+    if (const VkResult result = table_.vkCreateCommandPool(device_, &info, nullptr, &pool); result != VK_SUCCESS) {
+        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateCommandPool", .result = result});
     }
-    if (const VkResult result = table_.vkResetCommandPool(device_, frame.pool, 0); result != VK_SUCCESS) {
+    const CommandPoolHandle commandPool = commandPools_.emplace(device_, table_, pool, queue);
+    if (commandPool.isNull()) {
+        table_.vkDestroyCommandPool(device_, pool, nullptr);
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             std::format("the device holds at most {} command pools", kCommandPoolLimit));
+    }
+    return commandPool;
+}
+
+core::Result<void> VulkanDevice::resetCommandPool(CommandPoolHandle commandPool) {
+    auto pool = commandPoolFor(commandPool);
+    if (!pool) {
+        return std::unexpected(std::move(pool.error()));
+    }
+    if (!(*pool)->recording.empty()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             std::format("{} lists from the pool are still recording; submit or destroy them",
+                                         (*pool)->recording.size()));
+    }
+    const auto completed = completedValue(*queues_[(*pool)->queue]);
+    if (!completed) {
+        return std::unexpected(completed.error());
+    }
+    if (*completed < (*pool)->lastSubmit) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             std::format("the GPU has not passed the pool's last submit, token {}; wait on it first",
+                                         (*pool)->lastSubmit));
+    }
+    if (const VkResult result = table_.vkResetCommandPool(device_, (*pool)->pool, 0); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkResetCommandPool", .result = result});
     }
+    (*pool)->used = 0;
+    return {};
+}
+
+core::Result<void> VulkanDevice::destroyCommandPool(CommandPoolHandle commandPool) {
+    if (commandPool.isNull()) {
+        return {};
+    }
+    auto pool = commandPoolFor(commandPool);
+    if (!pool) {
+        return std::unexpected(std::move(pool.error()));
+    }
+    for (const CommandListHandle list : (*pool)->recording) {
+        commandLists_.erase(list);
+    }
+    VulkanQueue& queue = *queues_[(*pool)->queue];
+    {
+        const std::scoped_lock lock{queue.lock};
+        queue.retired.emplace_back((*pool)->release(), (*pool)->lastSubmit);
+        queue.retiredCount.store(static_cast<std::uint32_t>(queue.retired.size()), std::memory_order_release);
+        collectPools(queue);
+    }
+    commandPools_.erase(commandPool);
+    return {};
+}
+
+core::Result<CommandListHandle> VulkanDevice::beginCommands(CommandPoolHandle commandPool) {
+    auto pool = commandPoolFor(commandPool);
+    if (!pool) {
+        return std::unexpected(std::move(pool.error()));
+    }
+    if ((*pool)->used == (*pool)->buffers.size()) {
+        VkCommandBufferAllocateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        info.commandPool = (*pool)->pool;
+        info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        info.commandBufferCount = 1;
+        VkCommandBuffer buffer = VK_NULL_HANDLE;
+        if (const VkResult result = table_.vkAllocateCommandBuffers(device_, &info, &buffer); result != VK_SUCCESS) {
+            return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkAllocateCommandBuffers", .result = result});
+        }
+        (*pool)->buffers.push_back(buffer);
+    }
+    VkCommandBuffer buffer = (*pool)->buffers[(*pool)->used];
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    if (const VkResult result = table_.vkBeginCommandBuffer(frame.buffer, &begin); result != VK_SUCCESS) {
+    if (const VkResult result = table_.vkBeginCommandBuffer(buffer, &begin); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkBeginCommandBuffer", .result = result});
     }
     const CommandListHandle commandList = commandLists_.emplace(
-        VulkanCommandList{.buffer = frame.buffer, .frame = index, .rendering = {}, .rendered = {}});
+        VulkanCommandList{.buffer = buffer, .pool = commandPool, .rendering = {}, .rendered = {}});
     if (commandList.isNull()) {
-        return core::failure(core::ErrorCode::RhiLimitReached, "no command list is free");
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             std::format("the device holds at most {} command lists", kCommandListLimit));
     }
-    frame.recording = true;
-    nextFrame_ = (index + 1) % kFramesInFlight;
+    ++(*pool)->used;
+    (*pool)->recording.push_back(commandList);
     return commandList;
 }
 
@@ -300,6 +443,11 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
     }
     if ((*list)->rendering.has_value()) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is already open");
+    }
+    if (const VulkanCommandPool* pool = commandPools_.find((*list)->pool);
+        pool != nullptr && queues_[pool->queue]->type != QueueType::Graphics) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             std::format("the list records for queue {}, which does not render", pool->queue));
     }
     if ((*chain)->submitted()) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
@@ -367,74 +515,157 @@ core::Result<void> VulkanDevice::endRendering(CommandListHandle commandList) {
     return {};
 }
 
-core::Result<void> VulkanDevice::submit(CommandListHandle commandList) {
-    auto list = commandListFor(commandList);
-    if (!list) {
-        return std::unexpected(std::move(list.error()));
+core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
+    if (auto checked = checkQueue(desc.queue); !checked) {
+        return std::unexpected(std::move(checked.error()));
     }
-    if ((*list)->rendering.has_value()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is still open; end it first");
+    for (const Token wait : desc.waits) {
+        if (auto checked = checkToken(wait); !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
     }
-    const std::scoped_lock lock{queues_};
-    // Each swapchain rendered to: its image's acquire is waited on and its
-    // present semaphore signaled.
-    std::vector<VkSemaphoreSubmitInfo> waits;
-    std::vector<VkSemaphoreSubmitInfo> signals;
+    VulkanQueue& queue = *queues_[desc.queue];
+    const std::scoped_lock lock{queue.lock};
+    queue.buffers.clear();
+    queue.waits.clear();
+    queue.signals.clear();
     std::vector<std::pair<VulkanSwapchain*, VkImageLayout>> chains;
-    for (const RenderedSwapchain& rendered : (*list)->rendered) {
-        auto chain = swapchainFor(rendered.swapchain);
-        if (!chain) {
-            return std::unexpected(std::move(chain.error()));
+    for (const CommandListHandle commandList : desc.commandLists) {
+        auto list = commandListFor(commandList);
+        if (!list) {
+            return std::unexpected(std::move(list.error()));
         }
-        const auto image = (*chain)->acquired();
-        if (!image) {
-            return std::unexpected(image.error());
+        if ((*list)->rendering.has_value()) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is still open; end it first");
         }
-        if ((*chain)->submitted()) {
+        if (const VulkanCommandPool* pool = commandPools_.find((*list)->pool);
+            pool != nullptr && pool->queue != desc.queue) {
             return core::failure(core::ErrorCode::RhiInvalidCall,
-                                 "the acquired image was already submitted; present it first");
+                                 std::format("the list was recorded for queue {}, not {}", pool->queue, desc.queue));
         }
-        VkSemaphoreSubmitInfo wait{};
-        wait.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        wait.semaphore = image->acquireSemaphore;
-        wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        waits.push_back(wait);
-        VkSemaphoreSubmitInfo signal{};
-        signal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        signal.semaphore = image->presentSemaphore;
-        signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        signals.push_back(signal);
-        chains.emplace_back(*chain, rendered.layout);
+        for (const RenderedSwapchain& rendered : (*list)->rendered) {
+            auto chain = swapchainFor(rendered.swapchain);
+            if (!chain) {
+                return std::unexpected(std::move(chain.error()));
+            }
+            const auto image = (*chain)->acquired();
+            if (!image) {
+                return std::unexpected(image.error());
+            }
+            if ((*chain)->submitted()) {
+                return core::failure(core::ErrorCode::RhiInvalidCall,
+                                     "the acquired image was already submitted; present it first");
+            }
+            if (auto seen = std::ranges::find(chains, *chain, &std::pair<VulkanSwapchain*, VkImageLayout>::first);
+                seen != chains.end()) {
+                seen->second = rendered.layout;
+                continue;
+            }
+            VkSemaphoreSubmitInfo wait{};
+            wait.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            wait.semaphore = image->acquireSemaphore;
+            wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            queue.waits.push_back(wait);
+            VkSemaphoreSubmitInfo signal{};
+            signal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            signal.semaphore = image->presentSemaphore;
+            signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            queue.signals.push_back(signal);
+            chains.emplace_back(*chain, rendered.layout);
+        }
+        VkCommandBufferSubmitInfo buffer{};
+        buffer.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+        buffer.commandBuffer = (*list)->buffer;
+        queue.buffers.push_back(buffer);
     }
-    Frame& frame = frames_[(*list)->frame];
-    // The list is done either way; the pool reset before its next recording
-    // clears a buffer that failed here.
-    frame.recording = false;
-    commandLists_.erase(commandList);
-    if (const VkResult result = table_.vkEndCommandBuffer(frame.buffer); result != VK_SUCCESS) {
-        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkEndCommandBuffer", .result = result});
+    for (const Token wait : desc.waits) {
+        VkSemaphoreSubmitInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        info.semaphore = queues_[wait.queue]->timeline;
+        info.value = wait.value;
+        info.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        queue.waits.push_back(info);
     }
-    VkCommandBufferSubmitInfo buffer{};
-    buffer.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
-    buffer.commandBuffer = frame.buffer;
+    const std::uint64_t value = queue.submitted.load(std::memory_order_relaxed) + 1;
+    core::Result<void> ended;
+    for (const CommandListHandle commandList : desc.commandLists) {
+        VulkanCommandList* list = commandLists_.find(commandList);
+        if (list == nullptr) {
+            continue;
+        }
+        if (VulkanCommandPool* pool = commandPools_.find(list->pool); pool != nullptr) {
+            std::erase(pool->recording, commandList);
+            pool->lastSubmit = value;
+        }
+        if (const VkResult result = table_.vkEndCommandBuffer(list->buffer); result != VK_SUCCESS && ended) {
+            ended = failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkEndCommandBuffer", .result = result});
+        }
+        commandLists_.erase(commandList);
+    }
+    if (!ended) {
+        return std::unexpected(std::move(ended.error()));
+    }
+    VkSemaphoreSubmitInfo done{};
+    done.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    done.semaphore = queue.timeline;
+    done.value = value;
+    done.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    queue.signals.push_back(done);
     VkSubmitInfo2 info{};
     info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-    info.waitSemaphoreInfoCount = static_cast<std::uint32_t>(waits.size());
-    info.pWaitSemaphoreInfos = waits.data();
-    info.commandBufferInfoCount = 1;
-    info.pCommandBufferInfos = &buffer;
-    info.signalSemaphoreInfoCount = static_cast<std::uint32_t>(signals.size());
-    info.pSignalSemaphoreInfos = signals.data();
-    if (const VkResult result = table_.vkQueueSubmit2(graphicsQueue_, 1, &info, frame.fence); result != VK_SUCCESS) {
+    info.waitSemaphoreInfoCount = static_cast<std::uint32_t>(queue.waits.size());
+    info.pWaitSemaphoreInfos = queue.waits.data();
+    info.commandBufferInfoCount = static_cast<std::uint32_t>(queue.buffers.size());
+    info.pCommandBufferInfos = queue.buffers.data();
+    info.signalSemaphoreInfoCount = static_cast<std::uint32_t>(queue.signals.size());
+    info.pSignalSemaphoreInfos = queue.signals.data();
+    if (const VkResult result = table_.vkQueueSubmit2(queue.queue, 1, &info, VK_NULL_HANDLE); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkQueueSubmit2", .result = result});
     }
-    frame.pending = true;
-    // The GPU now has the transitions, so the images are in these layouts.
+    queue.submitted.store(value, std::memory_order_release);
     for (const auto& [chain, layout] : chains) {
         chain->setLayout(layout);
         chain->setSubmitted();
     }
+    collectPools(queue);
+    return Token{.queue = desc.queue, .value = value};
+}
+
+core::Result<void> VulkanDevice::wait(Token token) {
+    if (auto checked = checkToken(token); !checked) {
+        return checked;
+    }
+    VulkanQueue& queue = *queues_[token.queue];
+    VkSemaphoreWaitInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+    info.semaphoreCount = 1;
+    info.pSemaphores = &queue.timeline;
+    info.pValues = &token.value;
+    if (const VkResult result = table_.vkWaitSemaphores(device_, &info, std::numeric_limits<std::uint64_t>::max());
+        result != VK_SUCCESS) {
+        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkWaitSemaphores", .result = result});
+    }
+    if (queue.retiredCount.load(std::memory_order_acquire) != 0) {
+        const std::scoped_lock lock{queue.lock};
+        collectPools(queue);
+    }
     return {};
+}
+
+core::Result<bool> VulkanDevice::poll(Token token) {
+    if (auto checked = checkToken(token); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    VulkanQueue& queue = *queues_[token.queue];
+    const auto completed = completedValue(queue);
+    if (!completed) {
+        return std::unexpected(completed.error());
+    }
+    if (queue.retiredCount.load(std::memory_order_acquire) != 0) {
+        const std::scoped_lock lock{queue.lock};
+        collectPools(queue);
+    }
+    return *completed >= token.value;
 }
 
 core::Result<void> VulkanDevice::destroyCommandList(CommandListHandle commandList) {
@@ -445,9 +676,9 @@ core::Result<void> VulkanDevice::destroyCommandList(CommandListHandle commandLis
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    // The buffer stays begun; the pool reset before its next recording clears it.
-    const std::scoped_lock lock{queues_};
-    frames_[(*list)->frame].recording = false;
+    if (VulkanCommandPool* pool = commandPools_.find((*list)->pool); pool != nullptr) {
+        std::erase(pool->recording, commandList);
+    }
     commandLists_.erase(commandList);
     return {};
 }
@@ -466,18 +697,21 @@ VulkanDevice::~VulkanDevice() {
         rhi_->logger().send(core::Severity::Error,
                             std::format("vkDeviceWaitIdle: {}; destroying the device anyway", string_VkResult(result)));
     }
-    // Swapchains and command lists are the device's children, so they go first.
     if (swapchains_.size() != 0) {
         BFR_LOG_WARN(rhi_->logger(), "{} swapchains were left when the device went", swapchains_.size());
     }
+    if (commandPools_.size() != 0) {
+        BFR_LOG_WARN(rhi_->logger(), "{} command pools were left when the device went", commandPools_.size());
+    }
     commandLists_.clear();
+    commandPools_.clear();
     swapchains_.clear();
-    for (Frame& frame : frames_) {
-        if (frame.fence != VK_NULL_HANDLE) {
-            table_.vkDestroyFence(device_, frame.fence, nullptr);
+    for (const auto& queue : queues_) {
+        for (const auto& [pool, value] : queue->retired) {
+            table_.vkDestroyCommandPool(device_, pool, nullptr);
         }
-        if (frame.pool != VK_NULL_HANDLE) {
-            table_.vkDestroyCommandPool(device_, frame.pool, nullptr);
+        if (queue->timeline != VK_NULL_HANDLE) {
+            table_.vkDestroySemaphore(device_, queue->timeline, nullptr);
         }
     }
     table_.vkDestroyDevice(device_, nullptr);

@@ -37,6 +37,19 @@ TEST_CASE("Pool finds what it stores", "[core][unit]") {
     CHECK(pool.size() == 1);
 }
 
+TEST_CASE("Pool visits every live value and no retired one", "[core][unit]") {
+    Pool<int> pool{"test", 1, kLimit};
+    const Handle<int> kept = pool.emplace(4);
+    const Handle<int> gone = pool.emplace(5);
+    REQUIRE(pool.retire(gone, 1));
+
+    std::vector<int> seen;
+    pool.forEach([&seen](int& value) { seen.push_back(value); });
+
+    CHECK(seen == std::vector<int>{4});
+    CHECK(pool.find(kept) != nullptr);
+}
+
 TEST_CASE("Pool finds nothing for a retired handle", "[core][unit]") {
     Pool<int> pool{"test", 1, kLimit};
     const Handle<int> handle = pool.emplace(4);

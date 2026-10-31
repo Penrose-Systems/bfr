@@ -8,10 +8,12 @@
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 namespace bfr::detail {
 
@@ -54,6 +56,31 @@ template <class To, class From, std::size_t Size, class Convert>
     std::ranges::transform(values, converted.begin(), convert);
     return converted;
 }
+
+/// A C array built from a range for one call: in place up to kInline
+/// elements, on the heap past that.
+template <class T, std::size_t kInline = 16>
+class SmallBuffer {
+public:
+    template <class Range, class Convert>
+    [[nodiscard]] const T* fill(const Range& range, Convert convert) {
+        const std::size_t size = std::ranges::size(range);
+        if (size == 0) {
+            return nullptr;
+        }
+        T* out = inline_.data();
+        if (size > kInline) {
+            heap_.resize(size);
+            out = heap_.data();
+        }
+        std::ranges::transform(range, out, convert);
+        return out;
+    }
+
+private:
+    std::array<T, kInline> inline_{};
+    std::vector<T> heap_;
+};
 
 /// Calls call, keeping anything it throws from leaving: a callback runs on a
 /// C stack, often a driver's thread.

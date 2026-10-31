@@ -23,10 +23,10 @@
 namespace bfr::rhi::null {
 
 /// What the null adapter says a swapchain on any window may be.
-[[nodiscard]] SurfaceCaps nullSurfaceCaps();
+[[nodiscard]] SwapchainCaps nullSurfaceCaps();
 
 /// The formats and color spaces the null adapter presents in.
-[[nodiscard]] std::span<const SurfaceFormat> nullSurfaceFormats();
+[[nodiscard]] std::span<const SwapchainFormat> nullSurfaceFormats();
 
 class NullRhi final : public Rhi {
 public:
@@ -35,12 +35,13 @@ public:
     NullRhi(const RhiConfig& config, core::Logger logger);
 
     [[nodiscard]] std::span<const Adapter> adapters() const override { return adapters_; }
-    [[nodiscard]] core::Result<std::unique_ptr<Device>> createDevice(
-        std::size_t adapter, const core::window::NativeWindow& presentTo) override;
+    [[nodiscard]] core::Result<std::unique_ptr<Device>> createDevice(std::size_t adapter,
+                                                                     const core::window::NativeWindow& presentTo,
+                                                                     const DeviceQueues& queues) override;
     [[nodiscard]] core::Result<FormatCaps> formatCaps(std::size_t adapter, Format format) const override;
-    [[nodiscard]] core::Result<SurfaceCaps> surfaceCaps(std::size_t adapter,
-                                                        const core::window::NativeWindow& window) const override;
-    [[nodiscard]] core::Result<std::vector<SurfaceFormat>> surfaceFormats(
+    [[nodiscard]] core::Result<SwapchainCaps> swapchainCaps(std::size_t adapter,
+                                                            const core::window::NativeWindow& window) const override;
+    [[nodiscard]] core::Result<std::vector<SwapchainFormat>> swapchainFormats(
         std::size_t adapter, const core::window::NativeWindow& window) const override;
 
     /// Where the Rhi and its devices send their messages.

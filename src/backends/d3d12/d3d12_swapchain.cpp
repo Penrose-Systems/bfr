@@ -28,12 +28,12 @@ using Microsoft::WRL::ComPtr;
 // Each window system a swapchain can be made on, or why not.
 struct Checker {
     core::Result<void> operator()(std::monostate /*none*/) const {
-        return core::failure(core::ErrorCode::RhiSurfaceFailed, "there is no window");
+        return core::failure(core::ErrorCode::RhiWindowFailed, "there is no window");
     }
 
     core::Result<void> operator()(const core::window::Win32& window) const {
         if (window.window == nullptr) {
-            return core::failure(core::ErrorCode::RhiSurfaceFailed, "the Win32 window has no handle");
+            return core::failure(core::ErrorCode::RhiWindowFailed, "the Win32 window has no handle");
         }
         return {};
     }
@@ -43,7 +43,7 @@ struct Checker {
     // A window system this build has no surface for.
     template <class Handles>
     core::Result<void> operator()(const Handles& /*window*/) const {
-        return core::failure(core::ErrorCode::RhiSurfaceFailed, "this build has no surface for the window's system");
+        return core::failure(core::ErrorCode::RhiWindowFailed, "this build has no surface for the window's system");
     }
 };
 
@@ -118,7 +118,7 @@ void D3D12Swapchain::release() {
 }
 
 core::Result<void> D3D12Swapchain::makeChain(std::uint32_t width, std::uint32_t height) {
-    const SwapchainFormat format = swapchainFormatFor(request_.format, request_.colorSpace);
+    const DxgiSwapchainFormat format = swapchainFormatFor(request_.format, request_.colorSpace);
     if (format.format == DXGI_FORMAT_UNKNOWN) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "DXGI has no setting for the format with the color space that were asked");

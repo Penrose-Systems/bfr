@@ -184,15 +184,15 @@ core::Result<FormatCaps> formatCapsFor(ID3D12Device* device, Format format) {
     return caps;
 }
 
-SurfaceCaps surfaceCapsFor(bool tearing) {
+SwapchainCaps surfaceCapsFor(bool tearing) {
     return {.maxImageCount = DXGI_MAX_SWAP_CHAIN_BUFFERS, .immediate = tearing};
 }
 
-std::span<const SurfaceFormat> surfaceFormats() {
+std::span<const SwapchainFormat> swapchainFormats() {
     return {};
 }
 
-SwapchainFormat swapchainFormatFor(Format format, ColorSpace colorSpace) {
+DxgiSwapchainFormat swapchainFormatFor(Format format, ColorSpace colorSpace) {
     if (colorSpace == ColorSpace::Srgb) {
         if (format == Format::Bgra8Unorm) {
             return {.format = DXGI_FORMAT_B8G8R8A8_UNORM, .colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709};

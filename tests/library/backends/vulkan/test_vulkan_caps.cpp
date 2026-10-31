@@ -126,15 +126,15 @@ TEST_CASE("Vulkan reports a failed surface query as the failure it is", "[vulkan
     REQUIRE(rhi.has_value());
     const std::size_t adapter = cpuAdapter(**rhi);
 
-    const auto caps = (*rhi)->surfaceCaps(adapter, bfr::core::window::Headless{});
-    const auto formats = (*rhi)->surfaceFormats(adapter, bfr::core::window::Headless{});
+    const auto caps = (*rhi)->swapchainCaps(adapter, bfr::core::window::Headless{});
+    const auto formats = (*rhi)->swapchainFormats(adapter, bfr::core::window::Headless{});
 
     INFO(function);
     const bool capsFail = function == "vkGetPhysicalDeviceSurfaceCapabilitiesKHR";
     REQUIRE(caps.has_value() != capsFail);
     REQUIRE(formats.has_value() == capsFail);
     const bfr::core::Error& failed = capsFail ? caps.error() : formats.error();
-    CHECK(failed.code == bfr::core::ErrorCode::RhiSurfaceFailed);
+    CHECK(failed.code == bfr::core::ErrorCode::RhiWindowFailed);
     CHECK_THAT(failed.message, Catch::Matchers::Equals(function + ": VK_ERROR_UNKNOWN"));
 }
 
@@ -147,7 +147,7 @@ TEST_CASE("Vulkan doesn't ask NVIDIA's driver about a headless window's swapchai
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto caps = (*rhi)->surfaceCaps(cpuAdapter(**rhi), bfr::core::window::Headless{});
+    const auto caps = (*rhi)->swapchainCaps(cpuAdapter(**rhi), bfr::core::window::Headless{});
 
     REQUIRE_FALSE(caps.has_value());
     CHECK(caps.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
@@ -161,7 +161,7 @@ TEST_CASE("Vulkan device without VK_EXT_memory_budget fails with RhiUnsupported"
     const auto rhi = Rhi::create(kVulkan, {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
-    const auto device = (*rhi)->createDevice(0, kNoWindow);
+    const auto device = (*rhi)->createDevice(0, kNoWindow, {});
     INFO(failureOf(device));
     REQUIRE(device.has_value());
 

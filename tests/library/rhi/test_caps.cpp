@@ -138,8 +138,8 @@ TEST_CASE("Rhi reports what a swapchain for a headless window may be", "[rhi][ca
     REQUIRE(rhi.has_value());
     const std::size_t adapter = headlessAdapter(**rhi);
 
-    const auto caps = (*rhi)->surfaceCaps(adapter, bfr::core::window::Headless{});
-    const auto formats = (*rhi)->surfaceFormats(adapter, bfr::core::window::Headless{});
+    const auto caps = (*rhi)->swapchainCaps(adapter, bfr::core::window::Headless{});
+    const auto formats = (*rhi)->swapchainFormats(adapter, bfr::core::window::Headless{});
 
     INFO(failureOf(caps) << ' ' << failureOf(formats));
     REQUIRE(caps.has_value());
@@ -150,7 +150,7 @@ TEST_CASE("Rhi reports what a swapchain for a headless window may be", "[rhi][ca
     CHECK((caps->alphaOpaque || caps->alphaPremultiplied || caps->alphaPostmultiplied || caps->alphaInherit));
     CHECK_FALSE(formats->empty());
     CHECK(std::ranges::any_of(*formats,
-                              [](const SurfaceFormat& format) { return format.colorSpace == ColorSpace::Srgb; }));
+                              [](const SwapchainFormat& format) { return format.colorSpace == ColorSpace::Srgb; }));
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
@@ -162,9 +162,9 @@ TEST_CASE("Rhi refuses queries about an adapter it does not list", "[rhi][caps][
     const std::size_t missing = (*rhi)->adapters().size();
 
     CHECK((*rhi)->formatCaps(missing, Format::Rgba8Unorm).error().code == bfr::core::ErrorCode::RhiAdapterOutOfRange);
-    CHECK((*rhi)->surfaceCaps(missing, bfr::core::window::Headless{}).error().code ==
+    CHECK((*rhi)->swapchainCaps(missing, bfr::core::window::Headless{}).error().code ==
           bfr::core::ErrorCode::RhiAdapterOutOfRange);
-    CHECK((*rhi)->surfaceFormats(missing, bfr::core::window::Headless{}).error().code ==
+    CHECK((*rhi)->swapchainFormats(missing, bfr::core::window::Headless{}).error().code ==
           bfr::core::ErrorCode::RhiAdapterOutOfRange);
 }
 
@@ -178,7 +178,7 @@ TEST_CASE("Device reports its memory budget heap by heap", "[rhi][caps][agnostic
     for (std::size_t adapter = 0; adapter < (*rhi)->adapters().size(); ++adapter) {
         const Adapter& listed = (*rhi)->adapters()[adapter];
         INFO(listed.name);
-        const auto device = (*rhi)->createDevice(adapter, kNoWindow);
+        const auto device = (*rhi)->createDevice(adapter, kNoWindow, {});
         INFO(failureOf(device));
         REQUIRE(device.has_value());
 

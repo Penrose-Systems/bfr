@@ -170,7 +170,7 @@ TEST_CASE("Device destroying a null swapchain does nothing", "[rhi][agnostic]") 
     CHECK(headless.device->destroySwapchain(SwapchainHandle{}).has_value());
 }
 
-TEST_CASE("Device fails with RhiSurfaceFailed for a swapchain without a window", "[rhi][agnostic]") {
+TEST_CASE("Device fails with RhiWindowFailed for a swapchain without a window", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(backend, messages)};
@@ -178,7 +178,7 @@ TEST_CASE("Device fails with RhiSurfaceFailed for a swapchain without a window",
     const auto swapchain = headless.device->createSwapchain(kNoWindow, swapchainRequest(*headless.rhi));
 
     REQUIRE_FALSE(swapchain.has_value());
-    CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiSurfaceFailed);
+    CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiWindowFailed);
     CHECK_THAT(swapchain.error().message, Catch::Matchers::ContainsSubstring("no window"));
 }
 
@@ -211,7 +211,7 @@ TEST_CASE("Device builds the image count its swapchain was created with", "[rhi]
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages), kValidation};
-        const auto surface = headless.rhi->surfaceCaps(headlessAdapter(*headless.rhi), kHeadless);
+        const auto surface = headless.rhi->swapchainCaps(headlessAdapter(*headless.rhi), kHeadless);
         INFO(failureOf(surface));
         REQUIRE(surface.has_value());
         // One more than the window's least, more than the default, when the

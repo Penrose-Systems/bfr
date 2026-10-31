@@ -27,12 +27,12 @@ namespace {
 // Each window system a swapchain can be made on, or why not.
 struct Checker {
     core::Result<void> operator()(std::monostate /*none*/) const {
-        return core::failure(core::ErrorCode::RhiSurfaceFailed, "there is no window");
+        return core::failure(core::ErrorCode::RhiWindowFailed, "there is no window");
     }
 
     core::Result<void> operator()(const core::window::Metal& window) const {
         if (window.layer == nullptr) {
-            return core::failure(core::ErrorCode::RhiSurfaceFailed, "the Metal window has no layer");
+            return core::failure(core::ErrorCode::RhiWindowFailed, "the Metal window has no layer");
         }
         return {};
     }
@@ -42,7 +42,7 @@ struct Checker {
     // A window system this build has no surface for.
     template <class Handles>
     core::Result<void> operator()(const Handles& /*window*/) const {
-        return core::failure(core::ErrorCode::RhiSurfaceFailed, "this build has no surface for the window's system");
+        return core::failure(core::ErrorCode::RhiWindowFailed, "this build has no surface for the window's system");
     }
 };
 

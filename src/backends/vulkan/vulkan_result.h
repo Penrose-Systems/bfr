@@ -32,7 +32,7 @@ struct VulkanFailure {
         case VK_ERROR_DEVICE_LOST:
             return core::ErrorCode::RhiDeviceLost;
         case VK_ERROR_SURFACE_LOST_KHR:
-            return core::ErrorCode::RhiSurfaceLost;
+            return core::ErrorCode::RhiWindowLost;
         default:
             return code;
     }

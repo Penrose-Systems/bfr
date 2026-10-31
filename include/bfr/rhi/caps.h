@@ -227,7 +227,7 @@ struct FormatCaps {
     std::uint32_t sampleCounts = 0;
 };
 
-struct SurfaceCaps {
+struct SwapchainCaps {
     std::uint32_t minImageCount = 0;
     std::uint32_t maxImageCount = 0;
     std::uint32_t width = 0;
@@ -236,7 +236,7 @@ struct SurfaceCaps {
     std::uint32_t minHeight = 0;
     std::uint32_t maxWidth = 0;
     std::uint32_t maxHeight = 0;
-    SurfaceRotation rotation = SurfaceRotation::None;
+    DisplayRotation rotation = DisplayRotation::None;
     bool fifo = false;
     bool fifoRelaxed = false;
     bool mailbox = false;
@@ -247,7 +247,7 @@ struct SurfaceCaps {
     bool alphaInherit = false;
 };
 
-struct SurfaceFormat {
+struct SwapchainFormat {
     Format format = Format::R8Unorm;
     ColorSpace colorSpace = ColorSpace::Srgb;
 };

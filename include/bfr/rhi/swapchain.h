@@ -8,14 +8,14 @@
 
 namespace bfr::rhi {
 
-/// The images a device presents to one surface in turn. Only named, by a
+/// The images a device presents to one window in turn. Only named, by a
 /// SwapchainHandle.
 struct Swapchain;
 
 using SwapchainHandle = core::Handle<Swapchain>;
 
 /// How a swapchain presents. Fifo is on every window; the others are on those
-/// whose surface caps list them.
+/// whose swapchain caps list them.
 enum class PresentMode : std::uint8_t {
     /// Presents wait for vertical blank and queue up.
     Fifo,

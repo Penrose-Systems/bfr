@@ -19,31 +19,69 @@
 #include <QuartzCore/QuartzCore.hpp>
 #include <TargetConditionals.h>
 
-#include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace bfr::rhi::metal {
 
 class MetalRhi;
 
-/// Commands recorded on one frame's buffer: the swapchain rendering is open
-/// on, and every swapchain rendered to, whose drawables the submit waits for
-/// and signals.
+/// A command pool: an allocator and a buffer for each list recording at once,
+/// since a Metal 4 allocator serves one buffer at a time; how many are handed
+/// out since the last reset, the lists still recording, and the event value its
+/// last submit signals.
+struct MetalCommandPool {
+    struct Entry {
+        Ref<MTL4::CommandAllocator> allocator;
+        Ref<MTL4::CommandBuffer> buffer;
+    };
+    std::uint32_t queue = 0;
+    std::vector<Entry> entries;
+    std::uint32_t used = 0;
+    std::vector<CommandListHandle> recording;
+    std::uint64_t lastSubmit = 0;
+};
+
+/// One of the device's queues: its MTL4 command queue, the shared event each
+/// submit signals the next value of, the value last submitted, the array a
+/// submit is built in, and the allocators of pools destroyed while the GPU may
+/// still run their lists, each with the value that frees them. Used by one
+/// thread at a time under lock, which present shares; submitted is read from
+/// any thread.
+struct MetalQueue {
+    QueueType type = QueueType::Graphics;
+    Ref<MTL4::CommandQueue> queue;
+    Ref<MTL::SharedEvent> event;
+    std::atomic<std::uint64_t> submitted{0};
+    std::vector<const MTL4::CommandBuffer*> buffers;
+    std::vector<std::pair<std::vector<MetalCommandPool::Entry>, std::uint64_t>> retired;
+    std::atomic<std::uint32_t> retiredCount{0};
+    std::mutex lock;
+};
+
+/// Commands recorded on one buffer: the pool it came from, the encoder
+/// rendering is open on, the swapchain rendering is open on, and every
+/// swapchain rendered to, whose drawables the submit waits for and signals.
 struct MetalCommandList {
-    std::uint32_t frame = 0;
+    Ref<MTL4::CommandBuffer> buffer;
+    CommandPoolHandle pool;
+    Ref<MTL4::RenderCommandEncoder> encoder;
     std::optional<SwapchainHandle> rendering;
     std::vector<SwapchainHandle> rendered;
 };
 
 class MetalDevice final : public Device {
 public:
-    /// A device on device, which rhi listed. Fails with RhiDeviceFailed when Metal gives no
-    /// queue, event, or the buffers a frame needs.
-    [[nodiscard]] static core::Result<std::unique_ptr<MetalDevice>> create(MetalRhi& rhi, Ref<MTL::Device> device);
+    /// A device on device, which rhi listed, with a graphics queue and the
+    /// queues asked for. Fails with RhiDeviceFailed when Metal gives no queue
+    /// or event.
+    [[nodiscard]] static core::Result<std::unique_ptr<MetalDevice>> create(MetalRhi& rhi, Ref<MTL::Device> device,
+                                                                           const DeviceQueues& queues);
 
     /// For create.
     MetalDevice(MetalRhi& rhi, Ref<MTL::Device> device);
@@ -60,62 +98,45 @@ public:
     [[nodiscard]] core::Result<void> destroySwapchain(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<void> acquire(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<void> present(SwapchainHandle swapchain) override;
-    [[nodiscard]] core::Result<CommandListHandle> beginCommands() override;
+    [[nodiscard]] core::Result<CommandPoolHandle> createCommandPool(std::uint32_t queue) override;
+    [[nodiscard]] core::Result<void> resetCommandPool(CommandPoolHandle commandPool) override;
+    [[nodiscard]] core::Result<void> destroyCommandPool(CommandPoolHandle commandPool) override;
+    [[nodiscard]] core::Result<CommandListHandle> beginCommands(CommandPoolHandle commandPool) override;
     [[nodiscard]] core::Result<void> beginRendering(CommandListHandle commandList, SwapchainHandle swapchain,
                                                     const RenderingDesc& desc) override;
     [[nodiscard]] core::Result<void> endRendering(CommandListHandle commandList) override;
-    [[nodiscard]] core::Result<void> submit(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
+    [[nodiscard]] core::Result<void> wait(Token token) override;
+    [[nodiscard]] core::Result<bool> poll(Token token) override;
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
-    // One command buffer that may be on the GPU: its allocator, which is reset
-    // before it records again, the encoder rendering is open on, and the event
-    // value its last submit signals.
-    struct Frame {
-        Ref<MTL4::CommandAllocator> allocator;
-        Ref<MTL4::CommandBuffer> buffer;
-        Ref<MTL4::RenderCommandEncoder> encoder;
-        std::uint64_t doneValue = 0;
-        // Whether a submit is on the GPU, and whether a command list records.
-        bool pending = false;
-        bool recording = false;
-    };
-
-    // Makes the queue, the event and every frame's allocator and buffer.
-    [[nodiscard]] core::Result<void> open();
-    // Waits for the frame's last submit, if one is pending.
-    [[nodiscard]] core::Result<void> waitFrame(Frame& frame);
+    [[nodiscard]] core::Result<void> open(const DeviceQueues& queues);
+    [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
+    [[nodiscard]] core::Result<void> checkToken(Token token) const;
+    void collectPools(MetalQueue& queue);
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
-    // Ends the encoder and the buffer of a frame whose list will not be submitted.
-    static void discard(Frame& frame);
-    // The frame at index, which is less than kFramesInFlight.
-    [[nodiscard]] Frame& frameAt(std::uint32_t index);
-    // Fails with RhiInvalidHandle for a swapchain or command list this device
-    // no longer has.
+    static void discard(MetalCommandList& list);
     [[nodiscard]] core::Result<MetalSwapchain*> swapchainFor(SwapchainHandle swapchain);
+    [[nodiscard]] core::Result<MetalCommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<MetalCommandList*> commandListFor(CommandListHandle commandList);
 
     MetalRhi* rhi_;
     Ref<MTL::Device> device_;
-    Ref<MTL4::CommandQueue> queue_;
-    // Signaled by the queue after each submit, to the value submitted_ counts.
-    Ref<MTL::SharedEvent> event_;
-    std::uint64_t submitted_ = 0;
+    std::vector<std::unique_ptr<MetalQueue>> queues_;
     // Room for a few windows' swapchains before the pool grows, and a limit no
     // tool should reach.
     static constexpr std::uint32_t kSwapchainCapacity = 4;
     static constexpr std::uint32_t kSwapchainLimit = 256;
     core::Pool<MetalSwapchain, Swapchain> swapchains_;
-    // Two frames: one recording while the GPU runs the other.
-    static constexpr std::uint32_t kFramesInFlight = 2;
-    std::array<Frame, kFramesInFlight> frames_{};
-    std::uint32_t nextFrame_ = 0;
+    static constexpr std::uint32_t kCommandPoolCapacity = 4;
+    static constexpr std::uint32_t kCommandPoolLimit = 256;
+    static constexpr std::uint32_t kCommandListCapacity = 8;
+    static constexpr std::uint32_t kCommandListLimit = 4096;
+    core::Pool<MetalCommandPool, CommandPool> commandPools_;
     core::Pool<MetalCommandList, CommandList> commandLists_;
-    // The queue, event and frames are used by one thread at a time; the
-    // device's functions may be called from several threads at once.
-    std::mutex lock_;
 };
 
 } // namespace bfr::rhi::metal

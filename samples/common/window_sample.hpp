@@ -77,7 +77,7 @@ inline int fail(std::string_view what, const bfr::Error& error) {
     return 1;
 }
 
-inline void printSurface(const bfr::SurfaceCaps& caps, const std::vector<bfr::SurfaceFormat>& formats) {
+inline void printSurface(const bfr::SwapchainCaps& caps, const std::vector<bfr::SwapchainFormat>& formats) {
     const std::string most = caps.maxImageCount == 0 ? "any" : std::to_string(caps.maxImageCount);
     row("Images", {std::format("{} to {}", caps.minImageCount, most)});
     row("Sizes", {std::format("{}x{} to {}x{}", caps.minWidth, caps.minHeight, caps.maxWidth, caps.maxHeight)});
@@ -91,7 +91,7 @@ inline void printSurface(const bfr::SurfaceCaps& caps, const std::vector<bfr::Su
     row("Present", modes);
     std::vector<std::string> names;
     names.reserve(formats.size());
-    for (const bfr::SurfaceFormat& format : formats) {
+    for (const bfr::SwapchainFormat& format : formats) {
         names.push_back(std::format("{} {}", bfr::name(format.format), bfr::name(format.colorSpace)));
     }
     row("Swap formats", names);
@@ -149,11 +149,11 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     }
     detail::row("Adapter", {adapters->at(adapter).name});
 
-    const auto caps = instance->surfaceCaps(adapter, {.window = window});
+    const auto caps = instance->swapchainCaps(adapter, {.window = window});
     if (!caps) {
         return detail::fail("can't ask what the window presents", caps.error());
     }
-    const auto formats = instance->surfaceFormats(adapter, {.window = window});
+    const auto formats = instance->swapchainFormats(adapter, {.window = window});
     if (!formats) {
         return detail::fail("can't list the window's formats", formats.error());
     }
@@ -163,6 +163,20 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     if (!swapchain) {
         return detail::fail("can't create a swapchain", swapchain.error());
     }
+    constexpr int kFramesInFlight = 2;
+    struct Slot {
+        bfr::CommandPool pool;
+        bfr::Token done;
+    };
+    std::vector<Slot> slots;
+    for (int slot = 0; slot < kFramesInFlight; ++slot) {
+        auto pool = device.createCommandPool({.queue = 0});
+        if (!pool) {
+            return detail::fail("can't create a command pool", pool.error());
+        }
+        slots.push_back({.pool = std::move(*pool), .done = {}});
+    }
+    std::size_t frame = 0;
     const auto started = std::chrono::steady_clock::now();
     Size last;
     bool resize = true;
@@ -192,6 +206,13 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
             }
         }
         // The window changed under the swapchain: rebuild it next time round.
+        Slot& slot = slots[frame % slots.size()];
+        if (const auto waited = device.wait(slot.done); !waited) {
+            return detail::fail("can't wait for the GPU", waited.error());
+        }
+        if (const auto reset = slot.pool.reset(); !reset) {
+            return detail::fail("can't reset the command pool", reset.error());
+        }
         const auto acquired = swapchain->acquire();
         if (!acquired) {
             if (acquired.error().code == bfr::Result::ErrorOutOfDate) {
@@ -200,7 +221,7 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
             }
             return detail::fail("can't acquire an image", acquired.error());
         }
-        auto commands = device.beginCommands();
+        auto commands = slot.pool.beginCommands();
         if (!commands) {
             return detail::fail("can't begin commands", commands.error());
         }
@@ -213,9 +234,12 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
         if (const auto ended = commands->endRendering(); !ended) {
             return detail::fail("can't end rendering", ended.error());
         }
-        if (const auto submitted = commands->submit(); !submitted) {
+        const auto submitted = device.submit({.queue = 0, .commandLists = std::span{&*commands, 1}});
+        if (!submitted) {
             return detail::fail("can't submit", submitted.error());
         }
+        slot.done = *submitted;
+        ++frame;
         const auto presented = swapchain->present();
         if (!presented) {
             if (presented.error().code == bfr::Result::ErrorOutOfDate) {

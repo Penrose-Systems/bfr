@@ -41,8 +41,8 @@ enums:
       error_device_failed: {value: -7, doc: The backend refused to create the device.}
       error_device_lost: {value: -8, doc: The device was lost. Every later call on it returns this.}
       error_invalid_handle: {value: -9, doc: A handle is stale or destroyed.}
-      error_surface_failed: {value: -10, doc: "The API refused a surface for the window, or failed when asked about it."}
-      error_surface_lost: {value: -11, doc: The window's surface is gone; recreate the swapchain.}
+      error_window_failed: {value: -10, doc: "The backend refused the window, or failed when asked about it."}
+      error_window_lost: {value: -11, doc: The window is gone to the backend; recreate the swapchain.}
       error_present_unsupported: {value: -12, doc: The device's queue cannot present to the window.}
       error_swapchain_failed: {value: -13, doc: The backend refused to create or resize the swapchain.}
       error_out_of_date: {value: -14, doc: The swapchain no longer matches the window; resize it.}
@@ -226,7 +226,7 @@ enums:
       pass_through: {value: 15, doc: Values reach the display as they are.}
       display_native: {value: 16, doc: The display's own space (AMD FreeSync 2).}
 
-  surface_rotation:
+  display_rotation:
     doc: How a window's display is turned relative to its natural orientation.
     values:
       none: {value: 0, doc: Not turned.}
@@ -238,7 +238,7 @@ enums:
   present_mode:
     doc: >-
       How a swapchain presents. Which ones a window allows is in
-      bfr_surface_caps.
+      bfr_swapchain_caps.
     values:
       fifo: {value: 0, doc: Presents wait for vertical blank and queue up. Always available.}
       fifo_relaxed: {value: 1, doc: "As fifo, but a late frame presents at once, and may tear."}
@@ -248,12 +248,19 @@ enums:
   alpha_mode:
     doc: >-
       How a window blends a swapchain's alpha. Which ones a window allows is in
-      bfr_surface_caps.
+      bfr_swapchain_caps.
     values:
       opaque: {value: 0, doc: The window ignores alpha.}
       premultiplied: {value: 1, doc: "Colors are already multiplied by alpha."}
       postmultiplied: {value: 2, doc: "The window multiplies colors by alpha."}
       inherit: {value: 3, doc: The window system decides how alpha blends.}
+
+  queue_type:
+    doc: What a queue runs.
+    values:
+      graphics: {value: 0, doc: "Graphics, compute and copies."}
+      compute: {value: 1, doc: "Compute and copies, beside the graphics queue."}
+      copy: {value: 2, doc: Copies alone.}
 
   load_op:
     doc: What an attachment holds when rendering begins.
@@ -299,13 +306,23 @@ handles:
       overlap, destroying it included; the caller synchronizes them. Different
       swapchains may be used from different threads at once.
 
+  command_pool:
+    parent: device
+    destroy: destroy_command_pool
+    doc: >-
+      Where command lists for one queue are recorded from: the memory they
+      record into, given back to the pool by bfr_reset_command_pool once the
+      GPU has run them. Calls on one pool, and recording on the lists it made,
+      must not overlap; the caller synchronizes them. Different pools may be
+      used from different threads at once.
+
   command_list:
     parent: device
     destroy: destroy_command_list
     doc: >-
       Commands recorded for the GPU, from bfr_begin_commands until bfr_submit
-      sends them. Calls on one command list must not overlap; the caller
-      synchronizes them.
+      sends them to the queue of the pool they came from. Calls on one command
+      list must not overlap; the caller synchronizes them.
 
 callbacks:
   message_callback:
@@ -357,13 +374,24 @@ structs:
       - {name: system, type: window_system}
 
   device_desc:
-    doc: How to open an adapter.
+    doc: >-
+      How to open an adapter. The device's queues are numbered: the graphics
+      queue is 0, then the compute queues, then the copy queues, in the order
+      asked for here.
     extensible: true
     members:
       - {name: adapter, type: u32, doc: Index into the instance's adapter list.}
       - name: window
         type: window
         doc: The window the device must be able to present to; all zero opens it without presenting.
+      - name: compute_queues
+        type: u32
+        doc: >-
+          Compute queues to open beside the graphics queue; 0 is none. Fails with error_unsupported
+          when the adapter has fewer; bfr_caps.queues says how many it has.
+      - name: copy_queues
+        type: u32
+        doc: Copy queues to open; 0 is none. Fails with error_unsupported when the adapter has fewer.
 
   swapchain_desc:
     doc: How to create a swapchain.
@@ -416,7 +444,40 @@ structs:
       - {name: store_op, type: store_op, doc: What becomes of it at the end; 0 is store.}
       - {name: clear_color, type: f32, fixed: 4, doc: "Red, green, blue and alpha, 0 to 1, when load_op is clear."}
 
-  surface_desc:
+  command_pool_desc:
+    doc: How to create a command pool.
+    extensible: true
+    members:
+      - {name: queue, type: u32, doc: The queue its lists record for; 0 is the graphics queue.}
+
+  token:
+    doc: >-
+      A point on a queue's timeline, which bfr_submit writes and the GPU passes
+      once what was submitted has run. An all-zero token has already completed.
+    members:
+      - {name: queue, type: u32, doc: Index of the queue on the device; 0 is the graphics queue.}
+      - {name: value, type: u64}
+
+  submit_desc:
+    doc: What to send to a queue.
+    extensible: true
+    members:
+      - {name: queue, type: u32, doc: The queue to send to; 0 is the graphics queue.}
+      - name: command_lists
+        type: command_list
+        array: command_list_count
+        pointer: in
+        doc: Recorded from pools on the same queue; the GPU runs them in this order.
+      - {name: command_list_count, type: u32}
+      - name: waits
+        type: token
+        array: wait_count
+        pointer: in
+        optional: true
+        doc: The GPU passes these before it runs the lists.
+      - {name: wait_count, type: u32}
+
+  swapchain_query:
     doc: Which window to ask about.
     extensible: true
     members:
@@ -651,7 +712,7 @@ structs:
       - {name: storage_texel_buffer_atomic, type: bool}
       - {name: sample_counts, type: u32, doc: "Sample counts for 2D textures of it: each set bit is a count, 1, 2, 4 and so on; 0 when it can't be rendered to."}
 
-  surface_caps:
+  swapchain_caps:
     doc: What a window's swapchain may be, on one adapter.
     members:
       - {name: min_image_count, type: u32}
@@ -662,7 +723,7 @@ structs:
       - {name: min_height, type: u32}
       - {name: max_width, type: u32}
       - {name: max_height, type: u32}
-      - {name: rotation, type: surface_rotation, doc: How the display is turned now; on phones the app may render turned to match.}
+      - {name: rotation, type: display_rotation, doc: How the display is turned now; on phones the app may render turned to match.}
       - {name: fifo, type: bool, doc: "Presents wait for vertical blank and queue up. Always there."}
       - {name: fifo_relaxed, type: bool, doc: "As fifo, but a late frame presents at once, and may tear."}
       - {name: mailbox, type: bool, doc: "Presents wait for vertical blank, and a newer frame replaces a waiting one."}
@@ -672,7 +733,7 @@ structs:
       - {name: alpha_postmultiplied, type: bool}
       - {name: alpha_inherit, type: bool, doc: The window system decides how alpha blends.}
 
-  surface_format:
+  swapchain_format:
     doc: A format and color space a window's swapchain may use.
     members:
       - {name: format, type: format}
@@ -756,7 +817,7 @@ functions:
       - {name: count, type: u32, pointer: inout}
       - {name: formats, type: format_caps, array: count, pointer: out, optional: true}
 
-  get_surface_caps:
+  get_swapchain_caps:
     doc: >-
       Writes what a swapchain for the window in desc may be on an
       adapter. Asks the window system each time, since the window changes.
@@ -765,24 +826,24 @@ functions:
     params:
       - {name: instance, type: instance}
       - {name: adapter, type: u32}
-      - {name: desc, type: surface_desc, pointer: in}
-      - {name: caps, type: surface_caps, pointer: out}
+      - {name: desc, type: swapchain_query, pointer: in}
+      - {name: caps, type: swapchain_caps, pointer: out}
 
-  get_surface_formats:
+  get_swapchain_formats:
     doc: >-
       Lists the formats and color spaces a swapchain for the window in desc
       may use on an adapter, the order the window system gives. Only those BFR
       has names for. With formats null, writes how many there are to count.
       Otherwise writes up to count of them, sets count to how many it wrote,
-      and returns incomplete if there were more. Fails as bfr_get_surface_caps
+      and returns incomplete if there were more. Fails as bfr_get_swapchain_caps
       does.
     returns: result
     params:
       - {name: instance, type: instance}
       - {name: adapter, type: u32}
-      - {name: desc, type: surface_desc, pointer: in}
+      - {name: desc, type: swapchain_query, pointer: in}
       - {name: count, type: u32, pointer: inout}
-      - {name: formats, type: surface_format, array: count, pointer: out, optional: true}
+      - {name: formats, type: swapchain_format, array: count, pointer: out, optional: true}
 
   get_budget:
     doc: >-
@@ -865,13 +926,40 @@ functions:
       - {name: device, type: device}
       - {name: swapchain, type: swapchain}
 
-  begin_commands:
-    doc: >-
-      Starts recording commands. The device holds a few command lists at once
-      and waits for the GPU to finish the oldest before reusing it.
+  create_command_pool:
+    doc: Creates a command pool, as desc says.
     returns: result
     params:
       - {name: device, type: device}
+      - {name: desc, type: command_pool_desc, pointer: in}
+      - {name: command_pool, type: command_pool, pointer: out}
+
+  reset_command_pool:
+    doc: >-
+      Gives every list the pool made back to it, so bfr_begin_commands may use
+      their memory again. Fails with error_invalid_argument while a list from
+      the pool is recording, or while the GPU has not passed the token of the
+      pool's last submit; bfr_wait on it first.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_pool, type: command_pool}
+
+  destroy_command_pool:
+    doc: >-
+      Destroys a command pool and every list it made, once the GPU has finished
+      with them; the handles are invalid at once. A handle that is already
+      destroyed does nothing. Not while another thread is using the pool.
+    params:
+      - {name: device, type: device}
+      - {name: command_pool, type: command_pool}
+
+  begin_commands:
+    doc: Starts recording a command list from the pool.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_pool, type: command_pool}
       - {name: command_list, type: command_list, pointer: out}
 
   begin_rendering:
@@ -894,12 +982,31 @@ functions:
 
   submit:
     doc: >-
-      Sends the recorded commands to the GPU, which runs them in the order
-      submitted. The command list is gone afterwards.
+      Sends recorded command lists to a queue, which runs them after what it
+      was sent before and after the GPU passes the waits, and writes the token
+      their completion signals. The command lists are gone afterwards. Calls on
+      one queue must not overlap; the caller synchronizes them. Different
+      queues may be sent to from different threads at once.
     returns: result
     params:
       - {name: device, type: device}
-      - {name: command_list, type: command_list}
+      - {name: desc, type: submit_desc, pointer: in}
+      - {name: token, type: token, pointer: out, optional: true}
+
+  wait:
+    doc: Blocks until the GPU has passed token, whichever queue it is on.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: token, type: token, pointer: in}
+
+  poll:
+    doc: Writes whether the GPU has passed token, without blocking.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: token, type: token, pointer: in}
+      - {name: complete, type: bool, pointer: out}
 
   destroy_command_list:
     doc: >-

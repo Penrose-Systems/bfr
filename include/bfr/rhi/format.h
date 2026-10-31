@@ -186,7 +186,7 @@ enum class ColorSpace : std::uint8_t {
 };
 
 /// How a window's display is turned. The values are the C API's.
-enum class SurfaceRotation : std::uint8_t {
+enum class DisplayRotation : std::uint8_t {
     None,
     Rotate90,
     Rotate180,

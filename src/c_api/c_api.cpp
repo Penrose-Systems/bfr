@@ -29,6 +29,7 @@
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
 // Shares the Rhi with its devices, which keep it alive: garbage-collected
 // wrappers destroy them in no fixed order.
@@ -158,8 +159,8 @@ bfr_result resultFor(ErrorCode code) {
             return BFR_RESULT_ERROR_DEVICE_FAILED;
         case ErrorCode::RhiNoAdapter:
             return BFR_RESULT_ERROR_NO_ADAPTER;
-        case ErrorCode::RhiSurfaceFailed:
-            return BFR_RESULT_ERROR_SURFACE_FAILED;
+        case ErrorCode::RhiWindowFailed:
+            return BFR_RESULT_ERROR_WINDOW_FAILED;
         case ErrorCode::RhiInvalidHandle:
             return BFR_RESULT_ERROR_INVALID_HANDLE;
         case ErrorCode::RhiPresentUnsupported:
@@ -172,8 +173,8 @@ bfr_result resultFor(ErrorCode code) {
             return BFR_RESULT_ERROR_OUT_OF_MEMORY;
         case ErrorCode::RhiDeviceLost:
             return BFR_RESULT_ERROR_DEVICE_LOST;
-        case ErrorCode::RhiSurfaceLost:
-            return BFR_RESULT_ERROR_SURFACE_LOST;
+        case ErrorCode::RhiWindowLost:
+            return BFR_RESULT_ERROR_WINDOW_LOST;
         case ErrorCode::RhiUnsupported:
             return BFR_RESULT_ERROR_UNSUPPORTED;
         case ErrorCode::RhiBackendUnavailable:
@@ -230,8 +231,43 @@ bfr::rhi::SwapchainHandle fromC(bfr_swapchain handle) {
     return bfr::rhi::SwapchainHandle::fromBits(handle.bits);
 }
 
+bfr_command_pool toC(bfr::rhi::CommandPoolHandle handle) {
+    return {.bits = handle.bits};
+}
+
+bfr::rhi::CommandPoolHandle fromC(bfr_command_pool handle) {
+    return bfr::rhi::CommandPoolHandle::fromBits(handle.bits);
+}
+
 bfr_command_list toC(bfr::rhi::CommandListHandle handle) {
     return {.bits = handle.bits};
+}
+
+bfr_token toC(bfr::rhi::Token token) {
+    return {.queue = token.queue, .value = token.value};
+}
+
+template <class T, std::size_t kInline = 16>
+class SmallBuffer {
+public:
+    template <class From, class Convert>
+    [[nodiscard]] std::span<const T> fill(std::span<const From> from, Convert convert) {
+        T* out = inline_.data();
+        if (from.size() > kInline) {
+            heap_.resize(from.size());
+            out = heap_.data();
+        }
+        std::ranges::transform(from, out, convert);
+        return {out, from.size()};
+    }
+
+private:
+    std::array<T, kInline> inline_{};
+    std::vector<T> heap_;
+};
+
+bfr::rhi::Token fromC(const bfr_token& token) {
+    return {.queue = token.queue, .value = token.value};
 }
 
 bfr::rhi::CommandListHandle fromC(bfr_command_list handle) {
@@ -371,7 +407,7 @@ bfr_bool toC(bool value) {
 static_assert(static_cast<int>(bfr::rhi::Format::R8Unorm) == BFR_FORMAT_R8_UNORM);
 static_assert(static_cast<int>(bfr::rhi::Format::Astc12x12Float) == BFR_FORMAT_ASTC_12X12_FLOAT);
 static_assert(static_cast<int>(bfr::rhi::ColorSpace::DisplayNative) == BFR_COLOR_SPACE_DISPLAY_NATIVE);
-static_assert(static_cast<int>(bfr::rhi::SurfaceRotation::Other) == BFR_SURFACE_ROTATION_OTHER);
+static_assert(static_cast<int>(bfr::rhi::DisplayRotation::Other) == BFR_DISPLAY_ROTATION_OTHER);
 
 bfr_format toC(bfr::rhi::Format format) {
     return static_cast<bfr_format>(format);
@@ -634,7 +670,7 @@ bfr_format_caps toC(const bfr::rhi::FormatCaps& caps) {
     };
 }
 
-bfr_surface_caps toC(const bfr::rhi::SurfaceCaps& caps) {
+bfr_swapchain_caps toC(const bfr::rhi::SwapchainCaps& caps) {
     return {
         .min_image_count = caps.minImageCount,
         .max_image_count = caps.maxImageCount,
@@ -644,7 +680,7 @@ bfr_surface_caps toC(const bfr::rhi::SurfaceCaps& caps) {
         .min_height = caps.minHeight,
         .max_width = caps.maxWidth,
         .max_height = caps.maxHeight,
-        .rotation = static_cast<bfr_surface_rotation>(caps.rotation),
+        .rotation = static_cast<bfr_display_rotation>(caps.rotation),
         .fifo = toC(caps.fifo),
         .fifo_relaxed = toC(caps.fifoRelaxed),
         .mailbox = toC(caps.mailbox),
@@ -656,7 +692,7 @@ bfr_surface_caps toC(const bfr::rhi::SurfaceCaps& caps) {
     };
 }
 
-bfr_surface_format toC(const bfr::rhi::SurfaceFormat& format) {
+bfr_swapchain_format toC(const bfr::rhi::SwapchainFormat& format) {
     return {.format = toC(format.format), .color_space = static_cast<bfr_color_space>(format.colorSpace)};
 }
 
@@ -669,14 +705,13 @@ std::optional<bfr_result> checkAdapter(const bfr_instance& instance, std::uint32
     return std::nullopt;
 }
 
-// The window in a bfr_surface_desc, or the result for one that has none or an
 // unusable one.
-std::optional<NativeWindow> surfaceWindow(const bfr_surface_desc& desc, bfr_result& failed) {
+std::optional<NativeWindow> surfaceWindow(const bfr_swapchain_query& desc, bfr_result& failed) {
     std::string error;
     auto window = windowIn(desc.window, error);
     if (window && std::holds_alternative<std::monostate>(*window)) {
         window.reset();
-        error = "bfr_surface_desc needs a window";
+        error = "bfr_swapchain_query needs a window";
     }
     if (!window) {
         failed = fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
@@ -800,7 +835,8 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
         if (!window) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
-        auto created = instance->rhi->createDevice(desc->adapter, *window);
+        auto created = instance->rhi->createDevice(desc->adapter, *window,
+                                                   {.compute = desc->compute_queues, .copy = desc->copy_queues});
         if (!created) {
             return fail(created.error());
         }
@@ -890,13 +926,53 @@ bfr_result bfr_present(bfr_device* device, bfr_swapchain swapchain) {
     });
 }
 
-bfr_result bfr_begin_commands(bfr_device* device, bfr_command_list* command_list) {
+bfr_result bfr_create_command_pool(bfr_device* device, const bfr_command_pool_desc* desc,
+                                   bfr_command_pool* command_pool) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr || command_pool == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and command_pool must not be null");
+        }
+        *command_pool = {};
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_command_pool_desc takes no chained structs");
+        }
+        const auto created = device->device->createCommandPool(desc->queue);
+        if (!created) {
+            return fail(created.error());
+        }
+        *command_pool = toC(*created);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_reset_command_pool(bfr_device* device, bfr_command_pool command_pool) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto reset = device->device->resetCommandPool(fromC(command_pool));
+        return reset ? BFR_RESULT_SUCCESS : fail(reset.error());
+    });
+}
+
+void bfr_destroy_command_pool(bfr_device* device, bfr_command_pool command_pool) {
+    quietly([&] {
+        if (device == nullptr) {
+            return;
+        }
+        if (const auto destroyed = device->device->destroyCommandPool(fromC(command_pool)); !destroyed) {
+            lastError() = destroyed.error().message;
+        }
+    });
+}
+
+bfr_result bfr_begin_commands(bfr_device* device, bfr_command_pool command_pool, bfr_command_list* command_list) {
     return guarded([&] {
         if (device == nullptr || command_list == nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and command_list must not be null");
         }
         *command_list = {};
-        const auto begun = device->device->beginCommands();
+        const auto begun = device->device->beginCommands(fromC(command_pool));
         if (!begun) {
             return fail(begun.error());
         }
@@ -934,13 +1010,66 @@ bfr_result bfr_end_rendering(bfr_device* device, bfr_command_list command_list) 
     });
 }
 
-bfr_result bfr_submit(bfr_device* device, bfr_command_list command_list) {
+bfr_result bfr_submit(bfr_device* device, const bfr_submit_desc* desc, bfr_token* token) {
     return guarded([&] {
-        if (device == nullptr) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        if (device == nullptr || desc == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and desc must not be null");
         }
-        const auto submitted = device->device->submit(fromC(command_list));
-        return submitted ? BFR_RESULT_SUCCESS : fail(submitted.error());
+        if (token != nullptr) {
+            *token = {};
+        }
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_submit_desc takes no chained structs");
+        }
+        if (desc->command_list_count != 0 && desc->command_lists == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT,
+                        "command_lists must not be null when command_list_count is not 0");
+        }
+        if (desc->wait_count != 0 && desc->waits == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "waits must not be null when wait_count is not 0");
+        }
+        SmallBuffer<bfr::rhi::CommandListHandle> lists;
+        SmallBuffer<bfr::rhi::Token> waits;
+        const bfr::rhi::SubmitDesc submitDesc{
+            .queue = desc->queue,
+            .commandLists = lists.fill(std::span{desc->command_lists, desc->command_list_count},
+                                       [](bfr_command_list list) { return fromC(list); }),
+            .waits = waits.fill(std::span{desc->waits, desc->wait_count},
+                                [](const bfr_token& wait) { return fromC(wait); }),
+        };
+        const auto submitted = device->device->submit(submitDesc);
+        if (!submitted) {
+            return fail(submitted.error());
+        }
+        if (token != nullptr) {
+            *token = toC(*submitted);
+        }
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_wait(bfr_device* device, const bfr_token* token) {
+    return guarded([&] {
+        if (device == nullptr || token == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and token must not be null");
+        }
+        const auto waited = device->device->wait(fromC(*token));
+        return waited ? BFR_RESULT_SUCCESS : fail(waited.error());
+    });
+}
+
+bfr_result bfr_poll(bfr_device* device, const bfr_token* token, bfr_bool* complete) {
+    return guarded([&] {
+        if (device == nullptr || token == nullptr || complete == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, token and complete must not be null");
+        }
+        *complete = BFR_FALSE;
+        const auto polled = device->device->poll(fromC(*token));
+        if (!polled) {
+            return fail(polled.error());
+        }
+        *complete = *polled ? BFR_TRUE : BFR_FALSE;
+        return BFR_RESULT_SUCCESS;
     });
 }
 
@@ -1009,8 +1138,8 @@ bfr_result bfr_get_formats(bfr_instance* instance, uint32_t adapter, uint32_t* c
     });
 }
 
-bfr_result bfr_get_surface_caps(bfr_instance* instance, uint32_t adapter, const bfr_surface_desc* desc,
-                                bfr_surface_caps* caps) {
+bfr_result bfr_get_swapchain_caps(bfr_instance* instance, uint32_t adapter, const bfr_swapchain_query* desc,
+                                  bfr_swapchain_caps* caps) {
     return guarded([&] {
         if (instance == nullptr || desc == nullptr || caps == nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instance, desc and caps must not be null");
@@ -1023,7 +1152,7 @@ bfr_result bfr_get_surface_caps(bfr_instance* instance, uint32_t adapter, const 
         if (!window) {
             return failed;
         }
-        const auto found = instance->rhi->surfaceCaps(adapter, *window);
+        const auto found = instance->rhi->swapchainCaps(adapter, *window);
         if (!found) {
             return fail(found.error());
         }
@@ -1032,8 +1161,8 @@ bfr_result bfr_get_surface_caps(bfr_instance* instance, uint32_t adapter, const 
     });
 }
 
-bfr_result bfr_get_surface_formats(bfr_instance* instance, uint32_t adapter, const bfr_surface_desc* desc,
-                                   uint32_t* count, bfr_surface_format* formats) {
+bfr_result bfr_get_swapchain_formats(bfr_instance* instance, uint32_t adapter, const bfr_swapchain_query* desc,
+                                     uint32_t* count, bfr_swapchain_format* formats) {
     return guarded([&] {
         if (instance == nullptr || desc == nullptr || count == nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instance, desc and count must not be null");
@@ -1046,7 +1175,7 @@ bfr_result bfr_get_surface_formats(bfr_instance* instance, uint32_t adapter, con
         if (!window) {
             return failed;
         }
-        const auto found = instance->rhi->surfaceFormats(adapter, *window);
+        const auto found = instance->rhi->swapchainFormats(adapter, *window);
         if (!found) {
             return fail(found.error());
         }
@@ -1054,7 +1183,7 @@ bfr_result bfr_get_surface_formats(bfr_instance* instance, uint32_t adapter, con
             *count = static_cast<std::uint32_t>(found->size());
             return BFR_RESULT_SUCCESS;
         }
-        return writeList(std::span<const bfr::rhi::SurfaceFormat>{*found}, count, formats);
+        return writeList(std::span<const bfr::rhi::SwapchainFormat>{*found}, count, formats);
     });
 }
 

@@ -94,20 +94,41 @@ std::vector<VkQueueFamilyProperties> queueFamilies(const InstanceTable& vk, VkPh
     return families;
 }
 
-// One queue per family, present's included: roles on the same family share it,
-// and Vulkan takes one create info per family.
-std::vector<VkDeviceQueueCreateInfo> queueCreateInfos(const QueueFamilies& families, std::uint32_t present) {
-    static constexpr float kQueuePriority = 1.0F;
-    std::vector<VkDeviceQueueCreateInfo> queues;
-    for (const std::uint32_t family : {families.graphics, families.compute, families.transfer, present}) {
-        if (std::ranges::find(queues, family, &VkDeviceQueueCreateInfo::queueFamilyIndex) != queues.end()) {
-            continue;
+// The queues to open on each family: one on the graphics and present
+// families, and the counts asked for on the compute and transfer families.
+// Vulkan takes one create info per family, pointing at as many priorities.
+struct QueueCreateInfos {
+    std::vector<VkDeviceQueueCreateInfo> infos;
+    std::vector<float> priorities;
+};
+
+QueueCreateInfos queueCreateInfos(const QueueFamilies& families, std::uint32_t present, const DeviceQueues& wanted) {
+    QueueCreateInfos queues;
+    const auto add = [&queues](std::uint32_t family, std::uint32_t count) {
+        if (count == 0) {
+            return;
         }
-        VkDeviceQueueCreateInfo& queue = queues.emplace_back();
+        if (auto found = std::ranges::find(queues.infos, family, &VkDeviceQueueCreateInfo::queueFamilyIndex);
+            found != queues.infos.end()) {
+            found->queueCount = std::max(found->queueCount, count);
+            return;
+        }
+        VkDeviceQueueCreateInfo& queue = queues.infos.emplace_back();
         queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
         queue.queueFamilyIndex = family;
-        queue.queueCount = 1;
-        queue.pQueuePriorities = &kQueuePriority;
+        queue.queueCount = count;
+    };
+    add(families.graphics, 1);
+    add(present, 1);
+    add(families.compute, wanted.compute);
+    add(families.transfer, wanted.copy);
+    std::uint32_t most = 1;
+    for (const VkDeviceQueueCreateInfo& queue : queues.infos) {
+        most = std::max(most, queue.queueCount);
+    }
+    queues.priorities.assign(most, 1.0F);
+    for (VkDeviceQueueCreateInfo& queue : queues.infos) {
+        queue.pQueuePriorities = queues.priorities.data();
     }
     return queues;
 }
@@ -393,7 +414,8 @@ std::span<const Adapter> VulkanRhi::adapters() const {
 }
 
 core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapter,
-                                                              const core::window::NativeWindow& presentTo) {
+                                                              const core::window::NativeWindow& presentTo,
+                                                              const DeviceQueues& wanted) {
     if (auto listed = checkAdapter(adapter); !listed) {
         return std::unexpected(std::move(listed.error()));
     }
@@ -412,6 +434,24 @@ core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapte
         return core::failure(core::ErrorCode::RhiPresentUnsupported,
                              std::format("no queue family on {} presents to the window", listed.name));
     }
+    if (wanted.compute != 0) {
+        const std::uint32_t has = families->compute == families->graphics ? 0
+                                                                          : properties[families->compute].queueCount;
+        if (has < wanted.compute) {
+            return core::failure(core::ErrorCode::RhiUnsupported,
+                                 std::format("{} has {} compute queues; {} were asked for", listed.name, has,
+                                             wanted.compute));
+        }
+    }
+    if (wanted.copy != 0) {
+        const bool dedicated = families->transfer != families->graphics && families->transfer != families->compute;
+        const std::uint32_t has = dedicated ? properties[families->transfer].queueCount : 0;
+        if (has < wanted.copy) {
+            return core::failure(core::ErrorCode::RhiUnsupported,
+                                 std::format("{} has {} copy queues; {} were asked for", listed.name, has,
+                                             wanted.copy));
+        }
+    }
     const auto available = deviceExtensions(vk_, physicalDevice);
     if (!available) {
         return failure(core::ErrorCode::RhiDeviceFailed,
@@ -423,13 +463,13 @@ core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapte
         extensions.push_back(kPortabilitySubset);
     }
 
-    const auto queues = queueCreateInfos(*families, *families->present);
+    const auto queues = queueCreateInfos(*families, *families->present, wanted);
     const FloorFeatures features;
     VkDeviceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     info.pNext = &features.head();
-    info.queueCreateInfoCount = static_cast<std::uint32_t>(queues.size());
-    info.pQueueCreateInfos = queues.data();
+    info.queueCreateInfoCount = static_cast<std::uint32_t>(queues.infos.size());
+    info.pQueueCreateInfos = queues.infos.data();
     info.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
     info.ppEnabledExtensionNames = extensions.data();
 
@@ -439,9 +479,9 @@ core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapte
         return failure(core::ErrorCode::RhiDeviceFailed,
                        {.call = std::format("vkCreateDevice on {}", listed.name), .result = result});
     }
-    BFR_LOG_INFO(logger(), "device on {}, queue families {}, extensions: {}", listed.name, familyList(queues),
+    BFR_LOG_INFO(logger(), "device on {}, queue families {}, extensions: {}", listed.name, familyList(queues.infos),
                  core::text::join(extensions, ", "));
-    auto made = VulkanDevice::create(*this, physicalDevice, device, *families, hasBudget_[adapter]);
+    auto made = VulkanDevice::create(*this, physicalDevice, device, *families, wanted, hasBudget_[adapter]);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }
@@ -455,12 +495,13 @@ core::Result<FormatCaps> VulkanRhi::formatCaps(std::size_t adapter, Format forma
     return readFormatCaps(vk_, physicalDevices_[adapter], format);
 }
 
-core::Result<SurfaceCaps> VulkanRhi::surfaceCaps(std::size_t adapter, const core::window::NativeWindow& window) const {
+core::Result<SwapchainCaps> VulkanRhi::swapchainCaps(std::size_t adapter,
+                                                     const core::window::NativeWindow& window) const {
     return askAboutSurface(adapter, window, readSurfaceCaps);
 }
 
-core::Result<std::vector<SurfaceFormat>> VulkanRhi::surfaceFormats(std::size_t adapter,
-                                                                   const core::window::NativeWindow& window) const {
+core::Result<std::vector<SwapchainFormat>> VulkanRhi::swapchainFormats(std::size_t adapter,
+                                                                       const core::window::NativeWindow& window) const {
     return askAboutSurface(adapter, window, readSurfaceFormats);
 }
 
@@ -534,7 +575,7 @@ core::Result<bool> VulkanRhi::presents(VkPhysicalDevice adapter, std::uint32_t f
     VkBool32 supported = VK_FALSE;
     if (const VkResult result = vk_.vkGetPhysicalDeviceSurfaceSupportKHR(adapter, family, surface.handle(), &supported);
         result != VK_SUCCESS) {
-        return failure(core::ErrorCode::RhiSurfaceFailed,
+        return failure(core::ErrorCode::RhiWindowFailed,
                        {.call = "vkGetPhysicalDeviceSurfaceSupportKHR", .result = result});
     }
     return supported == VK_TRUE;

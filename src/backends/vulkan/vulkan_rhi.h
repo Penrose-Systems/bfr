@@ -43,12 +43,13 @@ public:
     VulkanRhi& operator=(VulkanRhi&&) = delete;
 
     [[nodiscard]] std::span<const Adapter> adapters() const override;
-    [[nodiscard]] core::Result<std::unique_ptr<Device>> createDevice(
-        std::size_t adapter, const core::window::NativeWindow& presentTo) override;
+    [[nodiscard]] core::Result<std::unique_ptr<Device>> createDevice(std::size_t adapter,
+                                                                     const core::window::NativeWindow& presentTo,
+                                                                     const DeviceQueues& queues) override;
     [[nodiscard]] core::Result<FormatCaps> formatCaps(std::size_t adapter, Format format) const override;
-    [[nodiscard]] core::Result<SurfaceCaps> surfaceCaps(std::size_t adapter,
-                                                        const core::window::NativeWindow& window) const override;
-    [[nodiscard]] core::Result<std::vector<SurfaceFormat>> surfaceFormats(
+    [[nodiscard]] core::Result<SwapchainCaps> swapchainCaps(std::size_t adapter,
+                                                            const core::window::NativeWindow& window) const override;
+    [[nodiscard]] core::Result<std::vector<SwapchainFormat>> swapchainFormats(
         std::size_t adapter, const core::window::NativeWindow& window) const override;
 
     using Rhi::config;

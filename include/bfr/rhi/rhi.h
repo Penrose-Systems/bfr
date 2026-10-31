@@ -92,12 +92,13 @@ public:
     /// graphics queue presents to presentTo where a queue family can, else a
     /// queue of its own does; with no window, graphics presents. Fails with
     /// RhiAdapterOutOfRange when adapter is not an index into adapters(),
-    /// RhiSurfaceFailed as Device::createSwapchain describes,
-    /// RhiPresentUnsupported when no queue family presents to presentTo, and
-    /// RhiDeviceFailed when the adapter has no graphics queue or the API
-    /// refuses the device.
+    /// RhiWindowFailed as Device::createSwapchain describes,
+    /// RhiPresentUnsupported when no queue family presents to presentTo,
+    /// RhiUnsupported when the adapter has fewer compute or copy queues than
+    /// queues asks for, and RhiDeviceFailed when the adapter has no graphics
+    /// queue or the API refuses the device.
     [[nodiscard]] virtual core::Result<std::unique_ptr<Device>> createDevice(
-        std::size_t adapter, const core::window::NativeWindow& presentTo) = 0;
+        std::size_t adapter, const core::window::NativeWindow& presentTo, const DeviceQueues& queues) = 0;
 
     // The queries below fail with RhiAdapterOutOfRange when adapter is not an
     // index into adapters(). The API answers each afresh.
@@ -108,15 +109,15 @@ public:
     [[nodiscard]] virtual core::Result<FormatCaps> formatCaps(std::size_t adapter, Format format) const = 0;
 
     /// What a swapchain for window may be on adapters()[adapter]. Fails with
-    /// RhiSurfaceFailed as Device::createSwapchain describes, or when a query
+    /// RhiWindowFailed as Device::createSwapchain describes, or when a query
     /// fails.
-    [[nodiscard]] virtual core::Result<SurfaceCaps> surfaceCaps(std::size_t adapter,
-                                                                const core::window::NativeWindow& window) const = 0;
+    [[nodiscard]] virtual core::Result<SwapchainCaps> swapchainCaps(std::size_t adapter,
+                                                                    const core::window::NativeWindow& window) const = 0;
 
     /// The formats and color spaces a swapchain for window may use on
     /// adapters()[adapter], those BFR has names for, in the API's order. Fails
-    /// as surfaceCaps does.
-    [[nodiscard]] virtual core::Result<std::vector<SurfaceFormat>> surfaceFormats(
+    /// as swapchainCaps does.
+    [[nodiscard]] virtual core::Result<std::vector<SwapchainFormat>> swapchainFormats(
         std::size_t adapter, const core::window::NativeWindow& window) const = 0;
 
 protected:

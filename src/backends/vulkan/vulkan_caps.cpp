@@ -586,18 +586,18 @@ std::optional<ColorSpace> colorSpaceOf(VkColorSpaceKHR colorSpace) {
     return std::nullopt;
 }
 
-SurfaceRotation rotationOf(VkSurfaceTransformFlagBitsKHR transform) {
+DisplayRotation rotationOf(VkSurfaceTransformFlagBitsKHR transform) {
     switch (transform) {
         case VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR:
-            return SurfaceRotation::None;
+            return DisplayRotation::None;
         case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
-            return SurfaceRotation::Rotate90;
+            return DisplayRotation::Rotate90;
         case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
-            return SurfaceRotation::Rotate180;
+            return DisplayRotation::Rotate180;
         case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
-            return SurfaceRotation::Rotate270;
+            return DisplayRotation::Rotate270;
         default:
-            return SurfaceRotation::Other;
+            return DisplayRotation::Other;
     }
 }
 
@@ -700,11 +700,11 @@ core::Result<FormatCaps> readFormatCaps(const InstanceTable& vk, VkPhysicalDevic
     return caps;
 }
 
-core::Result<SurfaceCaps> readSurfaceCaps(const InstanceTable& vk, VkPhysicalDevice adapter, VkSurfaceKHR surface) {
+core::Result<SwapchainCaps> readSurfaceCaps(const InstanceTable& vk, VkPhysicalDevice adapter, VkSurfaceKHR surface) {
     VkSurfaceCapabilitiesKHR capabilities{};
     if (const VkResult result = vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(adapter, surface, &capabilities);
         result != VK_SUCCESS) {
-        return failure(core::ErrorCode::RhiSurfaceFailed,
+        return failure(core::ErrorCode::RhiWindowFailed,
                        {.call = "vkGetPhysicalDeviceSurfaceCapabilitiesKHR", .result = result});
     }
     const auto modes = listAll<VkPresentModeKHR>(
@@ -713,18 +713,18 @@ core::Result<SurfaceCaps> readSurfaceCaps(const InstanceTable& vk, VkPhysicalDev
             return vk.vkGetPhysicalDeviceSurfacePresentModesKHR(adapter, surface, count, listed);
         });
     if (!modes) {
-        return failure(core::ErrorCode::RhiSurfaceFailed, modes.error());
+        return failure(core::ErrorCode::RhiWindowFailed, modes.error());
     }
     return surfaceCapsOf(capabilities, *modes);
 }
 
-SurfaceCaps surfaceCapsOf(const VkSurfaceCapabilitiesKHR& capabilities,
-                          std::span<const VkPresentModeKHR> presentModes) {
+SwapchainCaps surfaceCapsOf(const VkSurfaceCapabilitiesKHR& capabilities,
+                            std::span<const VkPresentModeKHR> presentModes) {
     const auto presents = [presentModes](VkPresentModeKHR mode) {
         return std::ranges::find(presentModes, mode) != presentModes.end();
     };
     const VkCompositeAlphaFlagsKHR alpha = capabilities.supportedCompositeAlpha;
-    return SurfaceCaps{
+    return SwapchainCaps{
         .minImageCount = capabilities.minImageCount,
         .maxImageCount = capabilities.maxImageCount,
         .width = capabilities.currentExtent.width,
@@ -745,8 +745,8 @@ SurfaceCaps surfaceCapsOf(const VkSurfaceCapabilitiesKHR& capabilities,
     };
 }
 
-core::Result<std::vector<SurfaceFormat>> readSurfaceFormats(const InstanceTable& vk, VkPhysicalDevice adapter,
-                                                            VkSurfaceKHR surface) {
+core::Result<std::vector<SwapchainFormat>> readSurfaceFormats(const InstanceTable& vk, VkPhysicalDevice adapter,
+                                                              VkSurfaceKHR surface) {
     const auto listed = listAll<VkSurfaceFormatKHR>("vkGetPhysicalDeviceSurfaceFormatsKHR",
                                                     [&vk, adapter, surface](std::uint32_t* count,
                                                                             VkSurfaceFormatKHR* formats) {
@@ -754,13 +754,13 @@ core::Result<std::vector<SurfaceFormat>> readSurfaceFormats(const InstanceTable&
                                                                                                        count, formats);
                                                     });
     if (!listed) {
-        return failure(core::ErrorCode::RhiSurfaceFailed, listed.error());
+        return failure(core::ErrorCode::RhiWindowFailed, listed.error());
     }
     return surfaceFormatsOf(*listed);
 }
 
-std::vector<SurfaceFormat> surfaceFormatsOf(std::span<const VkSurfaceFormatKHR> formats) {
-    std::vector<SurfaceFormat> named;
+std::vector<SwapchainFormat> surfaceFormatsOf(std::span<const VkSurfaceFormatKHR> formats) {
+    std::vector<SwapchainFormat> named;
     for (const VkSurfaceFormatKHR& vulkan : formats) {
         const auto format = formatOf(vulkan.format);
         const auto colorSpace = colorSpaceOf(vulkan.colorSpace);

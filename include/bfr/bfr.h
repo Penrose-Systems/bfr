@@ -64,10 +64,10 @@ typedef enum bfr_result {
     BFR_RESULT_ERROR_DEVICE_LOST = -8,
     // A handle is stale or destroyed.
     BFR_RESULT_ERROR_INVALID_HANDLE = -9,
-    // The API refused a surface for the window, or failed when asked about it.
-    BFR_RESULT_ERROR_SURFACE_FAILED = -10,
-    // The window's surface is gone; recreate the swapchain.
-    BFR_RESULT_ERROR_SURFACE_LOST = -11,
+    // The backend refused the window, or failed when asked about it.
+    BFR_RESULT_ERROR_WINDOW_FAILED = -10,
+    // The window is gone to the backend; recreate the swapchain.
+    BFR_RESULT_ERROR_WINDOW_LOST = -11,
     // The device's queue cannot present to the window.
     BFR_RESULT_ERROR_PRESENT_UNSUPPORTED = -12,
     // The backend refused to create or resize the swapchain.
@@ -302,21 +302,21 @@ typedef enum bfr_color_space {
 } bfr_color_space;
 
 // How a window's display is turned relative to its natural orientation.
-typedef enum bfr_surface_rotation {
+typedef enum bfr_display_rotation {
     // Not turned.
-    BFR_SURFACE_ROTATION_NONE = 0,
+    BFR_DISPLAY_ROTATION_NONE = 0,
     // Turned 90 degrees clockwise.
-    BFR_SURFACE_ROTATION_ROTATE_90 = 1,
+    BFR_DISPLAY_ROTATION_ROTATE_90 = 1,
     // Turned 180 degrees.
-    BFR_SURFACE_ROTATION_ROTATE_180 = 2,
+    BFR_DISPLAY_ROTATION_ROTATE_180 = 2,
     // Turned 270 degrees clockwise.
-    BFR_SURFACE_ROTATION_ROTATE_270 = 3,
+    BFR_DISPLAY_ROTATION_ROTATE_270 = 3,
     // Mirrored, or left to the platform.
-    BFR_SURFACE_ROTATION_OTHER = 4,
-    BFR_SURFACE_ROTATION_FORCE32 = 0x7FFFFFFF
-} bfr_surface_rotation;
+    BFR_DISPLAY_ROTATION_OTHER = 4,
+    BFR_DISPLAY_ROTATION_FORCE32 = 0x7FFFFFFF
+} bfr_display_rotation;
 
-// How a swapchain presents. Which ones a window allows is in bfr_surface_caps.
+// How a swapchain presents. Which ones a window allows is in bfr_swapchain_caps.
 typedef enum bfr_present_mode {
     // Presents wait for vertical blank and queue up. Always available.
     BFR_PRESENT_MODE_FIFO = 0,
@@ -329,7 +329,7 @@ typedef enum bfr_present_mode {
     BFR_PRESENT_MODE_FORCE32 = 0x7FFFFFFF
 } bfr_present_mode;
 
-// How a window blends a swapchain's alpha. Which ones a window allows is in bfr_surface_caps.
+// How a window blends a swapchain's alpha. Which ones a window allows is in bfr_swapchain_caps.
 typedef enum bfr_alpha_mode {
     // The window ignores alpha.
     BFR_ALPHA_MODE_OPAQUE = 0,
@@ -341,6 +341,17 @@ typedef enum bfr_alpha_mode {
     BFR_ALPHA_MODE_INHERIT = 3,
     BFR_ALPHA_MODE_FORCE32 = 0x7FFFFFFF
 } bfr_alpha_mode;
+
+// What a queue runs.
+typedef enum bfr_queue_type {
+    // Graphics, compute and copies.
+    BFR_QUEUE_TYPE_GRAPHICS = 0,
+    // Compute and copies, beside the graphics queue.
+    BFR_QUEUE_TYPE_COMPUTE = 1,
+    // Copies alone.
+    BFR_QUEUE_TYPE_COPY = 2,
+    BFR_QUEUE_TYPE_FORCE32 = 0x7FFFFFFF
+} bfr_queue_type;
 
 // What an attachment holds when rendering begins.
 typedef enum bfr_load_op {
@@ -401,9 +412,17 @@ typedef struct bfr_swapchain {
     uint64_t bits;
 } bfr_swapchain;
 
-// Commands recorded for the GPU, from bfr_begin_commands until bfr_submit sends them. Calls on one
-// command list must not overlap; the caller synchronizes them. A generational handle; 0 is never
-// valid.
+// Where command lists for one queue are recorded from: the memory they record into, given back to
+// the pool by bfr_reset_command_pool once the GPU has run them. Calls on one pool, and recording on
+// the lists it made, must not overlap; the caller synchronizes them. Different pools may be used
+// from different threads at once. A generational handle; 0 is never valid.
+typedef struct bfr_command_pool {
+    uint64_t bits;
+} bfr_command_pool;
+
+// Commands recorded for the GPU, from bfr_begin_commands until bfr_submit sends them to the queue
+// of the pool they came from. Calls on one command list must not overlap; the caller synchronizes
+// them. A generational handle; 0 is never valid.
 typedef struct bfr_command_list {
     uint64_t bits;
 } bfr_command_list;
@@ -451,13 +470,19 @@ typedef struct bfr_window {
     bfr_window_system system;
 } bfr_window;
 
-// How to open an adapter.
+// How to open an adapter. The device's queues are numbered: the graphics queue is 0, then the
+// compute queues, then the copy queues, in the order asked for here.
 typedef struct bfr_device_desc {
     const bfr_chain* next;
     // Index into the instance's adapter list.
     uint32_t adapter;
     // The window the device must be able to present to; all zero opens it without presenting.
     bfr_window window;
+    // Compute queues to open beside the graphics queue; 0 is none. Fails with error_unsupported
+    // when the adapter has fewer; bfr_caps.queues says how many it has.
+    uint32_t compute_queues;
+    // Copy queues to open; 0 is none. Fails with error_unsupported when the adapter has fewer.
+    uint32_t copy_queues;
 } bfr_device_desc;
 
 // How to create a swapchain.
@@ -505,11 +530,40 @@ typedef struct bfr_rendering_desc {
     float clear_color[4];
 } bfr_rendering_desc;
 
+// How to create a command pool.
+typedef struct bfr_command_pool_desc {
+    const bfr_chain* next;
+    // The queue its lists record for; 0 is the graphics queue.
+    uint32_t queue;
+} bfr_command_pool_desc;
+
+// A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was submitted
+// has run. An all-zero token has already completed.
+typedef struct bfr_token {
+    // Index of the queue on the device; 0 is the graphics queue.
+    uint32_t queue;
+    uint64_t value;
+} bfr_token;
+
+// What to send to a queue.
+typedef struct bfr_submit_desc {
+    const bfr_chain* next;
+    // The queue to send to; 0 is the graphics queue.
+    uint32_t queue;
+    // Recorded from pools on the same queue; the GPU runs them in this order. An array of
+    // command_list_count elements.
+    const bfr_command_list* command_lists;
+    uint32_t command_list_count;
+    // The GPU passes these before it runs the lists. An array of wait_count elements. May be null.
+    const bfr_token* waits;
+    uint32_t wait_count;
+} bfr_submit_desc;
+
 // Which window to ask about.
-typedef struct bfr_surface_desc {
+typedef struct bfr_swapchain_query {
     const bfr_chain* next;
     bfr_window window;
-} bfr_surface_desc;
+} bfr_swapchain_query;
 
 // What an adapter is.
 typedef struct bfr_caps_info {
@@ -839,7 +893,7 @@ typedef struct bfr_format_caps {
 } bfr_format_caps;
 
 // What a window's swapchain may be, on one adapter.
-typedef struct bfr_surface_caps {
+typedef struct bfr_swapchain_caps {
     uint32_t min_image_count;
     // 0 for no limit.
     uint32_t max_image_count;
@@ -851,7 +905,7 @@ typedef struct bfr_surface_caps {
     uint32_t max_width;
     uint32_t max_height;
     // How the display is turned now; on phones the app may render turned to match.
-    bfr_surface_rotation rotation;
+    bfr_display_rotation rotation;
     // Presents wait for vertical blank and queue up. Always there.
     bfr_bool fifo;
     // As fifo, but a late frame presents at once, and may tear.
@@ -866,13 +920,13 @@ typedef struct bfr_surface_caps {
     bfr_bool alpha_postmultiplied;
     // The window system decides how alpha blends.
     bfr_bool alpha_inherit;
-} bfr_surface_caps;
+} bfr_swapchain_caps;
 
 // A format and color space a window's swapchain may use.
-typedef struct bfr_surface_format {
+typedef struct bfr_swapchain_format {
     bfr_format format;
     bfr_color_space color_space;
-} bfr_surface_format;
+} bfr_swapchain_format;
 
 // How much of one heap the process may use, and uses.
 typedef struct bfr_memory_budget_heap {
@@ -933,23 +987,23 @@ BFR_API bfr_result bfr_get_formats(
 // Writes what a swapchain for the window in desc may be on an adapter. Asks the window system each
 // time, since the window changes. Fails with present_unsupported when the adapter can't present to
 // the window.
-BFR_API bfr_result bfr_get_surface_caps(
+BFR_API bfr_result bfr_get_swapchain_caps(
     bfr_instance* instance,
     uint32_t adapter,
-    const bfr_surface_desc* desc,
-    bfr_surface_caps* caps);
+    const bfr_swapchain_query* desc,
+    bfr_swapchain_caps* caps);
 
 // Lists the formats and color spaces a swapchain for the window in desc may use on an adapter, the
 // order the window system gives. Only those BFR has names for. With formats null, writes how many
 // there are to count. Otherwise writes up to count of them, sets count to how many it wrote, and
-// returns incomplete if there were more. Fails as bfr_get_surface_caps does.
+// returns incomplete if there were more. Fails as bfr_get_swapchain_caps does.
 // formats: An array of count elements. May be null.
-BFR_API bfr_result bfr_get_surface_formats(
+BFR_API bfr_result bfr_get_swapchain_formats(
     bfr_instance* instance,
     uint32_t adapter,
-    const bfr_surface_desc* desc,
+    const bfr_swapchain_query* desc,
     uint32_t* count,
-    bfr_surface_format* formats);
+    bfr_swapchain_format* formats);
 
 // Writes how much memory the device's process may use and uses now. Fails with unsupported when the
 // driver cannot say.
@@ -997,9 +1051,27 @@ BFR_API bfr_result bfr_acquire(bfr_device* device, bfr_swapchain swapchain);
 // when the swapchain no longer matches its window; the image was still presented when it could be.
 BFR_API bfr_result bfr_present(bfr_device* device, bfr_swapchain swapchain);
 
-// Starts recording commands. The device holds a few command lists at once and waits for the GPU to
-// finish the oldest before reusing it.
-BFR_API bfr_result bfr_begin_commands(bfr_device* device, bfr_command_list* command_list);
+// Creates a command pool, as desc says.
+BFR_API bfr_result bfr_create_command_pool(
+    bfr_device* device,
+    const bfr_command_pool_desc* desc,
+    bfr_command_pool* command_pool);
+
+// Gives every list the pool made back to it, so bfr_begin_commands may use their memory again.
+// Fails with error_invalid_argument while a list from the pool is recording, or while the GPU has
+// not passed the token of the pool's last submit; bfr_wait on it first.
+BFR_API bfr_result bfr_reset_command_pool(bfr_device* device, bfr_command_pool command_pool);
+
+// Destroys a command pool and every list it made, once the GPU has finished with them; the handles
+// are invalid at once. A handle that is already destroyed does nothing. Not while another thread is
+// using the pool.
+BFR_API void bfr_destroy_command_pool(bfr_device* device, bfr_command_pool command_pool);
+
+// Starts recording a command list from the pool.
+BFR_API bfr_result bfr_begin_commands(
+    bfr_device* device,
+    bfr_command_pool command_pool,
+    bfr_command_list* command_list);
 
 // Begins rendering to the image bfr_acquire took from swapchain, as desc says. Ends with
 // bfr_end_rendering.
@@ -1012,9 +1084,18 @@ BFR_API bfr_result bfr_begin_rendering(
 // Ends the rendering bfr_begin_rendering began; the image is then ready to present.
 BFR_API bfr_result bfr_end_rendering(bfr_device* device, bfr_command_list command_list);
 
-// Sends the recorded commands to the GPU, which runs them in the order submitted. The command list
-// is gone afterwards.
-BFR_API bfr_result bfr_submit(bfr_device* device, bfr_command_list command_list);
+// Sends recorded command lists to a queue, which runs them after what it was sent before and after
+// the GPU passes the waits, and writes the token their completion signals. The command lists are
+// gone afterwards. Calls on one queue must not overlap; the caller synchronizes them. Different
+// queues may be sent to from different threads at once.
+// token: May be null.
+BFR_API bfr_result bfr_submit(bfr_device* device, const bfr_submit_desc* desc, bfr_token* token);
+
+// Blocks until the GPU has passed token, whichever queue it is on.
+BFR_API bfr_result bfr_wait(bfr_device* device, const bfr_token* token);
+
+// Writes whether the GPU has passed token, without blocking.
+BFR_API bfr_result bfr_poll(bfr_device* device, const bfr_token* token, bfr_bool* complete);
 
 // Discards a command list that was not submitted. A handle that is already submitted or destroyed
 // does nothing.

@@ -29,22 +29,21 @@ namespace {
 // The least images a swapchain on the null adapter may have.
 constexpr std::uint32_t kMinImages = 2;
 
-// SurfaceCaps::width and height when the swapchain's size sets the window's.
 constexpr std::uint32_t kSizeFromSwapchain = 0xFFFFFFFF;
 
 // The null adapter draws nothing, so a window on it has no largest size.
 constexpr std::uint32_t kNoLargest = std::numeric_limits<std::uint32_t>::max();
 
 constexpr std::array kSurfaceFormats{
-    SurfaceFormat{.format = Format::Bgra8Unorm, .colorSpace = ColorSpace::Srgb},
-    SurfaceFormat{.format = Format::Bgra8Srgb, .colorSpace = ColorSpace::Srgb},
-    SurfaceFormat{.format = Format::Rgba8Unorm, .colorSpace = ColorSpace::Srgb},
-    SurfaceFormat{.format = Format::Rgba8Srgb, .colorSpace = ColorSpace::Srgb},
+    SwapchainFormat{.format = Format::Bgra8Unorm, .colorSpace = ColorSpace::Srgb},
+    SwapchainFormat{.format = Format::Bgra8Srgb, .colorSpace = ColorSpace::Srgb},
+    SwapchainFormat{.format = Format::Rgba8Unorm, .colorSpace = ColorSpace::Srgb},
+    SwapchainFormat{.format = Format::Rgba8Srgb, .colorSpace = ColorSpace::Srgb},
 };
 
 } // namespace
 
-SurfaceCaps nullSurfaceCaps() {
+SwapchainCaps nullSurfaceCaps() {
     return {
         .minImageCount = kMinImages,
         .maxImageCount = 0,
@@ -54,7 +53,7 @@ SurfaceCaps nullSurfaceCaps() {
         .minHeight = 1,
         .maxWidth = kNoLargest,
         .maxHeight = kNoLargest,
-        .rotation = SurfaceRotation::None,
+        .rotation = DisplayRotation::None,
         .fifo = true,
         .fifoRelaxed = false,
         .mailbox = false,
@@ -66,7 +65,7 @@ SurfaceCaps nullSurfaceCaps() {
     };
 }
 
-std::span<const SurfaceFormat> nullSurfaceFormats() {
+std::span<const SwapchainFormat> nullSurfaceFormats() {
     return kSurfaceFormats;
 }
 
@@ -93,12 +92,13 @@ core::Result<void> NullRhi::checkAdapter(std::size_t adapter) const {
 }
 
 core::Result<std::unique_ptr<Device>> NullRhi::createDevice(std::size_t adapter,
-                                                            const core::window::NativeWindow& /*presentTo*/) {
+                                                            const core::window::NativeWindow& /*presentTo*/,
+                                                            const DeviceQueues& queues) {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     // The null device presents to every window, by presenting nowhere.
-    return std::make_unique<NullDevice>(*this);
+    return std::make_unique<NullDevice>(*this, queues);
 }
 
 core::Result<FormatCaps> NullRhi::formatCaps(std::size_t adapter, Format format) const {
@@ -109,26 +109,27 @@ core::Result<FormatCaps> NullRhi::formatCaps(std::size_t adapter, Format format)
     return FormatCaps{.format = format};
 }
 
-core::Result<SurfaceCaps> NullRhi::surfaceCaps(std::size_t adapter, const core::window::NativeWindow& window) const {
+core::Result<SwapchainCaps> NullRhi::swapchainCaps(std::size_t adapter,
+                                                   const core::window::NativeWindow& window) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (std::holds_alternative<std::monostate>(window)) {
-        return core::failure(core::ErrorCode::RhiSurfaceFailed, "there is no window");
+        return core::failure(core::ErrorCode::RhiWindowFailed, "there is no window");
     }
     return nullSurfaceCaps();
 }
 
-core::Result<std::vector<SurfaceFormat>> NullRhi::surfaceFormats(std::size_t adapter,
-                                                                 const core::window::NativeWindow& window) const {
+core::Result<std::vector<SwapchainFormat>> NullRhi::swapchainFormats(std::size_t adapter,
+                                                                     const core::window::NativeWindow& window) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (std::holds_alternative<std::monostate>(window)) {
-        return core::failure(core::ErrorCode::RhiSurfaceFailed, "there is no window");
+        return core::failure(core::ErrorCode::RhiWindowFailed, "there is no window");
     }
     const auto formats = nullSurfaceFormats();
-    return std::vector<SurfaceFormat>(formats.begin(), formats.end());
+    return std::vector<SwapchainFormat>(formats.begin(), formats.end());
 }
 
 } // namespace bfr::rhi::null

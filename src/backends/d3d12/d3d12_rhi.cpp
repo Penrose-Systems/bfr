@@ -226,7 +226,8 @@ core::Result<void> D3D12Rhi::checkAdapter(std::size_t adapter) const {
 }
 
 core::Result<std::unique_ptr<Device>> D3D12Rhi::createDevice(std::size_t adapter,
-                                                             const core::window::NativeWindow& presentTo) {
+                                                             const core::window::NativeWindow& presentTo,
+                                                             const DeviceQueues& queues) {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -239,7 +240,7 @@ core::Result<std::unique_ptr<Device>> D3D12Rhi::createDevice(std::size_t adapter
     }
     const D3D12Adapter& native = native_[adapter];
     const Caps& caps = adapters_[adapter].caps;
-    return D3D12Device::create(*this, native.device, native.adapter, caps.memory.heaps.size());
+    return D3D12Device::create(*this, native.device, native.adapter, caps.memory.heaps.size(), queues);
 }
 
 core::Result<FormatCaps> D3D12Rhi::formatCaps(std::size_t adapter, Format format) const {
@@ -249,7 +250,8 @@ core::Result<FormatCaps> D3D12Rhi::formatCaps(std::size_t adapter, Format format
     return formatCapsFor(native_[adapter].device.Get(), format);
 }
 
-core::Result<SurfaceCaps> D3D12Rhi::surfaceCaps(std::size_t adapter, const core::window::NativeWindow& window) const {
+core::Result<SwapchainCaps> D3D12Rhi::swapchainCaps(std::size_t adapter,
+                                                    const core::window::NativeWindow& window) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -259,16 +261,16 @@ core::Result<SurfaceCaps> D3D12Rhi::surfaceCaps(std::size_t adapter, const core:
     return surfaceCapsFor(tearing_);
 }
 
-core::Result<std::vector<SurfaceFormat>> D3D12Rhi::surfaceFormats(std::size_t adapter,
-                                                                  const core::window::NativeWindow& window) const {
+core::Result<std::vector<SwapchainFormat>> D3D12Rhi::swapchainFormats(std::size_t adapter,
+                                                                      const core::window::NativeWindow& window) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkWindow(window); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    const auto formats = d3d12::surfaceFormats();
-    return std::vector<SurfaceFormat>(formats.begin(), formats.end());
+    const auto formats = d3d12::swapchainFormats();
+    return std::vector<SwapchainFormat>(formats.begin(), formats.end());
 }
 
 } // namespace bfr::rhi::d3d12

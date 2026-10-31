@@ -14,23 +14,60 @@
 #include <windows.h>
 #include <wrl/client.h>
 
-#include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace bfr::rhi::d3d12 {
 
 class D3D12Rhi;
 
-/// Commands recorded on one frame's list: the swapchain rendering is open on,
-/// what becomes of its image when rendering ends, and every swapchain rendered
-/// to, whose images the submit marks as sent.
+/// A command pool: an allocator and a list for each list recording at once,
+/// since D3D12 lets one list record from an allocator at a time; how many are
+/// handed out since the last reset, the lists still recording, and the fence
+/// value its last submit signals.
+struct D3D12CommandPool {
+    struct Entry {
+        Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
+        Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> list;
+    };
+    std::uint32_t queue = 0;
+    std::vector<Entry> entries;
+    std::uint32_t used = 0;
+    std::vector<CommandListHandle> recording;
+    std::uint64_t lastSubmit = 0;
+};
+
+/// One of the device's queues: its ID3D12CommandQueue and the list type it
+/// takes, the fence each submit signals the next value of with the event waits
+/// use, the value last submitted, the array a submit is built in, and the
+/// allocators of pools destroyed while the GPU may still run their lists, each
+/// with the value that frees them. Used by one thread at a time under lock,
+/// which present shares; submitted is read from any thread.
+struct D3D12Queue {
+    QueueType type = QueueType::Graphics;
+    D3D12_COMMAND_LIST_TYPE listType = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
+    Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+    HANDLE event = nullptr;
+    std::atomic<std::uint64_t> submitted{0};
+    std::vector<ID3D12CommandList*> lists;
+    std::vector<std::pair<std::vector<D3D12CommandPool::Entry>, std::uint64_t>> retired;
+    std::atomic<std::uint32_t> retiredCount{0};
+    std::mutex lock;
+};
+
+/// Commands recorded on one list: the pool it came from, the swapchain
+/// rendering is open on, what becomes of its image when rendering ends, and
+/// every swapchain rendered to, whose images the submit marks as sent.
 struct D3D12CommandList {
-    std::uint32_t frame = 0;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> list;
+    CommandPoolHandle pool;
     std::optional<SwapchainHandle> rendering;
     StoreOp storeOp = StoreOp::Store;
     std::vector<SwapchainHandle> rendered;
@@ -39,11 +76,11 @@ struct D3D12CommandList {
 class D3D12Device final : public Device {
 public:
     /// A device on device, which rhi listed from adapter, with heapCount memory
-    /// heaps. Fails with RhiDeviceFailed when D3D12 gives no queue, fence, or
-    /// the lists a frame needs.
+    /// heaps, a graphics queue and the queues asked for. Fails with
+    /// RhiDeviceFailed when D3D12 gives no queue or fence.
     [[nodiscard]] static core::Result<std::unique_ptr<D3D12Device>> create(
         D3D12Rhi& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device, Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter,
-        std::size_t heapCount);
+        std::size_t heapCount, const DeviceQueues& queues);
 
     /// For create.
     D3D12Device(D3D12Rhi& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device,
@@ -61,65 +98,48 @@ public:
     [[nodiscard]] core::Result<void> destroySwapchain(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<void> acquire(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<void> present(SwapchainHandle swapchain) override;
-    [[nodiscard]] core::Result<CommandListHandle> beginCommands() override;
+    [[nodiscard]] core::Result<CommandPoolHandle> createCommandPool(std::uint32_t queue) override;
+    [[nodiscard]] core::Result<void> resetCommandPool(CommandPoolHandle commandPool) override;
+    [[nodiscard]] core::Result<void> destroyCommandPool(CommandPoolHandle commandPool) override;
+    [[nodiscard]] core::Result<CommandListHandle> beginCommands(CommandPoolHandle commandPool) override;
     [[nodiscard]] core::Result<void> beginRendering(CommandListHandle commandList, SwapchainHandle swapchain,
                                                     const RenderingDesc& desc) override;
     [[nodiscard]] core::Result<void> endRendering(CommandListHandle commandList) override;
-    [[nodiscard]] core::Result<void> submit(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
+    [[nodiscard]] core::Result<void> wait(Token token) override;
+    [[nodiscard]] core::Result<bool> poll(Token token) override;
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
-    // One command list that may be on the GPU: its allocator, which is reset
-    // before it records again, and the fence value its last submit signals.
-    struct Frame {
-        Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
-        Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> list;
-        std::uint64_t doneValue = 0;
-        // Whether a submit is on the GPU, and whether a command list records.
-        bool pending = false;
-        bool recording = false;
-    };
-
-    // Makes the queue, the fence and every frame's allocator and list.
-    [[nodiscard]] core::Result<void> open();
-    // Waits until the fence reaches value.
-    [[nodiscard]] core::Result<void> waitFor(std::uint64_t value);
-    // Waits for the frame's last submit, if one is pending.
-    [[nodiscard]] core::Result<void> waitFrame(Frame& frame);
+    [[nodiscard]] core::Result<void> open(const DeviceQueues& queues);
+    [[nodiscard]] core::Result<void> waitFor(D3D12Queue& queue, std::uint64_t value);
+    [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
+    [[nodiscard]] core::Result<void> checkToken(Token token) const;
+    void collectPools(D3D12Queue& queue);
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
-    // Closes the list of a frame that will not be submitted.
-    void discard(Frame& frame);
-    // The frame at index, which is less than kFramesInFlight.
-    [[nodiscard]] Frame& frameAt(std::uint32_t index);
-    // Fails with RhiInvalidHandle for a swapchain or command list this device
-    // no longer has.
+    void discard(ID3D12GraphicsCommandList* list);
     [[nodiscard]] core::Result<D3D12Swapchain*> swapchainFor(SwapchainHandle swapchain);
+    [[nodiscard]] core::Result<D3D12CommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<D3D12CommandList*> commandListFor(CommandListHandle commandList);
 
     D3D12Rhi* rhi_;
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
     Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter_;
     std::size_t heapCount_;
-    Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue_;
-    // Signaled by the queue after each submit, to the value submitted_ counts.
-    Microsoft::WRL::ComPtr<ID3D12Fence> fence_;
-    HANDLE event_ = nullptr;
-    std::uint64_t submitted_ = 0;
+    std::vector<std::unique_ptr<D3D12Queue>> queues_;
     // Room for a few windows' swapchains before the pool grows, and a limit no
     // tool should reach.
     static constexpr std::uint32_t kSwapchainCapacity = 4;
     static constexpr std::uint32_t kSwapchainLimit = 256;
     core::Pool<D3D12Swapchain, Swapchain> swapchains_;
-    // Two frames: one recording while the GPU runs the other.
-    static constexpr std::uint32_t kFramesInFlight = 2;
-    std::array<Frame, kFramesInFlight> frames_{};
-    std::uint32_t nextFrame_ = 0;
+    static constexpr std::uint32_t kCommandPoolCapacity = 4;
+    static constexpr std::uint32_t kCommandPoolLimit = 256;
+    static constexpr std::uint32_t kCommandListCapacity = 8;
+    static constexpr std::uint32_t kCommandListLimit = 4096;
+    core::Pool<D3D12CommandPool, CommandPool> commandPools_;
     core::Pool<D3D12CommandList, CommandList> commandLists_;
-    // The queue, fence and frames are used by one thread at a time; the
-    // device's functions may be called from several threads at once.
-    std::mutex lock_;
 };
 
 } // namespace bfr::rhi::d3d12

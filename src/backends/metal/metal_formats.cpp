@@ -10,11 +10,11 @@
 
 namespace bfr::rhi::metal {
 
-SurfaceCaps surfaceCapsFor() {
+SwapchainCaps surfaceCapsFor() {
     return {};
 }
 
-std::span<const SurfaceFormat> surfaceFormats() {
+std::span<const SwapchainFormat> swapchainFormats() {
     return {};
 }
 

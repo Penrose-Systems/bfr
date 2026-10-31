@@ -94,7 +94,8 @@ core::Result<void> MetalRhi::checkAdapter(std::size_t adapter) const {
 }
 
 core::Result<std::unique_ptr<Device>> MetalRhi::createDevice(std::size_t adapter,
-                                                             const core::window::NativeWindow& presentTo) {
+                                                             const core::window::NativeWindow& presentTo,
+                                                             const DeviceQueues& queues) {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -104,7 +105,7 @@ core::Result<std::unique_ptr<Device>> MetalRhi::createDevice(std::size_t adapter
             return std::unexpected(std::move(checked.error()));
         }
     }
-    return MetalDevice::create(*this, devices_[adapter]);
+    return MetalDevice::create(*this, devices_[adapter], queues);
 }
 
 core::Result<FormatCaps> MetalRhi::formatCaps(std::size_t adapter, Format format) const {
@@ -115,7 +116,8 @@ core::Result<FormatCaps> MetalRhi::formatCaps(std::size_t adapter, Format format
     return FormatCaps{.format = format};
 }
 
-core::Result<SurfaceCaps> MetalRhi::surfaceCaps(std::size_t adapter, const core::window::NativeWindow& window) const {
+core::Result<SwapchainCaps> MetalRhi::swapchainCaps(std::size_t adapter,
+                                                    const core::window::NativeWindow& window) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -125,16 +127,16 @@ core::Result<SurfaceCaps> MetalRhi::surfaceCaps(std::size_t adapter, const core:
     return surfaceCapsFor();
 }
 
-core::Result<std::vector<SurfaceFormat>> MetalRhi::surfaceFormats(std::size_t adapter,
-                                                                  const core::window::NativeWindow& window) const {
+core::Result<std::vector<SwapchainFormat>> MetalRhi::swapchainFormats(std::size_t adapter,
+                                                                      const core::window::NativeWindow& window) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkWindow(window); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    const auto formats = metal::surfaceFormats();
-    return std::vector<SurfaceFormat>(formats.begin(), formats.end());
+    const auto formats = metal::swapchainFormats();
+    return std::vector<SwapchainFormat>(formats.begin(), formats.end());
 }
 
 } // namespace bfr::rhi::metal

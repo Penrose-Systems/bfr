@@ -110,7 +110,7 @@ std::string failureOf(const core::Result<T>& result) {
 /// present to one at all: NVIDIA's driver has no headless surfaces.
 inline std::size_t headlessAdapter(const Rhi& rhi) {
     for (std::size_t adapter = 0; adapter < rhi.adapters().size(); ++adapter) {
-        const auto caps = rhi.surfaceCaps(adapter, core::window::Headless{});
+        const auto caps = rhi.swapchainCaps(adapter, core::window::Headless{});
         if (caps.has_value()) {
             return adapter;
         }
@@ -124,7 +124,7 @@ inline std::size_t headlessAdapter(const Rhi& rhi) {
 /// What a test swapchain on a headless window of rhi asks for: the defaults,
 /// with the fewest images the surface reports it takes, as a caller must set.
 inline SwapchainRequest swapchainRequest(const Rhi& rhi) {
-    const auto caps = rhi.surfaceCaps(headlessAdapter(rhi), core::window::Headless{});
+    const auto caps = rhi.swapchainCaps(headlessAdapter(rhi), core::window::Headless{});
     INFO(failureOf(caps));
     REQUIRE(caps.has_value());
     return {.imageCount = caps->minImageCount};
@@ -134,7 +134,7 @@ inline SwapchainRequest swapchainRequest(const Rhi& rhi) {
 /// present to it at all: NVIDIA's driver has no headless surfaces.
 inline std::unique_ptr<Device> presentingDevice(Rhi& rhi, const core::window::NativeWindow& window) {
     for (std::size_t adapter = 0; adapter < rhi.adapters().size(); ++adapter) {
-        auto device = rhi.createDevice(adapter, window);
+        auto device = rhi.createDevice(adapter, window, {});
         if (device.has_value()) {
             return std::move(*device);
         }

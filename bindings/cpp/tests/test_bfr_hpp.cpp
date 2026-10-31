@@ -15,6 +15,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -78,7 +79,7 @@ std::uint32_t headlessAdapter(const bfr::Instance& instance) {
     const auto adapters = instance.adapters();
     REQUIRE(adapters.has_value());
     for (std::uint32_t adapter = 0; adapter < adapters->size(); ++adapter) {
-        const auto caps = instance.surfaceCaps(adapter, {.window = kHeadless});
+        const auto caps = instance.swapchainCaps(adapter, {.window = kHeadless});
         if (caps.has_value()) {
             return adapter;
         }
@@ -92,7 +93,7 @@ std::uint32_t headlessAdapter(const bfr::Instance& instance) {
 // The fewest images a headless window takes on headlessAdapter, which a
 // swapchain on it must ask for.
 std::uint32_t fewestImages(const bfr::Instance& instance) {
-    const auto caps = instance.surfaceCaps(headlessAdapter(instance), {.window = kHeadless});
+    const auto caps = instance.swapchainCaps(headlessAdapter(instance), {.window = kHeadless});
     REQUIRE(caps.has_value());
     return caps->minImageCount;
 }
@@ -206,24 +207,33 @@ TEST_CASE("C++ API clears and presents a headless swapchain", "[cpp_api][gpu]") 
         REQUIRE(swapchain.has_value());
         REQUIRE(swapchain->resize(kWidth, kHeight).has_value());
 
+        auto pool = device.createCommandPool({});
+        INFO(failureOf(pool));
+        REQUIRE(pool.has_value());
+        bfr::Token last;
         for (int frame = 0; frame < 2; ++frame) {
             INFO("frame " << frame);
+            REQUIRE(device.wait(last).has_value());
+            REQUIRE(pool->reset().has_value());
             const auto acquired = swapchain->acquire();
             INFO(failureOf(acquired));
             REQUIRE(acquired.has_value());
-            auto commands = device.beginCommands();
+            auto commands = pool->beginCommands();
             INFO(failureOf(commands));
             REQUIRE(commands.has_value());
             CHECK(commands->beginRendering(*swapchain, {.loadOp = bfr::LoadOp::Clear, .clearColor = {1, 0, 0, 1}})
                       .has_value());
             CHECK(commands->endRendering().has_value());
-            const auto submitted = commands->submit();
+            const auto submitted = device.submit({.queue = 0, .commandLists = std::span{&*commands, 1}});
             INFO(failureOf(submitted));
             REQUIRE(submitted.has_value());
+            last = *submitted;
             const auto presented = swapchain->present();
             INFO(failureOf(presented));
             CHECK(presented.has_value());
         }
+        REQUIRE(device.wait(last).has_value());
+        CHECK(device.poll(last).value_or(false));
     }
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }
@@ -385,10 +395,10 @@ TEST_CASE("C++ API gives an adapter's caps, formats and surface caps", "[cpp_api
 
         const auto caps = instance.caps(adapter);
         const auto formats = instance.formats(adapter);
-        const auto surface = instance.surfaceCaps(adapter, {.window = kHeadless});
-        const auto surfaceFormats = instance.surfaceFormats(adapter, {.window = kHeadless});
+        const auto surface = instance.swapchainCaps(adapter, {.window = kHeadless});
+        const auto swapchainFormats = instance.swapchainFormats(adapter, {.window = kHeadless});
 
-        INFO(failureOf(caps) << failureOf(formats) << failureOf(surface) << failureOf(surfaceFormats));
+        INFO(failureOf(caps) << failureOf(formats) << failureOf(surface) << failureOf(swapchainFormats));
         REQUIRE(caps.has_value());
         CHECK(caps->info.name == listed.name);
         CHECK(caps->info.type == listed.type);
@@ -396,8 +406,8 @@ TEST_CASE("C++ API gives an adapter's caps, formats and surface caps", "[cpp_api
         CHECK(formats->front().format == bfr::Format::R8Unorm);
         REQUIRE(surface.has_value());
         CHECK(surface->fifo);
-        REQUIRE(surfaceFormats.has_value());
-        CHECK_FALSE(surfaceFormats->empty());
+        REQUIRE(swapchainFormats.has_value());
+        CHECK_FALSE(swapchainFormats->empty());
     }
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }

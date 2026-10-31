@@ -111,9 +111,13 @@ class Plan:
 
         self.out_structs = self._with_members(self._structs_passed("out"))
         self.in_structs = self._with_members(self._structs_passed("in"))
-        if self.out_structs & self.in_structs:
-            raise SpecError(f"{sorted(self.out_structs & self.in_structs)}: the C++ generator does not yet handle a "
-                            "struct passed both in and out")
+        # A struct of numbers and enums reads the same both ways; one with a
+        # string or a callback has a different C++ shape in each direction.
+        mixed = [name for name in sorted(self.out_structs & self.in_structs)
+                 if any(m["type"] == "string" or m["type"] in api.callbacks for m in api.structs[name]["members"])]
+        if mixed:
+            raise SpecError(f"{mixed}: the C++ generator does not yet handle a struct with a string or callback "
+                            "passed both in and out")
         # In the description's order, as everything rendered is: a set's order
         # changes from run to run.
         self.extensions = {
@@ -165,8 +169,10 @@ class Plan:
         if method.returned is not None and function.get("returns") != "result":
             raise SpecError(f"{name}: an out param needs the function to return result")
         returned = method.returned["type"] if method.returned else None
-        if returned in api.handles and api.handles[returned]["parent"] != method.owner:
-            raise SpecError(f"{name}: a {returned} is made by a method of its parent")
+        if returned in api.handles and api.handles[returned]["parent"] != method.owner and not (
+            method.owner in api.handles and api.handles[method.owner]["parent"] == api.handles[returned]["parent"]
+        ):
+            raise SpecError(f"{name}: a {returned} is made by a method of its parent or of a handle with that parent")
         method.inputs = [p for p in rest if p is not method.returned and p is not method.count]
         for param in method.inputs:
             if param.get("pointer") not in (None, "in") or param.get("array"):
@@ -212,8 +218,14 @@ class Plan:
         for member in members:
             where = f"{name}.{member['name']}"
             kind = member["type"]
-            if member.get("pointer") or member.get("array"):
-                raise SpecError(f"{where}: the C++ generator does not yet handle pointer or array members")
+            if member.get("array"):
+                if member.get("pointer") != "in" or name in self.out_structs:
+                    raise SpecError(f"{where}: the C++ generator handles an array member only passed in")
+                if kind == "string" or kind in api.callbacks or kind in api.objects:
+                    raise SpecError(f"{where}: the C++ generator does not yet handle an array of {kind}")
+                continue
+            if member.get("pointer"):
+                raise SpecError(f"{where}: the C++ generator does not yet handle pointer members")
             if kind in api.callbacks:
                 if name in self.out_structs:
                     raise SpecError(f"{where}: a callback is passed in, not out")
@@ -233,6 +245,18 @@ class Plan:
 
     def callbacks_of(self, struct: str) -> list[dict[str, Any]]:
         return [m for m in self.api.structs[struct]["members"] if m["type"] in self.api.callbacks]
+
+    def arrays_of(self, struct: str) -> list[dict[str, Any]]:
+        return [m for m in self.api.structs[struct]["members"] if m.get("array")]
+
+    def holds_handles(self, struct: str) -> bool:
+        """Whether the struct's C form is built from handle classes, so its
+        conversion must follow their definitions."""
+        return any(m["type"] in self.api.handles for m in self.arrays_of(struct))
+
+    def counts_of(self, struct: str) -> set[str]:
+        """The members that only count an array member."""
+        return {m["array"] for m in self.arrays_of(struct)}
 
     def is_extensible(self, struct: str) -> bool:
         return struct in self.extensions
@@ -344,6 +368,7 @@ class Renderer:
             "#include <expected>",
             "#include <functional>",
             "#include <memory>",
+            "#include <span>",
             "#include <string>",
             "#include <string_view>",
             "#include <utility>",
@@ -393,6 +418,13 @@ class Renderer:
             self.object_class(name)
         for name in api.handles:
             self.handle_class(name)
+        late = [name for name in sorted(self.plan.in_structs, key=list(api.structs).index)
+                if self.plan.holds_handles(name)]
+        if late:
+            self.emit("", "namespace detail {")
+            for name in late:
+                self.to_c_function(name, api.structs[name])
+            self.emit("", "} // namespace detail")
         for owner, methods in self.plan.methods.items():
             for method in methods:
                 self.method_definition(owner, method)
@@ -423,14 +455,18 @@ class Renderer:
         self.emit("")
         self.emit(*doc(text))
         self.emit(f"struct {pascal(name)} {{")
+        counts = self.plan.counts_of(name)
         for member in struct["members"]:
-            if member.get("user_data"):
+            if member.get("user_data") or member["name"] in counts:
                 continue
             member_doc = member.get("doc", "")
             if member.get("optional") and member["type"] in api.callbacks:
                 member_doc = (member_doc + " May be empty.").strip()
             if member_doc:
                 self.emit(*doc(member_doc, "    "))
+            if member.get("array"):
+                self.emit(f"    std::span<const {cpp_type(api, member['type'])}> {camel(member['name'])}{{}};")
+                continue
             self.emit(f"    {member_type(api, member, out)} {camel(member['name'])}{{}};")
         self.emit("};")
 
@@ -457,7 +493,8 @@ class Renderer:
                 "}",
             )
         for name in sorted(plan.in_structs, key=list(api.structs).index):
-            self.to_c_function(name, api.structs[name])
+            if not self.plan.holds_handles(name):
+                self.to_c_function(name, api.structs[name])
         for name in sorted(plan.out_structs, key=list(api.structs).index):
             struct = api.structs[name]
             members = [f".{camel(m['name'])} = {member_from_c(api, m, 'value.' + m['name'])}"
@@ -481,8 +518,23 @@ class Renderer:
         if struct.get("extends"):
             fields.append(f".chain = {{.next = nullptr, .type = {macro('struct_type', name)}}}")
         params += [f"{pascal(c['type'])}* {camel(c['name'])}" for c in callbacks]
+        arrays = self.plan.arrays_of(name)
+        params += [f"detail::SmallBuffer<{c_type(a['type'])}>& {camel(a['name'])}" for a in arrays]
+        counts = {a["array"]: a for a in arrays}
         for member in struct["members"]:
-            if member["type"] in api.callbacks:
+            if member.get("array"):
+                element = member["type"]
+                if element in api.handles:
+                    convert = "element.get()"
+                else:
+                    convert = to_c(api, element, "element")
+                fields.append(f".{member['name']} = {camel(member['name'])}.fill(value.{camel(member['name'])}, "
+                              f"[](const {cpp_type(api, element)}& element) {{ return {convert}; }})")
+            elif member["name"] in counts:
+                array = counts[member["name"]]
+                fields.append(f".{member['name']} = static_cast<{c_type(member['type'])}>("
+                              f"value.{camel(array['name'])}.size())")
+            elif member["type"] in api.callbacks:
                 fields.append(f".{member['name']} = {camel(member['name'])} != nullptr ? "
                               f"&{camel(member['type'])}Trampoline : nullptr")
             elif member.get("user_data"):
@@ -670,6 +722,10 @@ class Renderer:
                                     "of a static create")
                 callback_state = state
             c_value = f"c{pascal(param['name'])}"
+            for array in self.plan.arrays_of(kind):
+                buffer = f"{c_value}{pascal(array['name'])}"
+                self.emit(f"    detail::SmallBuffer<{c_type(array['type'])}> {buffer};")
+                extra.append(buffer)
             self.emit(f"    const {c_name(kind)} {c_value} = detail::toC({', '.join([name, *extra])});")
             args.append(f"&{c_value}")
         if callback_state is not None:
