@@ -24,7 +24,8 @@ namespace bfr::core {
 /// pool grows a page at a time, logging a warning with its new capacity, a
 /// sign that capacity should be larger. It holds at most maxCapacity values,
 /// counting retired ones not yet collected; past that emplace fails. Values
-/// never move while they live.
+/// never move while they live. Only growth allocates, so a pool used on the
+/// frame path is made with capacity equal to maxCapacity.
 ///
 /// Threads: every call is safe from any thread at once. find takes no lock.
 /// The other calls lock only to take or give back a slot; values are made and
@@ -57,7 +58,9 @@ public:
                           maxCapacity_);
         }
         const std::scoped_lock lock{mutex_};
+        owned_.reserve(maxPages());
         addPages(std::min(pagesFor(capacity), maxPages()));
+        collecting_.reserve(std::size_t{pageCount_} * kPageSize);
     }
 
     ~Pool() { clear(); }
@@ -141,25 +144,30 @@ public:
     /// Destroys the values retired with a submission ID at or before completed
     /// and frees their slots.
     void collect(std::uint64_t completed) {
-        std::vector<std::uint32_t> ready;
+        // Values are destroyed outside the lock, since they may use the pool;
+        // the slots being freed wait in collecting_, which has room for every
+        // slot. It grows only after the pool has, which a pool made at its
+        // maximum never does. One collect runs at a time.
+        const std::scoped_lock collectLock{collectMutex_};
         {
             const std::scoped_lock lock{mutex_};
+            collecting_.reserve(std::size_t{pageCount_} * kPageSize);
             const auto done = std::ranges::partition(retired_, [completed](const Retired& retired) {
                 return retired.submissionId > completed;
             });
-            ready.reserve(done.size());
             for (const Retired& retired : done) {
-                ready.push_back(retired.index);
+                collecting_.push_back(retired.index);
             }
             retired_.erase(done.begin(), done.end());
         }
-        for (const std::uint32_t index : ready) {
+        for (const std::uint32_t index : collecting_) {
             std::destroy_at(&entryAt(index).value);
         }
         const std::scoped_lock lock{mutex_};
-        for (const std::uint32_t index : ready) {
+        for (const std::uint32_t index : collecting_) {
             give(index);
         }
+        collecting_.clear();
     }
 
     /// Retires every live value and destroys every retired one, whatever its
@@ -294,6 +302,8 @@ private:
         for (std::uint32_t index = pageCount_ * kPageSize; index-- > first;) {
             pushFree(index);
         }
+        // Room to retire every slot, so retire never allocates.
+        retired_.reserve(std::size_t{pageCount_} * kPageSize);
     }
 
     std::string_view name_;
@@ -311,6 +321,9 @@ private:
     // Slots off the free list: live, being made, or retired and not collected.
     std::uint32_t taken_ = 0;
     std::vector<Retired> retired_;
+    // Taken before mutex_, by collect only. Guards collecting_.
+    std::mutex collectMutex_;
+    std::vector<std::uint32_t> collecting_;
 };
 
 } // namespace bfr::core

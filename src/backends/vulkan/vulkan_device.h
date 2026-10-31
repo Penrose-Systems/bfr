@@ -7,6 +7,8 @@
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/swapchain.h"
+#include "core/fixed_vector.h"
+#include "core/inline_vector.h"
 #include "vulkan/queue_families.h"
 #include "vulkan/vulkan_swapchain.h"
 
@@ -24,12 +26,14 @@ namespace bfr::rhi::vulkan {
 
 class VulkanInstance;
 
-/// A swapchain a command list rendered to, and the layout its image is in
-/// after the commands so far; the swapchain takes it once the submit is sent.
-struct RenderedSwapchain {
-    SwapchainHandle swapchain;
-    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
-};
+// Room for a few windows' swapchains and command pools before their pools
+// grow, and limits no tool should reach. Command lists are made on the frame
+// path, so their pool, and every array a frame fills, is made at its limit.
+inline constexpr std::uint32_t kSwapchainCapacity = 4;
+inline constexpr std::uint32_t kSwapchainLimit = 256;
+inline constexpr std::uint32_t kCommandPoolCapacity = 4;
+inline constexpr std::uint32_t kCommandPoolLimit = 256;
+inline constexpr std::uint32_t kCommandListLimit = 4096;
 
 /// A command pool and the buffers allocated from it: how many are handed out
 /// since the last reset, the lists still recording from it, and the timeline
@@ -48,9 +52,9 @@ public:
 
     VkCommandPool pool;
     std::uint32_t queue;
-    std::vector<VkCommandBuffer> buffers;
+    core::FixedVector<VkCommandBuffer> buffers{kCommandListLimit};
     std::uint32_t used = 0;
-    std::vector<CommandListHandle> recording;
+    core::FixedVector<CommandListHandle> recording{kCommandListLimit};
     std::uint64_t lastSubmit = 0;
 
 private:
@@ -69,9 +73,12 @@ struct VulkanQueue {
     VkQueue queue = VK_NULL_HANDLE;
     VkSemaphore timeline = VK_NULL_HANDLE;
     std::atomic<std::uint64_t> submitted{0};
-    std::vector<VkCommandBufferSubmitInfo> buffers;
-    std::vector<VkSemaphoreSubmitInfo> waits;
-    std::vector<VkSemaphoreSubmitInfo> signals;
+    core::FixedVector<VkCommandBufferSubmitInfo> buffers;
+    core::FixedVector<VkSemaphoreSubmitInfo> waits;
+    core::FixedVector<VkSemaphoreSubmitInfo> signals;
+    core::FixedVector<VulkanSwapchain*> chains;
+    // The largest value a submit waits for on each queue, by queue index.
+    std::vector<std::uint64_t> waitValues;
     std::vector<std::pair<VkCommandPool, std::uint64_t>> retired;
     std::atomic<std::uint32_t> retiredCount{0};
     std::mutex lock;
@@ -84,7 +91,7 @@ struct VulkanCommandList {
     VkCommandBuffer buffer = VK_NULL_HANDLE;
     CommandPoolHandle pool;
     std::optional<SwapchainHandle> rendering;
-    std::vector<RenderedSwapchain> rendered;
+    core::InlineVector<SwapchainHandle, kSwapchainLimit> rendered;
 };
 
 class VulkanDevice final : public Device {
@@ -152,15 +159,7 @@ private:
     std::vector<std::unique_ptr<VulkanQueue>> queues_;
     VkQueue presentQueue_ = VK_NULL_HANDLE;
     VulkanQueue* presentOn_ = nullptr;
-    // Room for a few windows' swapchains before the pool grows, and a limit no
-    // tool should reach.
-    static constexpr std::uint32_t kSwapchainCapacity = 4;
-    static constexpr std::uint32_t kSwapchainLimit = 256;
     core::Pool<VulkanSwapchain, Swapchain> swapchains_;
-    static constexpr std::uint32_t kCommandPoolCapacity = 4;
-    static constexpr std::uint32_t kCommandPoolLimit = 256;
-    static constexpr std::uint32_t kCommandListCapacity = 8;
-    static constexpr std::uint32_t kCommandListLimit = 4096;
     core::Pool<VulkanCommandPool, CommandPool> commandPools_;
     core::Pool<VulkanCommandList, CommandList> commandLists_;
 };

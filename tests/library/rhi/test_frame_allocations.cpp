@@ -1,0 +1,122 @@
+#include "allocation/allocation_counter.h"
+#include "bfr/core/error.h"
+#include "bfr/core/window.h"
+#include "bfr/rhi/command_list.h"
+#include "bfr/rhi/device.h"
+#include "bfr/rhi/instance.h"
+#include "bfr/rhi/rhi_config.h"
+#include "bfr/rhi/swapchain.h"
+#include "rhi_test_support.h"
+
+#include <catch2/catch_message.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <catch2/matchers/catch_matchers.hpp>
+#include <catch2/matchers/catch_matchers_container_properties.hpp>
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <string>
+#include <utility>
+#include <vector>
+
+using namespace bfr::rhi;
+using namespace bfr::rhi::test;
+
+namespace {
+
+constexpr std::uint32_t kWidth = 64;
+constexpr std::uint32_t kHeight = 48;
+constexpr int kFrames = 8;
+// Lists each frame records, two of them rendering to the swapchain.
+constexpr std::size_t kListsPerFrame = 3;
+
+const bfr::core::window::NativeWindow kHeadless = bfr::core::window::Headless{};
+
+constexpr RenderingDesc kClear{.loadOp = LoadOp::Clear, .storeOp = StoreOp::Store, .clearColor = {0, 0, 0, 1}};
+
+// What one frame's calls failed with, or nothing; it holds no string, so
+// checking it allocates nothing.
+struct FrameFailure {
+    const char* call = nullptr;
+    bfr::core::ErrorCode code{};
+};
+
+} // namespace
+
+// Validation stays off: its layer allocates through the operator new this
+// program counts.
+TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[rhi][agnostic]") {
+    if (!bfr::test::AllocationCounter::counts()) {
+        SKIP("a sanitizer replaces operator new, so allocations are not counted");
+    }
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        auto created = createInstance(recordingInto(backend, messages), RhiConfig{});
+        INFO(failureOf(created));
+        REQUIRE(created.has_value());
+        const std::unique_ptr<Instance> instance = std::move(*created);
+        const std::unique_ptr<Device> device = presentingDevice(*instance, kHeadless);
+        const auto swapchain = device->createSwapchain(kHeadless, swapchainDesc(*instance));
+        INFO(failureOf(swapchain));
+        REQUIRE(swapchain.has_value());
+        REQUIRE(device->resizeSwapchain(*swapchain, kWidth, kHeight).has_value());
+        const auto pool = device->createCommandPool(0);
+        INFO(failureOf(pool));
+        REQUIRE(pool.has_value());
+
+        FrameFailure failed;
+        std::size_t allocations = 0;
+        std::size_t frees = 0;
+        {
+            const bfr::test::AllocationCounter counter;
+            Token last;
+            const auto check = [&failed](const char* call, const auto& result) {
+                if (!result.has_value() && failed.call == nullptr) {
+                    failed = {.call = call, .code = result.error().code};
+                }
+                return result.has_value();
+            };
+            for (int frame = 0; frame < kFrames && failed.call == nullptr; ++frame) {
+                check("wait", device->wait(last));
+                check("resetCommandPool", device->resetCommandPool(*pool));
+                check("acquire", device->acquire(*swapchain));
+                std::array<CommandListHandle, kListsPerFrame> lists{};
+                for (std::size_t index = 0; index < lists.size(); ++index) {
+                    const auto commands = device->beginCommands(*pool);
+                    if (!check("beginCommands", commands)) {
+                        break;
+                    }
+                    lists.at(index) = *commands;
+                    if (index != 0) {
+                        check("beginRendering", device->beginRendering(*commands, *swapchain, kClear));
+                        check("endRendering", device->endRendering(*commands));
+                    }
+                }
+                const std::array<Token, 2> waits{last, last};
+                const auto submitted = device->submit(
+                    {.queue = 0, .commandLists = lists, .waits = std::span{waits}.first(frame == 0 ? 0 : 2)});
+                if (check("submit", submitted)) {
+                    last = *submitted;
+                }
+                check("present", device->present(*swapchain));
+                check("poll", device->poll(last));
+            }
+            check("wait", device->wait(last));
+            allocations = counter.allocations();
+            frees = counter.frees();
+        }
+        INFO("first failure: " << (failed.call == nullptr ? "none" : failed.call) << " "
+                               << bfr::core::name(failed.code));
+        CHECK(failed.call == nullptr);
+        CHECK(allocations == 0);
+        CHECK(frees == 0);
+        CHECK(device->destroyCommandPool(*pool).has_value());
+        CHECK(device->destroySwapchain(*swapchain).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}

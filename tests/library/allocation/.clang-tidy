@@ -1,0 +1,5 @@
+# The allocation counter replaces the global operator new and delete, which
+# must take memory from malloc and give it back to free, so the checks against
+# malloc and owning raw pointers are off here.
+InheritParentConfig: true
+Checks: '-cppcoreguidelines-no-malloc,-cppcoreguidelines-owning-memory'

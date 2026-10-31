@@ -38,12 +38,14 @@ endfunction()
 # The tests under rhi speak only to the interface and run on every backend
 # the build has; a backend's own tests sit under backends/<name>.
 add_executable(bfr_tests
+    allocation/allocation_counter.cpp
     c_api/test_c_api.cpp
     core/test_error.cpp
     core/test_log.cpp
     core/test_pool.cpp
     core/test_text.cpp
     rhi/test_caps.cpp
+    rhi/test_frame_allocations.cpp
     rhi/test_present.cpp
     rhi/test_instance.cpp
     rhi/test_swapchain.cpp

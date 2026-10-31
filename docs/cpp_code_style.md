@@ -32,7 +32,7 @@
 
 ## Hot path
 Anything per frame, view, pass, draw or instance, plus any job the frame waits on.
-- No heap allocation after warmup; scratch comes from the frame arena. [audit]
+- No heap allocation or freeing, not even the first time; storage is made when its owner is created, and scratch comes from the frame arena. [audit, tests]
 - No `std::function`, string keys or allocating formatting. [audit, review]
 - Virtual calls per pass are fine, per draw or instance are not. [review]
 - Elsewhere, allocate from the lifetime class's home; the general heap only in documented cold code. [review]

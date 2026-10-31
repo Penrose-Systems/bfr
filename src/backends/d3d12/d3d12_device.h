@@ -7,6 +7,8 @@
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/swapchain.h"
+#include "core/fixed_vector.h"
+#include "core/inline_vector.h"
 #include "d3d12/d3d12_swapchain.h"
 
 #include <d3d12.h>
@@ -27,6 +29,15 @@ namespace bfr::rhi::d3d12 {
 
 class D3D12Instance;
 
+// Room for a few windows' swapchains and command pools before their pools
+// grow, and limits no tool should reach. Command lists are made on the frame
+// path, so their pool, and every array a frame fills, is made at its limit.
+inline constexpr std::uint32_t kSwapchainCapacity = 4;
+inline constexpr std::uint32_t kSwapchainLimit = 256;
+inline constexpr std::uint32_t kCommandPoolCapacity = 4;
+inline constexpr std::uint32_t kCommandPoolLimit = 256;
+inline constexpr std::uint32_t kCommandListLimit = 4096;
+
 /// A command pool: an allocator and a list for each list recording at once,
 /// since D3D12 lets one list record from an allocator at a time; how many are
 /// handed out since the last reset, the lists still recording, and the fence
@@ -37,15 +48,15 @@ struct D3D12CommandPool {
         Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> list;
     };
     std::uint32_t queue = 0;
-    std::vector<Entry> entries;
+    core::FixedVector<Entry> entries{kCommandListLimit};
     std::uint32_t used = 0;
-    std::vector<CommandListHandle> recording;
+    core::FixedVector<CommandListHandle> recording{kCommandListLimit};
     std::uint64_t lastSubmit = 0;
 };
 
 /// One of the device's queues: its ID3D12CommandQueue and the list type it
 /// takes, the fence each submit signals the next value of with the event waits
-/// use, the value last submitted, the array a submit is built in, and the
+/// use, the value last submitted, the arrays a submit is built in, and the
 /// allocators of pools destroyed while the GPU may still run their lists, each
 /// with the value that frees them. Used by one thread at a time under lock,
 /// which present shares; submitted is read from any thread.
@@ -56,8 +67,9 @@ struct D3D12Queue {
     Microsoft::WRL::ComPtr<ID3D12Fence> fence;
     HANDLE event = nullptr;
     std::atomic<std::uint64_t> submitted{0};
-    std::vector<ID3D12CommandList*> lists;
-    std::vector<std::pair<std::vector<D3D12CommandPool::Entry>, std::uint64_t>> retired;
+    core::FixedVector<ID3D12CommandList*> lists{kCommandListLimit};
+    core::FixedVector<D3D12Swapchain*> chains{kSwapchainLimit};
+    std::vector<std::pair<core::FixedVector<D3D12CommandPool::Entry>, std::uint64_t>> retired;
     std::atomic<std::uint32_t> retiredCount{0};
     std::mutex lock;
 };
@@ -70,7 +82,7 @@ struct D3D12CommandList {
     CommandPoolHandle pool;
     std::optional<SwapchainHandle> rendering;
     StoreOp storeOp = StoreOp::Store;
-    std::vector<SwapchainHandle> rendered;
+    core::InlineVector<SwapchainHandle, kSwapchainLimit> rendered;
 };
 
 class D3D12Device final : public Device {
@@ -129,15 +141,7 @@ private:
     Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter_;
     std::size_t heapCount_;
     std::vector<std::unique_ptr<D3D12Queue>> queues_;
-    // Room for a few windows' swapchains before the pool grows, and a limit no
-    // tool should reach.
-    static constexpr std::uint32_t kSwapchainCapacity = 4;
-    static constexpr std::uint32_t kSwapchainLimit = 256;
     core::Pool<D3D12Swapchain, Swapchain> swapchains_;
-    static constexpr std::uint32_t kCommandPoolCapacity = 4;
-    static constexpr std::uint32_t kCommandPoolLimit = 256;
-    static constexpr std::uint32_t kCommandListCapacity = 8;
-    static constexpr std::uint32_t kCommandListLimit = 4096;
     core::Pool<D3D12CommandPool, CommandPool> commandPools_;
     core::Pool<D3D12CommandList, CommandList> commandLists_;
 };

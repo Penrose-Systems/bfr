@@ -28,6 +28,7 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -79,7 +80,7 @@ MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device)
       device_(std::move(device)),
       swapchains_("swapchains", kSwapchainCapacity, kSwapchainLimit, rhi.logger()),
       commandPools_("command pools", kCommandPoolCapacity, kCommandPoolLimit, rhi.logger()),
-      commandLists_("command lists", kCommandListCapacity, kCommandListLimit, rhi.logger()) {}
+      commandLists_("command lists", kCommandListLimit, kCommandListLimit, rhi.logger()) {}
 
 core::Result<void> MetalDevice::open(const DeviceQueues& queues) {
     const AutoreleasePool pool;
@@ -287,8 +288,7 @@ core::Result<CommandPoolHandle> MetalDevice::createCommandPool(std::uint32_t que
     if (auto checked = checkQueue(queue); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    const CommandPoolHandle commandPool = commandPools_.emplace(
-        MetalCommandPool{.queue = queue, .entries = {}, .used = 0, .recording = {}, .lastSubmit = 0});
+    const CommandPoolHandle commandPool = commandPools_.emplace(MetalCommandPool{.queue = queue});
     if (commandPool.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("the device holds at most {} command pools", kCommandPoolLimit));
@@ -360,7 +360,10 @@ core::Result<CommandListHandle> MetalDevice::beginCommands(CommandPoolHandle com
             return std::unexpected(deviceFailed("command buffer").error());
         }
         entry.buffer = adopt(buffer);
-        (*pool)->entries.push_back(std::move(entry));
+        if (!(*pool)->entries.push(std::move(entry))) {
+            return core::failure(core::ErrorCode::RhiLimitReached,
+                                 std::format("a command pool holds at most {} lists", kCommandListLimit));
+        }
     }
     const MetalCommandPool::Entry& entry = (*pool)->entries[(*pool)->used];
     entry.buffer->beginCommandBuffer(entry.allocator.get());
@@ -371,8 +374,12 @@ core::Result<CommandListHandle> MetalDevice::beginCommands(CommandPoolHandle com
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("the device holds at most {} command lists", kCommandListLimit));
     }
+    if (!(*pool)->recording.push(commandList)) {
+        commandLists_.erase(commandList);
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             std::format("a command pool holds at most {} lists", kCommandListLimit));
+    }
     ++(*pool)->used;
-    (*pool)->recording.push_back(commandList);
     return commandList;
 }
 
@@ -418,8 +425,9 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
     }
     (*list)->encoder = share(encoder);
     (*list)->rendering = swapchain;
+    // A list renders to at most every swapchain there is, so this has room.
     if (std::ranges::find((*list)->rendered, swapchain) == (*list)->rendered.end()) {
-        (*list)->rendered.push_back(swapchain);
+        std::ignore = (*list)->rendered.push(swapchain);
     }
     return {};
 }
@@ -450,7 +458,8 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
     MetalQueue& queue = *queues_[desc.queue];
     const std::scoped_lock lock{queue.lock};
     queue.buffers.clear();
-    std::vector<MetalSwapchain*> chains;
+    queue.held.clear();
+    queue.chains.clear();
     for (const CommandListHandle commandList : desc.commandLists) {
         auto list = commandListFor(commandList);
         if (!list) {
@@ -476,45 +485,48 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
                 return core::failure(core::ErrorCode::RhiInvalidCall,
                                      "the acquired image was already submitted; present it first");
             }
-            if (std::ranges::find(chains, *chain) == chains.end()) {
-                chains.push_back(*chain);
+            if (std::ranges::find(queue.chains, *chain) == queue.chains.end()) {
+                std::ignore = queue.chains.push(*chain);
             }
         }
-        queue.buffers.push_back((*list)->buffer.get());
+        if (!queue.buffers.push((*list)->buffer.get())) {
+            return core::failure(core::ErrorCode::RhiLimitReached,
+                                 std::format("a submit takes at most {} lists", kCommandListLimit));
+        }
     }
     const std::uint64_t value = queue.submitted.load(std::memory_order_relaxed) + 1;
-    std::vector<Ref<MTL4::CommandBuffer>> held;
-    held.reserve(desc.commandLists.size());
     for (const CommandListHandle commandList : desc.commandLists) {
         MetalCommandList* list = commandLists_.find(commandList);
         if (list == nullptr) {
             continue;
         }
         if (MetalCommandPool* pool = commandPools_.find(list->pool); pool != nullptr) {
-            std::erase(pool->recording, commandList);
+            pool->recording.erase(commandList);
             pool->lastSubmit = value;
         }
         list->buffer->endCommandBuffer();
-        held.push_back(list->buffer);
+        // One per list the submit took, so this has room.
+        std::ignore = queue.held.push(list->buffer);
         commandLists_.erase(commandList);
     }
     for (const Token wait : desc.waits) {
         queue.queue->wait(queues_[wait.queue]->event.get(), wait.value);
     }
-    for (const MetalSwapchain* chain : chains) {
+    for (const MetalSwapchain* chain : queue.chains) {
         queue.queue->wait(chain->drawable());
     }
     if (!queue.buffers.empty()) {
         queue.queue->commit(queue.buffers.data(), queue.buffers.size());
     }
-    for (const MetalSwapchain* chain : chains) {
+    for (const MetalSwapchain* chain : queue.chains) {
         queue.queue->signalDrawable(chain->drawable());
     }
     queue.queue->signalEvent(queue.event.get(), value);
     queue.submitted.store(value, std::memory_order_release);
-    for (MetalSwapchain* chain : chains) {
+    for (MetalSwapchain* chain : queue.chains) {
         chain->setSubmitted();
     }
+    queue.held.clear();
     collectPools(queue);
     return Token{.queue = desc.queue, .value = value};
 }
@@ -557,7 +569,7 @@ core::Result<void> MetalDevice::destroyCommandList(CommandListHandle commandList
     }
     discard(**list);
     if (MetalCommandPool* pool = commandPools_.find((*list)->pool); pool != nullptr) {
-        std::erase(pool->recording, commandList);
+        pool->recording.erase(commandList);
     }
     commandLists_.erase(commandList);
     return {};

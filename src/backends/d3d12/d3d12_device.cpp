@@ -25,6 +25,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -71,7 +72,7 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       heapCount_(heapCount),
       swapchains_("swapchains", kSwapchainCapacity, kSwapchainLimit, rhi.logger()),
       commandPools_("command pools", kCommandPoolCapacity, kCommandPoolLimit, rhi.logger()),
-      commandLists_("command lists", kCommandListCapacity, kCommandListLimit, rhi.logger()) {}
+      commandLists_("command lists", kCommandListLimit, kCommandListLimit, rhi.logger()) {}
 
 core::Result<void> D3D12Device::open(const DeviceQueues& queues) {
     const auto open = [this](QueueType type, D3D12_COMMAND_LIST_TYPE listType) -> core::Result<void> {
@@ -291,8 +292,7 @@ core::Result<CommandPoolHandle> D3D12Device::createCommandPool(std::uint32_t que
     if (auto checked = checkQueue(queue); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    const CommandPoolHandle commandPool = commandPools_.emplace(
-        D3D12CommandPool{.queue = queue, .entries = {}, .used = 0, .recording = {}, .lastSubmit = 0});
+    const CommandPoolHandle commandPool = commandPools_.emplace(D3D12CommandPool{.queue = queue});
     if (commandPool.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("the device holds at most {} command pools", kCommandPoolLimit));
@@ -366,7 +366,10 @@ core::Result<CommandListHandle> D3D12Device::beginCommands(CommandPoolHandle com
             FAILED(result)) {
             return std::unexpected(deviceFailed("ID3D12Device::CreateCommandList", result).error());
         }
-        (*pool)->entries.push_back(std::move(entry));
+        if (!(*pool)->entries.push(std::move(entry))) {
+            return core::failure(core::ErrorCode::RhiLimitReached,
+                                 std::format("a command pool holds at most {} lists", kCommandListLimit));
+        }
     }
     else {
         const D3D12CommandPool::Entry& entry = (*pool)->entries[(*pool)->used];
@@ -382,8 +385,12 @@ core::Result<CommandListHandle> D3D12Device::beginCommands(CommandPoolHandle com
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("the device holds at most {} command lists", kCommandListLimit));
     }
+    if (!(*pool)->recording.push(commandList)) {
+        commandLists_.erase(commandList);
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             std::format("a command pool holds at most {} lists", kCommandListLimit));
+    }
     ++(*pool)->used;
-    (*pool)->recording.push_back(commandList);
     return commandList;
 }
 
@@ -425,8 +432,9 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
     }
     (*list)->rendering = swapchain;
     (*list)->storeOp = desc.storeOp;
+    // A list renders to at most every swapchain there is, so this has room.
     if (std::ranges::find((*list)->rendered, swapchain) == (*list)->rendered.end()) {
-        (*list)->rendered.push_back(swapchain);
+        std::ignore = (*list)->rendered.push(swapchain);
     }
     return {};
 }
@@ -468,7 +476,7 @@ core::Result<Token> D3D12Device::submit(const SubmitDesc& desc) {
     D3D12Queue& queue = *queues_[desc.queue];
     const std::scoped_lock lock{queue.lock};
     queue.lists.clear();
-    std::vector<D3D12Swapchain*> chains;
+    queue.chains.clear();
     for (const CommandListHandle commandList : desc.commandLists) {
         auto list = commandListFor(commandList);
         if (!list) {
@@ -494,11 +502,14 @@ core::Result<Token> D3D12Device::submit(const SubmitDesc& desc) {
                 return core::failure(core::ErrorCode::RhiInvalidCall,
                                      "the acquired image was already submitted; present it first");
             }
-            if (std::ranges::find(chains, *chain) == chains.end()) {
-                chains.push_back(*chain);
+            if (std::ranges::find(queue.chains, *chain) == queue.chains.end()) {
+                std::ignore = queue.chains.push(*chain);
             }
         }
-        queue.lists.push_back((*list)->list.Get());
+        if (!queue.lists.push((*list)->list.Get())) {
+            return core::failure(core::ErrorCode::RhiLimitReached,
+                                 std::format("a submit takes at most {} lists", kCommandListLimit));
+        }
     }
     const std::uint64_t value = queue.submitted.load(std::memory_order_relaxed) + 1;
     core::Result<void> closed;
@@ -508,7 +519,7 @@ core::Result<Token> D3D12Device::submit(const SubmitDesc& desc) {
             continue;
         }
         if (D3D12CommandPool* pool = commandPools_.find(list->pool); pool != nullptr) {
-            std::erase(pool->recording, commandList);
+            pool->recording.erase(commandList);
             pool->lastSubmit = value;
         }
         if (const HRESULT result = list->list->Close(); FAILED(result) && closed) {
@@ -531,7 +542,7 @@ core::Result<Token> D3D12Device::submit(const SubmitDesc& desc) {
         return std::unexpected(deviceFailed("ID3D12CommandQueue::Signal", result).error());
     }
     queue.submitted.store(value, std::memory_order_release);
-    for (D3D12Swapchain* chain : chains) {
+    for (D3D12Swapchain* chain : queue.chains) {
         chain->setSubmitted();
     }
     collectPools(queue);
@@ -576,7 +587,7 @@ core::Result<void> D3D12Device::destroyCommandList(CommandListHandle commandList
     }
     discard((*list)->list.Get());
     if (D3D12CommandPool* pool = commandPools_.find((*list)->pool); pool != nullptr) {
-        std::erase(pool->recording, commandList);
+        pool->recording.erase(commandList);
     }
     commandLists_.erase(commandList);
     return {};

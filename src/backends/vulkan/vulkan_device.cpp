@@ -6,6 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/swapchain.h"
+#include "core/fixed_vector.h"
 #include "vulkan/queue_families.h"
 #include "vulkan/vulkan_caps.h"
 #include "vulkan/vulkan_instance.h"
@@ -18,6 +19,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <format>
@@ -25,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -124,7 +127,7 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       hasBudget_(hasBudget),
       swapchains_("swapchains", kSwapchainCapacity, kSwapchainLimit, rhi.logger()),
       commandPools_("command pools", kCommandPoolCapacity, kCommandPoolLimit, rhi.logger()),
-      commandLists_("command lists", kCommandListCapacity, kCommandListLimit, rhi.logger()) {
+      commandLists_("command lists", kCommandListLimit, kCommandListLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
     table_.vkGetDeviceQueue(device_, presentFamily_, 0, &presentQueue_);
 }
@@ -162,7 +165,14 @@ core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const
             return opened;
         }
     }
+    // A submit's arrays, made now at their limits: every list; a wait for
+    // each swapchain and queue; a signal for each swapchain and the timeline.
     for (const auto& queue : queues_) {
+        queue->buffers = core::FixedVector<VkCommandBufferSubmitInfo>{kCommandListLimit};
+        queue->waits = core::FixedVector<VkSemaphoreSubmitInfo>{kSwapchainLimit + queues_.size()};
+        queue->signals = core::FixedVector<VkSemaphoreSubmitInfo>{kSwapchainLimit + 1};
+        queue->chains = core::FixedVector<VulkanSwapchain*>{kSwapchainLimit};
+        queue->waitValues.resize(queues_.size());
         if (queue->queue == presentQueue_) {
             presentOn_ = queue.get();
         }
@@ -413,7 +423,10 @@ core::Result<CommandListHandle> VulkanDevice::beginCommands(CommandPoolHandle co
         if (const VkResult result = table_.vkAllocateCommandBuffers(device_, &info, &buffer); result != VK_SUCCESS) {
             return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkAllocateCommandBuffers", .result = result});
         }
-        (*pool)->buffers.push_back(buffer);
+        if (!(*pool)->buffers.push(buffer)) {
+            return core::failure(core::ErrorCode::RhiLimitReached,
+                                 std::format("a command pool holds at most {} lists", kCommandListLimit));
+        }
     }
     VkCommandBuffer buffer = (*pool)->buffers[(*pool)->used];
     VkCommandBufferBeginInfo begin{};
@@ -428,8 +441,12 @@ core::Result<CommandListHandle> VulkanDevice::beginCommands(CommandPoolHandle co
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("the device holds at most {} command lists", kCommandListLimit));
     }
+    if (!(*pool)->recording.push(commandList)) {
+        commandLists_.erase(commandList);
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             std::format("a command pool holds at most {} lists", kCommandListLimit));
+    }
     ++(*pool)->used;
-    (*pool)->recording.push_back(commandList);
     return commandList;
 }
 
@@ -459,10 +476,14 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
     if (!image) {
         return std::unexpected(image.error());
     }
-    // Rendered to earlier in this list, the image is where that left it; else
-    // where the last submit did.
-    const auto rendered = std::ranges::find((*list)->rendered, swapchain, &RenderedSwapchain::swapchain);
-    const VkImageLayout before = rendered == (*list)->rendered.end() ? image->layout : rendered->layout;
+    // Rendered to earlier in this list, the image was left ready to present;
+    // else it is where the last submit left it.
+    const bool renderedBefore = std::ranges::find((*list)->rendered, swapchain) != (*list)->rendered.end();
+    if (!renderedBefore && !(*list)->rendered.push(swapchain)) {
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             std::format("a command list renders to at most {} swapchains", kSwapchainLimit));
+    }
+    const VkImageLayout before = renderedBefore ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : image->layout;
     VkCommandBuffer buffer = (*list)->buffer;
     recordBarrier(table_, buffer, layoutBarrier(image->image, before, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL));
 
@@ -482,12 +503,6 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
     table_.vkCmdBeginRendering(buffer, &rendering);
 
     (*list)->rendering = swapchain;
-    if (rendered == (*list)->rendered.end()) {
-        (*list)->rendered.push_back({.swapchain = swapchain, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
-    }
-    else {
-        rendered->layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    }
     return {};
 }
 
@@ -510,10 +525,9 @@ core::Result<void> VulkanDevice::endRendering(CommandListHandle commandList) {
     }
     VkCommandBuffer buffer = (*list)->buffer;
     table_.vkCmdEndRendering(buffer);
-    // Rendering is open on it, so beginRendering listed it.
-    const auto rendered = std::ranges::find((*list)->rendered, *open, &RenderedSwapchain::swapchain);
-    recordBarrier(table_, buffer, layoutBarrier(image->image, rendered->layout, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR));
-    rendered->layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    recordBarrier(table_, buffer,
+                  layoutBarrier(image->image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR));
     (*list)->rendering.reset();
     return {};
 }
@@ -532,7 +546,11 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
     queue.buffers.clear();
     queue.waits.clear();
     queue.signals.clear();
-    std::vector<std::pair<VulkanSwapchain*, VkImageLayout>> chains;
+    queue.chains.clear();
+    const auto full = [] {
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             std::format("a submit takes at most {} lists", kCommandListLimit));
+    };
     for (const CommandListHandle commandList : desc.commandLists) {
         auto list = commandListFor(commandList);
         if (!list) {
@@ -546,8 +564,8 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
             return core::failure(core::ErrorCode::RhiInvalidCall,
                                  std::format("the list was recorded for queue {}, not {}", pool->queue, desc.queue));
         }
-        for (const RenderedSwapchain& rendered : (*list)->rendered) {
-            auto chain = swapchainFor(rendered.swapchain);
+        for (const SwapchainHandle rendered : (*list)->rendered) {
+            auto chain = swapchainFor(rendered);
             if (!chain) {
                 return std::unexpected(std::move(chain.error()));
             }
@@ -559,35 +577,46 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
                 return core::failure(core::ErrorCode::RhiInvalidCall,
                                      "the acquired image was already submitted; present it first");
             }
-            if (auto seen = std::ranges::find(chains, *chain, &std::pair<VulkanSwapchain*, VkImageLayout>::first);
-                seen != chains.end()) {
-                seen->second = rendered.layout;
+            if (std::ranges::find(queue.chains, *chain) != queue.chains.end()) {
                 continue;
             }
             VkSemaphoreSubmitInfo wait{};
             wait.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
             wait.semaphore = image->acquireSemaphore;
             wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-            queue.waits.push_back(wait);
             VkSemaphoreSubmitInfo signal{};
             signal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
             signal.semaphore = image->presentSemaphore;
             signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            queue.signals.push_back(signal);
-            chains.emplace_back(*chain, rendered.layout);
+            // Each swapchain is listed once and has a wait and a signal, so
+            // these have room.
+            std::ignore = queue.waits.push(wait);
+            std::ignore = queue.signals.push(signal);
+            std::ignore = queue.chains.push(*chain);
         }
         VkCommandBufferSubmitInfo buffer{};
         buffer.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
         buffer.commandBuffer = (*list)->buffer;
-        queue.buffers.push_back(buffer);
+        if (!queue.buffers.push(buffer)) {
+            return full();
+        }
     }
+    // A timeline wait passes once the value is reached, so waiting for the
+    // largest value asked of each queue waits for all of them.
+    std::ranges::fill(queue.waitValues, 0);
     for (const Token wait : desc.waits) {
+        queue.waitValues[wait.queue] = std::max(queue.waitValues[wait.queue], wait.value);
+    }
+    for (std::size_t index = 0; index < queues_.size(); ++index) {
+        if (queue.waitValues[index] == 0) {
+            continue;
+        }
         VkSemaphoreSubmitInfo info{};
         info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        info.semaphore = queues_[wait.queue]->timeline;
-        info.value = wait.value;
+        info.semaphore = queues_[index]->timeline;
+        info.value = queue.waitValues[index];
         info.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        queue.waits.push_back(info);
+        std::ignore = queue.waits.push(info);
     }
     const std::uint64_t value = queue.submitted.load(std::memory_order_relaxed) + 1;
     core::Result<void> ended;
@@ -597,7 +626,7 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
             continue;
         }
         if (VulkanCommandPool* pool = commandPools_.find(list->pool); pool != nullptr) {
-            std::erase(pool->recording, commandList);
+            pool->recording.erase(commandList);
             pool->lastSubmit = value;
         }
         if (const VkResult result = table_.vkEndCommandBuffer(list->buffer); result != VK_SUCCESS && ended) {
@@ -613,7 +642,7 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
     done.semaphore = queue.timeline;
     done.value = value;
     done.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    queue.signals.push_back(done);
+    std::ignore = queue.signals.push(done);
     VkSubmitInfo2 info{};
     info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
     info.waitSemaphoreInfoCount = static_cast<std::uint32_t>(queue.waits.size());
@@ -626,8 +655,8 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkQueueSubmit2", .result = result});
     }
     queue.submitted.store(value, std::memory_order_release);
-    for (const auto& [chain, layout] : chains) {
-        chain->setLayout(layout);
+    for (VulkanSwapchain* chain : queue.chains) {
+        chain->setLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
         chain->setSubmitted();
     }
     collectPools(queue);
@@ -680,7 +709,7 @@ core::Result<void> VulkanDevice::destroyCommandList(CommandListHandle commandLis
         return std::unexpected(std::move(list.error()));
     }
     if (VulkanCommandPool* pool = commandPools_.find((*list)->pool); pool != nullptr) {
-        std::erase(pool->recording, commandList);
+        pool->recording.erase(commandList);
     }
     commandLists_.erase(commandList);
     return {};

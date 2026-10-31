@@ -6,6 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/swapchain.h"
+#include "core/fixed_vector.h"
 
 #include <cstdint>
 #include <vector>
@@ -26,7 +27,7 @@ struct NullSwapchain {
 /// still recording from it.
 struct NullCommandPool {
     std::uint32_t queue = 0;
-    std::vector<CommandListHandle> recording;
+    core::FixedVector<CommandListHandle> recording;
 };
 
 /// Commands that go nowhere: the pool they came from and whether rendering is
@@ -75,12 +76,12 @@ private:
     [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
 
     NullInstance* instance_;
-    // The same room and limits as every backend's device.
+    // The same room and limits as every backend's device; command lists are
+    // made on the frame path, so their pool is made at its limit.
     static constexpr std::uint32_t kSwapchainCapacity = 4;
     static constexpr std::uint32_t kSwapchainLimit = 256;
     static constexpr std::uint32_t kCommandPoolCapacity = 4;
     static constexpr std::uint32_t kCommandPoolLimit = 256;
-    static constexpr std::uint32_t kCommandListCapacity = 8;
     static constexpr std::uint32_t kCommandListLimit = 4096;
     core::Pool<NullSwapchain, Swapchain> swapchains_;
     core::Pool<NullCommandPool, CommandPool> commandPools_;
