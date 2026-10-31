@@ -227,7 +227,9 @@ _Avoid_: frame graph
 
 **Core**:
 The lower public layer: devices, resources, pipelines, commands, explicit
-barriers and GPU lifetime. Backends implement only the core.
+barriers and GPU lifetime. Backends implement only the core. Not the
+`bfr::core` namespace, which holds results, handles, pools and logging; the
+core's interfaces are in `bfr::rhi`.
 
 **Authority**:
 Whoever currently states a resource's barriers: the graph, the caller's code or
