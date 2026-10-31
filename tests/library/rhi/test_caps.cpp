@@ -7,7 +7,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/format.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "rhi_test_support.h"
 
 #include <catch2/catch_message.hpp>
@@ -66,7 +66,7 @@ std::vector<std::string> limitsWithoutFeatures(const Caps& caps) {
 }
 
 // Each format whose query fails or answers about another format.
-std::vector<std::string> formatProblems(const Rhi& rhi, std::size_t adapter) {
+std::vector<std::string> formatProblems(const Instance& rhi, std::size_t adapter) {
     std::vector<std::string> failed;
     for (const Format format : kFormats) {
         const auto found = rhi.formatCaps(adapter, format);
@@ -101,10 +101,10 @@ std::vector<std::string> budgetProblems(const Device& device, const Memory& memo
 
 } // namespace
 
-TEST_CASE("Rhi reads each adapter's caps, consistent and 0 for each feature it lacks", "[rhi][caps][agnostic]") {
+TEST_CASE("Instance reads each adapter's caps, consistent and 0 for each feature it lacks", "[rhi][caps][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
-    const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
+    const auto rhi = createInstance(recordingInto(backend, messages), kValidation);
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -116,10 +116,10 @@ TEST_CASE("Rhi reads each adapter's caps, consistent and 0 for each feature it l
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Rhi reports what every adapter does with each format", "[rhi][caps][agnostic]") {
+TEST_CASE("Instance reports what every adapter does with each format", "[rhi][caps][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
-    const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
+    const auto rhi = createInstance(recordingInto(backend, messages), kValidation);
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -130,10 +130,10 @@ TEST_CASE("Rhi reports what every adapter does with each format", "[rhi][caps][a
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Rhi reports what a swapchain for a headless window may be", "[rhi][caps][agnostic]") {
+TEST_CASE("Instance reports what a swapchain for a headless window may be", "[rhi][caps][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
-    const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
+    const auto rhi = createInstance(recordingInto(backend, messages), kValidation);
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
     const std::size_t adapter = headlessAdapter(**rhi);
@@ -154,9 +154,9 @@ TEST_CASE("Rhi reports what a swapchain for a headless window may be", "[rhi][ca
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Rhi refuses queries about an adapter it does not list", "[rhi][caps][agnostic]") {
+TEST_CASE("Instance refuses queries about an adapter it does not list", "[rhi][caps][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
-    const auto rhi = createRhi(describe(backend), {});
+    const auto rhi = createInstance(describe(backend), {});
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
     const std::size_t missing = (*rhi)->adapters().size();
@@ -171,7 +171,7 @@ TEST_CASE("Rhi refuses queries about an adapter it does not list", "[rhi][caps][
 TEST_CASE("Device reports its memory budget heap by heap", "[rhi][caps][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
-    const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
+    const auto rhi = createInstance(recordingInto(backend, messages), kValidation);
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
 

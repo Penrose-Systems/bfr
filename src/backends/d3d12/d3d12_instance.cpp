@@ -1,4 +1,4 @@
-#include "d3d12/d3d12_rhi.h"
+#include "d3d12/d3d12_instance.h"
 
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
@@ -6,7 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/format.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "d3d12/d3d12_caps.h"
 #include "d3d12/d3d12_device.h"
@@ -61,8 +61,8 @@ void WINAPI onMessage(D3D12_MESSAGE_CATEGORY /*category*/, D3D12_MESSAGE_SEVERIT
 
 } // namespace
 
-core::Result<std::unique_ptr<D3D12Rhi>> D3D12Rhi::create(const RhiDesc& desc, const RhiConfig& config) {
-    auto rhi = std::make_unique<D3D12Rhi>(config, desc.logger);
+core::Result<std::unique_ptr<D3D12Instance>> D3D12Instance::create(const InstanceDesc& desc, const RhiConfig& config) {
+    auto rhi = std::make_unique<D3D12Instance>(config, desc.logger);
     // The debug layer is switched on before the first device or factory.
     if (config.validation) {
         if (auto enabled = enableDebugLayer(); !enabled) {
@@ -78,9 +78,10 @@ core::Result<std::unique_ptr<D3D12Rhi>> D3D12Rhi::create(const RhiDesc& desc, co
     return rhi;
 }
 
-D3D12Rhi::D3D12Rhi(const RhiConfig& config, core::Logger logger) : Rhi(config), logger_(std::move(logger)) {}
+D3D12Instance::D3D12Instance(const RhiConfig& config, core::Logger logger)
+    : Instance(config), logger_(std::move(logger)) {}
 
-D3D12Rhi::~D3D12Rhi() {
+D3D12Instance::~D3D12Instance() {
     for (const D3D12Adapter& native : native_) {
         if (native.messages) {
             native.messages->UnregisterMessageCallback(native.cookie);
@@ -88,7 +89,7 @@ D3D12Rhi::~D3D12Rhi() {
     }
 }
 
-core::Result<void> D3D12Rhi::enableDebugLayer() {
+core::Result<void> D3D12Instance::enableDebugLayer() {
     ComPtr<ID3D12Debug> debug;
     if (const HRESULT result = D3D12GetDebugInterface(IID_PPV_ARGS(&debug)); FAILED(result)) {
         return core::failure(
@@ -101,7 +102,7 @@ core::Result<void> D3D12Rhi::enableDebugLayer() {
     return {};
 }
 
-core::Result<void> D3D12Rhi::createFactory() {
+core::Result<void> D3D12Instance::createFactory() {
     const UINT flags = config().validation ? DXGI_CREATE_FACTORY_DEBUG : 0;
     if (const HRESULT result = CreateDXGIFactory2(flags, IID_PPV_ARGS(&factory_)); FAILED(result)) {
         return failure(core::ErrorCode::RhiInstanceFailed, {.call = "CreateDXGIFactory2", .result = result});
@@ -121,7 +122,7 @@ core::Result<void> D3D12Rhi::createFactory() {
     return {};
 }
 
-core::Result<void> D3D12Rhi::reportMessages(D3D12Adapter& native) {
+core::Result<void> D3D12Instance::reportMessages(D3D12Adapter& native) {
     const auto unavailable = [](const char* call, HRESULT result) {
         return core::failure(core::ErrorCode::RhiValidationUnavailable,
                              D3D12Failure{.call = call, .result = result}.message());
@@ -154,7 +155,7 @@ core::Result<void> D3D12Rhi::reportMessages(D3D12Adapter& native) {
     return {};
 }
 
-core::Result<void> D3D12Rhi::listAdapter(IDXGIAdapter1* found, std::vector<std::string>& rejected) {
+core::Result<void> D3D12Instance::listAdapter(IDXGIAdapter1* found, std::vector<std::string>& rejected) {
     DXGI_ADAPTER_DESC1 desc{};
     if (const HRESULT described = found->GetDesc1(&desc); FAILED(described)) {
         return failure(core::ErrorCode::RhiInstanceFailed, {.call = "IDXGIAdapter1::GetDesc1", .result = described});
@@ -193,7 +194,7 @@ core::Result<void> D3D12Rhi::listAdapter(IDXGIAdapter1* found, std::vector<std::
     return {};
 }
 
-core::Result<void> D3D12Rhi::listAdapters() {
+core::Result<void> D3D12Instance::listAdapters() {
     // Each adapter not listed, and why.
     std::vector<std::string> rejected;
     for (UINT index = 0;; ++index) {
@@ -217,7 +218,7 @@ core::Result<void> D3D12Rhi::listAdapters() {
     return {};
 }
 
-core::Result<void> D3D12Rhi::checkAdapter(std::size_t adapter) const {
+core::Result<void> D3D12Instance::checkAdapter(std::size_t adapter) const {
     if (adapter >= adapters_.size()) {
         return core::failure(core::ErrorCode::RhiAdapterOutOfRange,
                              std::format("adapter {} is not one of the {} listed", adapter, adapters_.size()));
@@ -225,9 +226,9 @@ core::Result<void> D3D12Rhi::checkAdapter(std::size_t adapter) const {
     return {};
 }
 
-core::Result<std::unique_ptr<Device>> D3D12Rhi::createDevice(std::size_t adapter,
-                                                             const core::window::NativeWindow& presentTo,
-                                                             const DeviceQueues& queues) {
+core::Result<std::unique_ptr<Device>> D3D12Instance::createDevice(std::size_t adapter,
+                                                                  const core::window::NativeWindow& presentTo,
+                                                                  const DeviceQueues& queues) {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -243,15 +244,15 @@ core::Result<std::unique_ptr<Device>> D3D12Rhi::createDevice(std::size_t adapter
     return D3D12Device::create(*this, native.device, native.adapter, caps.memory.heaps.size(), queues);
 }
 
-core::Result<FormatCaps> D3D12Rhi::formatCaps(std::size_t adapter, Format format) const {
+core::Result<FormatCaps> D3D12Instance::formatCaps(std::size_t adapter, Format format) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     return formatCapsFor(native_[adapter].device.Get(), format);
 }
 
-core::Result<SwapchainCaps> D3D12Rhi::swapchainCaps(std::size_t adapter,
-                                                    const core::window::NativeWindow& window) const {
+core::Result<SwapchainCaps> D3D12Instance::swapchainCaps(std::size_t adapter,
+                                                         const core::window::NativeWindow& window) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -261,8 +262,8 @@ core::Result<SwapchainCaps> D3D12Rhi::swapchainCaps(std::size_t adapter,
     return surfaceCapsFor(tearing_);
 }
 
-core::Result<std::vector<SwapchainFormat>> D3D12Rhi::swapchainFormats(std::size_t adapter,
-                                                                      const core::window::NativeWindow& window) const {
+core::Result<std::vector<SwapchainFormat>> D3D12Instance::swapchainFormats(
+    std::size_t adapter, const core::window::NativeWindow& window) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }

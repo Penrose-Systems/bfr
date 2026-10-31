@@ -5,7 +5,7 @@
 #include "bfr/core/window.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/swapchain.h"
-#include "null/null_rhi.h"
+#include "null/null_instance.h"
 
 #include <cstdint>
 #include <expected>
@@ -16,8 +16,8 @@
 
 namespace bfr::rhi::null {
 
-NullDevice::NullDevice(NullRhi& rhi, const DeviceQueues& queues)
-    : rhi_(&rhi),
+NullDevice::NullDevice(NullInstance& rhi, const DeviceQueues& queues)
+    : instance_(&rhi),
       swapchains_("swapchains", kSwapchainCapacity, kSwapchainLimit, rhi.logger()),
       commandPools_("command pools", kCommandPoolCapacity, kCommandPoolLimit, rhi.logger()),
       commandLists_("command lists", kCommandListCapacity, kCommandListLimit, rhi.logger()) {
@@ -30,7 +30,7 @@ NullDevice::NullDevice(NullRhi& rhi, const DeviceQueues& queues)
 NullDevice::~NullDevice() {
     // Swapchains are the device's children, so they go first.
     if (swapchains_.size() != 0) {
-        BFR_LOG_WARN(rhi_->logger(), "{} swapchains were left when the device went", swapchains_.size());
+        BFR_LOG_WARN(instance_->logger(), "{} swapchains were left when the device went", swapchains_.size());
     }
     swapchains_.clear();
 }
@@ -307,7 +307,7 @@ core::Result<void> NullDevice::destroyCommandList(CommandListHandle commandList)
 core::Result<MemoryBudget> NullDevice::budget() const {
     // No heaps, so nothing to budget.
     MemoryBudget budget;
-    for (const MemoryHeap& heap : rhi_->adapters()[0].caps.memory.heaps) {
+    for (const MemoryHeap& heap : instance_->adapters()[0].caps.memory.heaps) {
         budget.heaps.push_back({.budget = heap.size, .usage = 0});
     }
     return budget;

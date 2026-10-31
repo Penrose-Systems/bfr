@@ -11,7 +11,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/format.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 
 #include <array>
@@ -28,11 +28,12 @@ namespace bfr::rhi::null {
 /// The formats and color spaces the null adapter presents in.
 [[nodiscard]] std::span<const SwapchainFormat> nullSurfaceFormats();
 
-class NullRhi final : public Rhi {
+class NullInstance final : public Instance {
 public:
-    [[nodiscard]] static core::Result<std::unique_ptr<NullRhi>> create(const RhiDesc& desc, const RhiConfig& config);
+    [[nodiscard]] static core::Result<std::unique_ptr<NullInstance>> create(const InstanceDesc& desc,
+                                                                            const RhiConfig& config);
 
-    NullRhi(const RhiConfig& config, core::Logger logger);
+    NullInstance(const RhiConfig& config, core::Logger logger);
 
     [[nodiscard]] std::span<const Adapter> adapters() const override { return adapters_; }
     [[nodiscard]] core::Result<std::unique_ptr<Device>> createDevice(std::size_t adapter,
@@ -44,7 +45,7 @@ public:
     [[nodiscard]] core::Result<std::vector<SwapchainFormat>> swapchainFormats(
         std::size_t adapter, const core::window::NativeWindow& window) const override;
 
-    /// Where the Rhi and its devices send their messages.
+    /// Where the Instance and its devices send their messages.
     [[nodiscard]] const core::Logger& logger() const { return logger_; }
 
 private:

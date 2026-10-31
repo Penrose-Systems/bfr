@@ -1,15 +1,15 @@
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 
 #include "bfr/core/error.h"
 #include "bfr/rhi/rhi_config.h"
 #if BFR_HAS_D3D12
-    #include "d3d12/d3d12_rhi.h"
+    #include "d3d12/d3d12_instance.h"
 #endif
 #if BFR_HAS_METAL
-    #include "metal/metal_rhi.h"
+    #include "metal/metal_instance.h"
 #endif
 #if BFR_HAS_VULKAN
-    #include "vulkan/vulkan_rhi.h"
+    #include "vulkan/vulkan_instance.h"
 #endif
 
 #include <array>
@@ -45,23 +45,23 @@ std::span<const Backend> backends() noexcept {
     return kBackends;
 }
 
-core::Result<std::unique_ptr<Rhi>> Rhi::create(const RhiDesc& desc, const RhiConfig& config) {
+core::Result<std::unique_ptr<Instance>> Instance::create(const InstanceDesc& desc, const RhiConfig& config) {
     switch (desc.backend) {
 #if BFR_HAS_VULKAN
         case Backend::Vulkan:
-            return vulkan::VulkanRhi::create(desc, config);
+            return vulkan::VulkanInstance::create(desc, config);
 #else
         case Backend::Vulkan:
 #endif
 #if BFR_HAS_D3D12
         case Backend::D3D12:
-            return d3d12::D3D12Rhi::create(desc, config);
+            return d3d12::D3D12Instance::create(desc, config);
 #else
         case Backend::D3D12:
 #endif
 #if BFR_HAS_METAL
         case Backend::Metal:
-            return metal::MetalRhi::create(desc, config);
+            return metal::MetalInstance::create(desc, config);
 #else
         case Backend::Metal:
 #endif

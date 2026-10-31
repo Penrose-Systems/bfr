@@ -6,7 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/swapchain.h"
-#include "metal/metal_rhi.h"
+#include "metal/metal_instance.h"
 #include "metal/metal_swapchain.h"
 #include "metal/metal_util.h"
 
@@ -65,7 +65,7 @@ core::Result<void> deviceFailed(const char* what) {
 
 } // namespace
 
-core::Result<std::unique_ptr<MetalDevice>> MetalDevice::create(MetalRhi& rhi, Ref<MTL::Device> device,
+core::Result<std::unique_ptr<MetalDevice>> MetalDevice::create(MetalInstance& rhi, Ref<MTL::Device> device,
                                                                const DeviceQueues& queues) {
     auto made = std::make_unique<MetalDevice>(rhi, std::move(device));
     if (auto opened = made->open(queues); !opened) {
@@ -74,8 +74,8 @@ core::Result<std::unique_ptr<MetalDevice>> MetalDevice::create(MetalRhi& rhi, Re
     return made;
 }
 
-MetalDevice::MetalDevice(MetalRhi& rhi, Ref<MTL::Device> device)
-    : rhi_(&rhi),
+MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device)
+    : instance_(&rhi),
       device_(std::move(device)),
       swapchains_("swapchains", kSwapchainCapacity, kSwapchainLimit, rhi.logger()),
       commandPools_("command pools", kCommandPoolCapacity, kCommandPoolLimit, rhi.logger()),
@@ -119,14 +119,14 @@ MetalDevice::~MetalDevice() {
     // A failed wait leaves nothing to do but release, and no result to report
     // it through, so it is sent as an error whatever BFR_LOGGING says.
     if (auto idle = waitIdle(); !idle) {
-        rhi_->logger().send(core::Severity::Error,
-                            std::format("{}; destroying the device anyway", idle.error().message));
+        instance_->logger().send(core::Severity::Error,
+                                 std::format("{}; destroying the device anyway", idle.error().message));
     }
     if (swapchains_.size() != 0) {
-        BFR_LOG_WARN(rhi_->logger(), "{} swapchains were left when the device went", swapchains_.size());
+        BFR_LOG_WARN(instance_->logger(), "{} swapchains were left when the device went", swapchains_.size());
     }
     if (commandPools_.size() != 0) {
-        BFR_LOG_WARN(rhi_->logger(), "{} command pools were left when the device went", commandPools_.size());
+        BFR_LOG_WARN(instance_->logger(), "{} command pools were left when the device went", commandPools_.size());
     }
     swapchains_.clear();
     // A list left recording has an open encoder and buffer, which Metal wants
@@ -217,7 +217,7 @@ core::Result<SwapchainHandle> MetalDevice::createSwapchain(const core::window::N
     if (!layer) {
         return std::unexpected(std::move(layer.error()));
     }
-    const SwapchainHandle swapchain = swapchains_.emplace(device_, *layer, request, rhi_->logger());
+    const SwapchainHandle swapchain = swapchains_.emplace(device_, *layer, request, instance_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("a device holds at most {} swapchains", kSwapchainLimit));

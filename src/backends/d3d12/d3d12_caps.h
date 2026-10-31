@@ -1,7 +1,7 @@
 #pragma once
 
 #include "bfr/rhi/caps.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 
 #include <d3d12.h>
 #include <dxgi1_6.h>

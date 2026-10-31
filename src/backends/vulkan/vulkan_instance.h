@@ -6,7 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/format.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "vulkan/instance_table.h"
 #include "vulkan/vulkan_surface.h"
@@ -23,7 +23,7 @@
 
 namespace bfr::rhi::vulkan {
 
-class VulkanRhi final : public Rhi {
+class VulkanInstance final : public Instance {
 public:
     /// Where the messenger sends each message: the logger, and while
     /// vkCreateInstance runs, the reasons its failure carries.
@@ -32,15 +32,16 @@ public:
         std::vector<std::string>* reasons = nullptr;
     };
 
-    [[nodiscard]] static core::Result<std::unique_ptr<VulkanRhi>> create(const RhiDesc& desc, const RhiConfig& config);
+    [[nodiscard]] static core::Result<std::unique_ptr<VulkanInstance>> create(const InstanceDesc& desc,
+                                                                              const RhiConfig& config);
 
     /// Holds no VkInstance until create makes one.
-    VulkanRhi(const RhiConfig& config, core::Logger logger);
-    ~VulkanRhi() override;
-    VulkanRhi(const VulkanRhi&) = delete;
-    VulkanRhi& operator=(const VulkanRhi&) = delete;
-    VulkanRhi(VulkanRhi&&) = delete;
-    VulkanRhi& operator=(VulkanRhi&&) = delete;
+    VulkanInstance(const RhiConfig& config, core::Logger logger);
+    ~VulkanInstance() override;
+    VulkanInstance(const VulkanInstance&) = delete;
+    VulkanInstance& operator=(const VulkanInstance&) = delete;
+    VulkanInstance(VulkanInstance&&) = delete;
+    VulkanInstance& operator=(VulkanInstance&&) = delete;
 
     [[nodiscard]] std::span<const Adapter> adapters() const override;
     [[nodiscard]] core::Result<std::unique_ptr<Device>> createDevice(std::size_t adapter,
@@ -52,15 +53,15 @@ public:
     [[nodiscard]] core::Result<std::vector<SwapchainFormat>> swapchainFormats(
         std::size_t adapter, const core::window::NativeWindow& window) const override;
 
-    using Rhi::config;
+    using Instance::config;
 
-    /// Where the Rhi and its devices send their messages.
+    /// Where the Instance and its devices send their messages.
     [[nodiscard]] const core::Logger& logger() const { return messages_.logger; }
 
-    /// The instance's functions, which this Rhi and its devices call through.
+    /// The instance's functions, which this Instance and its devices call through.
     [[nodiscard]] const InstanceTable& instanceTable() const { return vk_; }
 
-    /// A surface on window, which goes before this Rhi. Fails as
+    /// A surface on window, which goes before this Instance. Fails as
     /// Device::createSwapchain describes.
     [[nodiscard]] core::Result<VulkanSurface> surfaceFor(const core::window::NativeWindow& window) const;
 

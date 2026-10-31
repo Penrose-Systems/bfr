@@ -1,9 +1,9 @@
-// What every backend's Rhi does, through the interface alone. Each case runs
+// What every backend's Instance does, through the interface alone. Each case runs
 // on every backend the build has; nothing here names one.
 
 #include "bfr/core/error.h"
 #include "bfr/core/window.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "rhi_test_support.h"
 
 #include <catch2/catch_message.hpp>
@@ -22,18 +22,18 @@
 using namespace bfr::rhi;
 using namespace bfr::rhi::test;
 
-TEST_CASE("Rhi has a name for each backend", "[rhi][unit]") {
+TEST_CASE("Instance has a name for each backend", "[rhi][unit]") {
     for (const Backend backend : backends()) {
         CHECK(name(backend) != "unknown");
     }
 }
 
-TEST_CASE("Rhi fails with RhiBackendUnavailable for a backend this build lacks", "[rhi][unit]") {
+TEST_CASE("Instance fails with RhiBackendUnavailable for a backend this build lacks", "[rhi][unit]") {
     for (const Backend backend : {Backend::Vulkan, Backend::D3D12, Backend::Metal}) {
         if (std::ranges::contains(backends(), backend)) {
             continue;
         }
-        const auto rhi = Rhi::create({.backend = backend}, {});
+        const auto rhi = Instance::create({.backend = backend}, {});
 
         INFO(name(backend));
         REQUIRE_FALSE(rhi.has_value());
@@ -43,19 +43,19 @@ TEST_CASE("Rhi fails with RhiBackendUnavailable for a backend this build lacks",
     }
 }
 
-TEST_CASE("Rhi fails with RhiBackendUnavailable for a value that is no backend", "[rhi][unit]") {
-    const auto rhi = Rhi::create({.backend = static_cast<Backend>(0)}, {});
+TEST_CASE("Instance fails with RhiBackendUnavailable for a value that is no backend", "[rhi][unit]") {
+    const auto rhi = Instance::create({.backend = static_cast<Backend>(0)}, {});
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiBackendUnavailable);
     CHECK_THAT(rhi.error().message, Catch::Matchers::Equals("backend 0 is not one BFR has"));
 }
 
-TEST_CASE("Rhi with validation lists an adapter and reports nothing", "[rhi][agnostic]") {
+TEST_CASE("Instance with validation lists an adapter and reports nothing", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
 
-    const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
+    const auto rhi = createInstance(recordingInto(backend, messages), kValidation);
 
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
@@ -66,10 +66,10 @@ TEST_CASE("Rhi with validation lists an adapter and reports nothing", "[rhi][agn
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Rhi fails to create a device on an adapter it does not list", "[rhi][agnostic]") {
+TEST_CASE("Instance fails to create a device on an adapter it does not list", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
-    const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
+    const auto rhi = createInstance(recordingInto(backend, messages), kValidation);
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -80,10 +80,10 @@ TEST_CASE("Rhi fails to create a device on an adapter it does not list", "[rhi][
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Rhi creates a device on every adapter it lists", "[rhi][agnostic]") {
+TEST_CASE("Instance creates a device on every adapter it lists", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
-    const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
+    const auto rhi = createInstance(recordingInto(backend, messages), kValidation);
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
     REQUIRE_FALSE((*rhi)->adapters().empty());
@@ -97,11 +97,11 @@ TEST_CASE("Rhi creates a device on every adapter it lists", "[rhi][agnostic]") {
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Rhi creates a device that presents to a headless window", "[rhi][agnostic]") {
+TEST_CASE("Instance creates a device that presents to a headless window", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const auto rhi = createRhi(recordingInto(backend, messages), kValidation);
+        const auto rhi = createInstance(recordingInto(backend, messages), kValidation);
         INFO(name(backend) << ' ' << failureOf(rhi));
         REQUIRE(rhi.has_value());
 

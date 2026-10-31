@@ -25,7 +25,7 @@
 
 namespace bfr::rhi::d3d12 {
 
-class D3D12Rhi;
+class D3D12Instance;
 
 /// A command pool: an allocator and a list for each list recording at once,
 /// since D3D12 lets one list record from an allocator at a time; how many are
@@ -79,11 +79,11 @@ public:
     /// heaps, a graphics queue and the queues asked for. Fails with
     /// RhiDeviceFailed when D3D12 gives no queue or fence.
     [[nodiscard]] static core::Result<std::unique_ptr<D3D12Device>> create(
-        D3D12Rhi& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device, Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter,
+        D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device, Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter,
         std::size_t heapCount, const DeviceQueues& queues);
 
     /// For create.
-    D3D12Device(D3D12Rhi& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device,
+    D3D12Device(D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device,
                 Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter, std::size_t heapCount);
     ~D3D12Device() override;
     D3D12Device(const D3D12Device&) = delete;
@@ -124,7 +124,7 @@ private:
     [[nodiscard]] core::Result<D3D12CommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<D3D12CommandList*> commandListFor(CommandListHandle commandList);
 
-    D3D12Rhi* rhi_;
+    D3D12Instance* instance_;
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
     Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter_;
     std::size_t heapCount_;

@@ -6,7 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/format.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "metal/metal_util.h"
 
@@ -26,20 +26,21 @@
 
 namespace bfr::rhi::metal {
 
-class MetalRhi final : public Rhi {
+class MetalInstance final : public Instance {
 public:
-    /// An Rhi over the Metal devices the system lists. With validation on,
+    /// An Instance over the Metal devices the system lists. With validation on,
     /// Metal's own validation layer is switched on, which reports to the
     /// system and not to the logger. Fails with RhiNoAdapter when no device
     /// meets the floor, naming each and why.
-    [[nodiscard]] static core::Result<std::unique_ptr<MetalRhi>> create(const RhiDesc& desc, const RhiConfig& config);
+    [[nodiscard]] static core::Result<std::unique_ptr<MetalInstance>> create(const InstanceDesc& desc,
+                                                                             const RhiConfig& config);
 
-    MetalRhi(const RhiConfig& config, core::Logger logger);
-    ~MetalRhi() override = default;
-    MetalRhi(const MetalRhi&) = delete;
-    MetalRhi& operator=(const MetalRhi&) = delete;
-    MetalRhi(MetalRhi&&) = delete;
-    MetalRhi& operator=(MetalRhi&&) = delete;
+    MetalInstance(const RhiConfig& config, core::Logger logger);
+    ~MetalInstance() override = default;
+    MetalInstance(const MetalInstance&) = delete;
+    MetalInstance& operator=(const MetalInstance&) = delete;
+    MetalInstance(MetalInstance&&) = delete;
+    MetalInstance& operator=(MetalInstance&&) = delete;
 
     [[nodiscard]] std::span<const Adapter> adapters() const override { return adapters_; }
     [[nodiscard]] core::Result<std::unique_ptr<Device>> createDevice(std::size_t adapter,
@@ -51,9 +52,9 @@ public:
     [[nodiscard]] core::Result<std::vector<SwapchainFormat>> swapchainFormats(
         std::size_t adapter, const core::window::NativeWindow& window) const override;
 
-    using Rhi::config;
+    using Instance::config;
 
-    /// Where the Rhi and its devices send their messages.
+    /// Where the Instance and its devices send their messages.
     [[nodiscard]] const core::Logger& logger() const { return logger_; }
 
 private:

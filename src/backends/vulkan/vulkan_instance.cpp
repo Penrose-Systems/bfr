@@ -1,4 +1,4 @@
-#include "vulkan/vulkan_rhi.h"
+#include "vulkan/vulkan_instance.h"
 
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
@@ -7,7 +7,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/format.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "vulkan/instance_table.h"
 #include "vulkan/queue_families.h"
@@ -306,7 +306,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL onMessage(VkDebugUtilsMessageSeverityFlagBitsEXT 
                                          const VkDebugUtilsMessengerCallbackDataEXT* data, void* userData) {
     const core::Severity level = severityOf(severity);
     const std::string_view message = data->pMessage != nullptr ? data->pMessage : "";
-    const auto& sink = *static_cast<const VulkanRhi::MessageSink*>(userData);
+    const auto& sink = *static_cast<const VulkanInstance::MessageSink*>(userData);
     if (sink.reasons != nullptr && level >= core::Severity::Warning) {
         sink.reasons->emplace_back(message);
     }
@@ -314,7 +314,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL onMessage(VkDebugUtilsMessageSeverityFlagBitsEXT 
     return VK_FALSE;
 }
 
-// The instance extensions the Rhi enables when the loader has them, or the
+// The instance extensions the Instance enables when the loader has them, or the
 // listing that failed. Portability enumeration shows portability drivers, such
 // as MoltenVK. The surface extensions cover every window system this build
 // supports, and each needs VK_KHR_surface.
@@ -347,7 +347,7 @@ core::Result<std::vector<const char*>> optionalExtensions() {
 
 // Warnings and errors of every type, and the quieter messages when the logger
 // wants them.
-VkDebugUtilsMessengerCreateInfoEXT messengerInfo(VulkanRhi::MessageSink* sink) {
+VkDebugUtilsMessengerCreateInfoEXT messengerInfo(VulkanInstance::MessageSink* sink) {
     VkDebugUtilsMessengerCreateInfoEXT info{};
     info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
     info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
@@ -367,7 +367,8 @@ VkDebugUtilsMessengerCreateInfoEXT messengerInfo(VulkanRhi::MessageSink* sink) {
 
 } // namespace
 
-core::Result<std::unique_ptr<VulkanRhi>> VulkanRhi::create(const RhiDesc& desc, const RhiConfig& config) {
+core::Result<std::unique_ptr<VulkanInstance>> VulkanInstance::create(const InstanceDesc& desc,
+                                                                     const RhiConfig& config) {
     if (auto opened = openLoader(); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
@@ -383,7 +384,7 @@ core::Result<std::unique_ptr<VulkanRhi>> VulkanRhi::create(const RhiDesc& desc, 
         }
     }
 
-    auto rhi = std::make_unique<VulkanRhi>(config, desc.logger);
+    auto rhi = std::make_unique<VulkanInstance>(config, desc.logger);
     rhi->loaderVersion_ = *loader;
     if (auto created = rhi->createInstance(); !created) {
         return std::unexpected(std::move(created.error()));
@@ -394,10 +395,10 @@ core::Result<std::unique_ptr<VulkanRhi>> VulkanRhi::create(const RhiDesc& desc, 
     return rhi;
 }
 
-VulkanRhi::VulkanRhi(const RhiConfig& config, core::Logger logger)
-    : Rhi(config), messages_{.logger = std::move(logger)} {}
+VulkanInstance::VulkanInstance(const RhiConfig& config, core::Logger logger)
+    : Instance(config), messages_{.logger = std::move(logger)} {}
 
-VulkanRhi::~VulkanRhi() {
+VulkanInstance::~VulkanInstance() {
     // Without a VkInstance, there is no table to destroy it through.
     if (instance_ == VK_NULL_HANDLE) {
         return;
@@ -409,13 +410,13 @@ VulkanRhi::~VulkanRhi() {
     BFR_LOG_DEBUG(logger(), "Vulkan instance destroyed");
 }
 
-std::span<const Adapter> VulkanRhi::adapters() const {
+std::span<const Adapter> VulkanInstance::adapters() const {
     return adapters_;
 }
 
-core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapter,
-                                                              const core::window::NativeWindow& presentTo,
-                                                              const DeviceQueues& wanted) {
+core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t adapter,
+                                                                   const core::window::NativeWindow& presentTo,
+                                                                   const DeviceQueues& wanted) {
     if (auto listed = checkAdapter(adapter); !listed) {
         return std::unexpected(std::move(listed.error()));
     }
@@ -488,24 +489,24 @@ core::Result<std::unique_ptr<Device>> VulkanRhi::createDevice(std::size_t adapte
     return std::unique_ptr<Device>{std::move(*made)};
 }
 
-core::Result<FormatCaps> VulkanRhi::formatCaps(std::size_t adapter, Format format) const {
+core::Result<FormatCaps> VulkanInstance::formatCaps(std::size_t adapter, Format format) const {
     if (auto listed = checkAdapter(adapter); !listed) {
         return std::unexpected(std::move(listed.error()));
     }
     return readFormatCaps(vk_, physicalDevices_[adapter], format);
 }
 
-core::Result<SwapchainCaps> VulkanRhi::swapchainCaps(std::size_t adapter,
-                                                     const core::window::NativeWindow& window) const {
+core::Result<SwapchainCaps> VulkanInstance::swapchainCaps(std::size_t adapter,
+                                                          const core::window::NativeWindow& window) const {
     return askAboutSurface(adapter, window, readSurfaceCaps);
 }
 
-core::Result<std::vector<SwapchainFormat>> VulkanRhi::swapchainFormats(std::size_t adapter,
-                                                                       const core::window::NativeWindow& window) const {
+core::Result<std::vector<SwapchainFormat>> VulkanInstance::swapchainFormats(
+    std::size_t adapter, const core::window::NativeWindow& window) const {
     return askAboutSurface(adapter, window, readSurfaceFormats);
 }
 
-core::Result<void> VulkanRhi::checkAdapter(std::size_t adapter) const {
+core::Result<void> VulkanInstance::checkAdapter(std::size_t adapter) const {
     if (adapter >= adapters_.size()) {
         return core::failure(core::ErrorCode::RhiAdapterOutOfRange,
                              std::format("adapter {} of {}", adapter, adapters_.size()));
@@ -514,7 +515,7 @@ core::Result<void> VulkanRhi::checkAdapter(std::size_t adapter) const {
 }
 
 template <class Query>
-auto VulkanRhi::askAboutSurface(std::size_t adapter, const core::window::NativeWindow& window, Query query) const
+auto VulkanInstance::askAboutSurface(std::size_t adapter, const core::window::NativeWindow& window, Query query) const
     -> std::invoke_result_t<Query, const InstanceTable&, VkPhysicalDevice, VkSurfaceKHR> {
     if (auto listed = checkAdapter(adapter); !listed) {
         return std::unexpected(std::move(listed.error()));
@@ -534,8 +535,8 @@ auto VulkanRhi::askAboutSurface(std::size_t adapter, const core::window::NativeW
     return query(vk_, physicalDevice, surface->handle());
 }
 
-core::Result<std::vector<VkBool32>> VulkanRhi::presentingFamilies(std::size_t adapter, std::size_t familyCount,
-                                                                  const core::window::NativeWindow& presentTo) const {
+core::Result<std::vector<VkBool32>> VulkanInstance::presentingFamilies(
+    std::size_t adapter, std::size_t familyCount, const core::window::NativeWindow& presentTo) const {
     std::vector<VkBool32> presenting;
     if (std::holds_alternative<std::monostate>(presentTo)) {
         return presenting;
@@ -563,12 +564,12 @@ core::Result<std::vector<VkBool32>> VulkanRhi::presentingFamilies(std::size_t ad
     return presenting;
 }
 
-core::Result<VulkanSurface> VulkanRhi::surfaceFor(const core::window::NativeWindow& window) const {
+core::Result<VulkanSurface> VulkanInstance::surfaceFor(const core::window::NativeWindow& window) const {
     return createSurface(instance_, vk_, extensions_, window);
 }
 
-core::Result<bool> VulkanRhi::presents(VkPhysicalDevice adapter, std::uint32_t family,
-                                       const VulkanSurface& surface) const {
+core::Result<bool> VulkanInstance::presents(VkPhysicalDevice adapter, std::uint32_t family,
+                                            const VulkanSurface& surface) const {
     if (presentQueryCrashes(adapter, surface)) {
         return false;
     }
@@ -581,12 +582,12 @@ core::Result<bool> VulkanRhi::presents(VkPhysicalDevice adapter, std::uint32_t f
     return supported == VK_TRUE;
 }
 
-bool VulkanRhi::presentQueryCrashes(VkPhysicalDevice adapter, const VulkanSurface& surface) const {
+bool VulkanInstance::presentQueryCrashes(VkPhysicalDevice adapter, const VulkanSurface& surface) const {
     return loaderVersion_ < kLoaderAnswersForDrivers && surface.headless() &&
            driverProperties(vk_, adapter).driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY;
 }
 
-core::Result<void> VulkanRhi::createInstance() {
+core::Result<void> VulkanInstance::createInstance() {
     VkApplicationInfo application{};
     application.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     application.pEngineName = "BFR";
@@ -625,7 +626,7 @@ core::Result<void> VulkanRhi::createInstance() {
     const VkResult result = vkCreateInstance(&info, nullptr, &handle);
     messages_.reasons = nullptr;
     if (result != VK_SUCCESS) {
-        // Validation is the only layer the Rhi enables, so a layer that is
+        // Validation is the only layer the Instance enables, so a layer that is
         // listed yet fails to load is validation.
         const core::ErrorCode code = result == VK_ERROR_LAYER_NOT_PRESENT
                                          ? core::ErrorCode::RhiValidationUnavailable
@@ -645,7 +646,7 @@ core::Result<void> VulkanRhi::createInstance() {
     return config().validation ? createMessenger(messenger) : core::Result<void>{};
 }
 
-core::Result<void> VulkanRhi::createMessenger(const VkDebugUtilsMessengerCreateInfoEXT& info) {
+core::Result<void> VulkanInstance::createMessenger(const VkDebugUtilsMessengerCreateInfoEXT& info) {
     if (const VkResult result = vk_.vkCreateDebugUtilsMessengerEXT(instance_, &info, nullptr, &messenger_);
         result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiInstanceFailed,
@@ -655,7 +656,7 @@ core::Result<void> VulkanRhi::createMessenger(const VkDebugUtilsMessengerCreateI
     return {};
 }
 
-core::Result<void> VulkanRhi::listAdapters() {
+core::Result<void> VulkanInstance::listAdapters() {
     const auto devices = listAll<VkPhysicalDevice>("vkEnumeratePhysicalDevices",
                                                    [this](std::uint32_t* count, VkPhysicalDevice* listed) {
                                                        return vk_.vkEnumeratePhysicalDevices(instance_, count, listed);

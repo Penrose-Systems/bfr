@@ -22,7 +22,7 @@
 
 namespace bfr::rhi::vulkan {
 
-class VulkanRhi;
+class VulkanInstance;
 
 /// A swapchain a command list rendered to, and the layout its image is in
 /// after the commands so far; the swapchain takes it once the submit is sent.
@@ -94,13 +94,13 @@ public:
     /// on families.transfer; rhi outlives it. hasBudget says whether adapter
     /// has VK_EXT_memory_budget. Fails with RhiDeviceFailed, destroying device,
     /// when the API refuses a queue's timeline.
-    [[nodiscard]] static core::Result<std::unique_ptr<VulkanDevice>> create(VulkanRhi& rhi, VkPhysicalDevice adapter,
-                                                                            VkDevice device,
+    [[nodiscard]] static core::Result<std::unique_ptr<VulkanDevice>> create(VulkanInstance& rhi,
+                                                                            VkPhysicalDevice adapter, VkDevice device,
                                                                             const QueueFamilies& families,
                                                                             const DeviceQueues& queues, bool hasBudget);
 
     /// For create.
-    VulkanDevice(VulkanRhi& rhi, VkPhysicalDevice adapter, VkDevice device, const QueueFamilies& families,
+    VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const QueueFamilies& families,
                  bool hasBudget);
     ~VulkanDevice() override;
     VulkanDevice(const VulkanDevice&) = delete;
@@ -140,7 +140,7 @@ private:
     [[nodiscard]] core::Result<VulkanCommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<VulkanCommandList*> commandListFor(CommandListHandle commandList);
 
-    VulkanRhi* rhi_;
+    VulkanInstance* instance_;
     VkPhysicalDevice adapter_;
     VkDevice device_;
     // Each device calls through its own table: volk's global pointers hold one

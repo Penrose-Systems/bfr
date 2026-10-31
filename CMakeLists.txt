@@ -34,7 +34,7 @@ endif()
 
 option(BFR_LOGGING "Compile the BFR_LOG_* calls in" ON)
 # Each backend is a build option, on wherever the platform has it, so a build
-# holds every backend it can and a program picks one at run time. Rhi::create
+# holds every backend it can and a program picks one at run time. Instance::create
 # dispatches on those turned on and refuses the rest with RhiBackendUnavailable.
 # Turning one on where the platform lacks it is an error. WIN32 and APPLE are
 # empty elsewhere.
@@ -90,14 +90,14 @@ include(cmake/bfr_build.cmake)
 # BFR's code, compiled once for both libraries below. include/bfr is its
 # public API: bfr.h, the C API, and the C++ layers behind it, bfr/core and
 # bfr/rhi. Each backend is one directory under src/backends, private, and
-# only src/rhi/rhi.cpp names them. The null backend is the tests' own, built
+# only src/rhi/instance.cpp names them. The null backend is the tests' own, built
 # into them alone.
 add_library(bfr_objects OBJECT
     src/c_api/c_api.cpp
     src/core/error.cpp
-    src/rhi/rhi.cpp)
+    src/rhi/instance.cpp)
 bfr_apply_compiler_flags(bfr_objects)
-# Private headers are named from src: "vulkan/vulkan_rhi.h".
+# Private headers are named from src: "vulkan/vulkan_instance.h".
 target_include_directories(bfr_objects
     PUBLIC include
     PRIVATE src src/backends)
@@ -125,7 +125,7 @@ if(BFR_BACKEND_VULKAN)
         src/backends/vulkan/vulkan_caps.cpp
         src/backends/vulkan/vulkan_device.cpp
         src/backends/vulkan/vulkan_loader.cpp
-        src/backends/vulkan/vulkan_rhi.cpp
+        src/backends/vulkan/vulkan_instance.cpp
         src/backends/vulkan/vulkan_surface.cpp
         src/backends/vulkan/vulkan_swapchain.cpp)
     target_link_libraries(bfr_objects PRIVATE volk::volk_headers Vulkan::UtilityHeaders)
@@ -157,7 +157,7 @@ if(BFR_BACKEND_D3D12)
         src/backends/d3d12/d3d12_caps.cpp
         src/backends/d3d12/d3d12_device.cpp
         src/backends/d3d12/d3d12_formats.cpp
-        src/backends/d3d12/d3d12_rhi.cpp
+        src/backends/d3d12/d3d12_instance.cpp
         src/backends/d3d12/d3d12_swapchain.cpp)
     # The Windows headers define macros, min and max among them, that would
     # leak into every file that includes a backend's header.
@@ -177,7 +177,7 @@ if(BFR_BACKEND_METAL)
         src/backends/metal/metal_caps.cpp
         src/backends/metal/metal_device.cpp
         src/backends/metal/metal_formats.cpp
-        src/backends/metal/metal_rhi.cpp
+        src/backends/metal/metal_instance.cpp
         src/backends/metal/metal_swapchain.cpp)
     target_include_directories(bfr_objects SYSTEM PRIVATE ${BFR_METAL_CPP_INCLUDE_DIR})
     target_link_libraries(bfr_objects PRIVATE "-framework Foundation" "-framework Metal" "-framework QuartzCore"

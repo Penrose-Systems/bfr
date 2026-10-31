@@ -1,4 +1,4 @@
-#include "metal/metal_rhi.h"
+#include "metal/metal_instance.h"
 
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
@@ -6,7 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/format.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "metal/metal_caps.h"
 #include "metal/metal_device.h"
@@ -31,8 +31,8 @@
 
 namespace bfr::rhi::metal {
 
-core::Result<std::unique_ptr<MetalRhi>> MetalRhi::create(const RhiDesc& desc, const RhiConfig& config) {
-    auto rhi = std::make_unique<MetalRhi>(config, desc.logger);
+core::Result<std::unique_ptr<MetalInstance>> MetalInstance::create(const InstanceDesc& desc, const RhiConfig& config) {
+    auto rhi = std::make_unique<MetalInstance>(config, desc.logger);
     if (config.validation) {
         // Metal's validation layer is switched on by the environment, before
         // the first device exists, and it reports to the system log.
@@ -44,9 +44,10 @@ core::Result<std::unique_ptr<MetalRhi>> MetalRhi::create(const RhiDesc& desc, co
     return rhi;
 }
 
-MetalRhi::MetalRhi(const RhiConfig& config, core::Logger logger) : Rhi(config), logger_(std::move(logger)) {}
+MetalInstance::MetalInstance(const RhiConfig& config, core::Logger logger)
+    : Instance(config), logger_(std::move(logger)) {}
 
-core::Result<void> MetalRhi::listAdapters() {
+core::Result<void> MetalInstance::listAdapters() {
     const AutoreleasePool pool;
     std::vector<Ref<MTL::Device>> found;
 #if TARGET_OS_OSX
@@ -85,7 +86,7 @@ core::Result<void> MetalRhi::listAdapters() {
     return {};
 }
 
-core::Result<void> MetalRhi::checkAdapter(std::size_t adapter) const {
+core::Result<void> MetalInstance::checkAdapter(std::size_t adapter) const {
     if (adapter >= adapters_.size()) {
         return core::failure(core::ErrorCode::RhiAdapterOutOfRange,
                              std::format("adapter {} is not one of the {} listed", adapter, adapters_.size()));
@@ -93,9 +94,9 @@ core::Result<void> MetalRhi::checkAdapter(std::size_t adapter) const {
     return {};
 }
 
-core::Result<std::unique_ptr<Device>> MetalRhi::createDevice(std::size_t adapter,
-                                                             const core::window::NativeWindow& presentTo,
-                                                             const DeviceQueues& queues) {
+core::Result<std::unique_ptr<Device>> MetalInstance::createDevice(std::size_t adapter,
+                                                                  const core::window::NativeWindow& presentTo,
+                                                                  const DeviceQueues& queues) {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -108,7 +109,7 @@ core::Result<std::unique_ptr<Device>> MetalRhi::createDevice(std::size_t adapter
     return MetalDevice::create(*this, devices_[adapter], queues);
 }
 
-core::Result<FormatCaps> MetalRhi::formatCaps(std::size_t adapter, Format format) const {
+core::Result<FormatCaps> MetalInstance::formatCaps(std::size_t adapter, Format format) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -116,8 +117,8 @@ core::Result<FormatCaps> MetalRhi::formatCaps(std::size_t adapter, Format format
     return FormatCaps{.format = format};
 }
 
-core::Result<SwapchainCaps> MetalRhi::swapchainCaps(std::size_t adapter,
-                                                    const core::window::NativeWindow& window) const {
+core::Result<SwapchainCaps> MetalInstance::swapchainCaps(std::size_t adapter,
+                                                         const core::window::NativeWindow& window) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -127,8 +128,8 @@ core::Result<SwapchainCaps> MetalRhi::swapchainCaps(std::size_t adapter,
     return surfaceCapsFor();
 }
 
-core::Result<std::vector<SwapchainFormat>> MetalRhi::swapchainFormats(std::size_t adapter,
-                                                                      const core::window::NativeWindow& window) const {
+core::Result<std::vector<SwapchainFormat>> MetalInstance::swapchainFormats(
+    std::size_t adapter, const core::window::NativeWindow& window) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }

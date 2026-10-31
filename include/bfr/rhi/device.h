@@ -10,7 +10,7 @@
 
 namespace bfr::rhi {
 
-/// A logical GPU on one of the Rhi's adapters.
+/// A logical GPU on one of the Instance's adapters.
 class Device {
 public:
     /// Waits for the GPU to finish its work, then releases the device and the

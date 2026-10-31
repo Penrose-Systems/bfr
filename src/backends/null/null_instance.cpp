@@ -1,4 +1,4 @@
-#include "null/null_rhi.h"
+#include "null/null_instance.h"
 
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
@@ -6,7 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/format.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "null/null_device.h"
 
@@ -69,12 +69,12 @@ std::span<const SwapchainFormat> nullSurfaceFormats() {
     return kSurfaceFormats;
 }
 
-core::Result<std::unique_ptr<NullRhi>> NullRhi::create(const RhiDesc& desc, const RhiConfig& config) {
-    return std::make_unique<NullRhi>(config, desc.logger);
+core::Result<std::unique_ptr<NullInstance>> NullInstance::create(const InstanceDesc& desc, const RhiConfig& config) {
+    return std::make_unique<NullInstance>(config, desc.logger);
 }
 
-NullRhi::NullRhi(const RhiConfig& config, core::Logger logger)
-    : Rhi(config),
+NullInstance::NullInstance(const RhiConfig& config, core::Logger logger)
+    : Instance(config),
       logger_(std::move(logger)),
       // No GPU, so nothing to report: every limit 0, no heaps or queues, no
       // optional feature. The device accepts every call anyway.
@@ -83,7 +83,7 @@ NullRhi::NullRhi(const RhiConfig& config, core::Logger logger)
                  config.validation ? "on" : "off");
 }
 
-core::Result<void> NullRhi::checkAdapter(std::size_t adapter) const {
+core::Result<void> NullInstance::checkAdapter(std::size_t adapter) const {
     if (adapter >= adapters_.size()) {
         return core::failure(core::ErrorCode::RhiAdapterOutOfRange,
                              std::format("adapter {} is not one of the {} listed", adapter, adapters_.size()));
@@ -91,9 +91,9 @@ core::Result<void> NullRhi::checkAdapter(std::size_t adapter) const {
     return {};
 }
 
-core::Result<std::unique_ptr<Device>> NullRhi::createDevice(std::size_t adapter,
-                                                            const core::window::NativeWindow& /*presentTo*/,
-                                                            const DeviceQueues& queues) {
+core::Result<std::unique_ptr<Device>> NullInstance::createDevice(std::size_t adapter,
+                                                                 const core::window::NativeWindow& /*presentTo*/,
+                                                                 const DeviceQueues& queues) {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -101,7 +101,7 @@ core::Result<std::unique_ptr<Device>> NullRhi::createDevice(std::size_t adapter,
     return std::make_unique<NullDevice>(*this, queues);
 }
 
-core::Result<FormatCaps> NullRhi::formatCaps(std::size_t adapter, Format format) const {
+core::Result<FormatCaps> NullInstance::formatCaps(std::size_t adapter, Format format) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -109,8 +109,8 @@ core::Result<FormatCaps> NullRhi::formatCaps(std::size_t adapter, Format format)
     return FormatCaps{.format = format};
 }
 
-core::Result<SwapchainCaps> NullRhi::swapchainCaps(std::size_t adapter,
-                                                   const core::window::NativeWindow& window) const {
+core::Result<SwapchainCaps> NullInstance::swapchainCaps(std::size_t adapter,
+                                                        const core::window::NativeWindow& window) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -120,8 +120,8 @@ core::Result<SwapchainCaps> NullRhi::swapchainCaps(std::size_t adapter,
     return nullSurfaceCaps();
 }
 
-core::Result<std::vector<SwapchainFormat>> NullRhi::swapchainFormats(std::size_t adapter,
-                                                                     const core::window::NativeWindow& window) const {
+core::Result<std::vector<SwapchainFormat>> NullInstance::swapchainFormats(
+    std::size_t adapter, const core::window::NativeWindow& window) const {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }

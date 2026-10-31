@@ -8,8 +8,8 @@
 #include "bfr/rhi/swapchain.h"
 #include "vulkan/queue_families.h"
 #include "vulkan/vulkan_caps.h"
+#include "vulkan/vulkan_instance.h"
 #include "vulkan/vulkan_result.h"
-#include "vulkan/vulkan_rhi.h"
 #include "vulkan/vulkan_swapchain.h"
 
 #include <volk.h>
@@ -88,7 +88,7 @@ void recordBarrier(const VolkDeviceTable& table, VkCommandBuffer buffer, const V
 
 } // namespace
 
-core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanRhi& rhi, VkPhysicalDevice adapter,
+core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance& rhi, VkPhysicalDevice adapter,
                                                                  VkDevice device, const QueueFamilies& families,
                                                                  const DeviceQueues& queues, bool hasBudget) {
     auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, families, hasBudget);
@@ -112,9 +112,9 @@ VkCommandPool VulkanCommandPool::release() {
     return std::exchange(pool, VK_NULL_HANDLE);
 }
 
-VulkanDevice::VulkanDevice(VulkanRhi& rhi, VkPhysicalDevice adapter, VkDevice device, const QueueFamilies& families,
-                           bool hasBudget)
-    : rhi_(&rhi),
+VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device,
+                           const QueueFamilies& families, bool hasBudget)
+    : instance_(&rhi),
       adapter_(adapter),
       device_(device),
       graphicsFamily_(families.graphics),
@@ -254,12 +254,12 @@ core::Result<VulkanCommandList*> VulkanDevice::commandListFor(CommandListHandle 
 
 core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::NativeWindow& window,
                                                             const SwapchainRequest& request) {
-    auto surface = rhi_->surfaceFor(window);
+    auto surface = instance_->surfaceFor(window);
     if (!surface) {
         return std::unexpected(std::move(surface.error()));
     }
     // Fixed for the surface, so asked once.
-    const auto presents = rhi_->presents(adapter_, presentFamily_, *surface);
+    const auto presents = instance_->presents(adapter_, presentFamily_, *surface);
     if (!presents) {
         return std::unexpected(presents.error());
     }
@@ -267,8 +267,8 @@ core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::
         return core::failure(core::ErrorCode::RhiPresentUnsupported,
                              "the device's present queue doesn't present to the window");
     }
-    const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, rhi_->instanceTable(), std::move(*surface),
-                                                          request, rhi_->logger());
+    const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, instance_->instanceTable(),
+                                                          std::move(*surface), request, instance_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("a device holds at most {} swapchains", kSwapchainLimit));
@@ -687,21 +687,22 @@ core::Result<MemoryBudget> VulkanDevice::budget() const {
     if (!hasBudget_) {
         return core::failure(core::ErrorCode::RhiUnsupported, "the driver lacks VK_EXT_memory_budget");
     }
-    return readBudget(rhi_->instanceTable(), adapter_);
+    return readBudget(instance_->instanceTable(), adapter_);
 }
 
 VulkanDevice::~VulkanDevice() {
     // A failed wait leaves nothing to do but release, and no result to report
     // it through, so it is sent as an error whatever BFR_LOGGING says.
     if (const VkResult result = table_.vkDeviceWaitIdle(device_); result != VK_SUCCESS) {
-        rhi_->logger().send(core::Severity::Error,
-                            std::format("vkDeviceWaitIdle: {}; destroying the device anyway", string_VkResult(result)));
+        instance_->logger().send(core::Severity::Error,
+                                 std::format("vkDeviceWaitIdle: {}; destroying the device anyway",
+                                             string_VkResult(result)));
     }
     if (swapchains_.size() != 0) {
-        BFR_LOG_WARN(rhi_->logger(), "{} swapchains were left when the device went", swapchains_.size());
+        BFR_LOG_WARN(instance_->logger(), "{} swapchains were left when the device went", swapchains_.size());
     }
     if (commandPools_.size() != 0) {
-        BFR_LOG_WARN(rhi_->logger(), "{} command pools were left when the device went", commandPools_.size());
+        BFR_LOG_WARN(instance_->logger(), "{} command pools were left when the device went", commandPools_.size());
     }
     commandLists_.clear();
     commandPools_.clear();
@@ -715,7 +716,7 @@ VulkanDevice::~VulkanDevice() {
         }
     }
     table_.vkDestroyDevice(device_, nullptr);
-    BFR_LOG_DEBUG(rhi_->logger(), "Vulkan device destroyed");
+    BFR_LOG_DEBUG(instance_->logger(), "Vulkan device destroyed");
 }
 
 } // namespace bfr::rhi::vulkan

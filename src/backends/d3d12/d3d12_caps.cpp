@@ -2,7 +2,7 @@
 
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/format.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "d3d12/d3d12_formats.h"
 
 #include <d3d12.h>

@@ -6,10 +6,10 @@
 
 #include "bfr/core/error.h"
 #include "bfr/core/window.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "bfr/rhi/swapchain.h"
-#include "null/null_rhi.h"
+#include "null/null_instance.h"
 #include "test_backends.h"
 
 #include <catch2/catch_message.hpp>
@@ -45,9 +45,9 @@ struct TestBackend {
     return backend.name;
 }
 
-/// What createRhi needs to make an Rhi on a TestBackend.
-struct TestRhiDesc {
-    RhiDesc desc;
+/// What createInstance needs to make an Instance on a TestBackend.
+struct TestInstanceDesc {
+    InstanceDesc desc;
     bool null = false;
 };
 
@@ -65,35 +65,36 @@ inline auto eachBackend() {
     return Catch::Generators::from_range(chosen);
 }
 
-/// An Rhi on backend: the null one when it has no Backend.
-[[nodiscard]] inline core::Result<std::unique_ptr<Rhi>> createRhi(const TestRhiDesc& test, const RhiConfig& config) {
+/// An Instance on backend: the null one when it has no Backend.
+[[nodiscard]] inline core::Result<std::unique_ptr<Instance>> createInstance(const TestInstanceDesc& test,
+                                                                            const RhiConfig& config) {
     if (test.null) {
-        return null::NullRhi::create(test.desc, config);
+        return null::NullInstance::create(test.desc, config);
     }
-    return Rhi::create(test.desc, config);
+    return Instance::create(test.desc, config);
 }
 
 /// A description on backend, with nothing recorded.
-inline TestRhiDesc describe(const TestBackend& backend) {
+inline TestInstanceDesc describe(const TestBackend& backend) {
     return {.desc = {.backend = backend.backend.value_or(Backend{})}, .null = !backend.backend.has_value()};
 }
 
-/// A description on backend that records every warning and error the Rhi and
+/// A description on backend that records every warning and error the Instance and
 /// validation report.
-inline RhiDesc recordingInto(Backend backend, std::vector<std::string>& messages) {
+inline InstanceDesc recordingInto(Backend backend, std::vector<std::string>& messages) {
     return {.backend = backend,
             .logger = {[&messages](core::Severity, std::string_view message) { messages.emplace_back(message); },
                        core::Severity::Warning}};
 }
 
 /// recordingInto on a TestBackend.
-inline TestRhiDesc recordingInto(const TestBackend& backend, std::vector<std::string>& messages) {
+inline TestInstanceDesc recordingInto(const TestBackend& backend, std::vector<std::string>& messages) {
     return {.desc = recordingInto(backend.backend.value_or(Backend{}), messages), .null = !backend.backend.has_value()};
 }
 
 /// A description on backend that records only errors: a backend's loader may
 /// warn about what the environment turned on.
-inline RhiDesc recordingErrorsInto(Backend backend, std::vector<std::string>& errors) {
+inline InstanceDesc recordingErrorsInto(Backend backend, std::vector<std::string>& errors) {
     return {.backend = backend,
             .logger = {[&errors](core::Severity, std::string_view message) { errors.emplace_back(message); },
                        core::Severity::Error}};
@@ -108,7 +109,7 @@ std::string failureOf(const core::Result<T>& result) {
 
 /// The first adapter that presents to a headless window. An adapter may not
 /// present to one at all: NVIDIA's driver has no headless surfaces.
-inline std::size_t headlessAdapter(const Rhi& rhi) {
+inline std::size_t headlessAdapter(const Instance& rhi) {
     for (std::size_t adapter = 0; adapter < rhi.adapters().size(); ++adapter) {
         const auto caps = rhi.swapchainCaps(adapter, core::window::Headless{});
         if (caps.has_value()) {
@@ -123,7 +124,7 @@ inline std::size_t headlessAdapter(const Rhi& rhi) {
 
 /// What a test swapchain on a headless window of rhi asks for: the defaults,
 /// with the fewest images the surface reports it takes, as a caller must set.
-inline SwapchainRequest swapchainRequest(const Rhi& rhi) {
+inline SwapchainRequest swapchainRequest(const Instance& rhi) {
     const auto caps = rhi.swapchainCaps(headlessAdapter(rhi), core::window::Headless{});
     INFO(failureOf(caps));
     REQUIRE(caps.has_value());
@@ -132,7 +133,7 @@ inline SwapchainRequest swapchainRequest(const Rhi& rhi) {
 
 /// A device on the first adapter that presents to window. An adapter may not
 /// present to it at all: NVIDIA's driver has no headless surfaces.
-inline std::unique_ptr<Device> presentingDevice(Rhi& rhi, const core::window::NativeWindow& window) {
+inline std::unique_ptr<Device> presentingDevice(Instance& rhi, const core::window::NativeWindow& window) {
     for (std::size_t adapter = 0; adapter < rhi.adapters().size(); ++adapter) {
         auto device = rhi.createDevice(adapter, window, {});
         if (device.has_value()) {

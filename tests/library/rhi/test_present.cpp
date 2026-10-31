@@ -5,7 +5,7 @@
 #include "bfr/core/window.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "bfr/rhi/swapchain.h"
 #include "rhi_test_support.h"
 
@@ -42,13 +42,13 @@ bfr::core::Result<Token> submitOne(Device& device, CommandListHandle commandList
 }
 
 struct HeadlessSwapchain {
-    explicit HeadlessSwapchain(const TestRhiDesc& desc) {
-        auto created = createRhi(desc, kValidation);
+    explicit HeadlessSwapchain(const TestInstanceDesc& desc) {
+        auto created = createInstance(desc, kValidation);
         INFO(failureOf(created));
         REQUIRE(created.has_value());
-        rhi = std::move(*created);
-        device = presentingDevice(*rhi, kHeadless);
-        auto made = device->createSwapchain(kHeadless, swapchainRequest(*rhi));
+        instance = std::move(*created);
+        device = presentingDevice(*instance, kHeadless);
+        auto made = device->createSwapchain(kHeadless, swapchainRequest(*instance));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         swapchain = *made;
@@ -69,7 +69,7 @@ struct HeadlessSwapchain {
     HeadlessSwapchain(HeadlessSwapchain&&) = delete;
     HeadlessSwapchain& operator=(HeadlessSwapchain&&) = delete;
 
-    std::unique_ptr<Rhi> rhi;
+    std::unique_ptr<Instance> instance;
     std::unique_ptr<Device> device;
     SwapchainHandle swapchain;
     CommandPoolHandle pool;
@@ -272,9 +272,9 @@ TEST_CASE("Device runs a compute queue beside graphics when the adapter has one"
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        auto created = createRhi(recordingInto(backend, messages), kValidation);
+        auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
-        Rhi& rhi = **created;
+        Instance& rhi = **created;
         const std::size_t adapter = headlessAdapter(rhi);
         const std::uint32_t computeQueues = std::min<std::uint32_t>(rhi.adapters()[adapter].caps.queues.compute, 1);
         auto opened = rhi.createDevice(adapter, kHeadless, {.compute = computeQueues});

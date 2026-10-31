@@ -29,7 +29,7 @@
 
 namespace bfr::rhi::metal {
 
-class MetalRhi;
+class MetalInstance;
 
 /// A command pool: an allocator and a buffer for each list recording at once,
 /// since a Metal 4 allocator serves one buffer at a time; how many are handed
@@ -80,11 +80,11 @@ public:
     /// A device on device, which rhi listed, with a graphics queue and the
     /// queues asked for. Fails with RhiDeviceFailed when Metal gives no queue
     /// or event.
-    [[nodiscard]] static core::Result<std::unique_ptr<MetalDevice>> create(MetalRhi& rhi, Ref<MTL::Device> device,
+    [[nodiscard]] static core::Result<std::unique_ptr<MetalDevice>> create(MetalInstance& rhi, Ref<MTL::Device> device,
                                                                            const DeviceQueues& queues);
 
     /// For create.
-    MetalDevice(MetalRhi& rhi, Ref<MTL::Device> device);
+    MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device);
     ~MetalDevice() override;
     MetalDevice(const MetalDevice&) = delete;
     MetalDevice& operator=(const MetalDevice&) = delete;
@@ -123,7 +123,7 @@ private:
     [[nodiscard]] core::Result<MetalCommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<MetalCommandList*> commandListFor(CommandListHandle commandList);
 
-    MetalRhi* rhi_;
+    MetalInstance* instance_;
     Ref<MTL::Device> device_;
     std::vector<std::unique_ptr<MetalQueue>> queues_;
     // Room for a few windows' swapchains before the pool grows, and a limit no

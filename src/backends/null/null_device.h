@@ -12,7 +12,7 @@
 
 namespace bfr::rhi::null {
 
-class NullRhi;
+class NullInstance;
 
 /// A swapchain that presents nowhere: what it was asked to be, the size it
 /// was last built at, and whether an image is acquired.
@@ -40,7 +40,7 @@ class NullDevice final : public Device {
 public:
     /// rhi outlives this. The device has a graphics queue and then the queues
     /// asked for, which run nothing.
-    NullDevice(NullRhi& rhi, const DeviceQueues& queues);
+    NullDevice(NullInstance& rhi, const DeviceQueues& queues);
     ~NullDevice() override;
     NullDevice(const NullDevice&) = delete;
     NullDevice& operator=(const NullDevice&) = delete;
@@ -74,7 +74,7 @@ private:
     [[nodiscard]] core::Result<void> checkToken(Token token) const;
     [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
 
-    NullRhi* rhi_;
+    NullInstance* instance_;
     // The same room and limits as every backend's device.
     static constexpr std::uint32_t kSwapchainCapacity = 4;
     static constexpr std::uint32_t kSwapchainLimit = 256;

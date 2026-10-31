@@ -45,10 +45,10 @@ add_executable(bfr_tests
     core/test_text.cpp
     rhi/test_caps.cpp
     rhi/test_present.cpp
-    rhi/test_rhi.cpp
+    rhi/test_instance.cpp
     rhi/test_swapchain.cpp
     ${PROJECT_SOURCE_DIR}/src/backends/null/null_device.cpp
-    ${PROJECT_SOURCE_DIR}/src/backends/null/null_rhi.cpp)
+    ${PROJECT_SOURCE_DIR}/src/backends/null/null_instance.cpp)
 bfr_apply_compiler_flags(bfr_tests)
 # Test helpers shared across the tests, such as scoped_env.h, and the
 # library's private headers under src, the null backend's among them.
@@ -74,7 +74,7 @@ target_sources(bfr_tests PRIVATE
     backends/vulkan/test_queue_families.cpp
     backends/vulkan/test_swapchain_settings.cpp
     backends/vulkan/test_vulkan_caps.cpp
-    backends/vulkan/test_vulkan_rhi.cpp
+    backends/vulkan/test_vulkan_instance.cpp
     backends/vulkan/test_vulkan_surface.cpp
     backends/vulkan/test_vulkan_swapchain.cpp)
 target_link_libraries(bfr_tests PRIVATE volk::volk_headers)

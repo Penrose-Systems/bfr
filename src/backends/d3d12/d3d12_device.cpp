@@ -6,8 +6,8 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/swapchain.h"
+#include "d3d12/d3d12_instance.h"
 #include "d3d12/d3d12_result.h"
-#include "d3d12/d3d12_rhi.h"
 #include "d3d12/d3d12_swapchain.h"
 
 #include <d3d12.h>
@@ -53,7 +53,7 @@ D3D12_RESOURCE_BARRIER transition(ID3D12Resource* image, D3D12_RESOURCE_STATES b
 
 } // namespace
 
-core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Rhi& rhi, ComPtr<ID3D12Device> device,
+core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rhi, ComPtr<ID3D12Device> device,
                                                                ComPtr<IDXGIAdapter3> adapter, std::size_t heapCount,
                                                                const DeviceQueues& queues) {
     auto made = std::make_unique<D3D12Device>(rhi, std::move(device), std::move(adapter), heapCount);
@@ -63,9 +63,9 @@ core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Rhi& rhi, Co
     return made;
 }
 
-D3D12Device::D3D12Device(D3D12Rhi& rhi, ComPtr<ID3D12Device> device, ComPtr<IDXGIAdapter3> adapter,
+D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr<IDXGIAdapter3> adapter,
                          std::size_t heapCount)
-    : rhi_(&rhi),
+    : instance_(&rhi),
       device_(std::move(device)),
       adapter_(std::move(adapter)),
       heapCount_(heapCount),
@@ -118,14 +118,14 @@ D3D12Device::~D3D12Device() {
     // A failed wait leaves nothing to do but release, and no result to report
     // it through, so it is sent as an error whatever BFR_LOGGING says.
     if (auto idle = waitIdle(); !idle) {
-        rhi_->logger().send(core::Severity::Error,
-                            std::format("{}; destroying the device anyway", idle.error().message));
+        instance_->logger().send(core::Severity::Error,
+                                 std::format("{}; destroying the device anyway", idle.error().message));
     }
     if (swapchains_.size() != 0) {
-        BFR_LOG_WARN(rhi_->logger(), "{} swapchains were left when the device went", swapchains_.size());
+        BFR_LOG_WARN(instance_->logger(), "{} swapchains were left when the device went", swapchains_.size());
     }
     if (commandPools_.size() != 0) {
-        BFR_LOG_WARN(rhi_->logger(), "{} command pools were left when the device went", commandPools_.size());
+        BFR_LOG_WARN(instance_->logger(), "{} command pools were left when the device went", commandPools_.size());
     }
     swapchains_.clear();
     // A list left recording is closed before it goes.
@@ -195,7 +195,7 @@ core::Result<void> D3D12Device::waitIdle() {
 
 void D3D12Device::discard(ID3D12GraphicsCommandList* list) {
     if (const HRESULT result = list->Close(); FAILED(result)) {
-        BFR_LOG_WARN(rhi_->logger(), "{}",
+        BFR_LOG_WARN(instance_->logger(), "{}",
                      D3D12Failure{.call = "ID3D12GraphicsCommandList::Close", .result = result}.message());
     }
 }
@@ -229,8 +229,8 @@ core::Result<SwapchainHandle> D3D12Device::createSwapchain(const core::window::N
     if (auto checked = checkWindow(window); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    const SwapchainHandle swapchain = swapchains_.emplace(device_, ComPtr<IDXGIFactory2>{rhi_->factory()},
-                                                          queues_[0]->queue, window, request, rhi_->logger());
+    const SwapchainHandle swapchain = swapchains_.emplace(device_, ComPtr<IDXGIFactory2>{instance_->factory()},
+                                                          queues_[0]->queue, window, request, instance_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("a device holds at most {} swapchains", kSwapchainLimit));

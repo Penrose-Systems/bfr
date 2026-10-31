@@ -1,10 +1,10 @@
-// What the Vulkan backend's Rhi does with its loader, layers, drivers and
+// What the Vulkan backend's Instance does with its loader, layers, drivers and
 // adapters: Vulkan's own behaviour, tested through the interface.
 
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "log_capture.h"
 #include "rhi/rhi_test_support.h"
 #include "scoped_env.h"
@@ -44,7 +44,7 @@ std::string lineStartingWith(const std::string& log, std::string_view prefix) {
 }
 
 // A description on the Vulkan backend that logs into log.
-RhiDesc vulkanLoggingInto(std::ostringstream& log) {
+InstanceDesc vulkanLoggingInto(std::ostringstream& log) {
     return {.backend = Backend::Vulkan, .logger = loggingInto(log)};
 }
 
@@ -61,7 +61,7 @@ TEST_CASE("Vulkan with validation reports a broken layer manifest", "[vulkan][gp
     const ScopedEnv layerPath("VK_ADD_LAYER_PATH", std::string{vcpkgLayers} + ":" + layers.string());
     std::vector<std::string> messages;
 
-    const auto rhi = Rhi::create(recordingInto(messages), kValidation);
+    const auto rhi = Instance::create(recordingInto(messages), kValidation);
 
     std::filesystem::remove_all(layers);
     REQUIRE(rhi.has_value());
@@ -72,7 +72,7 @@ TEST_CASE("Vulkan with validation fails when the layer is missing", "[vulkan][gp
     const ScopedEnv hidden("VK_LOADER_LAYERS_DISABLE", "VK_LAYER_KHRONOS_validation");
     std::vector<std::string> messages;
 
-    const auto rhi = Rhi::create(recordingInto(messages), kValidation);
+    const auto rhi = Instance::create(recordingInto(messages), kValidation);
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiValidationUnavailable);
@@ -94,7 +94,7 @@ TEST_CASE("Vulkan with validation fails when the layer's library is missing", "[
     const ScopedEnv layerPath("VK_ADD_LAYER_PATH", layers.string() + ":" + vcpkgLayers);
     std::vector<std::string> messages;
 
-    const auto rhi = Rhi::create(recordingInto(messages), kValidation);
+    const auto rhi = Instance::create(recordingInto(messages), kValidation);
 
     std::filesystem::remove_all(layers);
     INFO(failureOf(rhi));
@@ -108,7 +108,7 @@ TEST_CASE("Vulkan fails when no driver is installed", "[vulkan][gpu]") {
     const ScopedEnv noDriver("VK_DRIVER_FILES", "/nonexistent/bfr_no_driver.json");
     std::vector<std::string> messages;
 
-    const auto rhi = Rhi::create(recordingInto(messages), kValidation);
+    const auto rhi = Instance::create(recordingInto(messages), kValidation);
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiInstanceFailed);
@@ -118,7 +118,7 @@ TEST_CASE("Vulkan fails when no driver is installed", "[vulkan][gpu]") {
 // LD_LIBRARY_PATH at a broken loader, which glibc reads only when the process
 // starts.
 TEST_CASE("Vulkan reports why each loader library failed", "[vulkan][unit][.]") {
-    const auto rhi = Rhi::create(kVulkan, {});
+    const auto rhi = Instance::create(kVulkan, {});
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiLoaderFailed);
@@ -127,7 +127,7 @@ TEST_CASE("Vulkan reports why each loader library failed", "[vulkan][unit][.]") 
 }
 
 TEST_CASE("Vulkan reports a loader library without vkGetInstanceProcAddr", "[vulkan][unit][.]") {
-    const auto rhi = Rhi::create(kVulkan, {});
+    const auto rhi = Instance::create(kVulkan, {});
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiLoaderFailed);
@@ -139,7 +139,7 @@ TEST_CASE("Vulkan reports a loader library without vkGetInstanceProcAddr", "[vul
 // Hidden: only the vulkan.fake_loader_* ctest entries run these, each with
 // LD_LIBRARY_PATH at a loader that misbehaves as BFR_FAKE_LOADER_MODE says.
 TEST_CASE("Vulkan with validation reports a failed layer listing", "[vulkan][unit][.]") {
-    const auto rhi = Rhi::create(kVulkan, kValidation);
+    const auto rhi = Instance::create(kVulkan, kValidation);
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiValidationUnavailable);
@@ -148,7 +148,7 @@ TEST_CASE("Vulkan with validation reports a failed layer listing", "[vulkan][uni
 }
 
 TEST_CASE("Vulkan with validation reports a failed extension listing", "[vulkan][unit][.]") {
-    const auto rhi = Rhi::create(kVulkan, kValidation);
+    const auto rhi = Instance::create(kVulkan, kValidation);
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiValidationUnavailable);
@@ -157,7 +157,7 @@ TEST_CASE("Vulkan with validation reports a failed extension listing", "[vulkan]
 }
 
 TEST_CASE("Vulkan with validation lists again when a listing grows", "[vulkan][unit][.]") {
-    const auto rhi = Rhi::create(kVulkan, kValidation);
+    const auto rhi = Instance::create(kVulkan, kValidation);
 
     // Past both listings: only the fake vkCreateInstance fails.
     INFO(failureOf(rhi));
@@ -170,7 +170,7 @@ TEST_CASE("Vulkan with validation lists again when a listing grows", "[vulkan][u
 // Hidden: only the vulkan.portability_driver ctest entry runs this, with
 // VK_DRIVER_FILES at lavapipe marked as a portability driver.
 TEST_CASE("Vulkan lists an adapter from a portability driver", "[vulkan][gpu][.]") {
-    const auto rhi = Rhi::create(kVulkan, {});
+    const auto rhi = Instance::create(kVulkan, {});
 
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
@@ -185,7 +185,7 @@ TEST_CASE("Vulkan skips an adapter it fails to check, and says which call failed
     const ScopedEnv failing("BFR_FAIL", "vkEnumerateDeviceExtensionProperties");
     std::vector<std::string> messages;
 
-    const auto rhi = Rhi::create(recordingInto(messages), {});
+    const auto rhi = Instance::create(recordingInto(messages), {});
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
@@ -201,7 +201,7 @@ TEST_CASE("Vulkan fails with RhiNoAdapter when every adapter is below the floor"
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv version("BFR_ADAPTER_MINOR", "2");
 
-    const auto rhi = Rhi::create(kVulkan, {});
+    const auto rhi = Instance::create(kVulkan, {});
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
@@ -219,7 +219,7 @@ TEST_CASE("Vulkan fails with RhiNoAdapter when an adapter lacks a floor feature,
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv hidden("BFR_ADAPTER_NO_FEATURE", feature);
 
-    const auto rhi = Rhi::create(kVulkan, {});
+    const auto rhi = Instance::create(kVulkan, {});
 
     INFO(feature);
     REQUIRE_FALSE(rhi.has_value());
@@ -233,7 +233,7 @@ TEST_CASE("Vulkan lists a 1.3 adapter without an extension that 1.3 made core", 
     const ScopedEnv version("BFR_ADAPTER_MINOR", "3");
     const ScopedEnv hidden("BFR_ADAPTER_HIDE", extension);
 
-    const auto rhi = Rhi::create(kVulkan, {});
+    const auto rhi = Instance::create(kVulkan, {});
 
     INFO(extension << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
@@ -245,7 +245,7 @@ TEST_CASE("Vulkan fails with RhiNoAdapter when a 1.3 adapter lacks the swapchain
     const ScopedEnv version("BFR_ADAPTER_MINOR", "3");
     const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_KHR_swapchain");
 
-    const auto rhi = Rhi::create(kVulkan, {});
+    const auto rhi = Instance::create(kVulkan, {});
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
@@ -256,7 +256,7 @@ TEST_CASE("Vulkan fails with RhiNoAdapter when no queue family runs compute", "[
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv noCompute("BFR_ADAPTER_NO_COMPUTE", "1");
 
-    const auto rhi = Rhi::create(kVulkan, {});
+    const auto rhi = Instance::create(kVulkan, {});
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
@@ -267,7 +267,7 @@ TEST_CASE("Vulkan fails with RhiNoAdapter when no queue family runs graphics", "
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv noGraphics("BFR_ADAPTER_NO_GRAPHICS", "1");
 
-    const auto rhi = Rhi::create(kVulkan, {});
+    const auto rhi = Instance::create(kVulkan, {});
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
@@ -277,7 +277,7 @@ TEST_CASE("Vulkan fails with RhiNoAdapter when no queue family runs graphics", "
 TEST_CASE("Vulkan fails with RhiPresentUnsupported when no queue family presents to the window", "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv unsupported("BFR_PRESENT_UNSUPPORTED", "1");
-    const auto rhi = Rhi::create(kVulkan, {});
+    const auto rhi = Instance::create(kVulkan, {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -291,7 +291,7 @@ TEST_CASE("Vulkan fails with RhiPresentUnsupported when no queue family presents
 TEST_CASE("Vulkan fails with RhiWindowFailed when the API refuses a surface for the device's window", "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv refused("BFR_FAIL", "vkCreateHeadlessSurfaceEXT");
-    const auto rhi = Rhi::create(kVulkan, {});
+    const auto rhi = Instance::create(kVulkan, {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -312,7 +312,7 @@ TEST_CASE("Vulkan doesn't ask NVIDIA's driver about a headless window on a loade
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv nvidia("BFR_ADAPTER_DRIVER_ID", std::to_string(VK_DRIVER_ID_NVIDIA_PROPRIETARY));
     std::ostringstream log;
-    const auto rhi = Rhi::create(vulkanLoggingInto(log), {});
+    const auto rhi = Instance::create(vulkanLoggingInto(log), {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -330,7 +330,7 @@ TEST_CASE("Vulkan asks NVIDIA's driver about a headless window on a loader that 
     const LoaderVersion loader{"1.4.319"};
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv nvidia("BFR_ADAPTER_DRIVER_ID", std::to_string(VK_DRIVER_ID_NVIDIA_PROPRIETARY));
-    const auto rhi = Rhi::create(kVulkan, {});
+    const auto rhi = Instance::create(kVulkan, {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -346,7 +346,7 @@ TEST_CASE("Vulkan fails with RhiDeviceFailed when the API refuses the device and
     const ScopedEnv failing("BFR_FAIL", "vkCreateDevice");
     std::vector<std::string> errors;
     {
-        const auto rhi = Rhi::create(recordingErrorsInto(errors), kValidation);
+        const auto rhi = Instance::create(recordingErrorsInto(errors), kValidation);
         INFO(failureOf(rhi));
         REQUIRE(rhi.has_value());
 
@@ -368,7 +368,7 @@ TEST_CASE("Vulkan creates a valid device on an adapter that lists VK_KHR_portabi
     const ScopedEnv added("BFR_ADAPTER_ADD", "VK_KHR_portability_subset");
     // Errors only: the loader also reports layer warnings.
     std::vector<std::string> errors;
-    const auto rhi = Rhi::create(recordingErrorsInto(errors), kValidation);
+    const auto rhi = Instance::create(recordingErrorsInto(errors), kValidation);
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -385,7 +385,7 @@ TEST_CASE("Vulkan logs the loader and each adapter it lists", "[vulkan][gpu]") {
     }
     std::ostringstream log;
 
-    const auto rhi = Rhi::create(vulkanLoggingInto(log), {});
+    const auto rhi = Instance::create(vulkanLoggingInto(log), {});
 
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
@@ -405,7 +405,7 @@ TEST_CASE("Vulkan logs why an adapter is below the floor", "[vulkan][gpu]") {
     const ScopedEnv version("BFR_ADAPTER_MINOR", "2");
     std::ostringstream log;
 
-    const auto rhi = Rhi::create(vulkanLoggingInto(log), {});
+    const auto rhi = Instance::create(vulkanLoggingInto(log), {});
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK_THAT(log.str(), Catch::Matchers::ContainsSubstring(", Vulkan 1.2: below the floor, Vulkan 1.2, needs 1.3"));
@@ -417,7 +417,7 @@ TEST_CASE("Vulkan logs the validation layer's version", "[vulkan][gpu]") {
     }
     std::ostringstream log;
 
-    const auto rhi = Rhi::create(vulkanLoggingInto(log), kValidation);
+    const auto rhi = Instance::create(vulkanLoggingInto(log), kValidation);
 
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
@@ -430,9 +430,9 @@ TEST_CASE("Vulkan logs the device it creates, its queue families and its extensi
     }
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv added("BFR_ADAPTER_ADD", "VK_KHR_portability_subset");
-    // Outlives the Rhi, which logs as it goes.
+    // Outlives the Instance, which logs as it goes.
     std::ostringstream log;
-    const auto rhi = Rhi::create(vulkanLoggingInto(log), {});
+    const auto rhi = Instance::create(vulkanLoggingInto(log), {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 

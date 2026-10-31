@@ -6,7 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/format.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 
 #include <d3d12.h>
@@ -23,7 +23,7 @@
 
 namespace bfr::rhi::d3d12 {
 
-/// What an Rhi keeps of each adapter it lists, beside its Adapter.
+/// What an Instance keeps of each adapter it lists, beside its Adapter.
 struct D3D12Adapter {
     Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter;
     /// The device its caps were read from; every Device on the adapter uses it.
@@ -34,20 +34,21 @@ struct D3D12Adapter {
     DWORD cookie = 0;
 };
 
-class D3D12Rhi final : public Rhi {
+class D3D12Instance final : public Instance {
 public:
-    /// An Rhi over the adapters DXGI lists. With validation on, the D3D12 debug
+    /// An Instance over the adapters DXGI lists. With validation on, the D3D12 debug
     /// layer is switched on and its messages go to the logger. Fails with
     /// RhiValidationUnavailable when the debug layer is missing, and
     /// RhiNoAdapter when no adapter meets the floor, naming each and why.
-    [[nodiscard]] static core::Result<std::unique_ptr<D3D12Rhi>> create(const RhiDesc& desc, const RhiConfig& config);
+    [[nodiscard]] static core::Result<std::unique_ptr<D3D12Instance>> create(const InstanceDesc& desc,
+                                                                             const RhiConfig& config);
 
-    D3D12Rhi(const RhiConfig& config, core::Logger logger);
-    ~D3D12Rhi() override;
-    D3D12Rhi(const D3D12Rhi&) = delete;
-    D3D12Rhi& operator=(const D3D12Rhi&) = delete;
-    D3D12Rhi(D3D12Rhi&&) = delete;
-    D3D12Rhi& operator=(D3D12Rhi&&) = delete;
+    D3D12Instance(const RhiConfig& config, core::Logger logger);
+    ~D3D12Instance() override;
+    D3D12Instance(const D3D12Instance&) = delete;
+    D3D12Instance& operator=(const D3D12Instance&) = delete;
+    D3D12Instance(D3D12Instance&&) = delete;
+    D3D12Instance& operator=(D3D12Instance&&) = delete;
 
     [[nodiscard]] std::span<const Adapter> adapters() const override { return adapters_; }
     [[nodiscard]] core::Result<std::unique_ptr<Device>> createDevice(std::size_t adapter,
@@ -59,9 +60,9 @@ public:
     [[nodiscard]] core::Result<std::vector<SwapchainFormat>> swapchainFormats(
         std::size_t adapter, const core::window::NativeWindow& window) const override;
 
-    using Rhi::config;
+    using Instance::config;
 
-    /// Where the Rhi and its devices send their messages.
+    /// Where the Instance and its devices send their messages.
     [[nodiscard]] const core::Logger& logger() const { return logger_; }
 
     /// The DXGI factory swapchains are made with.

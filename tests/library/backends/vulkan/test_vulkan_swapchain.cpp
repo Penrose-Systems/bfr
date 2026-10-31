@@ -5,7 +5,7 @@
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
 #include "bfr/rhi/device.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "bfr/rhi/swapchain.h"
 #include "rhi/rhi_test_support.h"
@@ -40,7 +40,7 @@ const bfr::core::window::NativeWindow kHeadless = bfr::core::window::Headless{};
 
 // A description on the Vulkan backend that records errors in errors and
 // writes every message from info up to log, one a line.
-RhiDesc errorsAndLogInto(std::vector<std::string>& errors, std::ostringstream& log) {
+InstanceDesc errorsAndLogInto(std::vector<std::string>& errors, std::ostringstream& log) {
     return {.backend = Backend::Vulkan,
             .logger = {[&errors, &log](bfr::core::Severity severity, std::string_view message) {
                            if (severity == bfr::core::Severity::Error) {
@@ -51,19 +51,19 @@ RhiDesc errorsAndLogInto(std::vector<std::string>& errors, std::ostringstream& l
                        bfr::core::Severity::Info}};
 }
 
-// An Rhi made with desc, whose recording outlives it, and a device that
+// An Instance made with desc, whose recording outlives it, and a device that
 // presents to a headless window.
 struct HeadlessDevice {
-    explicit HeadlessDevice(const RhiDesc& desc, const RhiConfig& config = kValidation) {
-        auto created = Rhi::create(desc, config);
+    explicit HeadlessDevice(const InstanceDesc& desc, const RhiConfig& config = kValidation) {
+        auto created = Instance::create(desc, config);
         INFO(failureOf(created));
         REQUIRE(created.has_value());
-        rhi = std::move(*created);
-        device = presentingDevice(*rhi, kHeadless);
+        instance = std::move(*created);
+        device = presentingDevice(*instance, kHeadless);
     }
 
-    // The device goes before its Rhi.
-    std::unique_ptr<Rhi> rhi;
+    // The device goes before its Instance.
+    std::unique_ptr<Instance> instance;
     std::unique_ptr<Device> device;
 };
 
@@ -72,7 +72,7 @@ struct HeadlessDevice {
 TEST_CASE("Vulkan device fails with RhiWindowFailed when the API refuses a swapchain's surface", "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv refused("BFR_FAIL", "vkCreateHeadlessSurfaceEXT");
-    const auto rhi = Rhi::create(kVulkan, {});
+    const auto rhi = Instance::create(kVulkan, {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
     const auto device = (*rhi)->createDevice(0, kNoWindow, {});
@@ -92,7 +92,7 @@ TEST_CASE("Vulkan device fails with RhiPresentUnsupported when it can't present 
           "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv unsupported("BFR_PRESENT_UNSUPPORTED", "1");
-    const auto rhi = Rhi::create(kVulkan, {});
+    const auto rhi = Instance::create(kVulkan, {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
     const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow, {});
@@ -118,7 +118,7 @@ TEST_CASE("Vulkan device reports a failed call when building a swapchain's image
     std::vector<std::string> errors;
     {
         const HeadlessDevice headless{recordingErrorsInto(errors)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.rhi));
+        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 
@@ -137,7 +137,7 @@ TEST_CASE("Vulkan device reports a failed present query as the failure it is", "
     const ScopedEnv failing("BFR_FAIL", "vkGetPhysicalDeviceSurfaceSupportKHR");
     std::vector<std::string> errors;
     {
-        const auto rhi = Rhi::create(recordingErrorsInto(errors), kValidation);
+        const auto rhi = Instance::create(recordingErrorsInto(errors), kValidation);
         INFO(failureOf(rhi));
         REQUIRE(rhi.has_value());
         const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow, {});
@@ -164,7 +164,7 @@ TEST_CASE("Vulkan device keeps running out of memory, a lost device and a lost s
     INFO(result);
     const AdapterOverrideLayer adapterOverride;
     const HeadlessDevice headless{kVulkan, {}};
-    const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.rhi));
+    const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
     INFO(failureOf(swapchain));
     REQUIRE(swapchain.has_value());
     const ScopedEnv failing("BFR_FAIL", "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
@@ -187,7 +187,7 @@ TEST_CASE("Vulkan device builds a swapchain once a call the API refused succeeds
     std::vector<std::string> errors;
     {
         const HeadlessDevice headless{recordingErrorsInto(errors)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.rhi));
+        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         {
@@ -213,7 +213,7 @@ TEST_CASE("Vulkan device presents from a queue family of its own when no graphic
     std::vector<std::string> errors;
     std::ostringstream log;
     {
-        const auto rhi = Rhi::create(errorsAndLogInto(errors, log), kValidation);
+        const auto rhi = Instance::create(errorsAndLogInto(errors, log), kValidation);
         INFO(failureOf(rhi));
         REQUIRE(rhi.has_value());
         const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kHeadless, {});

@@ -9,7 +9,7 @@
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/format.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "bfr/rhi/swapchain.h"
 
@@ -31,16 +31,16 @@
 #include <variant>
 #include <vector>
 
-// Shares the Rhi with its devices, which keep it alive: garbage-collected
+// Shares the Instance with its devices, which keep it alive: garbage-collected
 // wrappers destroy them in no fixed order.
 struct bfr_instance {
-    std::shared_ptr<bfr::rhi::Rhi> rhi;
+    std::shared_ptr<bfr::rhi::Instance> instance;
     bfr_backend backend;
 };
 
-// The Rhi comes first so that it outlives the device it made.
+// The Instance comes first so that it outlives the device it made.
 struct bfr_device {
-    std::shared_ptr<bfr::rhi::Rhi> rhi;
+    std::shared_ptr<bfr::rhi::Instance> instance;
     std::unique_ptr<bfr::rhi::Device> device;
 };
 
@@ -698,7 +698,7 @@ bfr_swapchain_format toC(const bfr::rhi::SwapchainFormat& format) {
 
 // Fails unless adapter is an index into instance's adapters.
 std::optional<bfr_result> checkAdapter(const bfr_instance& instance, std::uint32_t adapter) {
-    const std::size_t count = instance.rhi->adapters().size();
+    const std::size_t count = instance.instance->adapters().size();
     if (adapter >= count) {
         return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, std::format("adapter {} of {}", adapter, count));
     }
@@ -778,7 +778,7 @@ bfr_result bfr_create_instance(const bfr_instance_desc* desc, bfr_instance** ins
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, std::format("min_severity {} is not a severity",
                                                                        static_cast<std::int64_t>(desc->min_severity)));
         }
-        bfr::rhi::RhiDesc rhiDesc{.backend = *backend};
+        bfr::rhi::InstanceDesc rhiDesc{.backend = *backend};
         if (desc->message_callback != nullptr) {
             rhiDesc.logger = {[callback = desc->message_callback,
                                userData = desc->message_user_data](Severity severity, std::string_view message) {
@@ -787,13 +787,14 @@ bfr_result bfr_create_instance(const bfr_instance_desc* desc, bfr_instance** ins
                               },
                               *least};
         }
-        auto rhi = bfr::rhi::Rhi::create(rhiDesc, bfr::rhi::RhiConfig{.validation = desc->validation != BFR_FALSE});
+        auto rhi = bfr::rhi::Instance::create(rhiDesc,
+                                              bfr::rhi::RhiConfig{.validation = desc->validation != BFR_FALSE});
         if (!rhi) {
             return fail(rhi.error());
         }
         // The caller owns it until bfr_destroy_instance.
-        *instance =
-            std::make_unique<bfr_instance>(bfr_instance{.rhi = std::move(*rhi), .backend = desc->backend}).release();
+        *instance = std::make_unique<bfr_instance>(bfr_instance{.instance = std::move(*rhi), .backend = desc->backend})
+                        .release();
         return BFR_RESULT_SUCCESS;
     });
 }
@@ -807,7 +808,7 @@ bfr_result bfr_get_adapters(bfr_instance* instance, uint32_t* count, bfr_adapter
         if (instance == nullptr || count == nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instance and count must not be null");
         }
-        const std::span<const bfr::rhi::Adapter> listed = instance->rhi->adapters();
+        const std::span<const bfr::rhi::Adapter> listed = instance->instance->adapters();
         const auto total = static_cast<std::uint32_t>(listed.size());
         if (adapters == nullptr) {
             *count = total;
@@ -835,14 +836,15 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
         if (!window) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
-        auto created = instance->rhi->createDevice(desc->adapter, *window,
-                                                   {.compute = desc->compute_queues, .copy = desc->copy_queues});
+        auto created = instance->instance->createDevice(desc->adapter, *window,
+                                                        {.compute = desc->compute_queues, .copy = desc->copy_queues});
         if (!created) {
             return fail(created.error());
         }
         // The caller owns it until bfr_destroy_device.
-        *device =
-            std::make_unique<bfr_device>(bfr_device{.rhi = instance->rhi, .device = std::move(*created)}).release();
+        *device = std::make_unique<bfr_device>(
+                      bfr_device{.instance = instance->instance, .device = std::move(*created)})
+                      .release();
         return BFR_RESULT_SUCCESS;
     });
 }
@@ -1093,7 +1095,7 @@ bfr_result bfr_get_caps(bfr_instance* instance, uint32_t adapter, bfr_caps* caps
         if (const auto failed = checkAdapter(*instance, adapter)) {
             return *failed;
         }
-        const bfr::rhi::Adapter& listed = instance->rhi->adapters()[adapter];
+        const bfr::rhi::Adapter& listed = instance->instance->adapters()[adapter];
         const bfr::rhi::Caps& found = listed.caps;
         *caps = {
             .info = toC(listed, instance->backend),
@@ -1127,7 +1129,7 @@ bfr_result bfr_get_formats(bfr_instance* instance, uint32_t adapter, uint32_t* c
         const std::uint32_t written = std::min(*count, total);
         const std::span out{formats, written};
         for (std::uint32_t i = 0; i < written; ++i) {
-            const auto found = instance->rhi->formatCaps(adapter, bfr::rhi::kFormats.at(i));
+            const auto found = instance->instance->formatCaps(adapter, bfr::rhi::kFormats.at(i));
             if (!found) {
                 return fail(found.error());
             }
@@ -1152,7 +1154,7 @@ bfr_result bfr_get_swapchain_caps(bfr_instance* instance, uint32_t adapter, cons
         if (!window) {
             return failed;
         }
-        const auto found = instance->rhi->swapchainCaps(adapter, *window);
+        const auto found = instance->instance->swapchainCaps(adapter, *window);
         if (!found) {
             return fail(found.error());
         }
@@ -1175,7 +1177,7 @@ bfr_result bfr_get_swapchain_formats(bfr_instance* instance, uint32_t adapter, c
         if (!window) {
             return failed;
         }
-        const auto found = instance->rhi->swapchainFormats(adapter, *window);
+        const auto found = instance->instance->swapchainFormats(adapter, *window);
         if (!found) {
             return fail(found.error());
         }

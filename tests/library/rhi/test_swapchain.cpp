@@ -5,7 +5,7 @@
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
 #include "bfr/rhi/device.h"
-#include "bfr/rhi/rhi.h"
+#include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "bfr/rhi/swapchain.h"
 #include "rhi_test_support.h"
@@ -35,19 +35,19 @@ constexpr std::uint32_t kHeight = 48;
 // A headless window: the swapchain decides its size.
 const bfr::core::window::NativeWindow kHeadless = bfr::core::window::Headless{};
 
-// An Rhi made with desc, whose recording outlives it, and a device that
+// An Instance made with desc, whose recording outlives it, and a device that
 // presents to a headless window.
 struct HeadlessDevice {
-    explicit HeadlessDevice(const TestRhiDesc& desc, const RhiConfig& config = kValidation) {
-        auto created = createRhi(desc, config);
+    explicit HeadlessDevice(const TestInstanceDesc& desc, const RhiConfig& config = kValidation) {
+        auto created = createInstance(desc, config);
         INFO(failureOf(created));
         REQUIRE(created.has_value());
-        rhi = std::move(*created);
-        device = presentingDevice(*rhi, kHeadless);
+        instance = std::move(*created);
+        device = presentingDevice(*instance, kHeadless);
     }
 
-    // The device goes before its Rhi.
-    std::unique_ptr<Rhi> rhi;
+    // The device goes before its Instance.
+    std::unique_ptr<Instance> instance;
     std::unique_ptr<Device> device;
 };
 
@@ -58,7 +58,7 @@ TEST_CASE("Device builds a headless swapchain at the size asked for", "[rhi][agn
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.rhi));
+        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 
@@ -79,7 +79,7 @@ TEST_CASE("Device rebuilds a swapchain at a new size", "[rhi][agnostic]") {
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.rhi));
+        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         const auto first = headless.device->resizeSwapchain(*swapchain, kWidth, kHeight);
@@ -102,7 +102,7 @@ TEST_CASE("Device destroys the swapchains left when it goes, and says so", "[rhi
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.rhi));
+        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         const auto images = headless.device->resizeSwapchain(*swapchain, kWidth, kHeight);
@@ -125,7 +125,7 @@ TEST_CASE("Device empties a swapchain for a window with no area", "[rhi][agnosti
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.rhi));
+        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         const auto built = headless.device->resizeSwapchain(*swapchain, kWidth, kHeight);
@@ -148,7 +148,7 @@ TEST_CASE("Device fails with RhiInvalidHandle on a destroyed swapchain", "[rhi][
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(backend, messages)};
-    const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.rhi));
+    const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
     INFO(failureOf(swapchain));
     REQUIRE(swapchain.has_value());
     REQUIRE(headless.device->destroySwapchain(*swapchain).has_value());
@@ -175,7 +175,7 @@ TEST_CASE("Device fails with RhiWindowFailed for a swapchain without a window", 
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(backend, messages)};
 
-    const auto swapchain = headless.device->createSwapchain(kNoWindow, swapchainRequest(*headless.rhi));
+    const auto swapchain = headless.device->createSwapchain(kNoWindow, swapchainRequest(*headless.instance));
 
     REQUIRE_FALSE(swapchain.has_value());
     CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiWindowFailed);
@@ -191,7 +191,7 @@ TEST_CASE("Device fails with RhiInvalidHandle for a forged swapchain handle", "[
     INFO("index " << forged.index() << ", generation " << forged.generation());
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(backend, messages)};
-    const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.rhi));
+    const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
     INFO(failureOf(swapchain));
     REQUIRE(swapchain.has_value());
     REQUIRE(swapchain->index() == 0);
@@ -211,7 +211,7 @@ TEST_CASE("Device builds the image count its swapchain was created with", "[rhi]
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages), kValidation};
-        const auto surface = headless.rhi->swapchainCaps(headlessAdapter(*headless.rhi), kHeadless);
+        const auto surface = headless.instance->swapchainCaps(headlessAdapter(*headless.instance), kHeadless);
         INFO(failureOf(surface));
         REQUIRE(surface.has_value());
         // One more than the window's least, more than the default, when the

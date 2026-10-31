@@ -6,7 +6,7 @@ namespace bfr::rhi::vulkan {
 
 /// The instance-level functions one VkInstance provides. volk's global
 /// pointers hold one instance's set and a second instance rewrites them, so
-/// each VulkanRhi calls through its own table.
+/// each VulkanInstance calls through its own table.
 struct InstanceTable {
     PFN_vkDestroyInstance vkDestroyInstance = nullptr;
     PFN_vkEnumeratePhysicalDevices vkEnumeratePhysicalDevices = nullptr;

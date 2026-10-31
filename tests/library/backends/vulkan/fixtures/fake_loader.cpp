@@ -3,7 +3,7 @@
 // - "layers" or "extensions": that listing fails with VK_ERROR_UNKNOWN.
 // - "grow": each listing gains an entry once counted, as if one were installed
 //   meanwhile, so its first fill returns VK_INCOMPLETE.
-// It lists the validation layer and VK_EXT_debug_utils, so the Rhi's checks
+// It lists the validation layer and VK_EXT_debug_utils, so the Instance's checks
 // pass, and vkCreateInstance fails with VK_ERROR_INITIALIZATION_FAILED. It
 // serves only those three functions.
 

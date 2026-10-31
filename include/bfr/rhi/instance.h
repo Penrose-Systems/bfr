@@ -34,8 +34,8 @@ struct Adapter {
     Caps caps;
 };
 
-/// The native graphics API an Rhi runs on. The values are bfr_backend's, so
-/// that zero, which a default-initialised RhiDesc holds, names no backend.
+/// The native graphics API an Instance runs on. The values are bfr_backend's, so
+/// that zero, which a default-initialised InstanceDesc holds, names no backend.
 enum class Backend : std::uint8_t {
     Vulkan = 1,
     D3D12 = 2,
@@ -54,23 +54,23 @@ enum class Backend : std::uint8_t {
     return "unknown";
 }
 
-/// The backends this build has, in Backend order. Rhi::create accepts these
+/// The backends this build has, in Backend order. Instance::create accepts these
 /// and refuses every other.
 [[nodiscard]] std::span<const Backend> backends() noexcept;
 
-struct RhiDesc {
-    /// The API the Rhi runs on. The caller names one; there is no default.
+struct InstanceDesc {
+    /// The API the Instance runs on. The caller names one; there is no default.
     Backend backend{};
 
-    /// Where the Rhi, its devices and, when RhiConfig turns it on, validation
+    /// Where the Instance, its devices and, when RhiConfig turns it on, validation
     /// send their messages. Nowhere, until the caller says.
     core::Logger logger = core::Logger::none();
 };
 
 /// The graphics API's entry point and the adapters it found.
-class Rhi {
+class Instance {
 public:
-    /// An Rhi on desc.backend. Fails with RhiBackendUnavailable when
+    /// An Instance on desc.backend. Fails with RhiBackendUnavailable when
     /// desc.backend is not in backends(), RhiLoaderFailed when the API's loader
     /// won't load, giving the OS's reason, RhiValidationUnavailable when
     /// validation is asked for and the system can't provide it,
@@ -78,17 +78,18 @@ public:
     /// when no adapter meets the floor, naming each and why. With validation
     /// on, a refused instance's error carries the messages the API sent
     /// meanwhile.
-    [[nodiscard]] static core::Result<std::unique_ptr<Rhi>> create(const RhiDesc& desc, const RhiConfig& config);
+    [[nodiscard]] static core::Result<std::unique_ptr<Instance>> create(const InstanceDesc& desc,
+                                                                        const RhiConfig& config);
 
-    virtual ~Rhi() = default;
-    Rhi(const Rhi&) = delete;
-    Rhi& operator=(const Rhi&) = delete;
-    Rhi(Rhi&&) = delete;
-    Rhi& operator=(Rhi&&) = delete;
+    virtual ~Instance() = default;
+    Instance(const Instance&) = delete;
+    Instance& operator=(const Instance&) = delete;
+    Instance(Instance&&) = delete;
+    Instance& operator=(Instance&&) = delete;
 
     [[nodiscard]] virtual std::span<const Adapter> adapters() const = 0;
 
-    /// A device on adapters()[adapter], destroyed before this Rhi. Its
+    /// A device on adapters()[adapter], destroyed before this Instance. Its
     /// graphics queue presents to presentTo where a queue family can, else a
     /// queue of its own does; with no window, graphics presents. Fails with
     /// RhiAdapterOutOfRange when adapter is not an index into adapters(),
@@ -121,7 +122,7 @@ public:
         std::size_t adapter, const core::window::NativeWindow& window) const = 0;
 
 protected:
-    explicit Rhi(const RhiConfig& config) : config_(config) {}
+    explicit Instance(const RhiConfig& config) : config_(config) {}
 
     [[nodiscard]] const RhiConfig& config() const { return config_; }
 
