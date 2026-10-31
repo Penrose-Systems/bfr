@@ -5,6 +5,7 @@
 
 #include "bfr.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -159,7 +160,12 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     }
     detail::printSurface(*caps, *formats);
 
-    auto swapchain = device.createSwapchain({.window = window, .imageCount = caps->minImageCount});
+    // Three images where the window allows them, so one can be on screen, one
+    // queued and one being drawn.
+    const std::uint32_t imageCount = caps->maxImageCount == 0
+                                         ? std::max(caps->minImageCount, 3U)
+                                         : std::clamp(3U, caps->minImageCount, caps->maxImageCount);
+    auto swapchain = device.createSwapchain({.window = window, .imageCount = imageCount});
     if (!swapchain) {
         return detail::fail("can't create a swapchain", swapchain.error());
     }

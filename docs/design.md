@@ -256,8 +256,8 @@ encoder switching needs lookahead.
 
 ### Handles
 
-- Instance, device and command list are opaque pointers. Reason: recording
-  is the hot path and a pointer needs no lookup.
+- Instance and device are opaque pointers; an app holds one of each and
+  every call names them.
 - Everything else is a generational 64-bit handle: a 24-bit slot index under
   a 40-bit generation. Each type is its own struct, so the C compiler rejects
   a buffer where a texture is expected, and every wrapper has a class per

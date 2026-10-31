@@ -1,3 +1,5 @@
+@docs/cpp_code_style.md
+
 # BFR
 
 BFR unifies graphics APIs behind one API. That is the whole job.
@@ -9,4 +11,3 @@ BFR unifies graphics APIs behind one API. That is the whole job.
 - Report what the backend says. Do not invent, hallucinate, substitute, or make a fall back.
 - Public API (api/bfr.yaml, bfr.h, bfr.hpp, include/bfr) changes: visually notify the exact signatures first.
 - Say what changed in a precise and concise manner, then stop.
-- C++ follows docs/cpp_code_style.md; read it before writing or reviewing C++.
