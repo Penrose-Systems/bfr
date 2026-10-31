@@ -16,7 +16,6 @@
 
 ## Files
 - snake_case `.h` and `.cpp`; one primary abstraction per file. [script, review]
-- Warn above 500 lines, fail above 600; over 500 needs a split proposal or a reason in the PR. [script]
 - Public headers in `modules/<module>/public/`, included by file name; sources and private headers in `modules/<module>/private/`. Public header names are unique across modules. [review]
 
 ## Ownership

@@ -14,7 +14,6 @@
 #include <atomic>
 #include <cstdint>
 #include <format>
-#include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>

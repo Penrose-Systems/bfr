@@ -4,6 +4,7 @@
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
 #include "bfr/rhi/caps.h"
+#include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/instance.h"

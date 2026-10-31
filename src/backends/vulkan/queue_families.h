@@ -11,9 +11,9 @@ namespace bfr::rhi::vulkan {
 /// The family each queue role takes, by index into the adapter's families.
 /// present is nullopt when no family presents to the surface.
 struct QueueFamilies {
-    std::uint32_t graphics;
-    std::uint32_t compute;
-    std::uint32_t transfer;
+    std::uint32_t graphics{};
+    std::uint32_t compute{};
+    std::uint32_t transfer{};
     std::optional<std::uint32_t> present;
 };
 

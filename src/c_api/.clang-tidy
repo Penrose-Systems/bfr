@@ -1,0 +1,6 @@
+# The C API definitions keep the snake_case parameter names bfr.h gives them;
+# the helpers beside them stay camelBack.
+InheritParentConfig: true
+CheckOptions:
+    - key: readability-identifier-naming.ParameterIgnoredRegexp
+      value: '^[a-z]+(_[a-z]+)+$'

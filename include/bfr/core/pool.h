@@ -182,7 +182,7 @@ public:
     /// Calls fn on every live value, under the lock, so fn must not call the
     /// pool.
     template <class Fn>
-    void forEach(Fn&& fn) {
+    void forEach(Fn fn) {
         const std::scoped_lock lock{mutex_};
         for (std::uint32_t index = 0; index < pageCount_ * kPageSize; ++index) {
             if ((generationAt(index).load(std::memory_order_relaxed) & 1U) != 0) {

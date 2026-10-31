@@ -17,12 +17,14 @@
 #include <vulkan/vulkan_core.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <expected>
 #include <format>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -494,10 +496,11 @@ core::Result<void> VulkanDevice::endRendering(CommandListHandle commandList) {
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (!(*list)->rendering.has_value()) {
+    const std::optional<SwapchainHandle> open = (*list)->rendering;
+    if (!open.has_value()) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "no rendering is open");
     }
-    auto chain = swapchainFor(*(*list)->rendering);
+    auto chain = swapchainFor(*open);
     if (!chain) {
         return std::unexpected(std::move(chain.error()));
     }
@@ -508,7 +511,7 @@ core::Result<void> VulkanDevice::endRendering(CommandListHandle commandList) {
     VkCommandBuffer buffer = (*list)->buffer;
     table_.vkCmdEndRendering(buffer);
     // Rendering is open on it, so beginRendering listed it.
-    const auto rendered = std::ranges::find((*list)->rendered, *(*list)->rendering, &RenderedSwapchain::swapchain);
+    const auto rendered = std::ranges::find((*list)->rendered, *open, &RenderedSwapchain::swapchain);
     recordBarrier(table_, buffer, layoutBarrier(image->image, rendered->layout, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR));
     rendered->layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     (*list)->rendering.reset();

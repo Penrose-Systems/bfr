@@ -1,0 +1,4 @@
+# The C++ wrapper's tests run under the repository .clang-tidy, with the
+# Catch2 changes tests/.clang-tidy makes and gives the reasons for.
+InheritParentConfig: true
+Checks: '-clang-analyzer-optin.core.EnumCastOutOfRange,-bugprone-unchecked-optional-access'

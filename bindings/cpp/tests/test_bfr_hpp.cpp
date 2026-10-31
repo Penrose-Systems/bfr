@@ -12,7 +12,6 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <iterator>
 #include <memory>
 #include <mutex>
 #include <span>

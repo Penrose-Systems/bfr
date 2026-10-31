@@ -247,7 +247,10 @@ bfr_token toC(bfr::rhi::Token token) {
     return {.queue = token.queue, .value = token.value};
 }
 
-template <class T, std::size_t kInline = 16>
+// The elements a SmallBuffer holds in place unless told otherwise.
+inline constexpr std::size_t kSmallBufferInline = 16;
+
+template <class T, std::size_t kInline = kSmallBufferInline>
 class SmallBuffer {
 public:
     template <class From, class Convert>

@@ -57,9 +57,12 @@ template <class To, class From, std::size_t Size, class Convert>
     return converted;
 }
 
+// The elements a SmallBuffer holds in place unless told otherwise.
+inline constexpr std::size_t kSmallBufferInline = 16;
+
 /// A C array built from a range for one call: in place up to kInline
 /// elements, on the heap past that.
-template <class T, std::size_t kInline = 16>
+template <class T, std::size_t kInline = kSmallBufferInline>
 class SmallBuffer {
 public:
     template <class Range, class Convert>

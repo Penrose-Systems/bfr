@@ -258,7 +258,7 @@ core::Result<void> VulkanSwapchain::present(VkQueue queue) {
     const std::uint32_t image = *acquiredImage_;
     // With nothing submitted, the image is shown as acquired; the acquire's
     // own signal is what the present waits on.
-    const VkSemaphore wait = submitted_ ? presentSemaphores_[image] : acquireSemaphores_[acquireUsed_];
+    VkSemaphore wait = submitted_ ? presentSemaphores_[image] : acquireSemaphores_[acquireUsed_];
     VkPresentInfoKHR info{};
     info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     info.waitSemaphoreCount = 1;

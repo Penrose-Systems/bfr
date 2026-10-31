@@ -53,8 +53,9 @@ TEST_CASE("Vulkan swapchain settings name the request in Vulkan's terms", "[vulk
 }
 
 TEST_CASE("Vulkan swapchain settings pass on what the surface does not allow", "[vulkan][unit]") {
-    const SwapchainSettings settings = swapchainSettingsFor(
-        capabilities(), kWindow, {.imageCount = kMaxImages + 1, .alphaMode = AlphaMode::Inherit});
+    const SwapchainSettings settings = swapchainSettingsFor(capabilities(), kWindow,
+                                                            {.imageCount = kMaxImages + 1,
+                                                             .alphaMode = AlphaMode::Inherit});
 
     CHECK(settings.imageCount == kMaxImages + 1);
     CHECK(settings.compositeAlpha == VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR);
