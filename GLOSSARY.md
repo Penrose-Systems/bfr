@@ -97,6 +97,12 @@ How BFR frees what the GPU may still use: the handle is invalid at once, and
 the memory is freed only once every queue has passed the work submitted before
 the destroy call. Swapchains are the exception and are destroyed at once.
 
+**Submission ID**:
+The number a handle table retires an object against: the count of submits a
+queue has made, which the GPU passes in order. Internal; a caller never sees
+one. Not a completion token.
+_Avoid_: serial, token
+
 **Retire**:
 To end a handle's life while its underlying object waits for the GPU to pass
 the work that may use it.

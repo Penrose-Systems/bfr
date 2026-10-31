@@ -61,16 +61,16 @@ TEST_CASE("Pool finds nothing for a retired handle", "[core][unit]") {
     CHECK(pool.size() == 0);
 }
 
-TEST_CASE("Pool keeps a retired value until its token completes", "[core][unit]") {
-    constexpr std::uint64_t kToken = 5;
+TEST_CASE("Pool keeps a retired value until its submission ID completes", "[core][unit]") {
+    constexpr std::uint64_t kSubmissionId = 5;
     const auto shared = std::make_shared<int>(0);
     Pool<std::shared_ptr<int>> pool{"test", 1, kLimit};
-    REQUIRE(pool.retire(pool.emplace(shared), kToken));
+    REQUIRE(pool.retire(pool.emplace(shared), kSubmissionId));
 
-    pool.collect(kToken - 1);
+    pool.collect(kSubmissionId - 1);
     CHECK(shared.use_count() == 2);
 
-    pool.collect(kToken);
+    pool.collect(kSubmissionId);
     CHECK(shared.use_count() == 1);
 }
 
@@ -223,7 +223,7 @@ TEST_CASE("Pool clear destroys every value", "[core][unit]") {
     CHECK(pool.size() == 0);
 }
 
-TEST_CASE("Pool clear destroys retired values whatever their token", "[core][unit]") {
+TEST_CASE("Pool clear destroys retired values whatever their submission ID", "[core][unit]") {
     const auto shared = std::make_shared<int>(0);
     Pool<std::shared_ptr<int>> pool{"test", 1, kLimit};
     REQUIRE(pool.retire(pool.emplace(shared), std::numeric_limits<std::uint64_t>::max()));

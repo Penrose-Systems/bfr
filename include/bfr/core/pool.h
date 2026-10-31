@@ -33,9 +33,9 @@ namespace bfr::core {
 /// once is the caller's to synchronize.
 ///
 /// Lifetime: retire ends a handle at once, so find stops finding it, but its
-/// value lives on until collect is told that the token it was retired with has
-/// completed. The device retires against GPU progress, so nothing the GPU may
-/// still use is destroyed. erase ends a handle and destroys its value at once,
+/// value lives on until collect is told that the submission ID it was retired
+/// with has completed. The device retires against GPU progress, so nothing the
+/// GPU may still use is destroyed. erase ends a handle and destroys its value at once,
 /// for a value the caller has already waited for.
 template <class T, class Tag = T>
 class Pool {
@@ -109,14 +109,15 @@ public:
     }
 
     /// Ends handle at once; its value is destroyed by the first collect told
-    /// that token has completed. False when handle is null or already retired.
-    bool retire(Handle<Tag> handle, std::uint64_t token) {
+    /// that submissionId has completed. False when handle is null or already
+    /// retired.
+    bool retire(Handle<Tag> handle, std::uint64_t submissionId) {
         const std::scoped_lock lock{mutex_};
         // Under the lock, so of two retires of one handle only one passes.
         if (find(handle) == nullptr) {
             return false;
         }
-        retireLocked(handle.index(), token);
+        retireLocked(handle.index(), submissionId);
         return true;
     }
 
@@ -137,14 +138,14 @@ public:
         return true;
     }
 
-    /// Destroys the values retired with a token at or before completed and
-    /// frees their slots.
+    /// Destroys the values retired with a submission ID at or before completed
+    /// and frees their slots.
     void collect(std::uint64_t completed) {
         std::vector<std::uint32_t> ready;
         {
             const std::scoped_lock lock{mutex_};
             const auto done = std::ranges::partition(retired_, [completed](const Retired& retired) {
-                return retired.token > completed;
+                return retired.submissionId > completed;
             });
             ready.reserve(done.size());
             for (const Retired& retired : done) {
@@ -162,7 +163,7 @@ public:
     }
 
     /// Retires every live value and destroys every retired one, whatever its
-    /// token: for when nothing can still be using them.
+    /// submission ID: for when nothing can still be using them.
     void clear() {
         {
             const std::scoped_lock lock{mutex_};
@@ -225,7 +226,7 @@ private:
 
     struct Retired {
         std::uint32_t index;
-        std::uint64_t token;
+        std::uint64_t submissionId;
     };
 
     static std::uint32_t pagesFor(std::uint32_t count) { return (count + kPageSize - 1) / kPageSize; }
@@ -277,9 +278,9 @@ private:
     }
 
     // Ends a live slot and queues its value for collect. Locked.
-    void retireLocked(std::uint32_t index, std::uint64_t token) {
+    void retireLocked(std::uint32_t index, std::uint64_t submissionId) {
         endLocked(index);
-        retired_.push_back({.index = index, .token = token});
+        retired_.push_back({.index = index, .submissionId = submissionId});
     }
 
     // Adds count pages; their slots join the free list in index order. Locked.

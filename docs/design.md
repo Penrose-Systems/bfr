@@ -156,7 +156,7 @@ encoder switching needs lookahead.
   frees it when that value completes. Until queues submit, every value has
   completed, so objects are freed during the destroy call. A handle table's
   token is one 64-bit number, not a queue's timeline value: the device keeps
-  a submission serial that every submit advances, retires against the
+  a submission ID that every submit advances, retires against the
   latest, and collects a serial once every queue has passed the value it
   submitted under it.
 - Swapchains are the exception: destroying one waits for the GPU's use of
