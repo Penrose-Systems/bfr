@@ -36,19 +36,19 @@ NullDevice::~NullDevice() {
 }
 
 core::Result<SwapchainHandle> NullDevice::createSwapchain(const core::window::NativeWindow& window,
-                                                          const SwapchainRequest& request) {
+                                                          const SwapchainDesc& desc) {
     if (std::holds_alternative<std::monostate>(window)) {
         return core::failure(core::ErrorCode::RhiWindowFailed, "there is no window");
     }
     const SwapchainHandle swapchain = swapchains_.emplace(NullSwapchain{
-        .request = request,
+        .desc = desc,
         .images = {.width = 0,
                    .height = 0,
                    .count = 0,
-                   .format = request.format,
-                   .colorSpace = request.colorSpace,
-                   .presentMode = request.presentMode,
-                   .alphaMode = request.alphaMode},
+                   .format = desc.format,
+                   .colorSpace = desc.colorSpace,
+                   .presentMode = desc.presentMode,
+                   .alphaMode = desc.alphaMode},
     });
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
@@ -84,7 +84,7 @@ core::Result<SwapchainImages> NullDevice::resizeSwapchain(SwapchainHandle swapch
     const bool empty = width == 0 || height == 0;
     chain.images.width = empty ? 0 : width;
     chain.images.height = empty ? 0 : height;
-    chain.images.count = empty ? 0 : chain.request.imageCount;
+    chain.images.count = empty ? 0 : chain.desc.imageCount;
     chain.acquired = false;
     return chain.images;
 }

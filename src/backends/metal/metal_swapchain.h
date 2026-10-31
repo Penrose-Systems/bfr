@@ -32,9 +32,9 @@ namespace bfr::rhi::metal {
 /// built.
 class MetalSwapchain {
 public:
-    /// A swapchain on layer, built as request says each time. It reports to
+    /// A swapchain on layer, built as desc says each time. It reports to
     /// logger, which outlives it.
-    MetalSwapchain(Ref<MTL::Device> device, Ref<CA::MetalLayer> layer, const SwapchainRequest& request,
+    MetalSwapchain(Ref<MTL::Device> device, Ref<CA::MetalLayer> layer, const SwapchainDesc& desc,
                    const core::Logger& logger);
     ~MetalSwapchain() = default;
     MetalSwapchain(const MetalSwapchain&) = delete;
@@ -42,10 +42,10 @@ public:
     MetalSwapchain(MetalSwapchain&&) = delete;
     MetalSwapchain& operator=(MetalSwapchain&&) = delete;
 
-    /// Sets the layer up as the request says, at width by height pixels,
+    /// Sets the layer up as the desc says, at width by height pixels,
     /// dropping any image acquired; a window with no area leaves it empty.
     /// Fails with RhiUnsupported when the layer has no setting for a value of
-    /// the request.
+    /// the desc.
     [[nodiscard]] core::Result<SwapchainImages> build(std::uint32_t width, std::uint32_t height);
 
     /// Takes the layer's next drawable. Fails with RhiOutOfDate when the
@@ -72,7 +72,7 @@ public:
 private:
     Ref<MTL::Device> device_;
     Ref<CA::MetalLayer> layer_;
-    SwapchainRequest request_;
+    SwapchainDesc desc_;
     const core::Logger* logger_;
     // How many images the layer was last set up with; 0 while empty.
     std::uint32_t count_ = 0;

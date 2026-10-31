@@ -71,7 +71,7 @@ enum class AlphaMode : std::uint8_t {
 
 /// What a swapchain is asked to be. Each value is passed to the backend as
 /// given; the backend accepts or refuses it.
-struct SwapchainRequest {
+struct SwapchainDesc {
     /// The caller sets it; it is passed to the backend as given.
     std::uint32_t imageCount = 0;
     PresentMode presentMode = PresentMode::Fifo;

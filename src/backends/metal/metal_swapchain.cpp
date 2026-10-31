@@ -85,9 +85,9 @@ core::Result<Ref<CA::MetalLayer>> layerFor(const core::window::NativeWindow& win
     return share(CA::MetalLayer::layer());
 }
 
-MetalSwapchain::MetalSwapchain(Ref<MTL::Device> device, Ref<CA::MetalLayer> layer, const SwapchainRequest& request,
+MetalSwapchain::MetalSwapchain(Ref<MTL::Device> device, Ref<CA::MetalLayer> layer, const SwapchainDesc& desc,
                                const core::Logger& logger)
-    : device_(std::move(device)), layer_(std::move(layer)), request_(request), logger_(&logger) {}
+    : device_(std::move(device)), layer_(std::move(layer)), desc_(desc), logger_(&logger) {}
 
 core::Result<SwapchainImages> MetalSwapchain::build(std::uint32_t width, std::uint32_t height) {
     drawable_.reset();
@@ -97,28 +97,28 @@ core::Result<SwapchainImages> MetalSwapchain::build(std::uint32_t width, std::ui
         return SwapchainImages{.width = width,
                                .height = height,
                                .count = count,
-                               .format = request_.format,
-                               .colorSpace = request_.colorSpace,
-                               .presentMode = request_.presentMode,
-                               .alphaMode = request_.alphaMode};
+                               .format = desc_.format,
+                               .colorSpace = desc_.colorSpace,
+                               .presentMode = desc_.presentMode,
+                               .alphaMode = desc_.alphaMode};
     };
     if (width == 0 || height == 0) {
         BFR_LOG_DEBUG(*logger_, "swapchain left empty: the window has no area");
         return imagesOf(0, 0, 0);
     }
 
-    const LayerFormat format = layerFormatFor(request_.format, request_.colorSpace);
+    const LayerFormat format = layerFormatFor(desc_.format, desc_.colorSpace);
     if (format.pixelFormat == MTL::PixelFormatInvalid) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "the layer has no setting for the format with the color space that were asked");
     }
-    const auto displaySync = displaySyncFor(request_.presentMode);
+    const auto displaySync = displaySyncFor(desc_.presentMode);
     if (!displaySync) {
         return std::unexpected(displaySync.error());
     }
-    if (request_.alphaMode != AlphaMode::Opaque) {
+    if (desc_.alphaMode != AlphaMode::Opaque) {
         return core::failure(core::ErrorCode::RhiUnsupported,
-                             std::format("the layer has no setting for {} alpha", name(request_.alphaMode)));
+                             std::format("the layer has no setting for {} alpha", name(desc_.alphaMode)));
     }
     layer_->setDevice(device_.get());
     layer_->setPixelFormat(format.pixelFormat);
@@ -129,13 +129,13 @@ core::Result<SwapchainImages> MetalSwapchain::build(std::uint32_t width, std::ui
     layer_->setFramebufferOnly(true);
     setLayerFlag(layer_.get(), "setOpaque:", true);
     layer_->setDrawableSize(CGSize{.width = static_cast<CGFloat>(width), .height = static_cast<CGFloat>(height)});
-    layer_->setMaximumDrawableCount(request_.imageCount);
+    layer_->setMaximumDrawableCount(desc_.imageCount);
 #if TARGET_OS_OSX
     layer_->setDisplaySyncEnabled(*displaySync);
 #endif
     layer_->setAllowsNextDrawableTimeout(true);
     count_ = static_cast<std::uint32_t>(layer_->maximumDrawableCount());
-    BFR_LOG_INFO(*logger_, "swapchain {}x{}, {} images, {}", width, height, count_, name(request_.presentMode));
+    BFR_LOG_INFO(*logger_, "swapchain {}x{}, {} images, {}", width, height, count_, name(desc_.presentMode));
     return imagesOf(width, height, count_);
 }
 

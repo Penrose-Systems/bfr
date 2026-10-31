@@ -25,11 +25,11 @@ namespace bfr::rhi::d3d12 {
 /// headless one.
 class D3D12Swapchain {
 public:
-    /// A swapchain on window, which checkWindow allowed, built as request says each
+    /// A swapchain on window, which checkWindow allowed, built as desc says each
     /// time. It presents through queue, and reports to logger, which outlives it.
     D3D12Swapchain(Microsoft::WRL::ComPtr<ID3D12Device> device, Microsoft::WRL::ComPtr<IDXGIFactory2> factory,
                    Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue, const core::window::NativeWindow& window,
-                   const SwapchainRequest& request, const core::Logger& logger);
+                   const SwapchainDesc& desc, const core::Logger& logger);
     ~D3D12Swapchain() = default;
     D3D12Swapchain(const D3D12Swapchain&) = delete;
     D3D12Swapchain& operator=(const D3D12Swapchain&) = delete;
@@ -39,7 +39,7 @@ public:
     /// Builds the swapchain's images at width by height pixels, dropping any
     /// image acquired; a window with no area leaves it empty. The GPU must be
     /// done with the old images. Fails with RhiUnsupported when DXGI has no
-    /// setting for a value of the request, and RhiSwapchainFailed when DXGI
+    /// setting for a value of the desc, and RhiSwapchainFailed when DXGI
     /// refuses.
     [[nodiscard]] core::Result<SwapchainImages> build(std::uint32_t width, std::uint32_t height);
 
@@ -80,7 +80,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue_;
     // Null for a headless window.
     HWND window_ = nullptr;
-    SwapchainRequest request_;
+    SwapchainDesc desc_;
     const core::Logger* logger_;
     // Made by the first build; the images change under it afterwards.
     Microsoft::WRL::ComPtr<IDXGISwapChain3> chain_;

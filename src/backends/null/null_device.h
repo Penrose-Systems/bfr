@@ -17,7 +17,7 @@ class NullInstance;
 /// A swapchain that presents nowhere: what it was asked to be, the size it
 /// was last built at, and whether an image is acquired.
 struct NullSwapchain {
-    SwapchainRequest request;
+    SwapchainDesc desc;
     SwapchainImages images;
     bool acquired = false;
 };
@@ -48,7 +48,7 @@ public:
     NullDevice& operator=(NullDevice&&) = delete;
 
     [[nodiscard]] core::Result<SwapchainHandle> createSwapchain(const core::window::NativeWindow& window,
-                                                                const SwapchainRequest& request) override;
+                                                                const SwapchainDesc& desc) override;
     [[nodiscard]] core::Result<SwapchainImages> resizeSwapchain(SwapchainHandle swapchain, std::uint32_t width,
                                                                 std::uint32_t height) override;
     [[nodiscard]] core::Result<void> destroySwapchain(SwapchainHandle swapchain) override;

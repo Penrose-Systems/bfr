@@ -225,12 +225,12 @@ core::Result<D3D12CommandList*> D3D12Device::commandListFor(CommandListHandle co
 }
 
 core::Result<SwapchainHandle> D3D12Device::createSwapchain(const core::window::NativeWindow& window,
-                                                           const SwapchainRequest& request) {
+                                                           const SwapchainDesc& desc) {
     if (auto checked = checkWindow(window); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, ComPtr<IDXGIFactory2>{instance_->factory()},
-                                                          queues_[0]->queue, window, request, instance_->logger());
+                                                          queues_[0]->queue, window, desc, instance_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("a device holds at most {} swapchains", kSwapchainLimit));

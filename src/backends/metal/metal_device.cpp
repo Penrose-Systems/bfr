@@ -212,12 +212,12 @@ core::Result<MetalCommandList*> MetalDevice::commandListFor(CommandListHandle co
 }
 
 core::Result<SwapchainHandle> MetalDevice::createSwapchain(const core::window::NativeWindow& window,
-                                                           const SwapchainRequest& request) {
+                                                           const SwapchainDesc& desc) {
     auto layer = layerFor(window);
     if (!layer) {
         return std::unexpected(std::move(layer.error()));
     }
-    const SwapchainHandle swapchain = swapchains_.emplace(device_, *layer, request, instance_->logger());
+    const SwapchainHandle swapchain = swapchains_.emplace(device_, *layer, desc, instance_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("a device holds at most {} swapchains", kSwapchainLimit));

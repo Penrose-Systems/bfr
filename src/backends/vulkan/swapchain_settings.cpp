@@ -39,16 +39,17 @@ VkCompositeAlphaFlagBitsKHR compositeAlphaFor(AlphaMode mode) {
 }
 
 SwapchainSettings swapchainSettingsFor(const VkSurfaceCapabilitiesKHR& capabilities, VkExtent2D size,
-                                       const SwapchainRequest& request) {
+                                       const SwapchainDesc& desc) {
     // A current extent of 0xFFFFFFFF says the swapchain's size sets the window's.
     constexpr std::uint32_t kSizeFromSwapchain = 0xFFFFFFFF;
-    const VkExtent2D extent = capabilities.currentExtent.width == kSizeFromSwapchain ? size : capabilities.currentExtent;
+    const VkExtent2D extent = capabilities.currentExtent.width == kSizeFromSwapchain ? size
+                                                                                     : capabilities.currentExtent;
     return SwapchainSettings{
-        .format = {.format = vulkanFormat(request.format), .colorSpace = vulkanColorSpace(request.colorSpace)},
+        .format = {.format = vulkanFormat(desc.format), .colorSpace = vulkanColorSpace(desc.colorSpace)},
         .extent = extent,
-        .imageCount = request.imageCount,
-        .compositeAlpha = compositeAlphaFor(request.alphaMode),
-        .presentMode = presentModeFor(request.presentMode),
+        .imageCount = desc.imageCount,
+        .compositeAlpha = compositeAlphaFor(desc.alphaMode),
+        .presentMode = presentModeFor(desc.presentMode),
     };
 }
 

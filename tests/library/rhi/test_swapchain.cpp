@@ -58,7 +58,7 @@ TEST_CASE("Device builds a headless swapchain at the size asked for", "[rhi][agn
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
+        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainDesc(*headless.instance));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 
@@ -79,7 +79,7 @@ TEST_CASE("Device rebuilds a swapchain at a new size", "[rhi][agnostic]") {
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
+        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainDesc(*headless.instance));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         const auto first = headless.device->resizeSwapchain(*swapchain, kWidth, kHeight);
@@ -102,7 +102,7 @@ TEST_CASE("Device destroys the swapchains left when it goes, and says so", "[rhi
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
+        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainDesc(*headless.instance));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         const auto images = headless.device->resizeSwapchain(*swapchain, kWidth, kHeight);
@@ -125,7 +125,7 @@ TEST_CASE("Device empties a swapchain for a window with no area", "[rhi][agnosti
     std::vector<std::string> messages;
     {
         const HeadlessDevice headless{recordingInto(backend, messages)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
+        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainDesc(*headless.instance));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         const auto built = headless.device->resizeSwapchain(*swapchain, kWidth, kHeight);
@@ -148,7 +148,7 @@ TEST_CASE("Device fails with RhiInvalidHandle on a destroyed swapchain", "[rhi][
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(backend, messages)};
-    const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
+    const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainDesc(*headless.instance));
     INFO(failureOf(swapchain));
     REQUIRE(swapchain.has_value());
     REQUIRE(headless.device->destroySwapchain(*swapchain).has_value());
@@ -175,7 +175,7 @@ TEST_CASE("Device fails with RhiWindowFailed for a swapchain without a window", 
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(backend, messages)};
 
-    const auto swapchain = headless.device->createSwapchain(kNoWindow, swapchainRequest(*headless.instance));
+    const auto swapchain = headless.device->createSwapchain(kNoWindow, swapchainDesc(*headless.instance));
 
     REQUIRE_FALSE(swapchain.has_value());
     CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiWindowFailed);
@@ -191,7 +191,7 @@ TEST_CASE("Device fails with RhiInvalidHandle for a forged swapchain handle", "[
     INFO("index " << forged.index() << ", generation " << forged.generation());
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(backend, messages)};
-    const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
+    const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainDesc(*headless.instance));
     INFO(failureOf(swapchain));
     REQUIRE(swapchain.has_value());
     REQUIRE(swapchain->index() == 0);

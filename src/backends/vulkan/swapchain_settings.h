@@ -24,9 +24,9 @@ struct SwapchainSettings {
 /// The Vulkan composite alpha that is mode.
 [[nodiscard]] VkCompositeAlphaFlagBitsKHR compositeAlphaFor(AlphaMode mode);
 
-/// request in Vulkan's names, each value as given. size is the window's size in
+/// desc in Vulkan's names, each value as given. size is the window's size in
 /// pixels, which the surface's current extent overrides when it reports one.
 [[nodiscard]] SwapchainSettings swapchainSettingsFor(const VkSurfaceCapabilitiesKHR& capabilities, VkExtent2D size,
-                                                     const SwapchainRequest& request);
+                                                     const SwapchainDesc& desc);
 
 } // namespace bfr::rhi::vulkan

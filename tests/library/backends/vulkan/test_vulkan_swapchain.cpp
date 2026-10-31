@@ -79,8 +79,8 @@ TEST_CASE("Vulkan device fails with RhiWindowFailed when the API refuses a swapc
     INFO(failureOf(device));
     REQUIRE(device.has_value());
 
-    // The request is never used: making the swapchain fails first.
-    const auto swapchain = (*device)->createSwapchain(kHeadless, SwapchainRequest{});
+    // The desc is never used: making the swapchain fails first.
+    const auto swapchain = (*device)->createSwapchain(kHeadless, SwapchainDesc{});
 
     REQUIRE_FALSE(swapchain.has_value());
     CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiWindowFailed);
@@ -99,8 +99,8 @@ TEST_CASE("Vulkan device fails with RhiPresentUnsupported when it can't present 
     INFO(failureOf(device));
     REQUIRE(device.has_value());
 
-    // The request is never used: making the swapchain fails first.
-    const auto swapchain = (*device)->createSwapchain(kHeadless, SwapchainRequest{});
+    // The desc is never used: making the swapchain fails first.
+    const auto swapchain = (*device)->createSwapchain(kHeadless, SwapchainDesc{});
 
     REQUIRE_FALSE(swapchain.has_value());
     CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
@@ -118,7 +118,7 @@ TEST_CASE("Vulkan device reports a failed call when building a swapchain's image
     std::vector<std::string> errors;
     {
         const HeadlessDevice headless{recordingErrorsInto(errors)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
+        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainDesc(*headless.instance));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 
@@ -144,8 +144,8 @@ TEST_CASE("Vulkan device reports a failed present query as the failure it is", "
         INFO(failureOf(device));
         REQUIRE(device.has_value());
 
-        // The request is never used: making the swapchain fails first.
-        const auto swapchain = (*device)->createSwapchain(kHeadless, SwapchainRequest{});
+        // The desc is never used: making the swapchain fails first.
+        const auto swapchain = (*device)->createSwapchain(kHeadless, SwapchainDesc{});
 
         REQUIRE_FALSE(swapchain.has_value());
         CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiWindowFailed);
@@ -164,7 +164,7 @@ TEST_CASE("Vulkan device keeps running out of memory, a lost device and a lost s
     INFO(result);
     const AdapterOverrideLayer adapterOverride;
     const HeadlessDevice headless{kVulkan, {}};
-    const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
+    const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainDesc(*headless.instance));
     INFO(failureOf(swapchain));
     REQUIRE(swapchain.has_value());
     const ScopedEnv failing("BFR_FAIL", "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
@@ -187,7 +187,7 @@ TEST_CASE("Vulkan device builds a swapchain once a call the API refused succeeds
     std::vector<std::string> errors;
     {
         const HeadlessDevice headless{recordingErrorsInto(errors)};
-        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainRequest(*headless.instance));
+        const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainDesc(*headless.instance));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         {
@@ -219,7 +219,7 @@ TEST_CASE("Vulkan device presents from a queue family of its own when no graphic
         const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kHeadless, {});
         INFO(failureOf(device));
         REQUIRE(device.has_value());
-        const auto swapchain = (*device)->createSwapchain(kHeadless, swapchainRequest(**rhi));
+        const auto swapchain = (*device)->createSwapchain(kHeadless, swapchainDesc(**rhi));
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 

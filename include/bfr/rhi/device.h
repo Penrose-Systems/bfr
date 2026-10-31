@@ -27,14 +27,14 @@ public:
     /// surface extension is unavailable, or when the API refuses the window,
     /// and RhiPresentUnsupported when the device can't present to it.
     [[nodiscard]] virtual core::Result<SwapchainHandle> createSwapchain(const core::window::NativeWindow& window,
-                                                                        const SwapchainRequest& request) = 0;
+                                                                        const SwapchainDesc& desc) = 0;
 
     /// Builds the swapchain's images at width by height pixels, replacing any
     /// it has once the GPU is done with them. The window system may set the size
     /// itself. A window with no area leaves the swapchain empty, which is not a
-    /// failure. Builds as the request says. Fails with RhiInvalidHandle when
+    /// failure. Builds as the desc says. Fails with RhiInvalidHandle when
     /// swapchain is destroyed, RhiUnsupported when the backend has no setting
-    /// for a value of the request, and RhiSwapchainFailed when the API refuses;
+    /// for a value of the desc, and RhiSwapchainFailed when the API refuses;
     /// a failure leaves it empty.
     [[nodiscard]] virtual core::Result<SwapchainImages> resizeSwapchain(SwapchainHandle swapchain, std::uint32_t width,
                                                                         std::uint32_t height) = 0;

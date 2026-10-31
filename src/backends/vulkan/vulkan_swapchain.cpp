@@ -64,13 +64,13 @@ core::Result<VkSurfaceCapabilitiesKHR> askSurface(const InstanceTable& vk, VkPhy
 } // namespace
 
 VulkanSwapchain::VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, const InstanceTable& instanceTable,
-                                 VulkanSurface surface, const SwapchainRequest& request, const core::Logger& logger)
+                                 VulkanSurface surface, const SwapchainDesc& desc, const core::Logger& logger)
     : device_(device),
       table_(&table),
       instanceTable_(&instanceTable),
       logger_(&logger),
       surface_(std::move(surface)),
-      request_(request) {}
+      desc_(desc) {}
 
 VulkanSwapchain::~VulkanSwapchain() {
     release();
@@ -83,15 +83,15 @@ core::Result<SwapchainImages> VulkanSwapchain::build(VkPhysicalDevice adapter, V
     if (!capabilities) {
         return std::unexpected(capabilities.error());
     }
-    const SwapchainSettings settings = swapchainSettingsFor(*capabilities, size, request_);
+    const SwapchainSettings settings = swapchainSettingsFor(*capabilities, size, desc_);
     const auto imagesOf = [this](std::uint32_t width, std::uint32_t height, std::uint32_t count) {
         return SwapchainImages{.width = width,
                                .height = height,
                                .count = count,
-                               .format = request_.format,
-                               .colorSpace = request_.colorSpace,
-                               .presentMode = request_.presentMode,
-                               .alphaMode = request_.alphaMode};
+                               .format = desc_.format,
+                               .colorSpace = desc_.colorSpace,
+                               .presentMode = desc_.presentMode,
+                               .alphaMode = desc_.alphaMode};
     };
     if (settings.extent.width == 0 || settings.extent.height == 0) {
         BFR_LOG_DEBUG(*logger_, "swapchain left empty: the window has no area");
@@ -123,7 +123,7 @@ core::Result<SwapchainImages> VulkanSwapchain::build(VkPhysicalDevice adapter, V
         return std::unexpected(std::move(made.error()));
     }
     BFR_LOG_INFO(*logger_, "swapchain {}x{}, {} images, {}, {}", settings.extent.width, settings.extent.height, count,
-                 string_VkFormat(settings.format.format), name(request_.presentMode));
+                 string_VkFormat(settings.format.format), name(desc_.presentMode));
     return imagesOf(settings.extent.width, settings.extent.height, count);
 }
 

@@ -48,7 +48,7 @@ struct HeadlessSwapchain {
         REQUIRE(created.has_value());
         instance = std::move(*created);
         device = presentingDevice(*instance, kHeadless);
-        auto made = device->createSwapchain(kHeadless, swapchainRequest(*instance));
+        auto made = device->createSwapchain(kHeadless, swapchainDesc(*instance));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         swapchain = *made;
@@ -296,7 +296,7 @@ TEST_CASE("Device runs a compute queue beside graphics when the adapter has one"
         REQUIRE(compute.has_value());
 
         // A compute list neither renders nor goes to the graphics queue.
-        auto swapchain = device.createSwapchain(kHeadless, swapchainRequest(rhi));
+        auto swapchain = device.createSwapchain(kHeadless, swapchainDesc(rhi));
         REQUIRE(swapchain.has_value());
         REQUIRE(device.resizeSwapchain(*swapchain, kWidth, kHeight).has_value());
         REQUIRE(device.acquire(*swapchain).has_value());

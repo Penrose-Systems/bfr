@@ -253,7 +253,7 @@ core::Result<VulkanCommandList*> VulkanDevice::commandListFor(CommandListHandle 
 }
 
 core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::NativeWindow& window,
-                                                            const SwapchainRequest& request) {
+                                                            const SwapchainDesc& desc) {
     auto surface = instance_->surfaceFor(window);
     if (!surface) {
         return std::unexpected(std::move(surface.error()));
@@ -268,7 +268,7 @@ core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::
                              "the device's present queue doesn't present to the window");
     }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, instance_->instanceTable(),
-                                                          std::move(*surface), request, instance_->logger());
+                                                          std::move(*surface), desc, instance_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              std::format("a device holds at most {} swapchains", kSwapchainLimit));

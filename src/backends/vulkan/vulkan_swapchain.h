@@ -34,20 +34,20 @@ struct AcquiredImage {
 class VulkanSwapchain {
 public:
     /// Builds on surface, which it takes over, through device's table and the
-    /// table of the instance the adapter belongs to, as request says each
+    /// table of the instance the adapter belongs to, as desc says each
     /// time. It reports to logger; the tables and logger outlive it.
     VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, const InstanceTable& instanceTable,
-                    VulkanSurface surface, const SwapchainRequest& request, const core::Logger& logger);
+                    VulkanSurface surface, const SwapchainDesc& desc, const core::Logger& logger);
     ~VulkanSwapchain();
     VulkanSwapchain(const VulkanSwapchain&) = delete;
     VulkanSwapchain& operator=(const VulkanSwapchain&) = delete;
     VulkanSwapchain(VulkanSwapchain&&) = delete;
     VulkanSwapchain& operator=(VulkanSwapchain&&) = delete;
 
-    /// Builds images as the request says on adapter, at size in pixels,
+    /// Builds images as the desc says on adapter, at size in pixels,
     /// replacing those it has, which the GPU must be done with; a window with
     /// no area leaves it empty. Fails with RhiUnsupported when the surface no
-    /// longer allows the request, and RhiSwapchainFailed, naming the call the
+    /// longer allows the desc, and RhiSwapchainFailed, naming the call the
     /// API refused. Either leaves it empty.
     [[nodiscard]] core::Result<SwapchainImages> build(VkPhysicalDevice adapter, VkExtent2D size);
 
@@ -92,7 +92,7 @@ private:
     const InstanceTable* instanceTable_;
     const core::Logger* logger_;
     VulkanSurface surface_;
-    SwapchainRequest request_;
+    SwapchainDesc desc_;
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
     VkExtent2D extent_{};
     // Refilled by each build, keeping their storage.

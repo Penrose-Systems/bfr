@@ -68,22 +68,22 @@ std::optional<Severity> severityFrom(bfr_message_severity severity) {
 
 // The swapchain desc asks for, each 0 as its documented default. Nothing when a value is one BFR
 // doesn't have; error says which.
-std::optional<bfr::rhi::SwapchainRequest> requestIn(const bfr_swapchain_desc& desc, std::string& error) {
+std::optional<bfr::rhi::SwapchainDesc> swapchainIn(const bfr_swapchain_desc& desc, std::string& error) {
     using namespace bfr::rhi;
-    SwapchainRequest request;
-    request.imageCount = desc.image_count;
+    SwapchainDesc swapchain;
+    swapchain.imageCount = desc.image_count;
     switch (desc.present_mode) {
         case BFR_PRESENT_MODE_FIFO:
-            request.presentMode = PresentMode::Fifo;
+            swapchain.presentMode = PresentMode::Fifo;
             break;
         case BFR_PRESENT_MODE_FIFO_RELAXED:
-            request.presentMode = PresentMode::FifoRelaxed;
+            swapchain.presentMode = PresentMode::FifoRelaxed;
             break;
         case BFR_PRESENT_MODE_MAILBOX:
-            request.presentMode = PresentMode::Mailbox;
+            swapchain.presentMode = PresentMode::Mailbox;
             break;
         case BFR_PRESENT_MODE_IMMEDIATE:
-            request.presentMode = PresentMode::Immediate;
+            swapchain.presentMode = PresentMode::Immediate;
             break;
         case BFR_PRESENT_MODE_FORCE32:
         default:
@@ -98,7 +98,7 @@ std::optional<bfr::rhi::SwapchainRequest> requestIn(const bfr_swapchain_desc& de
             error = std::format("format {} is not one BFR has", format);
             return std::nullopt;
         }
-        request.format = *found;
+        swapchain.format = *found;
     }
     if (const auto colorSpace = static_cast<std::int64_t>(desc.color_space); colorSpace != 0) {
         if (colorSpace < static_cast<std::int64_t>(ColorSpace::Srgb) ||
@@ -106,27 +106,27 @@ std::optional<bfr::rhi::SwapchainRequest> requestIn(const bfr_swapchain_desc& de
             error = std::format("color space {} is not one BFR has", colorSpace);
             return std::nullopt;
         }
-        request.colorSpace = static_cast<ColorSpace>(colorSpace);
+        swapchain.colorSpace = static_cast<ColorSpace>(colorSpace);
     }
     switch (desc.alpha_mode) {
         case BFR_ALPHA_MODE_OPAQUE:
-            request.alphaMode = AlphaMode::Opaque;
+            swapchain.alphaMode = AlphaMode::Opaque;
             break;
         case BFR_ALPHA_MODE_PREMULTIPLIED:
-            request.alphaMode = AlphaMode::Premultiplied;
+            swapchain.alphaMode = AlphaMode::Premultiplied;
             break;
         case BFR_ALPHA_MODE_POSTMULTIPLIED:
-            request.alphaMode = AlphaMode::Postmultiplied;
+            swapchain.alphaMode = AlphaMode::Postmultiplied;
             break;
         case BFR_ALPHA_MODE_INHERIT:
-            request.alphaMode = AlphaMode::Inherit;
+            swapchain.alphaMode = AlphaMode::Inherit;
             break;
         case BFR_ALPHA_MODE_FORCE32:
         default:
             error = std::format("alpha mode {} is not one BFR has", static_cast<std::int64_t>(desc.alpha_mode));
             return std::nullopt;
     }
-    return request;
+    return swapchain;
 }
 
 // The calling thread's last error, which bfr_get_last_error returns.
@@ -867,11 +867,11 @@ bfr_result bfr_create_swapchain(bfr_device* device, const bfr_swapchain_desc* de
         if (std::holds_alternative<std::monostate>(*window)) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_swapchain_desc needs a window");
         }
-        const auto request = requestIn(*desc, error);
-        if (!request) {
+        const auto made = swapchainIn(*desc, error);
+        if (!made) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
-        const auto created = device->device->createSwapchain(*window, *request);
+        const auto created = device->device->createSwapchain(*window, *made);
         if (!created) {
             return fail(created.error());
         }

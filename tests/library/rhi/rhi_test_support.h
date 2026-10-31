@@ -124,7 +124,7 @@ inline std::size_t headlessAdapter(const Instance& rhi) {
 
 /// What a test swapchain on a headless window of rhi asks for: the defaults,
 /// with the fewest images the surface reports it takes, as a caller must set.
-inline SwapchainRequest swapchainRequest(const Instance& rhi) {
+inline SwapchainDesc swapchainDesc(const Instance& rhi) {
     const auto caps = rhi.swapchainCaps(headlessAdapter(rhi), core::window::Headless{});
     INFO(failureOf(caps));
     REQUIRE(caps.has_value());

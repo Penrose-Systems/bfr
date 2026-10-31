@@ -92,7 +92,7 @@ public:
     D3D12Device& operator=(D3D12Device&&) = delete;
 
     [[nodiscard]] core::Result<SwapchainHandle> createSwapchain(const core::window::NativeWindow& window,
-                                                                const SwapchainRequest& request) override;
+                                                                const SwapchainDesc& desc) override;
     [[nodiscard]] core::Result<SwapchainImages> resizeSwapchain(SwapchainHandle swapchain, std::uint32_t width,
                                                                 std::uint32_t height) override;
     [[nodiscard]] core::Result<void> destroySwapchain(SwapchainHandle swapchain) override;
