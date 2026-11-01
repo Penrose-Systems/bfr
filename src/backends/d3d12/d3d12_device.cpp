@@ -105,8 +105,7 @@ core::Result<void> D3D12Device::open(const DeviceDesc& desc) {
         }
         queue->event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         if (queue->event == nullptr) {
-            return core::failure(core::ErrorCode::RhiDeviceFailed,
-                                 std::format("CreateEventW: error {}", GetLastError()));
+            return core::failure(core::ErrorCode::RhiDeviceFailed, "CreateEventW: error {}", GetLastError());
         }
         queues_.push_back(std::move(queue));
         return {};
@@ -132,7 +131,7 @@ D3D12Device::~D3D12Device() {
     // it through, so it is sent as an error whatever BFR_LOGGING says.
     if (auto idle = waitIdle(); !idle) {
         instance_->logger().send(core::Severity::Error,
-                                 std::format("{}; destroying the device anyway", idle.error().message));
+                                 std::format("{}; destroying the device anyway", idle.error().message.view()));
     }
     if (swapchains_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} swapchains were left when the device went", swapchains_.size());
@@ -169,8 +168,8 @@ core::Result<void> D3D12Device::waitFor(D3D12Queue& queue, std::uint64_t value) 
 
 core::Result<void> D3D12Device::checkQueue(std::uint32_t queue) const {
     if (queue >= queues_.size()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("the device has no queue {}; it has {}", queue, queues_.size()));
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the device has no queue {}; it has {}", queue,
+                             queues_.size());
     }
     return {};
 }
@@ -182,8 +181,8 @@ core::Result<void> D3D12Device::checkToken(Token token) const {
     const std::uint64_t submitted = queues_[token.queue]->submitted.load(std::memory_order_acquire);
     if (token.value > submitted) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("no submit has returned token {} on queue {}; the last is {}", token.value,
-                                         token.queue, submitted));
+                             "no submit has returned token {} on queue {}; the last is {}", token.value, token.queue,
+                             submitted);
     }
     return {};
 }
@@ -223,8 +222,8 @@ core::Result<void> D3D12Device::waitIdle() {
 
 void D3D12Device::discard(ID3D12GraphicsCommandList* list) {
     if (const HRESULT result = list->Close(); FAILED(result)) {
-        BFR_LOG_WARN(instance_->logger(), "{}",
-                     D3D12Failure{.call = "ID3D12GraphicsCommandList::Close", .result = result}.message());
+        BFR_LOG_WARN(instance_->logger(), "ID3D12GraphicsCommandList::Close: {} (0x{:08X})",
+                     D3D12Failure::nameOf(result), static_cast<std::uint32_t>(result));
     }
 }
 
@@ -260,8 +259,8 @@ core::Result<SwapchainHandle> D3D12Device::createSwapchain(const core::window::N
     const SwapchainHandle swapchain = swapchains_.emplace(device_, ComPtr<IDXGIFactory2>{instance_->factory()},
                                                           queues_[0]->queue, window, desc, instance_->logger());
     if (swapchain.isNull()) {
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("a device holds at most {} swapchains", desc_.maxSwapchains));
+        return core::failure(core::ErrorCode::RhiLimitReached, "a device holds at most {} swapchains",
+                             desc_.maxSwapchains);
     }
     return swapchain;
 }
@@ -329,15 +328,15 @@ core::Result<CommandPoolHandle> D3D12Device::createCommandPool(const CommandPool
     }
     if (poolsHeld_.fetch_add(1, std::memory_order_relaxed) >= desc_.maxCommandPools) {
         poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command pools", desc_.maxCommandPools));
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
+                             desc_.maxCommandPools);
     }
     const auto first = listSlots_.take(desc.listCount);
     if (!first) {
         poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the pool asks for {} lists; {} of the device's {} are free", desc.listCount,
-                                         listSlots_.available(), desc_.maxCommandLists));
+                             "the pool asks for {} lists; {} of the device's {} are free", desc.listCount,
+                             listSlots_.available(), desc_.maxCommandLists);
     }
     const auto release = [this, first] {
         releaseSlots(*first);
@@ -369,8 +368,8 @@ core::Result<CommandPoolHandle> D3D12Device::createCommandPool(const CommandPool
         D3D12CommandPool{.queue = desc.queue, .first = *first, .next = *first, .recording = 0, .lastSubmit = 0});
     if (commandPool.isNull()) {
         release();
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command pools", desc_.maxCommandPools));
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
+                             desc_.maxCommandPools);
     }
     return commandPool;
 }
@@ -382,13 +381,12 @@ core::Result<void> D3D12Device::resetCommandPool(CommandPoolHandle commandPool) 
     }
     if ((*pool)->recording != 0) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("{} lists from the pool are still recording; submit or destroy them",
-                                         (*pool)->recording));
+                             "{} lists from the pool are still recording; submit or destroy them", (*pool)->recording);
     }
     if (queues_[(*pool)->queue]->fence->GetCompletedValue() < (*pool)->lastSubmit) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("the GPU has not passed the pool's last submit, token {}; wait on it first",
-                                         (*pool)->lastSubmit));
+                             "the GPU has not passed the pool's last submit, token {}; wait on it first",
+                             (*pool)->lastSubmit);
     }
     // Only the lists handed out since the last reset recorded into their
     // allocators.
@@ -453,8 +451,8 @@ core::Result<CommandListHandle> D3D12Device::beginCommands(CommandPoolHandle com
                                                                                  .rendered = core::SlotChains::kEnd});
     if (commandList.isNull()) {
         discard(made.list.Get());
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command lists", desc_.maxCommandLists));
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command lists",
+                             desc_.maxCommandLists);
     }
     (*pool)->next = listSlots_.next(slot);
     ++(*pool)->recording;
@@ -477,8 +475,8 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
     }
     if (const D3D12CommandPool* pool = commandPools_.find((*list)->pool);
         pool != nullptr && queues_[pool->queue]->type != QueueType::Graphics) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("the list records for queue {}, which does not render", pool->queue));
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the list records for queue {}, which does not render",
+                             pool->queue);
     }
     if ((*chain)->submitted()) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
@@ -498,8 +496,8 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
         const auto slot = renderSlots_.push((*list)->rendered);
         if (!slot) {
             return core::failure(core::ErrorCode::RhiLimitReached,
-                                 std::format("the device's recording lists render to at most {} swapchains at once",
-                                             desc_.maxCommandLists));
+                                 "the device's recording lists render to at most {} swapchains at once",
+                                 desc_.maxCommandLists);
         }
         renders_[*slot] = swapchain;
     }
@@ -565,8 +563,8 @@ core::Result<Token> D3D12Device::submit(const SubmitDesc& desc) {
         }
         if (const D3D12CommandPool* pool = commandPools_.find((*list)->pool);
             pool != nullptr && pool->queue != desc.queue) {
-            return core::failure(core::ErrorCode::RhiInvalidCall,
-                                 std::format("the list was recorded for queue {}, not {}", pool->queue, desc.queue));
+            return core::failure(core::ErrorCode::RhiInvalidCall, "the list was recorded for queue {}, not {}",
+                                 pool->queue, desc.queue);
         }
         for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
             auto chain = swapchainFor(renders_[slot]);
@@ -585,8 +583,8 @@ core::Result<Token> D3D12Device::submit(const SubmitDesc& desc) {
             }
         }
         if (!queue.lists.push((*list)->list)) {
-            return core::failure(core::ErrorCode::RhiInvalidCall,
-                                 std::format("a submit takes at most {} lists", desc_.maxCommandLists));
+            return core::failure(core::ErrorCode::RhiInvalidCall, "a submit takes at most {} lists",
+                                 desc_.maxCommandLists);
         }
     }
     const std::uint64_t value = queue.submitted.load(std::memory_order_relaxed) + 1;

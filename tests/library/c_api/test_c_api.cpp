@@ -878,3 +878,45 @@ TEST_CASE("C API allocates and frees nothing on the heap frame after frame", "[c
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
+
+// bfr_acquire on a swapchain with no images, as on a minimised window, fails
+// every frame; recording the failure as the last error allocates nothing.
+TEST_CASE("C API allocates nothing when a frame-path call fails frame after frame", "[c_api][gpu]") {
+    if (!bfr::test::AllocationCounter::counts()) {
+        SKIP("a sanitizer replaces operator new, so allocations are not counted");
+    }
+    const bfr_backend backend = GENERATE(eachBackend());
+    constexpr int kFrames = 8;
+    std::vector<std::string> messages;
+    {
+        const Instance instance{backend, messages, BFR_FALSE};
+        const HeadlessDevice device{instance.instance};
+        const bfr_swapchain_desc desc{.next = nullptr,
+                                      .window = kHeadless,
+                                      .image_count = device.images,
+                                      .present_mode = BFR_PRESENT_MODE_FIFO,
+                                      .format = {},
+                                      .color_space = {},
+                                      .alpha_mode = {}};
+        bfr_swapchain swapchain{};
+        REQUIRE(bfr_create_swapchain(device.device, &desc, &swapchain) == BFR_RESULT_SUCCESS);
+
+        int refused = 0;
+        std::size_t allocations = 0;
+        std::size_t frees = 0;
+        {
+            const bfr::test::AllocationCounter counter;
+            for (int frame = 0; frame < kFrames; ++frame) {
+                refused += bfr_acquire(device.device, swapchain) == BFR_RESULT_ERROR_OUT_OF_DATE ? 1 : 0;
+                refused -= bfr_get_last_error().length == 0 ? 1 : 0;
+            }
+            allocations = counter.allocations();
+            frees = counter.frees();
+        }
+        CHECK(refused == kFrames);
+        CHECK(allocations == 0);
+        CHECK(frees == 0);
+        bfr_destroy_swapchain(device.device, swapchain);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}

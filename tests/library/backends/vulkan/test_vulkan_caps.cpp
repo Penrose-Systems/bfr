@@ -112,7 +112,7 @@ TEST_CASE("Vulkan reports a failed format query as the failure it is", "[vulkan]
     INFO(name);
     REQUIRE_FALSE(rgba8.has_value());
     CHECK(rgba8.error().code == code);
-    CHECK_THAT(rgba8.error().message,
+    CHECK_THAT(rgba8.error().message.text(),
                Catch::Matchers::Equals(std::string{"vkGetPhysicalDeviceImageFormatProperties2: "} + name));
 }
 
@@ -135,7 +135,7 @@ TEST_CASE("Vulkan reports a failed surface query as the failure it is", "[vulkan
     REQUIRE(formats.has_value() == capsFail);
     const bfr::core::Error& failed = capsFail ? caps.error() : formats.error();
     CHECK(failed.code == bfr::core::ErrorCode::RhiWindowFailed);
-    CHECK_THAT(failed.message, Catch::Matchers::Equals(function + ": VK_ERROR_UNKNOWN"));
+    CHECK_THAT(failed.message.text(), Catch::Matchers::Equals(function + ": VK_ERROR_UNKNOWN"));
 }
 
 TEST_CASE("Vulkan doesn't ask NVIDIA's driver about a headless window's swapchain on a loader that lets it crash",
@@ -151,8 +151,8 @@ TEST_CASE("Vulkan doesn't ask NVIDIA's driver about a headless window's swapchai
 
     REQUIRE_FALSE(caps.has_value());
     CHECK(caps.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
-    CHECK_THAT(caps.error().message, Catch::Matchers::ContainsSubstring("can't present to this window"));
-    CHECK_THAT(caps.error().message, !Catch::Matchers::ContainsSubstring("loader"));
+    CHECK_THAT(caps.error().message.text(), Catch::Matchers::ContainsSubstring("can't present to this window"));
+    CHECK_THAT(caps.error().message.text(), !Catch::Matchers::ContainsSubstring("loader"));
 }
 
 TEST_CASE("Vulkan device without VK_EXT_memory_budget fails with RhiUnsupported", "[vulkan][caps][gpu]") {
@@ -169,5 +169,5 @@ TEST_CASE("Vulkan device without VK_EXT_memory_budget fails with RhiUnsupported"
 
     REQUIRE_FALSE(budget.has_value());
     CHECK(budget.error().code == bfr::core::ErrorCode::RhiUnsupported);
-    CHECK_THAT(budget.error().message, Catch::Matchers::ContainsSubstring("VK_EXT_memory_budget"));
+    CHECK_THAT(budget.error().message.text(), Catch::Matchers::ContainsSubstring("VK_EXT_memory_budget"));
 }

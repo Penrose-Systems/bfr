@@ -89,8 +89,8 @@ core::Result<void> MetalInstance::listAdapters() {
 
 core::Result<void> MetalInstance::checkAdapter(std::size_t adapter) const {
     if (adapter >= adapters_.size()) {
-        return core::failure(core::ErrorCode::RhiAdapterOutOfRange,
-                             std::format("adapter {} is not one of the {} listed", adapter, adapters_.size()));
+        return core::failure(core::ErrorCode::RhiAdapterOutOfRange, "adapter {} is not one of the {} listed", adapter,
+                             adapters_.size());
     }
     return {};
 }

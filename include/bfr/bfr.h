@@ -42,6 +42,9 @@ typedef uint32_t bfr_bool;
 // What bfr_device_desc.max_swapchains of 0 means.
 #define BFR_DEFAULT_MAX_SWAPCHAINS 512u
 
+// The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".
+#define BFR_MAX_MESSAGE_LENGTH 1024u
+
 // Text that is not null-terminated.
 typedef struct bfr_string {
     const char* data;

@@ -42,9 +42,32 @@ inline constexpr bool kExtends = false;
     return {.data = text.data(), .length = text.size()};
 }
 
+/// An error's text held in place, so a failed call allocates nothing: a call
+/// on the frame path may fail every frame, such as acquire on a minimised
+/// window. kCapacity is BFR_MAX_MESSAGE_LENGTH, the most the C API's message
+/// ever holds.
+class Message {
+public:
+    static constexpr std::size_t kCapacity = BFR_MAX_MESSAGE_LENGTH;
+
+    Message() = default;
+    explicit Message(std::string_view text) : size_(std::min(text.size(), kCapacity)) {
+        std::ranges::copy(text.substr(0, size_), chars_.begin());
+    }
+
+    [[nodiscard]] std::string_view view() const { return {chars_.data(), size_}; }
+    /// A std::string of the text, for code off the frame path; it allocates.
+    [[nodiscard]] std::string text() const { return std::string{view()}; }
+    bool operator==(std::string_view other) const { return view() == other; }
+
+private:
+    std::array<char, kCapacity> chars_{};
+    std::size_t size_ = 0;
+};
+
 /// The calling thread's last error, copied before another call replaces it.
-[[nodiscard]] inline std::string lastError() {
-    return std::string{text(bfr_get_last_error())};
+[[nodiscard]] inline Message lastError() {
+    return Message{text(bfr_get_last_error())};
 }
 
 /// A C array as a std::array, each element converted by convert.

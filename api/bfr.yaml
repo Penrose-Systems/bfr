@@ -34,6 +34,7 @@ constants:
   default_max_command_lists: {value: 8192, doc: What bfr_device_desc.max_command_lists of 0 means.}
   default_max_command_pools: {value: 512, doc: What bfr_device_desc.max_command_pools of 0 means.}
   default_max_swapchains: {value: 512, doc: What bfr_device_desc.max_swapchains of 0 means.}
+  max_message_length: {value: 1024, doc: The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".}
 
 enums:
   result:

@@ -38,7 +38,7 @@ TEST_CASE("Instance fails with RhiBackendUnavailable for a backend this build la
         INFO(name(backend));
         REQUIRE_FALSE(rhi.has_value());
         CHECK(rhi.error().code == bfr::core::ErrorCode::RhiBackendUnavailable);
-        CHECK_THAT(rhi.error().message,
+        CHECK_THAT(rhi.error().message.text(),
                    Catch::Matchers::Equals(std::format("backend {} is not in this build", name(backend))));
     }
 }
@@ -48,7 +48,7 @@ TEST_CASE("Instance fails with RhiBackendUnavailable for a value that is no back
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiBackendUnavailable);
-    CHECK_THAT(rhi.error().message, Catch::Matchers::Equals("backend 0 is not one BFR has"));
+    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::Equals("backend 0 is not one BFR has"));
 }
 
 TEST_CASE("Instance with validation lists an adapter and reports nothing", "[rhi][agnostic]") {

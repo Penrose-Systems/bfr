@@ -74,7 +74,7 @@ inline void row(std::string_view label, const std::vector<std::string>& items) {
 }
 
 inline int fail(std::string_view what, const bfr::Error& error) {
-    std::cerr << what << ": " << error.message << "\n";
+    std::cerr << what << ": " << error.message.view() << "\n";
     return 1;
 }
 

@@ -14,5 +14,5 @@ TEST_CASE("Vulkan surface fails when the instance lacks the window system's exte
 
     REQUIRE_FALSE(surface.has_value());
     CHECK(surface.error().code == bfr::core::ErrorCode::RhiWindowFailed);
-    CHECK(surface.error().message == "VK_EXT_headless_surface is not available");
+    CHECK(surface.error().message.text() == "VK_EXT_headless_surface is not available");
 }

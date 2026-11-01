@@ -53,7 +53,7 @@ private:
 // The message of a failed result, for INFO; empty on success.
 template <class T>
 std::string failureOf(const bfr::Expected<T>& result) {
-    return result.has_value() ? std::string{} : result.error().message;
+    return result.has_value() ? std::string{} : result.error().message.text();
 }
 
 // Each backend this build has, for a case that runs on each:
@@ -84,7 +84,7 @@ std::uint32_t headlessAdapter(const bfr::Instance& instance) {
         if (caps.has_value()) {
             return adapter;
         }
-        INFO((*adapters)[adapter].name << ' ' << caps.error().message);
+        INFO((*adapters)[adapter].name << ' ' << caps.error().message.text());
         REQUIRE(caps.error().code == bfr::Result::ErrorPresentUnsupported);
     }
     FAIL("no adapter presents to a headless window");
@@ -108,7 +108,7 @@ bfr::Device headlessDevice(const bfr::Instance& instance) {
         if (device.has_value()) {
             return std::move(*device);
         }
-        INFO(device.error().message);
+        INFO(device.error().message.text());
         REQUIRE(device.error().code == bfr::Result::ErrorPresentUnsupported);
     }
     FAIL("no adapter presents headless");
@@ -140,7 +140,7 @@ TEST_CASE("C++ API reports a failed call's result and message", "[cpp_api][unit]
 
     REQUIRE_FALSE(instance.has_value());
     CHECK(instance.error().code == bfr::Result::ErrorBackendUnavailable);
-    CHECK_THAT(instance.error().message, Catch::Matchers::ContainsSubstring("not in this build"));
+    CHECK_THAT(instance.error().message.text(), Catch::Matchers::ContainsSubstring("not in this build"));
 }
 
 TEST_CASE("C++ API objects that own nothing go quietly", "[cpp_api][unit]") {
@@ -250,7 +250,7 @@ TEST_CASE("C++ API passes on the C API's refusal of a swapchain without a window
 
     REQUIRE_FALSE(swapchain.has_value());
     CHECK(swapchain.error().code == bfr::Result::ErrorInvalidArgument);
-    CHECK_THAT(swapchain.error().message, Catch::Matchers::ContainsSubstring("needs a window"));
+    CHECK_THAT(swapchain.error().message.text(), Catch::Matchers::ContainsSubstring("needs a window"));
 }
 
 TEST_CASE("C++ API moves objects without destroying what they own", "[cpp_api][gpu]") {

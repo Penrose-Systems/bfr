@@ -19,8 +19,7 @@ namespace bfr::rhi {
          {std::pair{"maxCommandLists", desc.maxCommandLists}, std::pair{"maxCommandPools", desc.maxCommandPools},
           std::pair{"maxSwapchains", desc.maxSwapchains}}) {
         if (value == 0 || value > kMost) {
-            return core::failure(core::ErrorCode::RhiInvalidCall,
-                                 std::format("{} is {}; it must be 1 to {}", name, value, kMost));
+            return core::failure(core::ErrorCode::RhiInvalidCall, "{} is {}; it must be 1 to {}", name, value, kMost);
         }
     }
     return {};

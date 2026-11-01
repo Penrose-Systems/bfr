@@ -14,9 +14,10 @@
 
 namespace bfr::rhi::d3d12 {
 
-/// A D3D12 or DXGI call that failed, and what it returned.
+/// A D3D12 or DXGI call that failed, and what it returned. call names a
+/// literal, so making one allocates nothing.
 struct D3D12Failure {
-    std::string call;
+    std::string_view call;
     HRESULT result = S_OK;
 
     /// "call: E_... (0x...)", the HRESULT's name when it has one.
@@ -78,7 +79,8 @@ struct D3D12Failure {
 
 /// The error for failed, coded as codeFor says.
 [[nodiscard]] inline std::unexpected<core::Error> failure(core::ErrorCode code, const D3D12Failure& failed) {
-    return core::failure(codeFor(code, failed.result), failed.message());
+    return core::failure(codeFor(code, failed.result), "{}: {} (0x{:08X})", failed.call,
+                         D3D12Failure::nameOf(failed.result), static_cast<std::uint32_t>(failed.result));
 }
 
 } // namespace bfr::rhi::d3d12

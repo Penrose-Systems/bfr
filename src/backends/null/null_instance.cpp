@@ -87,8 +87,8 @@ NullInstance::NullInstance(const RhiConfig& config, core::Logger logger)
 
 core::Result<void> NullInstance::checkAdapter(std::size_t adapter) const {
     if (adapter >= adapters_.size()) {
-        return core::failure(core::ErrorCode::RhiAdapterOutOfRange,
-                             std::format("adapter {} is not one of the {} listed", adapter, adapters_.size()));
+        return core::failure(core::ErrorCode::RhiAdapterOutOfRange, "adapter {} is not one of the {} listed", adapter,
+                             adapters_.size());
     }
     return {};
 }

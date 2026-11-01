@@ -1,5 +1,7 @@
 #pragma once
 
+#include "bfr/core/error.h"
+
 #include <cstdint>
 #include <format>
 #include <functional>
@@ -57,11 +59,14 @@ private:
 // off drops the call whole. The discarded branch is still compiled, so format
 // strings stay checked and a variable only a log call uses is not reported
 // unused. The empty else makes the call one whole statement, so an else after
-// it binds to the caller's if.
+// it binds to the caller's if. The message is written into a fixed Message on
+// the stack, so logging, which the frame path does, allocates nothing.
 #define BFR_LOG_AT(logger, severity, ...)                                                                              \
     if constexpr (::bfr::core::kLoggingEnabled) {                                                                      \
         if (const ::bfr::core::Logger& bfrLogger = (logger); bfrLogger.wants(severity)) {                              \
-            bfrLogger.send(severity, std::format(__VA_ARGS__));                                                        \
+            ::bfr::core::Message bfrMessage;                                                                           \
+            bfrMessage.format(__VA_ARGS__);                                                                            \
+            bfrLogger.send(severity, bfrMessage.view());                                                               \
         }                                                                                                              \
     }                                                                                                                  \
     else                                                                                                               \

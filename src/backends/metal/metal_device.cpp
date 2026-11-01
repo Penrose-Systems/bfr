@@ -63,7 +63,7 @@ MTL::StoreAction storeActionFor(StoreOp op) {
 }
 
 core::Result<void> deviceFailed(const char* what) {
-    return core::failure(core::ErrorCode::RhiDeviceFailed, std::format("Metal gave no {}", what));
+    return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no {}", what);
 }
 
 } // namespace
@@ -133,7 +133,7 @@ MetalDevice::~MetalDevice() {
     // it through, so it is sent as an error whatever BFR_LOGGING says.
     if (auto idle = waitIdle(); !idle) {
         instance_->logger().send(core::Severity::Error,
-                                 std::format("{}; destroying the device anyway", idle.error().message));
+                                 std::format("{}; destroying the device anyway", idle.error().message.view()));
     }
     if (swapchains_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} swapchains were left when the device went", swapchains_.size());
@@ -152,8 +152,8 @@ MetalDevice::~MetalDevice() {
 
 core::Result<void> MetalDevice::checkQueue(std::uint32_t queue) const {
     if (queue >= queues_.size()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("the device has no queue {}; it has {}", queue, queues_.size()));
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the device has no queue {}; it has {}", queue,
+                             queues_.size());
     }
     return {};
 }
@@ -165,8 +165,8 @@ core::Result<void> MetalDevice::checkToken(Token token) const {
     const std::uint64_t submitted = queues_[token.queue]->submitted.load(std::memory_order_acquire);
     if (token.value > submitted) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("no submit has returned token {} on queue {}; the last is {}", token.value,
-                                         token.queue, submitted));
+                             "no submit has returned token {} on queue {}; the last is {}", token.value, token.queue,
+                             submitted);
     }
     return {};
 }
@@ -245,8 +245,8 @@ core::Result<SwapchainHandle> MetalDevice::createSwapchain(const core::window::N
     }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, *layer, desc, instance_->logger());
     if (swapchain.isNull()) {
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("a device holds at most {} swapchains", desc_.maxSwapchains));
+        return core::failure(core::ErrorCode::RhiLimitReached, "a device holds at most {} swapchains",
+                             desc_.maxSwapchains);
     }
     // The layer's drawables are resident for the queue that renders to them.
     if (MTL::ResidencySet* residency = (*layer)->residencySet(); residency != nullptr) {
@@ -323,15 +323,15 @@ core::Result<CommandPoolHandle> MetalDevice::createCommandPool(const CommandPool
     }
     if (poolsHeld_.fetch_add(1, std::memory_order_relaxed) >= desc_.maxCommandPools) {
         poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command pools", desc_.maxCommandPools));
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
+                             desc_.maxCommandPools);
     }
     const auto first = listSlots_.take(desc.listCount);
     if (!first) {
         poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the pool asks for {} lists; {} of the device's {} are free", desc.listCount,
-                                         listSlots_.available(), desc_.maxCommandLists));
+                             "the pool asks for {} lists; {} of the device's {} are free", desc.listCount,
+                             listSlots_.available(), desc_.maxCommandLists);
     }
     const auto release = [this, first] {
         releaseSlots(*first);
@@ -358,8 +358,8 @@ core::Result<CommandPoolHandle> MetalDevice::createCommandPool(const CommandPool
         MetalCommandPool{.queue = desc.queue, .first = *first, .next = *first, .recording = 0, .lastSubmit = 0});
     if (commandPool.isNull()) {
         release();
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command pools", desc_.maxCommandPools));
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
+                             desc_.maxCommandPools);
     }
     return commandPool;
 }
@@ -371,13 +371,12 @@ core::Result<void> MetalDevice::resetCommandPool(CommandPoolHandle commandPool) 
     }
     if ((*pool)->recording != 0) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("{} lists from the pool are still recording; submit or destroy them",
-                                         (*pool)->recording));
+                             "{} lists from the pool are still recording; submit or destroy them", (*pool)->recording);
     }
     if (queues_[(*pool)->queue]->event->signaledValue() < (*pool)->lastSubmit) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("the GPU has not passed the pool's last submit, token {}; wait on it first",
-                                         (*pool)->lastSubmit));
+                             "the GPU has not passed the pool's last submit, token {}; wait on it first",
+                             (*pool)->lastSubmit);
     }
     // Only the lists handed out since the last reset recorded into their
     // allocators.
@@ -439,8 +438,8 @@ core::Result<CommandListHandle> MetalDevice::beginCommands(CommandPoolHandle com
                                                                                  .rendered = core::SlotChains::kEnd});
     if (commandList.isNull()) {
         made.buffer->endCommandBuffer();
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command lists", desc_.maxCommandLists));
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command lists",
+                             desc_.maxCommandLists);
     }
     (*pool)->next = listSlots_.next(slot);
     ++(*pool)->recording;
@@ -463,8 +462,8 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
     }
     if (const MetalCommandPool* pool = commandPools_.find((*list)->pool);
         pool != nullptr && queues_[pool->queue]->type != QueueType::Graphics) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("the list records for queue {}, which does not render", pool->queue));
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the list records for queue {}, which does not render",
+                             pool->queue);
     }
     if ((*chain)->submitted()) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
@@ -484,8 +483,8 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
         const auto slot = renderSlots_.push((*list)->rendered);
         if (!slot) {
             return core::failure(core::ErrorCode::RhiLimitReached,
-                                 std::format("the device's recording lists render to at most {} swapchains at once",
-                                             desc_.maxCommandLists));
+                                 "the device's recording lists render to at most {} swapchains at once",
+                                 desc_.maxCommandLists);
         }
         renders_[*slot] = swapchain;
     }
@@ -545,8 +544,8 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
         }
         if (const MetalCommandPool* pool = commandPools_.find((*list)->pool);
             pool != nullptr && pool->queue != desc.queue) {
-            return core::failure(core::ErrorCode::RhiInvalidCall,
-                                 std::format("the list was recorded for queue {}, not {}", pool->queue, desc.queue));
+            return core::failure(core::ErrorCode::RhiInvalidCall, "the list was recorded for queue {}, not {}",
+                                 pool->queue, desc.queue);
         }
         for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
             auto chain = swapchainFor(renders_[slot]);
@@ -565,8 +564,8 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
             }
         }
         if (!queue.buffers.push((*list)->buffer)) {
-            return core::failure(core::ErrorCode::RhiInvalidCall,
-                                 std::format("a submit takes at most {} lists", desc_.maxCommandLists));
+            return core::failure(core::ErrorCode::RhiInvalidCall, "a submit takes at most {} lists",
+                                 desc_.maxCommandLists);
         }
     }
     const std::uint64_t value = queue.submitted.load(std::memory_order_relaxed) + 1;

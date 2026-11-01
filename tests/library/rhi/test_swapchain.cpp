@@ -179,7 +179,7 @@ TEST_CASE("Device fails with RhiWindowFailed for a swapchain without a window", 
 
     REQUIRE_FALSE(swapchain.has_value());
     CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiWindowFailed);
-    CHECK_THAT(swapchain.error().message, Catch::Matchers::ContainsSubstring("no window"));
+    CHECK_THAT(swapchain.error().message.text(), Catch::Matchers::ContainsSubstring("no window"));
 }
 
 TEST_CASE("Device fails with RhiInvalidHandle for a forged swapchain handle", "[rhi][agnostic]") {

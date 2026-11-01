@@ -107,7 +107,7 @@ inline InstanceDesc recordingErrorsInto(Backend backend, std::vector<std::string
 template <class T>
 std::string failureOf(const core::Result<T>& result) {
     return result.has_value() ? std::string{}
-                              : std::string{core::name(result.error().code)} + ": " + result.error().message;
+                              : std::string{core::name(result.error().code)} + ": " + result.error().message.text();
 }
 
 /// The first adapter that presents to a headless window. An adapter may not

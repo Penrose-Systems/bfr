@@ -17,7 +17,6 @@
 #include <expected>
 #include <format>
 #include <limits>
-#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -46,7 +45,7 @@ VkSwapchainCreateInfoKHR createInfo(VkSurfaceKHR surface, const SwapchainSetting
 }
 
 core::Result<SwapchainImages> refused(std::string_view function, VkResult result) {
-    return failure(core::ErrorCode::RhiSwapchainFailed, {.call = std::string{function}, .result = result});
+    return failure(core::ErrorCode::RhiSwapchainFailed, {.call = function, .result = result});
 }
 
 // What surface says about itself for adapter.

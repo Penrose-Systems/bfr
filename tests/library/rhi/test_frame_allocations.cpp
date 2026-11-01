@@ -137,3 +137,41 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
+
+// acquire on a swapchain with no images, as on a minimised window, fails every
+// frame; the failure, its message and the backend's log of it allocate nothing.
+TEST_CASE("Device allocates nothing when a frame-path call fails frame after frame", "[rhi][agnostic]") {
+    if (!bfr::test::AllocationCounter::counts()) {
+        SKIP("a sanitizer replaces operator new, so allocations are not counted");
+    }
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        auto created = createInstance(recordingInto(backend, messages), RhiConfig{});
+        INFO(failureOf(created));
+        REQUIRE(created.has_value());
+        const std::unique_ptr<Instance> instance = std::move(*created);
+        const std::unique_ptr<Device> device = presentingDevice(*instance, kHeadless);
+        const auto swapchain = device->createSwapchain(kHeadless, swapchainDesc(*instance));
+        INFO(failureOf(swapchain));
+        REQUIRE(swapchain.has_value());
+
+        int refused = 0;
+        std::size_t allocations = 0;
+        std::size_t frees = 0;
+        {
+            const bfr::test::AllocationCounter counter;
+            for (int frame = 0; frame < kFrames; ++frame) {
+                const auto acquired = device->acquire(*swapchain);
+                refused += !acquired.has_value() && acquired.error().code == bfr::core::ErrorCode::RhiOutOfDate ? 1 : 0;
+            }
+            allocations = counter.allocations();
+            frees = counter.frees();
+        }
+        CHECK(refused == kFrames);
+        CHECK(allocations == 0);
+        CHECK(frees == 0);
+        CHECK(device->destroySwapchain(*swapchain).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}

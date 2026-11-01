@@ -8,13 +8,15 @@
 #include <expected>
 #include <format>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace bfr::rhi::vulkan {
 
-/// A Vulkan call that failed, and what it returned.
+/// A Vulkan call that failed, and what it returned. call names a literal,
+/// so making one allocates nothing.
 struct VulkanFailure {
-    std::string call;
+    std::string_view call;
     VkResult result = VK_SUCCESS;
 
     /// "call: VK_ERROR_...".
@@ -40,7 +42,7 @@ struct VulkanFailure {
 
 /// The error for failed, coded as codeFor says.
 [[nodiscard]] inline std::unexpected<core::Error> failure(core::ErrorCode code, const VulkanFailure& failed) {
-    return core::failure(codeFor(code, failed.result), failed.message());
+    return core::failure(codeFor(code, failed.result), "{}: {}", failed.call, string_VkResult(failed.result));
 }
 
 } // namespace bfr::rhi::vulkan

@@ -77,8 +77,7 @@ core::Result<PresentSetup> presentSetupFor(PresentMode mode) {
         case PresentMode::Mailbox:
             break;
     }
-    return core::failure(core::ErrorCode::RhiUnsupported,
-                         std::format("DXGI has no setting for {} presenting", name(mode)));
+    return core::failure(core::ErrorCode::RhiUnsupported, "DXGI has no setting for {} presenting", name(mode));
 }
 
 // Fails with RhiUnsupported for a mode DXGI has no setting for.
@@ -86,7 +85,7 @@ core::Result<DXGI_ALPHA_MODE> alphaModeFor(AlphaMode mode) {
     if (mode == AlphaMode::Opaque) {
         return DXGI_ALPHA_MODE_IGNORE;
     }
-    return core::failure(core::ErrorCode::RhiUnsupported, std::format("DXGI has no setting for {} alpha", name(mode)));
+    return core::failure(core::ErrorCode::RhiUnsupported, "DXGI has no setting for {} alpha", name(mode));
 }
 
 std::unexpected<core::Error> swapchainFailed(const char* call, HRESULT result) {

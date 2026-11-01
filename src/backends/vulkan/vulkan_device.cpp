@@ -185,8 +185,8 @@ core::Result<std::uint64_t> VulkanDevice::completedValue(const VulkanQueue& queu
 
 core::Result<void> VulkanDevice::checkQueue(std::uint32_t queue) const {
     if (queue >= queues_.size()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("the device has no queue {}; it has {}", queue, queues_.size()));
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the device has no queue {}; it has {}", queue,
+                             queues_.size());
     }
     return {};
 }
@@ -198,8 +198,8 @@ core::Result<void> VulkanDevice::checkToken(Token token) const {
     const std::uint64_t submitted = queues_[token.queue]->submitted.load(std::memory_order_acquire);
     if (token.value > submitted) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("no submit has returned token {} on queue {}; the last is {}", token.value,
-                                         token.queue, submitted));
+                             "no submit has returned token {} on queue {}; the last is {}", token.value, token.queue,
+                             submitted);
     }
     return {};
 }
@@ -279,8 +279,8 @@ core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::
     const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, instance_->instanceTable(),
                                                           std::move(*surface), desc, instance_->logger());
     if (swapchain.isNull()) {
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("a device holds at most {} swapchains", desc_.maxSwapchains));
+        return core::failure(core::ErrorCode::RhiLimitReached, "a device holds at most {} swapchains",
+                             desc_.maxSwapchains);
     }
     return swapchain;
 }
@@ -350,15 +350,15 @@ core::Result<CommandPoolHandle> VulkanDevice::createCommandPool(const CommandPoo
     }
     if (poolsHeld_.fetch_add(1, std::memory_order_relaxed) >= desc_.maxCommandPools) {
         poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command pools", desc_.maxCommandPools));
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
+                             desc_.maxCommandPools);
     }
     const auto first = listSlots_.take(desc.listCount);
     if (!first) {
         poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the pool asks for {} lists; {} of the device's {} are free", desc.listCount,
-                                         listSlots_.available(), desc_.maxCommandLists));
+                             "the pool asks for {} lists; {} of the device's {} are free", desc.listCount,
+                             listSlots_.available(), desc_.maxCommandLists);
     }
     const auto release = [this, first](VkCommandPool pool) {
         if (pool != VK_NULL_HANDLE) {
@@ -394,8 +394,8 @@ core::Result<CommandPoolHandle> VulkanDevice::createCommandPool(const CommandPoo
         .pool = pool, .queue = desc.queue, .first = *first, .next = *first, .recording = 0, .lastSubmit = 0});
     if (commandPool.isNull()) {
         release(pool);
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command pools", desc_.maxCommandPools));
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
+                             desc_.maxCommandPools);
     }
     return commandPool;
 }
@@ -407,8 +407,7 @@ core::Result<void> VulkanDevice::resetCommandPool(CommandPoolHandle commandPool)
     }
     if ((*pool)->recording != 0) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("{} lists from the pool are still recording; submit or destroy them",
-                                         (*pool)->recording));
+                             "{} lists from the pool are still recording; submit or destroy them", (*pool)->recording);
     }
     const auto completed = completedValue(*queues_[(*pool)->queue]);
     if (!completed) {
@@ -416,8 +415,8 @@ core::Result<void> VulkanDevice::resetCommandPool(CommandPoolHandle commandPool)
     }
     if (*completed < (*pool)->lastSubmit) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("the GPU has not passed the pool's last submit, token {}; wait on it first",
-                                         (*pool)->lastSubmit));
+                             "the GPU has not passed the pool's last submit, token {}; wait on it first",
+                             (*pool)->lastSubmit);
     }
     if (const VkResult result = table_.vkResetCommandPool(device_, (*pool)->pool, 0); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkResetCommandPool", .result = result});
@@ -476,8 +475,8 @@ core::Result<CommandListHandle> VulkanDevice::beginCommands(CommandPoolHandle co
     const CommandListHandle commandList = commandLists_.emplace(VulkanCommandList{
         .buffer = buffer, .pool = commandPool, .slot = slot, .rendering = {}, .rendered = core::SlotChains::kEnd});
     if (commandList.isNull()) {
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command lists", desc_.maxCommandLists));
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command lists",
+                             desc_.maxCommandLists);
     }
     (*pool)->next = listSlots_.next(slot);
     ++(*pool)->recording;
@@ -500,8 +499,8 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
     }
     if (const VulkanCommandPool* pool = commandPools_.find((*list)->pool);
         pool != nullptr && queues_[pool->queue]->type != QueueType::Graphics) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("the list records for queue {}, which does not render", pool->queue));
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the list records for queue {}, which does not render",
+                             pool->queue);
     }
     if ((*chain)->submitted()) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
@@ -521,8 +520,8 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
         const auto slot = renderSlots_.push((*list)->rendered);
         if (!slot) {
             return core::failure(core::ErrorCode::RhiLimitReached,
-                                 std::format("the device's recording lists render to at most {} swapchains at once",
-                                             desc_.maxCommandLists));
+                                 "the device's recording lists render to at most {} swapchains at once",
+                                 desc_.maxCommandLists);
         }
         renders_[*slot] = swapchain;
     }
@@ -591,8 +590,7 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
     queue.signals.clear();
     queue.chains.clear();
     const auto full = [this] {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             std::format("a submit takes at most {} lists", desc_.maxCommandLists));
+        return core::failure(core::ErrorCode::RhiInvalidCall, "a submit takes at most {} lists", desc_.maxCommandLists);
     };
     for (const CommandListHandle commandList : desc.commandLists) {
         auto list = commandListFor(commandList);
@@ -604,8 +602,8 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
         }
         if (const VulkanCommandPool* pool = commandPools_.find((*list)->pool);
             pool != nullptr && pool->queue != desc.queue) {
-            return core::failure(core::ErrorCode::RhiInvalidCall,
-                                 std::format("the list was recorded for queue {}, not {}", pool->queue, desc.queue));
+            return core::failure(core::ErrorCode::RhiInvalidCall, "the list was recorded for queue {}, not {}",
+                                 pool->queue, desc.queue);
         }
         for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
             auto chain = swapchainFor(renders_[slot]);

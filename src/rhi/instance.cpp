@@ -65,11 +65,11 @@ core::Result<std::unique_ptr<Instance>> Instance::create(const InstanceDesc& des
 #else
         case Backend::Metal:
 #endif
-            return core::failure(core::ErrorCode::RhiBackendUnavailable,
-                                 std::format("backend {} is not in this build", name(desc.backend)));
+            return core::failure(core::ErrorCode::RhiBackendUnavailable, "backend {} is not in this build",
+                                 name(desc.backend));
     }
-    return core::failure(core::ErrorCode::RhiBackendUnavailable,
-                         std::format("backend {} is not one BFR has", static_cast<std::uint32_t>(desc.backend)));
+    return core::failure(core::ErrorCode::RhiBackendUnavailable, "backend {} is not one BFR has",
+                         static_cast<std::uint32_t>(desc.backend));
 }
 
 } // namespace bfr::rhi

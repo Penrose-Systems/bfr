@@ -38,7 +38,7 @@ TEST_CASE("Result carries the code and message on failure", "[core][unit]") {
     const Result<int> result = requirePositive(0);
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().code == ErrorCode::RhiDeviceFailed);
-    CHECK(result.error().message == "value must be positive");
+    CHECK(result.error().message.text() == "value must be positive");
 }
 
 TEST_CASE("Result<void> distinguishes success from failure", "[core][unit]") {
@@ -57,7 +57,7 @@ TEST_CASE("failure makes a failed Result of any type", "[core][unit]") {
     const Result<int> result = bfr::core::failure(ErrorCode::RhiDeviceFailed, "no window");
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().code == ErrorCode::RhiDeviceFailed);
-    CHECK(result.error().message == "no window");
+    CHECK(result.error().message.text() == "no window");
 }
 
 TEST_CASE("withReasons lists each reason after the message", "[core][unit]") {
@@ -67,4 +67,27 @@ TEST_CASE("withReasons lists each reason after the message", "[core][unit]") {
 
 TEST_CASE("withReasons without reasons is the message alone", "[core][unit]") {
     CHECK(bfr::core::error::withReasons("no loader", {}) == "no loader");
+}
+
+TEST_CASE("failure writes its format and arguments into the error", "[core][unit]") {
+    constexpr int kQueue = 7;
+    const Result<void> result = bfr::core::failure(ErrorCode::RhiInvalidCall, "no queue {}; it has {}", kQueue, 1);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message == "no queue 7; it has 1");
+}
+
+TEST_CASE("Message cuts text longer than it holds and marks the cut", "[core][unit]") {
+    using bfr::core::Message;
+    const std::string longer(Message::kCapacity + 1, 'x');
+    const Message assigned{longer};
+    CHECK(assigned.view().size() == Message::kCapacity);
+    CHECK(assigned.view().ends_with("..."));
+    Message formatted;
+    formatted.format("{}{}", longer, longer);
+    CHECK(formatted.view().size() == Message::kCapacity);
+    CHECK(formatted.view().ends_with("..."));
+    const Message copied = formatted;
+    CHECK(copied.view() == formatted.view());
+    const Message exact{std::string(Message::kCapacity, 'y')};
+    CHECK(exact.view() == std::string(Message::kCapacity, 'y'));
 }

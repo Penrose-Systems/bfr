@@ -63,8 +63,7 @@ core::Result<bool> displaySyncFor(PresentMode mode) {
         case PresentMode::Mailbox:
             break;
     }
-    return core::failure(core::ErrorCode::RhiUnsupported,
-                         std::format("the layer has no setting for {} presenting", name(mode)));
+    return core::failure(core::ErrorCode::RhiUnsupported, "the layer has no setting for {} presenting", name(mode));
 }
 
 } // namespace
@@ -117,8 +116,8 @@ core::Result<SwapchainImages> MetalSwapchain::build(std::uint32_t width, std::ui
         return std::unexpected(displaySync.error());
     }
     if (desc_.alphaMode != AlphaMode::Opaque) {
-        return core::failure(core::ErrorCode::RhiUnsupported,
-                             std::format("the layer has no setting for {} alpha", name(desc_.alphaMode)));
+        return core::failure(core::ErrorCode::RhiUnsupported, "the layer has no setting for {} alpha",
+                             name(desc_.alphaMode));
     }
     layer_->setDevice(device_.get());
     layer_->setPixelFormat(format.pixelFormat);

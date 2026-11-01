@@ -7,12 +7,11 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <utility>
 
 namespace bfr::core {
 
-std::unexpected<Error> failure(ErrorCode code, std::string message) {
-    return std::unexpected(Error{.code = code, .message = std::move(message)});
+std::unexpected<Error> failure(ErrorCode code, std::string_view message) {
+    return std::unexpected(Error{.code = code, .message = message});
 }
 
 std::string_view name(ErrorCode code) noexcept {

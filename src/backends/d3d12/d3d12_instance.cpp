@@ -93,11 +93,10 @@ D3D12Instance::~D3D12Instance() {
 core::Result<void> D3D12Instance::enableDebugLayer() {
     ComPtr<ID3D12Debug> debug;
     if (const HRESULT result = D3D12GetDebugInterface(IID_PPV_ARGS(&debug)); FAILED(result)) {
-        return core::failure(
-            core::ErrorCode::RhiValidationUnavailable,
-            std::format("the D3D12 debug layer is not available; Windows supplies it with the Graphics Tools "
-                        "optional feature: {}",
-                        D3D12Failure{.call = "D3D12GetDebugInterface", .result = result}.message()));
+        return core::failure(core::ErrorCode::RhiValidationUnavailable,
+                             "the D3D12 debug layer is not available; Windows supplies it with the Graphics Tools "
+                             "optional feature: {}",
+                             D3D12Failure{.call = "D3D12GetDebugInterface", .result = result}.message());
     }
     debug->EnableDebugLayer();
     return {};
@@ -221,8 +220,8 @@ core::Result<void> D3D12Instance::listAdapters() {
 
 core::Result<void> D3D12Instance::checkAdapter(std::size_t adapter) const {
     if (adapter >= adapters_.size()) {
-        return core::failure(core::ErrorCode::RhiAdapterOutOfRange,
-                             std::format("adapter {} is not one of the {} listed", adapter, adapters_.size()));
+        return core::failure(core::ErrorCode::RhiAdapterOutOfRange, "adapter {} is not one of the {} listed", adapter,
+                             adapters_.size());
     }
     return {};
 }

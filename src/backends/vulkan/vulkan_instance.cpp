@@ -271,8 +271,7 @@ core::Result<void> checkValidation(const core::Logger& logger) {
     // Named, so clang-tidy sees the check before the access.
     const std::optional<VkLayerProperties>& layer = *found;
     if (!layer) {
-        return core::failure(core::ErrorCode::RhiValidationUnavailable,
-                             std::format("{} is not installed", kValidationLayer));
+        return core::failure(core::ErrorCode::RhiValidationUnavailable, "{} is not installed", kValidationLayer);
     }
     BFR_LOG_INFO(logger, "{} {}", kValidationLayer, versionName(layer->specVersion));
     for (const char* provider : std::to_array<const char*>({nullptr, kValidationLayer})) {
@@ -284,8 +283,8 @@ core::Result<void> checkValidation(const core::Logger& logger) {
             return {};
         }
     }
-    return core::failure(core::ErrorCode::RhiValidationUnavailable,
-                         std::format("{} is not available", VK_EXT_DEBUG_UTILS_EXTENSION_NAME));
+    return core::failure(core::ErrorCode::RhiValidationUnavailable, "{} is not available",
+                         VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 }
 
 core::Severity severityOf(VkDebugUtilsMessageSeverityFlagBitsEXT severity) {
@@ -434,35 +433,32 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     }
     const auto families = chooseQueueFamilies(properties, *presenting);
     if (!families) {
-        return core::failure(core::ErrorCode::RhiDeviceFailed, std::format("{} has no graphics queue", listed.name));
+        return core::failure(core::ErrorCode::RhiDeviceFailed, "{} has no graphics queue", listed.name);
     }
     if (!families->present) {
-        return core::failure(core::ErrorCode::RhiPresentUnsupported,
-                             std::format("no queue family on {} presents to the window", listed.name));
+        return core::failure(core::ErrorCode::RhiPresentUnsupported, "no queue family on {} presents to the window",
+                             listed.name);
     }
     if (wanted.compute != 0) {
         const std::uint32_t has = families->compute == families->graphics ? 0
                                                                           : properties[families->compute].queueCount;
         if (has < wanted.compute) {
-            return core::failure(core::ErrorCode::RhiUnsupported,
-                                 std::format("{} has {} compute queues; {} were asked for", listed.name, has,
-                                             wanted.compute));
+            return core::failure(core::ErrorCode::RhiUnsupported, "{} has {} compute queues; {} were asked for",
+                                 listed.name, has, wanted.compute);
         }
     }
     if (wanted.copy != 0) {
         const bool dedicated = families->transfer != families->graphics && families->transfer != families->compute;
         const std::uint32_t has = dedicated ? properties[families->transfer].queueCount : 0;
         if (has < wanted.copy) {
-            return core::failure(core::ErrorCode::RhiUnsupported,
-                                 std::format("{} has {} copy queues; {} were asked for", listed.name, has,
-                                             wanted.copy));
+            return core::failure(core::ErrorCode::RhiUnsupported, "{} has {} copy queues; {} were asked for",
+                                 listed.name, has, wanted.copy);
         }
     }
     const auto available = deviceExtensions(vk_, physicalDevice);
     if (!available) {
-        return failure(core::ErrorCode::RhiDeviceFailed,
-                       {.call = std::format("{} on {}", available.error().call, listed.name),
-                        .result = available.error().result});
+        return core::failure(codeFor(core::ErrorCode::RhiDeviceFailed, available.error().result), "{} on {}: {}",
+                             available.error().call, listed.name, string_VkResult(available.error().result));
     }
     std::vector<const char*> extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
     if (lists(*available, kPortabilitySubset)) {
@@ -482,8 +478,8 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     VkDevice device = VK_NULL_HANDLE;
     const VkResult result = vk_.vkCreateDevice(physicalDevice, &info, nullptr, &device);
     if (result != VK_SUCCESS) {
-        return failure(core::ErrorCode::RhiDeviceFailed,
-                       {.call = std::format("vkCreateDevice on {}", listed.name), .result = result});
+        return core::failure(codeFor(core::ErrorCode::RhiDeviceFailed, result), "vkCreateDevice on {}: {}", listed.name,
+                             string_VkResult(result));
     }
     BFR_LOG_INFO(logger(), "device on {}, queue families {}, extensions: {}", listed.name, familyList(queues.infos),
                  core::text::join(extensions, ", "));
@@ -513,8 +509,7 @@ core::Result<std::vector<SwapchainFormat>> VulkanInstance::swapchainFormats(
 
 core::Result<void> VulkanInstance::checkAdapter(std::size_t adapter) const {
     if (adapter >= adapters_.size()) {
-        return core::failure(core::ErrorCode::RhiAdapterOutOfRange,
-                             std::format("adapter {} of {}", adapter, adapters_.size()));
+        return core::failure(core::ErrorCode::RhiAdapterOutOfRange, "adapter {} of {}", adapter, adapters_.size());
     }
     return {};
 }
@@ -534,8 +529,8 @@ auto VulkanInstance::askAboutSurface(std::size_t adapter, const core::window::Na
         BFR_LOG_INFO(logger(),
                      "{} does not present to headless surfaces; not asked, since loader {} would crash its driver",
                      adapters_[adapter].name, versionName(loaderVersion_));
-        return core::failure(core::ErrorCode::RhiPresentUnsupported,
-                             std::format("{} can't present to this window", adapters_[adapter].name));
+        return core::failure(core::ErrorCode::RhiPresentUnsupported, "{} can't present to this window",
+                             adapters_[adapter].name);
     }
     return query(vk_, physicalDevice, surface->handle());
 }

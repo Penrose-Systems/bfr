@@ -69,7 +69,7 @@ std::optional<Severity> severityFrom(bfr_message_severity severity) {
 
 // The swapchain desc asks for, each 0 as its documented default. Nothing when a value is one BFR
 // doesn't have; error says which.
-std::optional<bfr::rhi::SwapchainDesc> swapchainIn(const bfr_swapchain_desc& desc, std::string& error) {
+std::optional<bfr::rhi::SwapchainDesc> swapchainIn(const bfr_swapchain_desc& desc, bfr::core::Message& error) {
     using namespace bfr::rhi;
     SwapchainDesc swapchain;
     swapchain.imageCount = desc.image_count;
@@ -88,7 +88,7 @@ std::optional<bfr::rhi::SwapchainDesc> swapchainIn(const bfr_swapchain_desc& des
             break;
         case BFR_PRESENT_MODE_FORCE32:
         default:
-            error = std::format("present mode {} is not one BFR has", static_cast<std::int64_t>(desc.present_mode));
+            error.format("present mode {} is not one BFR has", static_cast<std::int64_t>(desc.present_mode));
             return std::nullopt;
     }
     if (const auto format = static_cast<std::int64_t>(desc.format); format != 0) {
@@ -96,7 +96,7 @@ std::optional<bfr::rhi::SwapchainDesc> swapchainIn(const bfr_swapchain_desc& des
             return static_cast<std::int64_t>(known) == format;
         });
         if (found == kFormats.end()) {
-            error = std::format("format {} is not one BFR has", format);
+            error.format("format {} is not one BFR has", format);
             return std::nullopt;
         }
         swapchain.format = *found;
@@ -104,7 +104,7 @@ std::optional<bfr::rhi::SwapchainDesc> swapchainIn(const bfr_swapchain_desc& des
     if (const auto colorSpace = static_cast<std::int64_t>(desc.color_space); colorSpace != 0) {
         if (colorSpace < static_cast<std::int64_t>(ColorSpace::Srgb) ||
             colorSpace > static_cast<std::int64_t>(ColorSpace::DisplayNative)) {
-            error = std::format("color space {} is not one BFR has", colorSpace);
+            error.format("color space {} is not one BFR has", colorSpace);
             return std::nullopt;
         }
         swapchain.colorSpace = static_cast<ColorSpace>(colorSpace);
@@ -124,25 +124,31 @@ std::optional<bfr::rhi::SwapchainDesc> swapchainIn(const bfr_swapchain_desc& des
             break;
         case BFR_ALPHA_MODE_FORCE32:
         default:
-            error = std::format("alpha mode {} is not one BFR has", static_cast<std::int64_t>(desc.alpha_mode));
+            error.format("alpha mode {} is not one BFR has", static_cast<std::int64_t>(desc.alpha_mode));
             return std::nullopt;
     }
     return swapchain;
 }
 
-// The calling thread's last error, which bfr_get_last_error returns.
-std::string& lastError() {
-    thread_local std::string error;
+// The calling thread's last error, which bfr_get_last_error returns. Fixed
+// text, so recording a failure allocates nothing, on the frame path or off it.
+bfr::core::Message& lastError() {
+    thread_local bfr::core::Message error;
     return error;
 }
 
 // Records message as the calling thread's last error and returns result.
 bfr_result fail(bfr_result result, std::string_view message) noexcept {
-    try {
-        lastError() = message;
-    } catch (...) {
-        lastError().clear();
-    }
+    lastError().assign(message);
+    return result;
+}
+
+// Records format filled with args as the calling thread's last error, written
+// straight into it, and returns result.
+template <class... Args>
+    requires(sizeof...(Args) > 0)
+bfr_result fail(bfr_result result, std::format_string<Args...> format, Args&&... args) noexcept {
+    lastError().format(format, std::forward<Args>(args)...);
     return result;
 }
 
@@ -270,7 +276,7 @@ bfr::rhi::CommandListHandle fromC(bfr_command_list handle) {
 
 // The rendering desc asks for, each 0 as its documented default. Nothing when
 // a value is one BFR doesn't have; error says which.
-std::optional<bfr::rhi::RenderingDesc> renderingIn(const bfr_rendering_desc& desc, std::string& error) {
+std::optional<bfr::rhi::RenderingDesc> renderingIn(const bfr_rendering_desc& desc, bfr::core::Message& error) {
     using namespace bfr::rhi;
     RenderingDesc rendering;
     switch (desc.load_op) {
@@ -285,7 +291,7 @@ std::optional<bfr::rhi::RenderingDesc> renderingIn(const bfr_rendering_desc& des
             break;
         case BFR_LOAD_OP_FORCE32:
         default:
-            error = std::format("load_op {} is not one BFR has", static_cast<std::int64_t>(desc.load_op));
+            error.format("load_op {} is not one BFR has", static_cast<std::int64_t>(desc.load_op));
             return std::nullopt;
     }
     switch (desc.store_op) {
@@ -297,7 +303,7 @@ std::optional<bfr::rhi::RenderingDesc> renderingIn(const bfr_rendering_desc& des
             break;
         case BFR_STORE_OP_FORCE32:
         default:
-            error = std::format("store_op {} is not one BFR has", static_cast<std::int64_t>(desc.store_op));
+            error.format("store_op {} is not one BFR has", static_cast<std::int64_t>(desc.store_op));
             return std::nullopt;
     }
     rendering.clearColor = std::to_array(desc.clear_color);
@@ -307,7 +313,7 @@ std::optional<bfr::rhi::RenderingDesc> renderingIn(const bfr_rendering_desc& des
 // The window in window, as the library keeps it: monostate for all zero,
 // which means no window. Fails for a window system this platform lacks, or a
 // window system with no window.
-std::optional<NativeWindow> windowIn(const bfr_window& window, std::string& error) {
+std::optional<NativeWindow> windowIn(const bfr_window& window, bfr::core::Message& error) {
     switch (window.system) {
         case BFR_WINDOW_SYSTEM_HEADLESS:
             return bfr::core::window::Headless{};
@@ -328,7 +334,7 @@ std::optional<NativeWindow> windowIn(const bfr_window& window, std::string& erro
             break;
         case BFR_WINDOW_SYSTEM_FORCE32:
         default:
-            error = std::format("window system {} is not one BFR has", static_cast<std::int64_t>(window.system));
+            error.format("window system {} is not one BFR has", static_cast<std::int64_t>(window.system));
             return std::nullopt;
     }
     if (window.window == nullptr) {
@@ -694,14 +700,14 @@ bfr_swapchain_format toC(const bfr::rhi::SwapchainFormat& format) {
 std::optional<bfr_result> checkAdapter(const bfr_instance& instance, std::uint32_t adapter) {
     const std::size_t count = instance.instance->adapters().size();
     if (adapter >= count) {
-        return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, std::format("adapter {} of {}", adapter, count));
+        return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "adapter {} of {}", adapter, count);
     }
     return std::nullopt;
 }
 
 // unusable one.
 std::optional<NativeWindow> surfaceWindow(const bfr_swapchain_query& desc, bfr_result& failed) {
-    std::string error;
+    bfr::core::Message error;
     auto window = windowIn(desc.window, error);
     if (window && std::holds_alternative<std::monostate>(*window)) {
         window.reset();
@@ -729,7 +735,7 @@ bfr_result writeList(std::span<const Item> items, std::uint32_t* count, Out* out
 extern "C" {
 
 bfr_string bfr_get_last_error(void) {
-    const std::string& error = lastError();
+    const std::string_view error = lastError().view();
     return {.data = error.data(), .length = error.size()};
 }
 
@@ -764,13 +770,13 @@ bfr_result bfr_create_instance(const bfr_instance_desc* desc, bfr_instance** ins
         }
         const auto backend = backendIn(desc->backend);
         if (!backend) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT,
-                        std::format("backend {} is not one BFR has", static_cast<std::int64_t>(desc->backend)));
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "backend {} is not one BFR has",
+                        static_cast<std::int64_t>(desc->backend));
         }
         const auto least = severityFrom(desc->min_severity);
         if (!least) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, std::format("min_severity {} is not a severity",
-                                                                       static_cast<std::int64_t>(desc->min_severity)));
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "min_severity {} is not a severity",
+                        static_cast<std::int64_t>(desc->min_severity));
         }
         bfr::rhi::InstanceDesc rhiDesc{.backend = *backend};
         if (desc->message_callback != nullptr) {
@@ -825,7 +831,7 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instance, desc and device must not be null");
         }
         *device = nullptr;
-        std::string error;
+        bfr::core::Message error;
         const auto window = windowIn(desc->window, error);
         if (!window) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
@@ -862,7 +868,7 @@ bfr_result bfr_create_swapchain(bfr_device* device, const bfr_swapchain_desc* de
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and swapchain must not be null");
         }
         *swapchain = {};
-        std::string error;
+        bfr::core::Message error;
         const auto window = windowIn(desc->window, error);
         if (!window) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
@@ -995,7 +1001,7 @@ bfr_result bfr_begin_rendering(bfr_device* device, bfr_command_list command_list
         if (desc->next != nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_rendering_desc takes no chained structs");
         }
-        std::string error;
+        bfr::core::Message error;
         const auto rendering = renderingIn(*desc, error);
         if (!rendering) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);

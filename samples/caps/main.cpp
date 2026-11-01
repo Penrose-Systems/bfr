@@ -300,7 +300,7 @@ void printFormatTable(const std::vector<bfr::FormatCaps>& formats) {
 void printFormats(const bfr::Instance& instance, std::uint32_t adapter, const Options& options) {
     const auto formats = instance.formats(adapter);
     if (!formats) {
-        row("Formats", "can't list them: " + formats.error().message);
+        row("Formats", "can't list them: " + formats.error().message.text());
         return;
     }
     printFormatCounts(*formats);
@@ -312,7 +312,7 @@ void printFormats(const bfr::Instance& instance, std::uint32_t adapter, const Op
 void printSurface(const bfr::Instance& instance, std::uint32_t adapter) {
     const auto caps = instance.swapchainCaps(adapter, {.window = {.system = bfr::WindowSystem::Headless}});
     if (!caps) {
-        row("Window", "can't ask: " + caps.error().message);
+        row("Window", "can't ask: " + caps.error().message.text());
         return;
     }
     std::vector<std::string> modes;
@@ -328,7 +328,7 @@ void printSurface(const bfr::Instance& instance, std::uint32_t adapter) {
     row("Present", modes);
     const auto formats = instance.swapchainFormats(adapter, {.window = {.system = bfr::WindowSystem::Headless}});
     if (!formats) {
-        row("Swap formats", "can't list them: " + formats.error().message);
+        row("Swap formats", "can't list them: " + formats.error().message.text());
         return;
     }
     std::vector<std::string> names;
@@ -342,12 +342,12 @@ void printSurface(const bfr::Instance& instance, std::uint32_t adapter) {
 void printBudget(const bfr::Instance& instance, std::uint32_t adapter, const bfr::CapsMemory& memory) {
     const auto device = instance.createDevice({.adapter = adapter});
     if (!device) {
-        row("Budget", "can't open a device: " + device.error().message);
+        row("Budget", "can't open a device: " + device.error().message.text());
         return;
     }
     const auto budget = device->budget();
     if (!budget) {
-        row("Budget", budget.error().message);
+        row("Budget", budget.error().message.text());
         return;
     }
     std::vector<std::string> heaps;
@@ -560,7 +560,7 @@ void printAll(const bfr::Caps& caps) {
 void printAdapter(const bfr::Instance& instance, std::uint32_t adapter, const Options& options) {
     const auto caps = instance.caps(adapter);
     if (!caps) {
-        print(std::format("Adapter {}: can't read its caps: {}\n", adapter, caps.error().message));
+        print(std::format("Adapter {}: can't read its caps: {}\n", adapter, caps.error().message.text()));
         return;
     }
     printHeading(caps->info);
@@ -598,7 +598,7 @@ int run(std::span<char*> args) {
     // Every backend the build has, each adapter of each.
     const auto backends = bfr::backends();
     if (!backends) {
-        std::cerr << "can't list backends: " << backends.error().message << "\n";
+        std::cerr << "can't list backends: " << backends.error().message.text() << "\n";
         return 1;
     }
     for (const bfr::Backend backend : *backends) {
@@ -606,12 +606,13 @@ int run(std::span<char*> args) {
         // A backend that won't start on this machine is said, and the next
         // is tried.
         if (!instance) {
-            std::cerr << "can't create a " << bfr::name(backend) << " instance: " << instance.error().message << "\n";
+            std::cerr << "can't create a " << bfr::name(backend) << " instance: " << instance.error().message.text()
+                      << "\n";
             continue;
         }
         const auto adapters = instance->adapters();
         if (!adapters) {
-            std::cerr << "can't list adapters: " << adapters.error().message << "\n";
+            std::cerr << "can't list adapters: " << adapters.error().message.text() << "\n";
             continue;
         }
         for (std::uint32_t adapter = 0; adapter < adapters->size(); ++adapter) {

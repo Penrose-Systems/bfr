@@ -84,7 +84,7 @@ TEST_CASE("Vulkan device fails with RhiWindowFailed when the API refuses a swapc
 
     REQUIRE_FALSE(swapchain.has_value());
     CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiWindowFailed);
-    CHECK_THAT(swapchain.error().message,
+    CHECK_THAT(swapchain.error().message.text(),
                Catch::Matchers::ContainsSubstring("vkCreateHeadlessSurfaceEXT: VK_ERROR_UNKNOWN"));
 }
 
@@ -126,7 +126,7 @@ TEST_CASE("Vulkan device reports a failed call when building a swapchain's image
 
         REQUIRE_FALSE(images.has_value());
         CHECK(images.error().code == bfr::core::ErrorCode::RhiSwapchainFailed);
-        CHECK_THAT(images.error().message, Catch::Matchers::ContainsSubstring(function + ": VK_ERROR_UNKNOWN"));
+        CHECK_THAT(images.error().message.text(), Catch::Matchers::ContainsSubstring(function + ": VK_ERROR_UNKNOWN"));
     }
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
@@ -149,7 +149,7 @@ TEST_CASE("Vulkan device reports a failed present query as the failure it is", "
 
         REQUIRE_FALSE(swapchain.has_value());
         CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiWindowFailed);
-        CHECK_THAT(swapchain.error().message,
+        CHECK_THAT(swapchain.error().message.text(),
                    Catch::Matchers::ContainsSubstring("vkGetPhysicalDeviceSurfaceSupportKHR: VK_ERROR_UNKNOWN"));
     }
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
@@ -174,7 +174,7 @@ TEST_CASE("Vulkan device keeps running out of memory, a lost device and a lost s
 
     REQUIRE_FALSE(images.has_value());
     CHECK(images.error().code == code);
-    CHECK_THAT(images.error().message,
+    CHECK_THAT(images.error().message.text(),
                Catch::Matchers::ContainsSubstring(std::string{"vkGetPhysicalDeviceSurfaceCapabilitiesKHR: "} + result));
     CHECK(headless.device->destroySwapchain(*swapchain).has_value());
 }

@@ -101,7 +101,7 @@ TEST_CASE("Vulkan with validation fails when the layer's library is missing", "[
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiValidationUnavailable);
     // The loader's message names the library it failed to load.
-    CHECK_THAT(rhi.error().message, Catch::Matchers::ContainsSubstring("libVkLayer_missing.so"));
+    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::ContainsSubstring("libVkLayer_missing.so"));
 }
 
 TEST_CASE("Vulkan fails when no driver is installed", "[vulkan][gpu]") {
@@ -122,8 +122,8 @@ TEST_CASE("Vulkan reports why each loader library failed", "[vulkan][unit][.]") 
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiLoaderFailed);
-    CHECK_THAT(rhi.error().message, Catch::Matchers::ContainsSubstring("libvulkan.so.1: file too short") &&
-                                        Catch::Matchers::ContainsSubstring("libvulkan.so: file too short"));
+    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::ContainsSubstring("libvulkan.so.1: file too short") &&
+                                               Catch::Matchers::ContainsSubstring("libvulkan.so: file too short"));
 }
 
 TEST_CASE("Vulkan reports a loader library without vkGetInstanceProcAddr", "[vulkan][unit][.]") {
@@ -131,7 +131,7 @@ TEST_CASE("Vulkan reports a loader library without vkGetInstanceProcAddr", "[vul
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiLoaderFailed);
-    CHECK_THAT(rhi.error().message,
+    CHECK_THAT(rhi.error().message.text(),
                Catch::Matchers::ContainsSubstring("libvulkan.so.1: undefined symbol: vkGetInstanceProcAddr") &&
                    Catch::Matchers::ContainsSubstring("libvulkan.so: undefined symbol: vkGetInstanceProcAddr"));
 }
@@ -143,7 +143,7 @@ TEST_CASE("Vulkan with validation reports a failed layer listing", "[vulkan][uni
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiValidationUnavailable);
-    CHECK_THAT(rhi.error().message,
+    CHECK_THAT(rhi.error().message.text(),
                Catch::Matchers::ContainsSubstring("vkEnumerateInstanceLayerProperties: VK_ERROR_UNKNOWN"));
 }
 
@@ -152,7 +152,7 @@ TEST_CASE("Vulkan with validation reports a failed extension listing", "[vulkan]
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiValidationUnavailable);
-    CHECK_THAT(rhi.error().message,
+    CHECK_THAT(rhi.error().message.text(),
                Catch::Matchers::ContainsSubstring("vkEnumerateInstanceExtensionProperties: VK_ERROR_UNKNOWN"));
 }
 
@@ -163,7 +163,7 @@ TEST_CASE("Vulkan with validation lists again when a listing grows", "[vulkan][u
     INFO(failureOf(rhi));
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiInstanceFailed);
-    CHECK_THAT(rhi.error().message,
+    CHECK_THAT(rhi.error().message.text(),
                Catch::Matchers::ContainsSubstring("vkCreateInstance: VK_ERROR_INITIALIZATION_FAILED"));
 }
 
@@ -189,9 +189,9 @@ TEST_CASE("Vulkan skips an adapter it fails to check, and says which call failed
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
-    CHECK_THAT(rhi.error().message, Catch::Matchers::StartsWith("no usable adapter") &&
-                                        Catch::Matchers::ContainsSubstring(
-                                            "skipped, vkEnumerateDeviceExtensionProperties: VK_ERROR_UNKNOWN"));
+    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::StartsWith("no usable adapter") &&
+                                               Catch::Matchers::ContainsSubstring(
+                                                   "skipped, vkEnumerateDeviceExtensionProperties: VK_ERROR_UNKNOWN"));
     if (bfr::core::kLoggingEnabled) {
         CHECK_THAT(messages, Catch::Matchers::AnyMatch(Catch::Matchers::ContainsSubstring("skipped, ")));
     }
@@ -205,7 +205,7 @@ TEST_CASE("Vulkan fails with RhiNoAdapter when every adapter is below the floor"
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
-    CHECK_THAT(rhi.error().message, Catch::Matchers::ContainsSubstring("Vulkan 1.2, needs 1.3"));
+    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::ContainsSubstring("Vulkan 1.2, needs 1.3"));
 }
 
 TEST_CASE("Vulkan fails with RhiNoAdapter when an adapter lacks a floor feature, and names it", "[vulkan][gpu]") {
@@ -224,7 +224,7 @@ TEST_CASE("Vulkan fails with RhiNoAdapter when an adapter lacks a floor feature,
     INFO(feature);
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
-    CHECK_THAT(rhi.error().message, Catch::Matchers::ContainsSubstring("below the floor, lacks " + feature));
+    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::ContainsSubstring("below the floor, lacks " + feature));
 }
 
 TEST_CASE("Vulkan lists a 1.3 adapter without an extension that 1.3 made core", "[vulkan][gpu]") {
@@ -249,7 +249,7 @@ TEST_CASE("Vulkan fails with RhiNoAdapter when a 1.3 adapter lacks the swapchain
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
-    CHECK_THAT(rhi.error().message, Catch::Matchers::ContainsSubstring("lacks VK_KHR_swapchain"));
+    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::ContainsSubstring("lacks VK_KHR_swapchain"));
 }
 
 TEST_CASE("Vulkan fails with RhiNoAdapter when no queue family runs compute", "[vulkan][gpu]") {
@@ -260,7 +260,7 @@ TEST_CASE("Vulkan fails with RhiNoAdapter when no queue family runs compute", "[
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
-    CHECK_THAT(rhi.error().message, Catch::Matchers::ContainsSubstring("no queue family runs compute"));
+    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::ContainsSubstring("no queue family runs compute"));
 }
 
 TEST_CASE("Vulkan fails with RhiNoAdapter when no queue family runs graphics", "[vulkan][gpu]") {
@@ -271,7 +271,7 @@ TEST_CASE("Vulkan fails with RhiNoAdapter when no queue family runs graphics", "
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
-    CHECK_THAT(rhi.error().message, Catch::Matchers::ContainsSubstring("no queue family runs graphics"));
+    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::ContainsSubstring("no queue family runs graphics"));
 }
 
 TEST_CASE("Vulkan fails with RhiPresentUnsupported when no queue family presents to the window", "[vulkan][gpu]") {
@@ -285,7 +285,7 @@ TEST_CASE("Vulkan fails with RhiPresentUnsupported when no queue family presents
 
     REQUIRE_FALSE(device.has_value());
     CHECK(device.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
-    CHECK_THAT(device.error().message, Catch::Matchers::ContainsSubstring("presents to the window"));
+    CHECK_THAT(device.error().message.text(), Catch::Matchers::ContainsSubstring("presents to the window"));
 }
 
 TEST_CASE("Vulkan fails with RhiWindowFailed when the API refuses a surface for the device's window", "[vulkan][gpu]") {
@@ -299,7 +299,7 @@ TEST_CASE("Vulkan fails with RhiWindowFailed when the API refuses a surface for 
 
     REQUIRE_FALSE(device.has_value());
     CHECK(device.error().code == bfr::core::ErrorCode::RhiWindowFailed);
-    CHECK_THAT(device.error().message,
+    CHECK_THAT(device.error().message.text(),
                Catch::Matchers::ContainsSubstring("vkCreateHeadlessSurfaceEXT: VK_ERROR_UNKNOWN"));
 }
 
@@ -354,7 +354,7 @@ TEST_CASE("Vulkan fails with RhiDeviceFailed when the API refuses the device and
 
         REQUIRE_FALSE(device.has_value());
         CHECK(device.error().code == bfr::core::ErrorCode::RhiDeviceFailed);
-        CHECK_THAT(device.error().message,
+        CHECK_THAT(device.error().message.text(),
                    Catch::Matchers::ContainsSubstring("vkCreateDevice on " + (*rhi)->adapters()[0].name +
                                                       ": VK_ERROR_UNKNOWN"));
     }

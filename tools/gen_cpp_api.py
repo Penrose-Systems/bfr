@@ -406,10 +406,11 @@ class Renderer:
             self.enum_name(name, enum)
         self.emit(
             "",
-            "/// A failed call: what it returned and the message bfr_get_last_error gave for it.",
+            "/// A failed call: what it returned and the message bfr_get_last_error gave for it, held in",
+            "/// place so a failure allocates nothing.",
             "struct Error {",
             "    Result code{};",
-            "    std::string message;",
+            "    detail::Message message;",
             "};",
             "",
             "/// What a call returns: its value, or why it failed.",

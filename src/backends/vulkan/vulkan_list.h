@@ -34,7 +34,7 @@ std::expected<void, VulkanFailure> listInto(std::vector<Item>& items, std::strin
         items.resize(count);
     }
     if (result != VK_SUCCESS) {
-        return std::unexpected(VulkanFailure{.call = std::string{function}, .result = result});
+        return std::unexpected(VulkanFailure{.call = function, .result = result});
     }
     return {};
 }
