@@ -31,8 +31,13 @@ namespace {
 constexpr std::uint32_t kWidth = 64;
 constexpr std::uint32_t kHeight = 48;
 constexpr int kFrames = 8;
-// Lists each frame records, two of them rendering to the swapchain.
-constexpr std::size_t kListsPerFrame = 3;
+// Lists each frame records, more than the 16 a submit once held in place
+// before it went to the heap; the first two render to the swapchain.
+constexpr std::size_t kListsPerFrame = 20;
+constexpr std::size_t kRenderingLists = 2;
+// The frame that destroys a pool the GPU may still be running, so a later
+// submit, wait or poll collects it.
+constexpr int kRetireFrame = 2;
 
 const bfr::core::window::NativeWindow kHeadless = bfr::core::window::Headless{};
 
@@ -65,9 +70,12 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         REQUIRE(device->resizeSwapchain(*swapchain, kWidth, kHeight).has_value());
-        const auto pool = device->createCommandPool(0);
+        const auto pool = device->createCommandPool({.queue = 0, .listCount = kListsPerFrame});
         INFO(failureOf(pool));
         REQUIRE(pool.has_value());
+        const auto retiring = device->createCommandPool({.queue = 0, .listCount = 1});
+        INFO(failureOf(retiring));
+        REQUIRE(retiring.has_value());
 
         FrameFailure failed;
         std::size_t allocations = 0;
@@ -92,7 +100,7 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
                         break;
                     }
                     lists.at(index) = *commands;
-                    if (index != 0) {
+                    if (index < kRenderingLists) {
                         check("beginRendering", device->beginRendering(*commands, *swapchain, kClear));
                         check("endRendering", device->endRendering(*commands));
                     }
@@ -104,6 +112,15 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
                     last = *submitted;
                 }
                 check("present", device->present(*swapchain));
+                if (frame == kRetireFrame) {
+                    const auto commands = device->beginCommands(*retiring);
+                    if (check("beginCommands", commands)) {
+                        const auto sent = device->submit(
+                            {.queue = 0, .commandLists = std::span{&*commands, 1}, .waits = {}});
+                        check("submit", sent);
+                    }
+                    check("destroyCommandPool", device->destroyCommandPool(*retiring));
+                }
                 check("poll", device->poll(last));
             }
             check("wait", device->wait(last));

@@ -35,14 +35,15 @@ BUILTINS = {
 POINTERS = {"in", "out", "inout"}
 # The keys each kind of entry may have, so a typo or a split value fails.
 KEYS = {
+    "constant": {"value", "doc"},
     "enum": {"doc", "values"},
     "value": {"value", "doc"},
     "object": {"doc", "destroy"},
-    "handle": {"doc", "parent", "destroy"},
+    "handle": {"doc", "parent", "destroy", "plain"},
     "callback": {"doc", "params"},
     "struct": {"doc", "extensible", "extends", "struct_type", "members"},
     "function": {"doc", "returns", "params"},
-    "field": {"name", "type", "doc", "pointer", "array", "fixed", "optional", "lifetime", "user_data"},
+    "field": {"name", "type", "doc", "pointer", "array", "fixed", "optional", "lifetime", "user_data", "default"},
 }
 
 
@@ -62,6 +63,7 @@ class Api:
 
     def __init__(self, spec: dict[str, Any]) -> None:
         self.version = spec["version"]
+        self.constants: dict[str, Any] = spec.get("constants") or {}
         self.enums: dict[str, Any] = spec.get("enums") or {}
         self.objects: dict[str, Any] = spec.get("objects") or {}
         self.handles: dict[str, Any] = spec.get("handles") or {}
@@ -72,6 +74,7 @@ class Api:
 
     def _check(self) -> None:
         for kind, entries in (
+            ("constant", self.constants),
             ("enum", self.enums),
             ("object", self.objects),
             ("handle", self.handles),
@@ -85,7 +88,11 @@ class Api:
                     raise SpecError(f"{name} needs a doc")
 
         names: dict[str, str] = {}
-        for kind in ("enums", "objects", "handles", "callbacks", "structs", "functions"):
+        for name, constant in self.constants.items():
+            value = constant["value"]
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise SpecError(f"{name} must be a non-negative integer")
+        for kind in ("constants", "enums", "objects", "handles", "callbacks", "structs", "functions"):
             for name in getattr(self, kind):
                 if name in names or name in BUILTINS:
                     raise SpecError(f"{name} is declared twice")
@@ -155,6 +162,9 @@ class Api:
                 not isinstance(fixed, int) or isinstance(fixed, bool) or fixed < 1 or pointer or count
             ):
                 raise SpecError(f"{where}: fixed must be a positive length, without pointer or array")
+            default = field.get("default")
+            if default is not None and (default not in self.constants or field["type"] not in {"u32", "u64"}):
+                raise SpecError(f"{where}: default must name a constant, on a u32 or u64")
             callback = field.get("user_data")
             if callback is not None and (
                 field["type"] != "opaque" or callback not in {other["type"] for other in fields}
@@ -179,6 +189,11 @@ class Api:
         declared = {**self.enums, **self.objects, **self.handles, **self.callbacks, **self.structs}
         if name not in BUILTINS and name not in declared:
             raise SpecError(f"{where}: unknown type {name}")
+
+    def is_plain(self, name: str) -> bool:
+        """A handle whose parent's pool owns what it names, so a wrapper keeps
+        it as the bare C value: copied freely, never destroyed by its owner."""
+        return bool(self.handles.get(name, {}).get("plain"))
 
     def struct_types(self) -> list[tuple[str, int]]:
         """The extension structs and their fixed type values, by value."""
@@ -207,6 +222,8 @@ def field_doc(field: dict[str, Any]) -> str:
         parts.append(f"An array of {field['array']} elements.")
     if field.get("optional"):
         parts.append("May be null.")
+    if field.get("default"):
+        parts.append(f"0 is {macro(field['default'])}.")
     if field.get("lifetime"):
         parts.append(f"Valid while the {field['lifetime']} lives.")
     return " ".join(part if part.endswith(".") else part + "." for part in parts if part)

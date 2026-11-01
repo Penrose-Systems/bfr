@@ -33,6 +33,15 @@ typedef uint32_t bfr_bool;
 #define BFR_FALSE 0u
 #define BFR_TRUE 1u
 
+// What bfr_device_desc.max_command_lists of 0 means.
+#define BFR_DEFAULT_MAX_COMMAND_LISTS 8192u
+
+// What bfr_device_desc.max_command_pools of 0 means.
+#define BFR_DEFAULT_MAX_COMMAND_POOLS 512u
+
+// What bfr_device_desc.max_swapchains of 0 means.
+#define BFR_DEFAULT_MAX_SWAPCHAINS 512u
+
 // Text that is not null-terminated.
 typedef struct bfr_string {
     const char* data;
@@ -483,6 +492,17 @@ typedef struct bfr_device_desc {
     uint32_t compute_queues;
     // Copy queues to open; 0 is none. Fails with error_unsupported when the adapter has fewer.
     uint32_t copy_queues;
+    // Command lists the device holds at once, across all its pools, and the most swapchains its
+    // recording lists render to at once; past it, calls fail with error_limit_reached. Room for
+    // them is made with the device, so recording and submitting never allocate. A bfr_submit of
+    // more lists than this fails with error_invalid_argument. 0 is BFR_DEFAULT_MAX_COMMAND_LISTS.
+    uint32_t max_command_lists;
+    // Command pools the device holds at once; past it, bfr_create_command_pool fails with
+    // error_limit_reached. 0 is BFR_DEFAULT_MAX_COMMAND_POOLS.
+    uint32_t max_command_pools;
+    // Swapchains the device holds at once; past it, bfr_create_swapchain fails with
+    // error_limit_reached. 0 is BFR_DEFAULT_MAX_SWAPCHAINS.
+    uint32_t max_swapchains;
 } bfr_device_desc;
 
 // How to create a swapchain.
@@ -535,6 +555,9 @@ typedef struct bfr_command_pool_desc {
     const bfr_chain* next;
     // The queue its lists record for; 0 is the graphics queue.
     uint32_t queue;
+    // Lists the pool holds, made with it from the device's max_command_lists. bfr_begin_commands
+    // hands them out in turn until bfr_reset_command_pool gives them back.
+    uint32_t list_count;
 } bfr_command_pool_desc;
 
 // A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was submitted
@@ -1051,7 +1074,8 @@ BFR_API bfr_result bfr_acquire(bfr_device* device, bfr_swapchain swapchain);
 // when the swapchain no longer matches its window; the image was still presented when it could be.
 BFR_API bfr_result bfr_present(bfr_device* device, bfr_swapchain swapchain);
 
-// Creates a command pool, as desc says.
+// Creates a command pool, as desc says, with its lists made. Fails with error_limit_reached at the
+// device's max_command_pools, or when fewer than desc.list_count of its max_command_lists are free.
 BFR_API bfr_result bfr_create_command_pool(
     bfr_device* device,
     const bfr_command_pool_desc* desc,
@@ -1067,7 +1091,8 @@ BFR_API bfr_result bfr_reset_command_pool(bfr_device* device, bfr_command_pool c
 // using the pool.
 BFR_API void bfr_destroy_command_pool(bfr_device* device, bfr_command_pool command_pool);
 
-// Starts recording a command list from the pool.
+// Starts recording the pool's next list. Fails with error_limit_reached when every list it holds
+// was handed out since it was last reset.
 BFR_API bfr_result bfr_begin_commands(
     bfr_device* device,
     bfr_command_pool command_pool,
@@ -1097,8 +1122,8 @@ BFR_API bfr_result bfr_wait(bfr_device* device, const bfr_token* token);
 // Writes whether the GPU has passed token, without blocking.
 BFR_API bfr_result bfr_poll(bfr_device* device, const bfr_token* token, bfr_bool* complete);
 
-// Discards a command list that was not submitted. A handle that is already submitted or destroyed
-// does nothing.
+// Discards a command list that was not submitted; the pool hands it out again after its next reset.
+// A handle that is already submitted or destroyed does nothing.
 BFR_API void bfr_destroy_command_list(bfr_device* device, bfr_command_list command_list);
 
 #ifdef __cplusplus

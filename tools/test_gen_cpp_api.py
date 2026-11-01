@@ -8,7 +8,7 @@ import unittest
 
 from bfr_api import REPO_ROOT, SOURCE, Api, SpecError, load
 from gen_cpp_api import HEADER, render
-from test_bfr_api import MINIMAL
+from test_bfr_api import MINIMAL, with_default
 
 
 def with_more(spec: dict) -> dict:
@@ -53,6 +53,10 @@ def comments(header: str) -> str:
 class RenderTests(unittest.TestCase):
     def setUp(self) -> None:
         self.header = render(Api(with_more(MINIMAL)))
+
+    def test_a_member_with_a_default_starts_at_its_constant(self) -> None:
+        header = render(Api(with_default(with_more(MINIMAL))))
+        self.assertIn("    std::uint32_t alignment = BFR_DEFAULT_ALIGNMENT;", header)
 
     def test_enums_are_enum_classes_valued_by_the_c_names(self) -> None:
         self.assertIn("enum class Result : std::int32_t {", self.header)
@@ -202,8 +206,9 @@ class PlacementTests(unittest.TestCase):
 
         self.assert_rejected(change, "both in and out")
 
-    def test_an_array_member_passed_in_becomes_a_span(self) -> None:
+    def test_an_array_member_passed_in_becomes_a_span_passed_to_c_as_it_is(self) -> None:
         spec = with_more(MINIMAL)
+        spec["handles"]["buffer"]["plain"] = True
         spec["structs"]["batch"] = {
             "doc": "Buffers to send.",
             "members": [
@@ -219,8 +224,36 @@ class PlacementTests(unittest.TestCase):
         rendered = render(Api(spec))
         self.assertIn("std::span<const Buffer> buffers{};", rendered)
         self.assertNotIn("bufferCount{}", rendered)
-        self.assertIn("detail::SmallBuffer<bfr_buffer> cBatchBuffers;", rendered)
+        self.assertIn(".buffers = reinterpret_cast<const bfr_buffer*>(value.buffers.data())", rendered)
+        self.assertIn("static_assert(sizeof(Buffer) == sizeof(bfr_buffer)", rendered)
         self.assertIn(".buffer_count = static_cast<uint32_t>(value.buffers.size())", rendered)
+
+    def test_an_array_member_that_would_need_a_copy_is_rejected(self) -> None:
+        def change(spec: dict) -> None:
+            spec["structs"]["batch"] = {
+                "doc": "Buffers to send.",
+                "members": [
+                    {"name": "buffers", "type": "buffer", "array": "buffer_count", "pointer": "in"},
+                    {"name": "buffer_count", "type": "u32"},
+                ],
+            }
+            spec["functions"]["device_send"] = {
+                "doc": "Sends.",
+                "returns": "result",
+                "params": [{"name": "device", "type": "device"}, {"name": "batch", "type": "batch", "pointer": "in"}],
+            }
+
+        self.assert_rejected(change, "without a copy")
+
+    def test_a_plain_handle_is_its_c_value_and_its_calls_are_on_its_parent(self) -> None:
+        spec = with_more(MINIMAL)
+        spec["handles"]["buffer"]["plain"] = True
+        rendered = render(Api(spec))
+        self.assertIn("class Buffer {\npublic:\n    Buffer() = default;", rendered)
+        self.assertIn("    bfr_buffer buffer_{};\n};", rendered)
+        self.assertNotIn("~Buffer()", rendered)
+        self.assertIn("    void destroyBuffer(Buffer buffer) const;", rendered)
+        self.assertIn("    bfr_destroy_buffer(device_, buffer.get());", rendered)
 
     def test_an_array_member_passed_out_is_rejected(self) -> None:
         def change(spec: dict) -> None:

@@ -95,6 +95,10 @@ def render(api: Api) -> str:
     emit("#define BFR_FALSE 0u")
     emit("#define BFR_TRUE 1u")
     emit("")
+    for name, constant in api.constants.items():
+        out.extend(comment(constant["doc"]))
+        emit(f"#define {macro(name)} {constant['value']}u")
+        emit("")
     emit("// Text that is not null-terminated.")
     emit("typedef struct bfr_string {")
     emit("    const char* data;")

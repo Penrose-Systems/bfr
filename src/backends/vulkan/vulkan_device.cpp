@@ -7,6 +7,7 @@
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/swapchain.h"
 #include "core/fixed_vector.h"
+#include "core/slot_chains.h"
 #include "vulkan/queue_families.h"
 #include "vulkan/vulkan_caps.h"
 #include "vulkan/vulkan_instance.h"
@@ -95,44 +96,35 @@ void recordBarrier(const VolkDeviceTable& table, VkCommandBuffer buffer, const V
 
 core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance& rhi, VkPhysicalDevice adapter,
                                                                  VkDevice device, const QueueFamilies& families,
-                                                                 const DeviceQueues& queues, bool hasBudget) {
-    auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, families, hasBudget);
-    if (auto opened = made->openQueues(families, queues); !opened) {
+                                                                 const DeviceDesc& desc, bool hasBudget) {
+    auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, families, desc, hasBudget);
+    if (auto opened = made->openQueues(families, desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
     return made;
 }
 
-VulkanCommandPool::VulkanCommandPool(VkDevice device, const VolkDeviceTable& table, VkCommandPool pool,
-                                     std::uint32_t queue)
-    : pool(pool), queue(queue), device_(device), table_(&table) {}
-
-VulkanCommandPool::~VulkanCommandPool() {
-    if (pool != VK_NULL_HANDLE) {
-        table_->vkDestroyCommandPool(device_, pool, nullptr);
-    }
-}
-
-VkCommandPool VulkanCommandPool::release() {
-    return std::exchange(pool, VK_NULL_HANDLE);
-}
-
 VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device,
-                           const QueueFamilies& families, bool hasBudget)
+                           const QueueFamilies& families, const DeviceDesc& desc, bool hasBudget)
     : instance_(&rhi),
       adapter_(adapter),
       device_(device),
       graphicsFamily_(families.graphics),
       presentFamily_(families.present.value_or(families.graphics)),
       hasBudget_(hasBudget),
-      swapchains_("swapchains", kSwapchainCapacity, kSwapchainLimit, rhi.logger()),
-      commandPools_("command pools", kCommandPoolCapacity, kCommandPoolLimit, rhi.logger()),
-      commandLists_("command lists", kCommandListLimit, kCommandListLimit, rhi.logger()) {
+      desc_(desc),
+      swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
+      commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
+      commandLists_("command lists", desc.maxCommandLists, desc.maxCommandLists, rhi.logger()),
+      listSlots_(desc.maxCommandLists),
+      lists_(desc.maxCommandLists),
+      renderSlots_(desc.maxCommandLists),
+      renders_(desc.maxCommandLists) {
     volkLoadDeviceTable(&table_, device_);
     table_.vkGetDeviceQueue(device_, presentFamily_, 0, &presentQueue_);
 }
 
-core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const DeviceQueues& queues) {
+core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const DeviceDesc& desc) {
     const auto open = [this](QueueType type, std::uint32_t family, std::uint32_t index) -> core::Result<void> {
         auto queue = std::make_unique<VulkanQueue>();
         queue->type = type;
@@ -155,24 +147,26 @@ core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const
     if (auto opened = open(QueueType::Graphics, families.graphics, 0); !opened) {
         return opened;
     }
-    for (std::uint32_t index = 0; index < queues.compute; ++index) {
+    for (std::uint32_t index = 0; index < desc.compute; ++index) {
         if (auto opened = open(QueueType::Compute, families.compute, index); !opened) {
             return opened;
         }
     }
-    for (std::uint32_t index = 0; index < queues.copy; ++index) {
+    for (std::uint32_t index = 0; index < desc.copy; ++index) {
         if (auto opened = open(QueueType::Copy, families.transfer, index); !opened) {
             return opened;
         }
     }
-    // A submit's arrays, made now at their limits: every list; a wait for
-    // each swapchain and queue; a signal for each swapchain and the timeline.
+    // A submit's arrays, made now at the device's maximums: every list; a
+    // wait for each swapchain and queue; a signal for each swapchain and the
+    // timeline. Every pool may be destroyed before the GPU is done with it.
     for (const auto& queue : queues_) {
-        queue->buffers = core::FixedVector<VkCommandBufferSubmitInfo>{kCommandListLimit};
-        queue->waits = core::FixedVector<VkSemaphoreSubmitInfo>{kSwapchainLimit + queues_.size()};
-        queue->signals = core::FixedVector<VkSemaphoreSubmitInfo>{kSwapchainLimit + 1};
-        queue->chains = core::FixedVector<VulkanSwapchain*>{kSwapchainLimit};
+        queue->buffers = core::FixedVector<VkCommandBufferSubmitInfo>{desc.maxCommandLists};
+        queue->waits = core::FixedVector<VkSemaphoreSubmitInfo>{std::size_t{desc.maxSwapchains} + queues_.size()};
+        queue->signals = core::FixedVector<VkSemaphoreSubmitInfo>{std::size_t{desc.maxSwapchains} + 1};
+        queue->chains = core::FixedVector<VulkanSwapchain*>{desc.maxSwapchains};
         queue->waitValues.resize(queues_.size());
+        queue->retired = core::FixedVector<VulkanRetiredPool>{desc.maxCommandPools};
         if (queue->queue == presentQueue_) {
             presentOn_ = queue.get();
         }
@@ -218,11 +212,14 @@ void VulkanDevice::collectPools(VulkanQueue& queue) {
     if (!completed) {
         return;
     }
-    std::erase_if(queue.retired, [this, completed](const std::pair<VkCommandPool, std::uint64_t>& retired) {
-        if (retired.second > *completed) {
+    queue.retired.eraseIf([this, completed](const VulkanRetiredPool& retired) {
+        if (retired.value > *completed) {
             return false;
         }
-        table_.vkDestroyCommandPool(device_, retired.first, nullptr);
+        // Destroying the pool frees its buffers; the slots held them.
+        table_.vkDestroyCommandPool(device_, retired.pool, nullptr);
+        listSlots_.give(retired.first);
+        poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
         return true;
     });
     queue.retiredCount.store(static_cast<std::uint32_t>(queue.retired.size()), std::memory_order_release);
@@ -283,7 +280,7 @@ core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::
                                                           std::move(*surface), desc, instance_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("a device holds at most {} swapchains", kSwapchainLimit));
+                             std::format("a device holds at most {} swapchains", desc_.maxSwapchains));
     }
     return swapchain;
 }
@@ -339,23 +336,66 @@ core::Result<void> VulkanDevice::present(SwapchainHandle swapchain) {
     return (*found)->present(presentQueue_);
 }
 
-core::Result<CommandPoolHandle> VulkanDevice::createCommandPool(std::uint32_t queue) {
-    if (auto checked = checkQueue(queue); !checked) {
+core::Result<CommandPoolHandle> VulkanDevice::createCommandPool(const CommandPoolDesc& desc) {
+    if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    // Cold, so pools the GPU is done with are freed first, making their slots
+    // and room count.
+    for (const auto& queue : queues_) {
+        if (queue->retiredCount.load(std::memory_order_acquire) != 0) {
+            const std::scoped_lock lock{queue->lock};
+            collectPools(*queue);
+        }
+    }
+    if (poolsHeld_.fetch_add(1, std::memory_order_relaxed) >= desc_.maxCommandPools) {
+        poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             std::format("the device holds at most {} command pools", desc_.maxCommandPools));
+    }
+    const auto first = listSlots_.take(desc.listCount);
+    if (!first) {
+        poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             std::format("the pool asks for {} lists; {} of the device's {} are free", desc.listCount,
+                                         listSlots_.available(), desc_.maxCommandLists));
+    }
+    const auto release = [this, first](VkCommandPool pool) {
+        if (pool != VK_NULL_HANDLE) {
+            table_.vkDestroyCommandPool(device_, pool, nullptr);
+        }
+        listSlots_.give(*first);
+        poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
+    };
     VkCommandPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-    info.queueFamilyIndex = queues_[queue]->family;
+    info.queueFamilyIndex = queues_[desc.queue]->family;
     VkCommandPool pool = VK_NULL_HANDLE;
     if (const VkResult result = table_.vkCreateCommandPool(device_, &info, nullptr, &pool); result != VK_SUCCESS) {
+        release(VK_NULL_HANDLE);
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateCommandPool", .result = result});
     }
-    const CommandPoolHandle commandPool = commandPools_.emplace(device_, table_, pool, queue);
+    // Every buffer the pool will hand out is made now, so beginCommands only
+    // begins one.
+    for (std::uint32_t slot = *first; slot != core::SlotChains::kEnd; slot = listSlots_.next(slot)) {
+        VkCommandBufferAllocateInfo allocate{};
+        allocate.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocate.commandPool = pool;
+        allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocate.commandBufferCount = 1;
+        if (const VkResult result = table_.vkAllocateCommandBuffers(device_, &allocate, &lists_[slot].buffer);
+            result != VK_SUCCESS) {
+            release(pool);
+            return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkAllocateCommandBuffers", .result = result});
+        }
+    }
+    const CommandPoolHandle commandPool = commandPools_.emplace(VulkanCommandPool{
+        .pool = pool, .queue = desc.queue, .first = *first, .next = *first, .recording = 0, .lastSubmit = 0});
     if (commandPool.isNull()) {
-        table_.vkDestroyCommandPool(device_, pool, nullptr);
+        release(pool);
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command pools", kCommandPoolLimit));
+                             std::format("the device holds at most {} command pools", desc_.maxCommandPools));
     }
     return commandPool;
 }
@@ -365,10 +405,10 @@ core::Result<void> VulkanDevice::resetCommandPool(CommandPoolHandle commandPool)
     if (!pool) {
         return std::unexpected(std::move(pool.error()));
     }
-    if (!(*pool)->recording.empty()) {
+    if ((*pool)->recording != 0) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              std::format("{} lists from the pool are still recording; submit or destroy them",
-                                         (*pool)->recording.size()));
+                                         (*pool)->recording));
     }
     const auto completed = completedValue(*queues_[(*pool)->queue]);
     if (!completed) {
@@ -382,7 +422,7 @@ core::Result<void> VulkanDevice::resetCommandPool(CommandPoolHandle commandPool)
     if (const VkResult result = table_.vkResetCommandPool(device_, (*pool)->pool, 0); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkResetCommandPool", .result = result});
     }
-    (*pool)->used = 0;
+    (*pool)->next = (*pool)->first;
     return {};
 }
 
@@ -394,13 +434,18 @@ core::Result<void> VulkanDevice::destroyCommandPool(CommandPoolHandle commandPoo
     if (!pool) {
         return std::unexpected(std::move(pool.error()));
     }
-    for (const CommandListHandle list : (*pool)->recording) {
-        commandLists_.erase(list);
+    for (std::uint32_t slot = (*pool)->first; slot != core::SlotChains::kEnd; slot = listSlots_.next(slot)) {
+        if (const VulkanCommandList* list = commandLists_.find(lists_[slot].live); list != nullptr) {
+            renderSlots_.give(list->rendered);
+        }
+        commandLists_.erase(std::exchange(lists_[slot].live, {}));
     }
     VulkanQueue& queue = *queues_[(*pool)->queue];
     {
         const std::scoped_lock lock{queue.lock};
-        queue.retired.emplace_back((*pool)->release(), (*pool)->lastSubmit);
+        // poolsHeld_ counts this pool until it is collected, so there is room.
+        std::ignore = queue.retired.push(
+            {.pool = (*pool)->pool, .first = (*pool)->first, .value = (*pool)->lastSubmit});
         queue.retiredCount.store(static_cast<std::uint32_t>(queue.retired.size()), std::memory_order_release);
         collectPools(queue);
     }
@@ -413,40 +458,30 @@ core::Result<CommandListHandle> VulkanDevice::beginCommands(CommandPoolHandle co
     if (!pool) {
         return std::unexpected(std::move(pool.error()));
     }
-    if ((*pool)->used == (*pool)->buffers.size()) {
-        VkCommandBufferAllocateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        info.commandPool = (*pool)->pool;
-        info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        info.commandBufferCount = 1;
-        VkCommandBuffer buffer = VK_NULL_HANDLE;
-        if (const VkResult result = table_.vkAllocateCommandBuffers(device_, &info, &buffer); result != VK_SUCCESS) {
-            return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkAllocateCommandBuffers", .result = result});
-        }
-        if (!(*pool)->buffers.push(buffer)) {
-            return core::failure(core::ErrorCode::RhiLimitReached,
-                                 std::format("a command pool holds at most {} lists", kCommandListLimit));
-        }
+    const std::uint32_t slot = (*pool)->next;
+    if (slot == core::SlotChains::kEnd) {
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             "every list in the pool was handed out since its last reset");
     }
-    VkCommandBuffer buffer = (*pool)->buffers[(*pool)->used];
+    // The buffer was made with the pool; this only begins it.
+    VkCommandBuffer buffer = lists_[slot].buffer;
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     if (const VkResult result = table_.vkBeginCommandBuffer(buffer, &begin); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkBeginCommandBuffer", .result = result});
     }
-    const CommandListHandle commandList = commandLists_.emplace(
-        VulkanCommandList{.buffer = buffer, .pool = commandPool, .rendering = {}, .rendered = {}});
+    // A new handle for each recording, so last frame's handle never names
+    // this one. The list pool was made at its maximum, so this never grows.
+    const CommandListHandle commandList = commandLists_.emplace(VulkanCommandList{
+        .buffer = buffer, .pool = commandPool, .slot = slot, .rendering = {}, .rendered = core::SlotChains::kEnd});
     if (commandList.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command lists", kCommandListLimit));
+                             std::format("the device holds at most {} command lists", desc_.maxCommandLists));
     }
-    if (!(*pool)->recording.push(commandList)) {
-        commandLists_.erase(commandList);
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("a command pool holds at most {} lists", kCommandListLimit));
-    }
-    ++(*pool)->used;
+    (*pool)->next = listSlots_.next(slot);
+    ++(*pool)->recording;
+    lists_[slot].live = commandList;
     return commandList;
 }
 
@@ -478,10 +513,18 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
     }
     // Rendered to earlier in this list, the image was left ready to present;
     // else it is where the last submit left it.
-    const bool renderedBefore = std::ranges::find((*list)->rendered, swapchain) != (*list)->rendered.end();
-    if (!renderedBefore && !(*list)->rendered.push(swapchain)) {
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("a command list renders to at most {} swapchains", kSwapchainLimit));
+    bool renderedBefore = false;
+    for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
+        renderedBefore = renderedBefore || renders_[slot] == swapchain;
+    }
+    if (!renderedBefore) {
+        const auto slot = renderSlots_.push((*list)->rendered);
+        if (!slot) {
+            return core::failure(core::ErrorCode::RhiLimitReached,
+                                 std::format("the device's recording lists render to at most {} swapchains at once",
+                                             desc_.maxCommandLists));
+        }
+        renders_[*slot] = swapchain;
     }
     const VkImageLayout before = renderedBefore ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : image->layout;
     VkCommandBuffer buffer = (*list)->buffer;
@@ -547,9 +590,9 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
     queue.waits.clear();
     queue.signals.clear();
     queue.chains.clear();
-    const auto full = [] {
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("a submit takes at most {} lists", kCommandListLimit));
+    const auto full = [this] {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             std::format("a submit takes at most {} lists", desc_.maxCommandLists));
     };
     for (const CommandListHandle commandList : desc.commandLists) {
         auto list = commandListFor(commandList);
@@ -564,8 +607,8 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
             return core::failure(core::ErrorCode::RhiInvalidCall,
                                  std::format("the list was recorded for queue {}, not {}", pool->queue, desc.queue));
         }
-        for (const SwapchainHandle rendered : (*list)->rendered) {
-            auto chain = swapchainFor(rendered);
+        for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
+            auto chain = swapchainFor(renders_[slot]);
             if (!chain) {
                 return std::unexpected(std::move(chain.error()));
             }
@@ -626,13 +669,12 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
             continue;
         }
         if (VulkanCommandPool* pool = commandPools_.find(list->pool); pool != nullptr) {
-            pool->recording.erase(commandList);
             pool->lastSubmit = value;
         }
         if (const VkResult result = table_.vkEndCommandBuffer(list->buffer); result != VK_SUCCESS && ended) {
             ended = failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkEndCommandBuffer", .result = result});
         }
-        commandLists_.erase(commandList);
+        end(commandList);
     }
     if (!ended) {
         return std::unexpected(std::move(ended.error()));
@@ -708,11 +750,22 @@ core::Result<void> VulkanDevice::destroyCommandList(CommandListHandle commandLis
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (VulkanCommandPool* pool = commandPools_.find((*list)->pool); pool != nullptr) {
-        pool->recording.erase(commandList);
-    }
-    commandLists_.erase(commandList);
+    // The buffer stays as it is; the pool's reset readies it again.
+    end(commandList);
     return {};
+}
+
+void VulkanDevice::end(CommandListHandle commandList) {
+    const VulkanCommandList* list = commandLists_.find(commandList);
+    if (list == nullptr) {
+        return;
+    }
+    if (VulkanCommandPool* pool = commandPools_.find(list->pool); pool != nullptr) {
+        --pool->recording;
+    }
+    renderSlots_.give(list->rendered);
+    lists_[list->slot].live = {};
+    commandLists_.erase(commandList);
 }
 
 core::Result<MemoryBudget> VulkanDevice::budget() const {
@@ -737,11 +790,13 @@ VulkanDevice::~VulkanDevice() {
         BFR_LOG_WARN(instance_->logger(), "{} command pools were left when the device went", commandPools_.size());
     }
     commandLists_.clear();
+    commandPools_.forEach(
+        [this](const VulkanCommandPool& pool) { table_.vkDestroyCommandPool(device_, pool.pool, nullptr); });
     commandPools_.clear();
     swapchains_.clear();
     for (const auto& queue : queues_) {
-        for (const auto& [pool, value] : queue->retired) {
-            table_.vkDestroyCommandPool(device_, pool, nullptr);
+        for (const VulkanRetiredPool& retired : queue->retired) {
+            table_.vkDestroyCommandPool(device_, retired.pool, nullptr);
         }
         if (queue->timeline != VK_NULL_HANDLE) {
             table_.vkDestroySemaphore(device_, queue->timeline, nullptr);

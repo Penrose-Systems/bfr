@@ -6,6 +6,8 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/swapchain.h"
+#include "core/fixed_vector.h"
+#include "core/slot_chains.h"
 #include "metal/metal_instance.h"
 #include "metal/metal_swapchain.h"
 #include "metal/metal_util.h"
@@ -67,26 +69,36 @@ core::Result<void> deviceFailed(const char* what) {
 } // namespace
 
 core::Result<std::unique_ptr<MetalDevice>> MetalDevice::create(MetalInstance& rhi, Ref<MTL::Device> device,
-                                                               const DeviceQueues& queues) {
-    auto made = std::make_unique<MetalDevice>(rhi, std::move(device));
-    if (auto opened = made->open(queues); !opened) {
+                                                               const DeviceDesc& desc) {
+    auto made = std::make_unique<MetalDevice>(rhi, std::move(device), desc);
+    if (auto opened = made->open(desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
     return made;
 }
 
-MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device)
+MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const DeviceDesc& desc)
     : instance_(&rhi),
       device_(std::move(device)),
-      swapchains_("swapchains", kSwapchainCapacity, kSwapchainLimit, rhi.logger()),
-      commandPools_("command pools", kCommandPoolCapacity, kCommandPoolLimit, rhi.logger()),
-      commandLists_("command lists", kCommandListLimit, kCommandListLimit, rhi.logger()) {}
+      desc_(desc),
+      swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
+      commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
+      commandLists_("command lists", desc.maxCommandLists, desc.maxCommandLists, rhi.logger()),
+      listSlots_(desc.maxCommandLists),
+      lists_(desc.maxCommandLists),
+      renderSlots_(desc.maxCommandLists),
+      renders_(desc.maxCommandLists) {}
 
-core::Result<void> MetalDevice::open(const DeviceQueues& queues) {
+core::Result<void> MetalDevice::open(const DeviceDesc& desc) {
     const AutoreleasePool pool;
-    const auto open = [this](QueueType type) -> core::Result<void> {
+    const auto open = [this, &desc](QueueType type) -> core::Result<void> {
         auto queue = std::make_unique<MetalQueue>();
         queue->type = type;
+        // A submit's arrays, made now at the device's maximums. Every pool
+        // may be destroyed before the GPU is done with it.
+        queue->buffers = core::FixedVector<const MTL4::CommandBuffer*>{desc.maxCommandLists};
+        queue->chains = core::FixedVector<MetalSwapchain*>{desc.maxSwapchains};
+        queue->retired = core::FixedVector<MetalRetiredPool>{desc.maxCommandPools};
         MTL4::CommandQueue* native = device_->newMTL4CommandQueue();
         if (native == nullptr) {
             return deviceFailed("command queue");
@@ -103,12 +115,12 @@ core::Result<void> MetalDevice::open(const DeviceQueues& queues) {
     if (auto opened = open(QueueType::Graphics); !opened) {
         return opened;
     }
-    for (std::uint32_t index = 0; index < queues.compute; ++index) {
+    for (std::uint32_t index = 0; index < desc.compute; ++index) {
         if (auto opened = open(QueueType::Compute); !opened) {
             return opened;
         }
     }
-    for (std::uint32_t index = 0; index < queues.copy; ++index) {
+    for (std::uint32_t index = 0; index < desc.copy; ++index) {
         if (auto opened = open(QueueType::Copy); !opened) {
             return opened;
         }
@@ -135,9 +147,7 @@ MetalDevice::~MetalDevice() {
     commandLists_.forEach([](MetalCommandList& list) { discard(list); });
     commandLists_.clear();
     commandPools_.clear();
-    for (const auto& queue : queues_) {
-        queue->retired.clear();
-    }
+    // The slots' vector releases every allocator and buffer as it goes.
 }
 
 core::Result<void> MetalDevice::checkQueue(std::uint32_t queue) const {
@@ -166,8 +176,23 @@ void MetalDevice::collectPools(MetalQueue& queue) {
         return;
     }
     const std::uint64_t completed = queue.event->signaledValue();
-    std::erase_if(queue.retired, [completed](const auto& retired) { return retired.second <= completed; });
+    queue.retired.eraseIf([this, completed](const MetalRetiredPool& retired) {
+        if (retired.value > completed) {
+            return false;
+        }
+        releaseSlots(retired.first);
+        poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
+        return true;
+    });
     queue.retiredCount.store(static_cast<std::uint32_t>(queue.retired.size()), std::memory_order_release);
+}
+
+void MetalDevice::releaseSlots(std::uint32_t first) {
+    for (std::uint32_t slot = first; slot != core::SlotChains::kEnd; slot = listSlots_.next(slot)) {
+        lists_[slot].buffer.reset();
+        lists_[slot].allocator.reset();
+    }
+    listSlots_.give(first);
 }
 
 core::Result<void> MetalDevice::waitIdle() {
@@ -221,7 +246,7 @@ core::Result<SwapchainHandle> MetalDevice::createSwapchain(const core::window::N
     const SwapchainHandle swapchain = swapchains_.emplace(device_, *layer, desc, instance_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("a device holds at most {} swapchains", kSwapchainLimit));
+                             std::format("a device holds at most {} swapchains", desc_.maxSwapchains));
     }
     // The layer's drawables are resident for the queue that renders to them.
     if (MTL::ResidencySet* residency = (*layer)->residencySet(); residency != nullptr) {
@@ -284,14 +309,57 @@ core::Result<void> MetalDevice::present(SwapchainHandle swapchain) {
     return (*found)->present();
 }
 
-core::Result<CommandPoolHandle> MetalDevice::createCommandPool(std::uint32_t queue) {
-    if (auto checked = checkQueue(queue); !checked) {
+core::Result<CommandPoolHandle> MetalDevice::createCommandPool(const CommandPoolDesc& desc) {
+    if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    const CommandPoolHandle commandPool = commandPools_.emplace(MetalCommandPool{.queue = queue});
-    if (commandPool.isNull()) {
+    // Cold, so pools the GPU is done with are freed first, making their slots
+    // and room count.
+    for (const auto& queue : queues_) {
+        if (queue->retiredCount.load(std::memory_order_acquire) != 0) {
+            const std::scoped_lock lock{queue->lock};
+            collectPools(*queue);
+        }
+    }
+    if (poolsHeld_.fetch_add(1, std::memory_order_relaxed) >= desc_.maxCommandPools) {
+        poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command pools", kCommandPoolLimit));
+                             std::format("the device holds at most {} command pools", desc_.maxCommandPools));
+    }
+    const auto first = listSlots_.take(desc.listCount);
+    if (!first) {
+        poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             std::format("the pool asks for {} lists; {} of the device's {} are free", desc.listCount,
+                                         listSlots_.available(), desc_.maxCommandLists));
+    }
+    const auto release = [this, first] {
+        releaseSlots(*first);
+        poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
+    };
+    // Every allocator and buffer the pool will hand out is made now, so
+    // beginCommands only begins one.
+    const AutoreleasePool autorelease;
+    for (std::uint32_t slot = *first; slot != core::SlotChains::kEnd; slot = listSlots_.next(slot)) {
+        MTL4::CommandAllocator* allocator = device_->newCommandAllocator();
+        if (allocator == nullptr) {
+            release();
+            return std::unexpected(deviceFailed("command allocator").error());
+        }
+        lists_[slot].allocator = adopt(allocator);
+        MTL4::CommandBuffer* buffer = device_->newCommandBuffer();
+        if (buffer == nullptr) {
+            release();
+            return std::unexpected(deviceFailed("command buffer").error());
+        }
+        lists_[slot].buffer = adopt(buffer);
+    }
+    const CommandPoolHandle commandPool = commandPools_.emplace(
+        MetalCommandPool{.queue = desc.queue, .first = *first, .next = *first, .recording = 0, .lastSubmit = 0});
+    if (commandPool.isNull()) {
+        release();
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             std::format("the device holds at most {} command pools", desc_.maxCommandPools));
     }
     return commandPool;
 }
@@ -301,20 +369,22 @@ core::Result<void> MetalDevice::resetCommandPool(CommandPoolHandle commandPool) 
     if (!pool) {
         return std::unexpected(std::move(pool.error()));
     }
-    if (!(*pool)->recording.empty()) {
+    if ((*pool)->recording != 0) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              std::format("{} lists from the pool are still recording; submit or destroy them",
-                                         (*pool)->recording.size()));
+                                         (*pool)->recording));
     }
     if (queues_[(*pool)->queue]->event->signaledValue() < (*pool)->lastSubmit) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              std::format("the GPU has not passed the pool's last submit, token {}; wait on it first",
                                          (*pool)->lastSubmit));
     }
-    for (const MetalCommandPool::Entry& entry : (*pool)->entries) {
-        entry.allocator->reset();
+    // Only the lists handed out since the last reset recorded into their
+    // allocators.
+    for (std::uint32_t slot = (*pool)->first; slot != (*pool)->next; slot = listSlots_.next(slot)) {
+        lists_[slot].allocator->reset();
     }
-    (*pool)->used = 0;
+    (*pool)->next = (*pool)->first;
     return {};
 }
 
@@ -326,16 +396,18 @@ core::Result<void> MetalDevice::destroyCommandPool(CommandPoolHandle commandPool
     if (!pool) {
         return std::unexpected(std::move(pool.error()));
     }
-    for (const CommandListHandle handle : (*pool)->recording) {
-        if (MetalCommandList* list = commandLists_.find(handle); list != nullptr) {
+    for (std::uint32_t slot = (*pool)->first; slot != core::SlotChains::kEnd; slot = listSlots_.next(slot)) {
+        if (MetalCommandList* list = commandLists_.find(lists_[slot].live); list != nullptr) {
             discard(*list);
+            renderSlots_.give(list->rendered);
         }
-        commandLists_.erase(handle);
+        commandLists_.erase(std::exchange(lists_[slot].live, {}));
     }
     MetalQueue& queue = *queues_[(*pool)->queue];
     {
         const std::scoped_lock lock{queue.lock};
-        queue.retired.emplace_back(std::move((*pool)->entries), (*pool)->lastSubmit);
+        // poolsHeld_ counts this pool until it is collected, so there is room.
+        std::ignore = queue.retired.push({.first = (*pool)->first, .value = (*pool)->lastSubmit});
         queue.retiredCount.store(static_cast<std::uint32_t>(queue.retired.size()), std::memory_order_release);
         collectPools(queue);
     }
@@ -348,38 +420,31 @@ core::Result<CommandListHandle> MetalDevice::beginCommands(CommandPoolHandle com
     if (!pool) {
         return std::unexpected(std::move(pool.error()));
     }
+    const std::uint32_t slot = (*pool)->next;
+    if (slot == core::SlotChains::kEnd) {
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             "every list in the pool was handed out since its last reset");
+    }
+    // The allocator and buffer were made with the pool; this only begins it.
     const AutoreleasePool autorelease;
-    if ((*pool)->used == (*pool)->entries.size()) {
-        MTL4::CommandAllocator* allocator = device_->newCommandAllocator();
-        if (allocator == nullptr) {
-            return std::unexpected(deviceFailed("command allocator").error());
-        }
-        MetalCommandPool::Entry entry{.allocator = adopt(allocator), .buffer = {}};
-        MTL4::CommandBuffer* buffer = device_->newCommandBuffer();
-        if (buffer == nullptr) {
-            return std::unexpected(deviceFailed("command buffer").error());
-        }
-        entry.buffer = adopt(buffer);
-        if (!(*pool)->entries.push(std::move(entry))) {
-            return core::failure(core::ErrorCode::RhiLimitReached,
-                                 std::format("a command pool holds at most {} lists", kCommandListLimit));
-        }
-    }
-    const MetalCommandPool::Entry& entry = (*pool)->entries[(*pool)->used];
-    entry.buffer->beginCommandBuffer(entry.allocator.get());
-    const CommandListHandle commandList = commandLists_.emplace(
-        MetalCommandList{.buffer = entry.buffer, .pool = commandPool, .encoder = {}, .rendering = {}, .rendered = {}});
+    MetalListSlot& made = lists_[slot];
+    made.buffer->beginCommandBuffer(made.allocator.get());
+    // A new handle for each recording, so last frame's handle never names
+    // this one. The list pool was made at its maximum, so this never grows.
+    const CommandListHandle commandList = commandLists_.emplace(MetalCommandList{.buffer = made.buffer.get(),
+                                                                                 .pool = commandPool,
+                                                                                 .slot = slot,
+                                                                                 .encoder = {},
+                                                                                 .rendering = {},
+                                                                                 .rendered = core::SlotChains::kEnd});
     if (commandList.isNull()) {
-        entry.buffer->endCommandBuffer();
+        made.buffer->endCommandBuffer();
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command lists", kCommandListLimit));
+                             std::format("the device holds at most {} command lists", desc_.maxCommandLists));
     }
-    if (!(*pool)->recording.push(commandList)) {
-        commandLists_.erase(commandList);
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("a command pool holds at most {} lists", kCommandListLimit));
-    }
-    ++(*pool)->used;
+    (*pool)->next = listSlots_.next(slot);
+    ++(*pool)->recording;
+    made.live = commandList;
     return commandList;
 }
 
@@ -410,6 +475,21 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
         return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
     }
 
+    // Rendered to earlier in this list, the swapchain is already in its chain.
+    bool renderedBefore = false;
+    for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
+        renderedBefore = renderedBefore || renders_[slot] == swapchain;
+    }
+    if (!renderedBefore) {
+        const auto slot = renderSlots_.push((*list)->rendered);
+        if (!slot) {
+            return core::failure(core::ErrorCode::RhiLimitReached,
+                                 std::format("the device's recording lists render to at most {} swapchains at once",
+                                             desc_.maxCommandLists));
+        }
+        renders_[*slot] = swapchain;
+    }
+
     const AutoreleasePool pool;
     const auto pass = adopt(MTL4::RenderPassDescriptor::alloc()->init());
     MTL::RenderPassColorAttachmentDescriptor* color = pass->colorAttachments()->object(0);
@@ -425,10 +505,6 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
     }
     (*list)->encoder = share(encoder);
     (*list)->rendering = swapchain;
-    // A list renders to at most every swapchain there is, so this has room.
-    if (std::ranges::find((*list)->rendered, swapchain) == (*list)->rendered.end()) {
-        std::ignore = (*list)->rendered.push(swapchain);
-    }
     return {};
 }
 
@@ -458,7 +534,6 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
     MetalQueue& queue = *queues_[desc.queue];
     const std::scoped_lock lock{queue.lock};
     queue.buffers.clear();
-    queue.held.clear();
     queue.chains.clear();
     for (const CommandListHandle commandList : desc.commandLists) {
         auto list = commandListFor(commandList);
@@ -473,8 +548,8 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
             return core::failure(core::ErrorCode::RhiInvalidCall,
                                  std::format("the list was recorded for queue {}, not {}", pool->queue, desc.queue));
         }
-        for (const SwapchainHandle swapchain : (*list)->rendered) {
-            auto chain = swapchainFor(swapchain);
+        for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
+            auto chain = swapchainFor(renders_[slot]);
             if (!chain) {
                 return std::unexpected(std::move(chain.error()));
             }
@@ -489,9 +564,9 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
                 std::ignore = queue.chains.push(*chain);
             }
         }
-        if (!queue.buffers.push((*list)->buffer.get())) {
-            return core::failure(core::ErrorCode::RhiLimitReached,
-                                 std::format("a submit takes at most {} lists", kCommandListLimit));
+        if (!queue.buffers.push((*list)->buffer)) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 std::format("a submit takes at most {} lists", desc_.maxCommandLists));
         }
     }
     const std::uint64_t value = queue.submitted.load(std::memory_order_relaxed) + 1;
@@ -501,13 +576,10 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
             continue;
         }
         if (MetalCommandPool* pool = commandPools_.find(list->pool); pool != nullptr) {
-            pool->recording.erase(commandList);
             pool->lastSubmit = value;
         }
         list->buffer->endCommandBuffer();
-        // One per list the submit took, so this has room.
-        std::ignore = queue.held.push(list->buffer);
-        commandLists_.erase(commandList);
+        end(commandList);
     }
     for (const Token wait : desc.waits) {
         queue.queue->wait(queues_[wait.queue]->event.get(), wait.value);
@@ -526,7 +598,6 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
     for (MetalSwapchain* chain : queue.chains) {
         chain->setSubmitted();
     }
-    queue.held.clear();
     collectPools(queue);
     return Token{.queue = desc.queue, .value = value};
 }
@@ -568,11 +639,21 @@ core::Result<void> MetalDevice::destroyCommandList(CommandListHandle commandList
         return std::unexpected(std::move(list.error()));
     }
     discard(**list);
-    if (MetalCommandPool* pool = commandPools_.find((*list)->pool); pool != nullptr) {
-        pool->recording.erase(commandList);
-    }
-    commandLists_.erase(commandList);
+    end(commandList);
     return {};
+}
+
+void MetalDevice::end(CommandListHandle commandList) {
+    const MetalCommandList* list = commandLists_.find(commandList);
+    if (list == nullptr) {
+        return;
+    }
+    if (MetalCommandPool* pool = commandPools_.find(list->pool); pool != nullptr) {
+        --pool->recording;
+    }
+    renderSlots_.give(list->rendered);
+    lists_[list->slot].live = {};
+    commandLists_.erase(commandList);
 }
 
 core::Result<MemoryBudget> MetalDevice::budget() const {

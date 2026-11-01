@@ -6,7 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/swapchain.h"
-#include "core/fixed_vector.h"
+#include "core/slot_chains.h"
 #include "null/null_instance.h"
 
 #include <cstdint>
@@ -18,14 +18,17 @@
 
 namespace bfr::rhi::null {
 
-NullDevice::NullDevice(NullInstance& rhi, const DeviceQueues& queues)
+NullDevice::NullDevice(NullInstance& rhi, const DeviceDesc& desc)
     : instance_(&rhi),
-      swapchains_("swapchains", kSwapchainCapacity, kSwapchainLimit, rhi.logger()),
-      commandPools_("command pools", kCommandPoolCapacity, kCommandPoolLimit, rhi.logger()),
-      commandLists_("command lists", kCommandListLimit, kCommandListLimit, rhi.logger()) {
+      desc_(desc),
+      swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
+      commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
+      commandLists_("command lists", desc.maxCommandLists, desc.maxCommandLists, rhi.logger()),
+      slots_(desc.maxCommandLists),
+      live_(desc.maxCommandLists) {
     queues_.push_back(QueueType::Graphics);
-    queues_.insert(queues_.end(), queues.compute, QueueType::Compute);
-    queues_.insert(queues_.end(), queues.copy, QueueType::Copy);
+    queues_.insert(queues_.end(), desc.compute, QueueType::Compute);
+    queues_.insert(queues_.end(), desc.copy, QueueType::Copy);
     submitted_.assign(queues_.size(), 0);
 }
 
@@ -54,7 +57,7 @@ core::Result<SwapchainHandle> NullDevice::createSwapchain(const core::window::Na
     });
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("a device holds at most {} swapchains", kSwapchainLimit));
+                             std::format("a device holds at most {} swapchains", desc_.maxSwapchains));
     }
     return swapchain;
 }
@@ -159,15 +162,22 @@ core::Result<void> NullDevice::checkToken(Token token) const {
     return {};
 }
 
-core::Result<CommandPoolHandle> NullDevice::createCommandPool(std::uint32_t queue) {
-    if (auto checked = checkQueue(queue); !checked) {
+core::Result<CommandPoolHandle> NullDevice::createCommandPool(const CommandPoolDesc& desc) {
+    if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    const CommandPoolHandle commandPool = commandPools_.emplace(
-        NullCommandPool{.queue = queue, .recording = core::FixedVector<CommandListHandle>{kCommandListLimit}});
-    if (commandPool.isNull()) {
+    const auto first = slots_.take(desc.listCount);
+    if (!first) {
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command pools", kCommandPoolLimit));
+                             std::format("the pool asks for {} lists; {} of the device's {} are free", desc.listCount,
+                                         slots_.available(), desc_.maxCommandLists));
+    }
+    const CommandPoolHandle commandPool = commandPools_.emplace(
+        NullCommandPool{.queue = desc.queue, .first = *first, .next = *first, .recording = 0});
+    if (commandPool.isNull()) {
+        slots_.give(*first);
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             std::format("the device holds at most {} command pools", desc_.maxCommandPools));
     }
     return commandPool;
 }
@@ -177,11 +187,12 @@ core::Result<void> NullDevice::resetCommandPool(CommandPoolHandle commandPool) {
     if (!pool) {
         return std::unexpected(std::move(pool.error()));
     }
-    if (!(*pool)->recording.empty()) {
+    if ((*pool)->recording != 0) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              std::format("{} lists from the pool are still recording; submit or destroy them",
-                                         (*pool)->recording.size()));
+                                         (*pool)->recording));
     }
+    (*pool)->next = (*pool)->first;
     return {};
 }
 
@@ -193,9 +204,11 @@ core::Result<void> NullDevice::destroyCommandPool(CommandPoolHandle commandPool)
     if (!pool) {
         return std::unexpected(std::move(pool.error()));
     }
-    for (const CommandListHandle list : (*pool)->recording) {
-        commandLists_.erase(list);
+    // No GPU runs the lists, so the slots go back at once.
+    for (std::uint32_t slot = (*pool)->first; slot != core::SlotChains::kEnd; slot = slots_.next(slot)) {
+        commandLists_.erase(std::exchange(live_[slot], {}));
     }
+    slots_.give((*pool)->first);
     commandPools_.erase(commandPool);
     return {};
 }
@@ -205,17 +218,21 @@ core::Result<CommandListHandle> NullDevice::beginCommands(CommandPoolHandle comm
     if (!pool) {
         return std::unexpected(std::move(pool.error()));
     }
+    const std::uint32_t slot = (*pool)->next;
+    if (slot == core::SlotChains::kEnd) {
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             "every list in the pool was handed out since its last reset");
+    }
+    // The pool's lists were made with it, so this only takes the next.
     const CommandListHandle commandList = commandLists_.emplace(
-        NullCommandList{.pool = commandPool, .rendering = false});
+        NullCommandList{.pool = commandPool, .slot = slot, .rendering = false});
     if (commandList.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("the device holds at most {} command lists", kCommandListLimit));
+                             std::format("the device holds at most {} command lists", desc_.maxCommandLists));
     }
-    if (!(*pool)->recording.push(commandList)) {
-        commandLists_.erase(commandList);
-        return core::failure(core::ErrorCode::RhiLimitReached,
-                             std::format("a command pool holds at most {} lists", kCommandListLimit));
-    }
+    (*pool)->next = slots_.next(slot);
+    ++(*pool)->recording;
+    live_[slot] = commandList;
     return commandList;
 }
 
@@ -275,12 +292,7 @@ core::Result<Token> NullDevice::submit(const SubmitDesc& desc) {
         }
     }
     for (const CommandListHandle commandList : desc.commandLists) {
-        if (NullCommandList* list = commandLists_.find(commandList); list != nullptr) {
-            if (NullCommandPool* pool = commandPools_.find(list->pool); pool != nullptr) {
-                pool->recording.erase(commandList);
-            }
-        }
-        commandLists_.erase(commandList);
+        end(commandList);
     }
     return Token{.queue = desc.queue, .value = ++submitted_[desc.queue]};
 }
@@ -304,11 +316,20 @@ core::Result<void> NullDevice::destroyCommandList(CommandListHandle commandList)
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (NullCommandPool* pool = commandPools_.find((*list)->pool); pool != nullptr) {
-        pool->recording.erase(commandList);
-    }
-    commandLists_.erase(commandList);
+    end(commandList);
     return {};
+}
+
+void NullDevice::end(CommandListHandle commandList) {
+    const NullCommandList* list = commandLists_.find(commandList);
+    if (list == nullptr) {
+        return;
+    }
+    if (NullCommandPool* pool = commandPools_.find(list->pool); pool != nullptr) {
+        --pool->recording;
+    }
+    live_[list->slot] = {};
+    commandLists_.erase(commandList);
 }
 
 core::Result<MemoryBudget> NullDevice::budget() const {

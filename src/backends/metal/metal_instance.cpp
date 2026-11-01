@@ -13,6 +13,7 @@
 #include "metal/metal_formats.h"
 #include "metal/metal_swapchain.h"
 #include "metal/metal_util.h"
+#include "rhi/device_limits.h"
 
 #include <Foundation/NSArray.hpp>
 #include <Foundation/NSTypes.hpp>
@@ -96,8 +97,11 @@ core::Result<void> MetalInstance::checkAdapter(std::size_t adapter) const {
 
 core::Result<std::unique_ptr<Device>> MetalInstance::createDevice(std::size_t adapter,
                                                                   const core::window::NativeWindow& presentTo,
-                                                                  const DeviceQueues& queues) {
+                                                                  const DeviceDesc& desc) {
     if (auto checked = checkAdapter(adapter); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkLimits(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     // Every device presents to a CAMetalLayer, so a window only has to be one.
@@ -106,7 +110,7 @@ core::Result<std::unique_ptr<Device>> MetalInstance::createDevice(std::size_t ad
             return std::unexpected(std::move(checked.error()));
         }
     }
-    return MetalDevice::create(*this, devices_[adapter], queues);
+    return MetalDevice::create(*this, devices_[adapter], desc);
 }
 
 core::Result<FormatCaps> MetalInstance::formatCaps(std::size_t adapter, Format format) const {

@@ -25,6 +25,8 @@ namespace {
 
 constexpr std::uint32_t kWidth = 64;
 constexpr std::uint32_t kHeight = 48;
+// Lists the test command pool holds, more than a frame records.
+constexpr std::uint32_t kPoolLists = 4;
 constexpr bfr::Window kHeadless{.system = bfr::WindowSystem::Headless};
 
 // Records every message an instance reports, from whichever thread reports it.
@@ -206,7 +208,7 @@ TEST_CASE("C++ API clears and presents a headless swapchain", "[cpp_api][gpu]") 
         REQUIRE(swapchain.has_value());
         REQUIRE(swapchain->resize(kWidth, kHeight).has_value());
 
-        auto pool = device.createCommandPool({});
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         INFO(failureOf(pool));
         REQUIRE(pool.has_value());
         bfr::Token last;
@@ -220,9 +222,10 @@ TEST_CASE("C++ API clears and presents a headless swapchain", "[cpp_api][gpu]") 
             auto commands = pool->beginCommands();
             INFO(failureOf(commands));
             REQUIRE(commands.has_value());
-            CHECK(commands->beginRendering(*swapchain, {.loadOp = bfr::LoadOp::Clear, .clearColor = {1, 0, 0, 1}})
-                      .has_value());
-            CHECK(commands->endRendering().has_value());
+            CHECK(
+                device.beginRendering(*commands, *swapchain, {.loadOp = bfr::LoadOp::Clear, .clearColor = {1, 0, 0, 1}})
+                    .has_value());
+            CHECK(device.endRendering(*commands).has_value());
             const auto submitted = device.submit({.queue = 0, .commandLists = std::span{&*commands, 1}});
             INFO(failureOf(submitted));
             REQUIRE(submitted.has_value());

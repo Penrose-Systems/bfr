@@ -27,6 +27,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -247,27 +248,17 @@ bfr_token toC(bfr::rhi::Token token) {
     return {.queue = token.queue, .value = token.value};
 }
 
-// The elements a SmallBuffer holds in place unless told otherwise.
-inline constexpr std::size_t kSmallBufferInline = 16;
-
-template <class T, std::size_t kInline = kSmallBufferInline>
-class SmallBuffer {
-public:
-    template <class From, class Convert>
-    [[nodiscard]] std::span<const T> fill(std::span<const From> from, Convert convert) {
-        T* out = inline_.data();
-        if (from.size() > kInline) {
-            heap_.resize(from.size());
-            out = heap_.data();
-        }
-        std::ranges::transform(from, out, convert);
-        return {out, from.size()};
-    }
-
-private:
-    std::array<T, kInline> inline_{};
-    std::vector<T> heap_;
-};
+// bfr_submit reads the caller's arrays as the rhi types, which are laid out
+// exactly as the C ones, so a submit copies and allocates nothing.
+static_assert(sizeof(bfr_command_list) == sizeof(bfr::rhi::CommandListHandle) &&
+              alignof(bfr_command_list) == alignof(bfr::rhi::CommandListHandle) &&
+              std::is_standard_layout_v<bfr::rhi::CommandListHandle> &&
+              std::is_trivially_copyable_v<bfr::rhi::CommandListHandle> &&
+              offsetof(bfr_command_list, bits) == offsetof(bfr::rhi::CommandListHandle, bits));
+static_assert(sizeof(bfr_token) == sizeof(bfr::rhi::Token) && alignof(bfr_token) == alignof(bfr::rhi::Token) &&
+              std::is_standard_layout_v<bfr::rhi::Token> && std::is_trivially_copyable_v<bfr::rhi::Token> &&
+              offsetof(bfr_token, queue) == offsetof(bfr::rhi::Token, queue) &&
+              offsetof(bfr_token, value) == offsetof(bfr::rhi::Token, value));
 
 bfr::rhi::Token fromC(const bfr_token& token) {
     return {.queue = token.queue, .value = token.value};
@@ -839,8 +830,17 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
         if (!window) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
-        auto created = instance->instance->createDevice(desc->adapter, *window,
-                                                        {.compute = desc->compute_queues, .copy = desc->copy_queues});
+        // 0 asks for the default, which bfr.h names.
+        const auto orDefault = [](std::uint32_t value, std::uint32_t fallback) {
+            return value == 0 ? fallback : value;
+        };
+        auto created = instance->instance->createDevice(
+            desc->adapter, *window,
+            {.compute = desc->compute_queues,
+             .copy = desc->copy_queues,
+             .maxCommandLists = orDefault(desc->max_command_lists, BFR_DEFAULT_MAX_COMMAND_LISTS),
+             .maxCommandPools = orDefault(desc->max_command_pools, BFR_DEFAULT_MAX_COMMAND_POOLS),
+             .maxSwapchains = orDefault(desc->max_swapchains, BFR_DEFAULT_MAX_SWAPCHAINS)});
         if (!created) {
             return fail(created.error());
         }
@@ -941,7 +941,7 @@ bfr_result bfr_create_command_pool(bfr_device* device, const bfr_command_pool_de
         if (desc->next != nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_command_pool_desc takes no chained structs");
         }
-        const auto created = device->device->createCommandPool(desc->queue);
+        const auto created = device->device->createCommandPool({.queue = desc->queue, .listCount = desc->list_count});
         if (!created) {
             return fail(created.error());
         }
@@ -1033,14 +1033,13 @@ bfr_result bfr_submit(bfr_device* device, const bfr_submit_desc* desc, bfr_token
         if (desc->wait_count != 0 && desc->waits == nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "waits must not be null when wait_count is not 0");
         }
-        SmallBuffer<bfr::rhi::CommandListHandle> lists;
-        SmallBuffer<bfr::rhi::Token> waits;
+        // The caller's arrays, read in place as the rhi types; see the
+        // layout asserts above.
         const bfr::rhi::SubmitDesc submitDesc{
             .queue = desc->queue,
-            .commandLists = lists.fill(std::span{desc->command_lists, desc->command_list_count},
-                                       [](bfr_command_list list) { return fromC(list); }),
-            .waits = waits.fill(std::span{desc->waits, desc->wait_count},
-                                [](const bfr_token& wait) { return fromC(wait); }),
+            .commandLists = {reinterpret_cast<const bfr::rhi::CommandListHandle*>(desc->command_lists),
+                             desc->command_list_count},
+            .waits = {reinterpret_cast<const bfr::rhi::Token*>(desc->waits), desc->wait_count},
         };
         const auto submitted = device->device->submit(submitDesc);
         if (!submitted) {

@@ -10,6 +10,7 @@
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
+#include "rhi/device_limits.h"
 #include "vulkan/instance_table.h"
 #include "vulkan/queue_families.h"
 #include "vulkan/vulkan_caps.h"
@@ -103,7 +104,7 @@ struct QueueCreateInfos {
     std::vector<float> priorities;
 };
 
-QueueCreateInfos queueCreateInfos(const QueueFamilies& families, std::uint32_t present, const DeviceQueues& wanted) {
+QueueCreateInfos queueCreateInfos(const QueueFamilies& families, std::uint32_t present, const DeviceDesc& wanted) {
     QueueCreateInfos queues;
     const auto add = [&queues](std::uint32_t family, std::uint32_t count) {
         if (count == 0) {
@@ -417,9 +418,12 @@ std::span<const Adapter> VulkanInstance::adapters() const {
 
 core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t adapter,
                                                                    const core::window::NativeWindow& presentTo,
-                                                                   const DeviceQueues& wanted) {
+                                                                   const DeviceDesc& wanted) {
     if (auto listed = checkAdapter(adapter); !listed) {
         return std::unexpected(std::move(listed.error()));
+    }
+    if (auto checked = checkLimits(wanted); !checked) {
+        return std::unexpected(std::move(checked.error()));
     }
     const Adapter& listed = adapters_[adapter];
     VkPhysicalDevice physicalDevice = physicalDevices_[adapter];

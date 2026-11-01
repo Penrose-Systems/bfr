@@ -43,6 +43,7 @@ add_executable(bfr_tests
     core/test_error.cpp
     core/test_log.cpp
     core/test_pool.cpp
+    core/test_slot_chains.cpp
     core/test_text.cpp
     rhi/test_caps.cpp
     rhi/test_frame_allocations.cpp

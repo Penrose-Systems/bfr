@@ -170,13 +170,15 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
         return detail::fail("can't create a swapchain", swapchain.error());
     }
     constexpr int kFramesInFlight = 2;
+    // A frame records one list, so each frame's pool holds one.
+    constexpr std::uint32_t kListsPerFrame = 1;
     struct Slot {
         bfr::CommandPool pool;
         bfr::Token done;
     };
     std::vector<Slot> slots;
     for (int slot = 0; slot < kFramesInFlight; ++slot) {
-        auto pool = device.createCommandPool({.queue = 0});
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kListsPerFrame});
         if (!pool) {
             return detail::fail("can't create a command pool", pool.error());
         }
@@ -232,12 +234,13 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
             return detail::fail("can't begin commands", commands.error());
         }
         const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - started;
-        if (const auto begun = commands->beginRendering(*swapchain, {.loadOp = bfr::LoadOp::Clear,
-                                                                     .clearColor = detail::colorAt(elapsed.count())});
+        if (const auto begun = device.beginRendering(*commands, *swapchain,
+                                                     {.loadOp = bfr::LoadOp::Clear,
+                                                      .clearColor = detail::colorAt(elapsed.count())});
             !begun) {
             return detail::fail("can't begin rendering", begun.error());
         }
-        if (const auto ended = commands->endRendering(); !ended) {
+        if (const auto ended = device.endRendering(*commands); !ended) {
             return detail::fail("can't end rendering", ended.error());
         }
         const auto submitted = device.submit({.queue = 0, .commandLists = std::span{&*commands, 1}});

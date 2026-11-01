@@ -8,7 +8,7 @@
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/swapchain.h"
 #include "core/fixed_vector.h"
-#include "core/inline_vector.h"
+#include "core/slot_chains.h"
 #include "metal/metal_swapchain.h"
 #include "metal/metal_util.h"
 
@@ -33,59 +33,68 @@ namespace bfr::rhi::metal {
 
 class MetalInstance;
 
-// Room for a few windows' swapchains and command pools before their pools
-// grow, and limits no tool should reach. Command lists are made on the frame
-// path, so their pool, and every array a frame fills, is made at its limit.
-inline constexpr std::uint32_t kSwapchainCapacity = 4;
-inline constexpr std::uint32_t kSwapchainLimit = 256;
-inline constexpr std::uint32_t kCommandPoolCapacity = 4;
-inline constexpr std::uint32_t kCommandPoolLimit = 256;
-inline constexpr std::uint32_t kCommandListLimit = 4096;
-
-/// A command pool: an allocator and a buffer for each list recording at once,
-/// since a Metal 4 allocator serves one buffer at a time; how many are handed
-/// out since the last reset, the lists still recording, and the event value its
-/// last submit signals.
+/// A command pool: the queue it records for, its chain of list slots, each
+/// holding an allocator and a buffer made with the pool, the next slot
+/// beginCommands hands out, how many lists it handed out still record, and
+/// the event value its last submit signals. Plain data: the device releases
+/// the slots' objects once the GPU is done with them.
 struct MetalCommandPool {
-    struct Entry {
-        Ref<MTL4::CommandAllocator> allocator;
-        Ref<MTL4::CommandBuffer> buffer;
-    };
     std::uint32_t queue = 0;
-    core::FixedVector<Entry> entries{kCommandListLimit};
-    std::uint32_t used = 0;
-    core::FixedVector<CommandListHandle> recording{kCommandListLimit};
+    std::uint32_t first = core::SlotChains::kEnd;
+    std::uint32_t next = core::SlotChains::kEnd;
+    std::uint32_t recording = 0;
     std::uint64_t lastSubmit = 0;
+};
+
+/// A list slot: an allocator and a buffer for it, since a Metal 4 allocator
+/// serves one buffer at a time, and the list recording on it.
+struct MetalListSlot {
+    Ref<MTL4::CommandAllocator> allocator;
+    Ref<MTL4::CommandBuffer> buffer;
+    CommandListHandle live;
+};
+
+/// A destroyed pool the GPU may still run lists from, and the event value
+/// that frees it.
+struct MetalRetiredPool {
+    std::uint32_t first = core::SlotChains::kEnd;
+    std::uint64_t value = 0;
 };
 
 /// One of the device's queues: its MTL4 command queue, the shared event each
 /// submit signals the next value of, the value last submitted, the arrays a
-/// submit is built in, and the allocators of pools destroyed while the GPU may
-/// still run their lists, each with the value that frees them. Used by one
-/// thread at a time under lock, which present shares; submitted is read from
-/// any thread.
+/// submit is built in, and the pools destroyed while the GPU may still run
+/// their lists. Used by one thread at a time under lock, which present
+/// shares; submitted is read from any thread.
+///
+/// Why the arrays: submit runs every frame, so it fills these in place rather
+/// than building vectors. They are made with the queue, when the device is
+/// created, sized from the device's maximums, so no submit touches the heap.
+/// The buffers they name are owned by their slots, which outlive the GPU's
+/// use of them.
 struct MetalQueue {
     QueueType type = QueueType::Graphics;
     Ref<MTL4::CommandQueue> queue;
     Ref<MTL::SharedEvent> event;
     std::atomic<std::uint64_t> submitted{0};
-    core::FixedVector<const MTL4::CommandBuffer*> buffers{kCommandListLimit};
-    core::FixedVector<Ref<MTL4::CommandBuffer>> held{kCommandListLimit};
-    core::FixedVector<MetalSwapchain*> chains{kSwapchainLimit};
-    std::vector<std::pair<core::FixedVector<MetalCommandPool::Entry>, std::uint64_t>> retired;
+    core::FixedVector<const MTL4::CommandBuffer*> buffers;
+    core::FixedVector<MetalSwapchain*> chains;
+    core::FixedVector<MetalRetiredPool> retired;
     std::atomic<std::uint32_t> retiredCount{0};
     std::mutex lock;
 };
 
-/// Commands recorded on one buffer: the pool it came from, the encoder
-/// rendering is open on, the swapchain rendering is open on, and every
-/// swapchain rendered to, whose drawables the submit waits for and signals.
+/// Commands recorded on one buffer: the buffer, which its slot owns, the pool
+/// and slot it came from, the encoder rendering is open on, the swapchain
+/// rendering is open on, and the chain of render slots naming every swapchain
+/// rendered to, whose drawables the submit waits for and signals.
 struct MetalCommandList {
-    Ref<MTL4::CommandBuffer> buffer;
+    MTL4::CommandBuffer* buffer = nullptr;
     CommandPoolHandle pool;
+    std::uint32_t slot = 0;
     Ref<MTL4::RenderCommandEncoder> encoder;
     std::optional<SwapchainHandle> rendering;
-    core::InlineVector<SwapchainHandle, kSwapchainLimit> rendered;
+    std::uint32_t rendered = core::SlotChains::kEnd;
 };
 
 class MetalDevice final : public Device {
@@ -94,10 +103,10 @@ public:
     /// queues asked for. Fails with RhiDeviceFailed when Metal gives no queue
     /// or event.
     [[nodiscard]] static core::Result<std::unique_ptr<MetalDevice>> create(MetalInstance& rhi, Ref<MTL::Device> device,
-                                                                           const DeviceQueues& queues);
+                                                                           const DeviceDesc& desc);
 
     /// For create.
-    MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device);
+    MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const DeviceDesc& desc);
     ~MetalDevice() override;
     MetalDevice(const MetalDevice&) = delete;
     MetalDevice& operator=(const MetalDevice&) = delete;
@@ -111,7 +120,7 @@ public:
     [[nodiscard]] core::Result<void> destroySwapchain(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<void> acquire(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<void> present(SwapchainHandle swapchain) override;
-    [[nodiscard]] core::Result<CommandPoolHandle> createCommandPool(std::uint32_t queue) override;
+    [[nodiscard]] core::Result<CommandPoolHandle> createCommandPool(const CommandPoolDesc& desc) override;
     [[nodiscard]] core::Result<void> resetCommandPool(CommandPoolHandle commandPool) override;
     [[nodiscard]] core::Result<void> destroyCommandPool(CommandPoolHandle commandPool) override;
     [[nodiscard]] core::Result<CommandListHandle> beginCommands(CommandPoolHandle commandPool) override;
@@ -125,10 +134,18 @@ public:
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
-    [[nodiscard]] core::Result<void> open(const DeviceQueues& queues);
+    [[nodiscard]] core::Result<void> open(const DeviceDesc& desc);
     [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
     [[nodiscard]] core::Result<void> checkToken(Token token) const;
+    // Releases the retired pools the GPU is done with and frees their slots.
+    // Runs on the frame path: it releases API objects and moves indices,
+    // nothing more.
     void collectPools(MetalQueue& queue);
+    // Releases the objects in a chain of list slots and gives the chain back.
+    void releaseSlots(std::uint32_t first);
+    // Ends a list that was submitted or discarded; its slot waits for the
+    // pool's reset.
+    void end(CommandListHandle commandList);
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
     static void discard(MetalCommandList& list);
@@ -138,10 +155,21 @@ private:
 
     MetalInstance* instance_;
     Ref<MTL::Device> device_;
+    DeviceDesc desc_;
     std::vector<std::unique_ptr<MetalQueue>> queues_;
     core::Pool<MetalSwapchain, Swapchain> swapchains_;
     core::Pool<MetalCommandPool, CommandPool> commandPools_;
     core::Pool<MetalCommandList, CommandList> commandLists_;
+    // A slot for each list the device holds, and one for each swapchain a
+    // recording list renders to, so beginCommands and beginRendering only
+    // take indices. Both are made here, at the device's maximum of lists.
+    core::SlotChains listSlots_;
+    std::vector<MetalListSlot> lists_;
+    core::SlotChains renderSlots_;
+    std::vector<SwapchainHandle> renders_;
+    // Live pools and destroyed ones not yet collected, held to
+    // desc_.maxCommandPools so every queue's retired array has room.
+    std::atomic<std::uint32_t> poolsHeld_{0};
 };
 
 } // namespace bfr::rhi::metal

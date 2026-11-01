@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bfr/bfr.h"
 #include "bfr/core/handle.h"
 
 #include <array>
@@ -28,11 +29,28 @@ enum class QueueType : std::uint8_t {
     Copy,
 };
 
-/// The queues a device opens beside its graphics queue. The device's queues
-/// are numbered: graphics is 0, then the compute queues, then the copy queues.
-struct DeviceQueues {
+/// How to open a device: the queues it opens beside its graphics queue, and
+/// how many command lists, command pools and swapchains it holds at once. The
+/// device's queues are numbered: graphics is 0, then the compute queues, then
+/// the copy queues. Room for every list, pool and swapchain is made with the
+/// device, so nothing on the frame path allocates; past a maximum, calls fail
+/// with RhiLimitReached, except a submit of more than maxCommandLists lists,
+/// which fails with RhiInvalidCall. The maximums start at bfr.h's defaults,
+/// which api/bfr.yaml owns.
+struct DeviceDesc {
     std::uint32_t compute = 0;
     std::uint32_t copy = 0;
+    std::uint32_t maxCommandLists = BFR_DEFAULT_MAX_COMMAND_LISTS;
+    std::uint32_t maxCommandPools = BFR_DEFAULT_MAX_COMMAND_POOLS;
+    std::uint32_t maxSwapchains = BFR_DEFAULT_MAX_SWAPCHAINS;
+};
+
+/// How to create a command pool: the queue its lists record for, and how many
+/// lists it holds, all made with it. beginCommands hands them out in turn
+/// until resetCommandPool gives them back.
+struct CommandPoolDesc {
+    std::uint32_t queue = 0;
+    std::uint32_t listCount = 0;
 };
 
 /// A point on a queue's timeline: submit returns one, and the GPU passes it

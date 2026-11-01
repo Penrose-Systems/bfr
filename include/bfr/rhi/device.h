@@ -57,13 +57,14 @@ public:
     /// is acquired.
     [[nodiscard]] virtual core::Result<void> present(SwapchainHandle swapchain) = 0;
 
-    /// A command pool whose lists record for queue. Fails with RhiInvalidCall
-    /// for a queue the device does not have, RhiLimitReached at the device's
-    /// maximum, and RhiDeviceFailed when the API refuses.
-    [[nodiscard]] virtual core::Result<CommandPoolHandle> createCommandPool(std::uint32_t queue) = 0;
+    /// A command pool as desc says, with its lists made. Fails with
+    /// RhiInvalidCall for a queue the device does not have, RhiLimitReached at
+    /// the device's maximum of pools or when fewer than desc.listCount of its
+    /// lists are free, and RhiDeviceFailed when the API refuses.
+    [[nodiscard]] virtual core::Result<CommandPoolHandle> createCommandPool(const CommandPoolDesc& desc) = 0;
 
-    /// Gives every list the pool made back to it, so beginCommands may use
-    /// their memory again. Fails with RhiInvalidCall while a list from the
+    /// Gives every list the pool made back to it, so beginCommands may hand
+    /// them out and use their memory again. Fails with RhiInvalidCall while a list from the
     /// pool is recording, or while the GPU has not passed the token of the
     /// pool's last submit, and RhiInvalidHandle when the pool is destroyed.
     [[nodiscard]] virtual core::Result<void> resetCommandPool(CommandPoolHandle commandPool) = 0;
@@ -73,9 +74,10 @@ public:
     /// nothing. Fails with RhiInvalidHandle when the pool is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroyCommandPool(CommandPoolHandle commandPool) = 0;
 
-    /// Starts recording a command list from the pool. Fails with
-    /// RhiInvalidHandle when the pool is destroyed, RhiLimitReached at the
-    /// device's maximum of lists, and RhiDeviceFailed when the API refuses.
+    /// Starts recording the pool's next list. Fails with RhiInvalidHandle when
+    /// the pool is destroyed, RhiLimitReached when every list it holds was
+    /// handed out since it was last reset, and RhiDeviceFailed when the API
+    /// refuses.
     [[nodiscard]] virtual core::Result<CommandListHandle> beginCommands(CommandPoolHandle commandPool) = 0;
 
     /// Begins rendering to the image acquire took from swapchain, as desc
@@ -105,8 +107,9 @@ public:
     /// Whether the GPU has passed token, without blocking. Fails as wait does.
     [[nodiscard]] virtual core::Result<bool> poll(Token token) = 0;
 
-    /// Discards a command list that was not submitted. A null handle does
-    /// nothing. Fails with RhiInvalidHandle when the list is already gone.
+    /// Discards a command list that was not submitted; the pool hands it out
+    /// again after its next reset. A null handle does nothing. Fails with RhiInvalidHandle when the list is already
+    /// gone.
     [[nodiscard]] virtual core::Result<void> destroyCommandList(CommandListHandle commandList) = 0;
 
     /// How much of each heap the process may use and uses now. Fails with

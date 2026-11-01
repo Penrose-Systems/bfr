@@ -29,6 +29,9 @@
 
 namespace bfr::rhi::test {
 
+// Lists each test command pool holds, more than any test records between resets.
+inline constexpr std::uint32_t kPoolLists = 8;
+
 inline const RhiConfig kValidation{.validation = true};
 
 /// For a device that presents to no window yet.

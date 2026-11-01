@@ -89,17 +89,18 @@ public:
 
     [[nodiscard]] virtual std::span<const Adapter> adapters() const = 0;
 
-    /// A device on adapters()[adapter], destroyed before this Instance. Its
-    /// graphics queue presents to presentTo where a queue family can, else a
-    /// queue of its own does; with no window, graphics presents. Fails with
-    /// RhiAdapterOutOfRange when adapter is not an index into adapters(),
-    /// RhiWindowFailed as Device::createSwapchain describes,
+    /// A device on adapters()[adapter], as desc says, destroyed before this
+    /// Instance. Its graphics queue presents to presentTo where a queue family
+    /// can, else a queue of its own does; with no window, graphics presents.
+    /// Fails with RhiAdapterOutOfRange when adapter is not an index into
+    /// adapters(), RhiInvalidCall when a maximum in desc is 0 or more than a
+    /// handle names, RhiWindowFailed as Device::createSwapchain describes,
     /// RhiPresentUnsupported when no queue family presents to presentTo,
     /// RhiUnsupported when the adapter has fewer compute or copy queues than
-    /// queues asks for, and RhiDeviceFailed when the adapter has no graphics
+    /// desc asks for, and RhiDeviceFailed when the adapter has no graphics
     /// queue or the API refuses the device.
     [[nodiscard]] virtual core::Result<std::unique_ptr<Device>> createDevice(
-        std::size_t adapter, const core::window::NativeWindow& presentTo, const DeviceQueues& queues) = 0;
+        std::size_t adapter, const core::window::NativeWindow& presentTo, const DeviceDesc& desc) = 0;
 
     // The queries below fail with RhiAdapterOutOfRange when adapter is not an
     // index into adapters(). The API answers each afresh.

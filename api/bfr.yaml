@@ -14,15 +14,26 @@
 #   optional: true              may be null
 #   lifetime: <object>          returned data stays valid while <object> lives
 #   user_data: <callback>       an opaque member passed to the <callback> beside it
+#   default: <constant>         a u32 or u64 member whose 0 means <constant>; the C++
+#                               member starts at it
+#
+# Constants are unsigned integers, named without the bfr_ prefix, each with a doc.
 #
 # Objects and handles name the function that destroys them, so wrappers own
 # them: destroy: <function>, which takes the object, or the handle's parent and
-# then the handle. A handle names its parent object: parent: <object>.
+# then the handle. A handle names its parent object: parent: <object>. A handle
+# its parent's pool owns is plain: true, so wrappers keep it as the bare C
+# value, laid out as it, and arrays of it pass to C without a copy.
 #
 # Every enum value is explicit, so the ABI never depends on order. Quote a doc
 # that has a comma in it: in {...} a comma ends the value.
 
 version: {major: 0, minor: 1, patch: 0}
+
+constants:
+  default_max_command_lists: {value: 8192, doc: What bfr_device_desc.max_command_lists of 0 means.}
+  default_max_command_pools: {value: 512, doc: What bfr_device_desc.max_command_pools of 0 means.}
+  default_max_swapchains: {value: 512, doc: What bfr_device_desc.max_swapchains of 0 means.}
 
 enums:
   result:
@@ -319,6 +330,7 @@ handles:
   command_list:
     parent: device
     destroy: destroy_command_list
+    plain: true
     doc: >-
       Commands recorded for the GPU, from bfr_begin_commands until bfr_submit
       sends them to the queue of the pool they came from. Calls on one command
@@ -392,6 +404,22 @@ structs:
       - name: copy_queues
         type: u32
         doc: Copy queues to open; 0 is none. Fails with error_unsupported when the adapter has fewer.
+      - name: max_command_lists
+        type: u32
+        default: default_max_command_lists
+        doc: >-
+          Command lists the device holds at once, across all its pools, and the most swapchains
+          its recording lists render to at once; past it, calls fail with error_limit_reached. Room
+          for them is made with the device, so recording and submitting never allocate. A
+          bfr_submit of more lists than this fails with error_invalid_argument.
+      - name: max_command_pools
+        type: u32
+        default: default_max_command_pools
+        doc: Command pools the device holds at once; past it, bfr_create_command_pool fails with error_limit_reached.
+      - name: max_swapchains
+        type: u32
+        default: default_max_swapchains
+        doc: Swapchains the device holds at once; past it, bfr_create_swapchain fails with error_limit_reached.
 
   swapchain_desc:
     doc: How to create a swapchain.
@@ -449,6 +477,11 @@ structs:
     extensible: true
     members:
       - {name: queue, type: u32, doc: The queue its lists record for; 0 is the graphics queue.}
+      - name: list_count
+        type: u32
+        doc: >-
+          Lists the pool holds, made with it from the device's max_command_lists. bfr_begin_commands
+          hands them out in turn until bfr_reset_command_pool gives them back.
 
   token:
     doc: >-
@@ -927,7 +960,10 @@ functions:
       - {name: swapchain, type: swapchain}
 
   create_command_pool:
-    doc: Creates a command pool, as desc says.
+    doc: >-
+      Creates a command pool, as desc says, with its lists made. Fails with
+      error_limit_reached at the device's max_command_pools, or when fewer than
+      desc.list_count of its max_command_lists are free.
     returns: result
     params:
       - {name: device, type: device}
@@ -955,7 +991,9 @@ functions:
       - {name: command_pool, type: command_pool}
 
   begin_commands:
-    doc: Starts recording a command list from the pool.
+    doc: >-
+      Starts recording the pool's next list. Fails with error_limit_reached
+      when every list it holds was handed out since it was last reset.
     returns: result
     params:
       - {name: device, type: device}
@@ -1010,8 +1048,9 @@ functions:
 
   destroy_command_list:
     doc: >-
-      Discards a command list that was not submitted. A handle that is
-      already submitted or destroyed does nothing.
+      Discards a command list that was not submitted; the pool hands it out
+      again after its next reset. A handle that is already submitted or
+      destroyed does nothing.
     params:
       - {name: device, type: device}
       - {name: command_list, type: command_list}

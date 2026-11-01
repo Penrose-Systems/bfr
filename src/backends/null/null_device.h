@@ -6,7 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/swapchain.h"
-#include "core/fixed_vector.h"
+#include "core/slot_chains.h"
 
 #include <cstdint>
 #include <vector>
@@ -23,17 +23,21 @@ struct NullSwapchain {
     bool acquired = false;
 };
 
-/// A pool whose lists go nowhere: the queue it records for, and the lists
-/// still recording from it.
+/// A pool whose lists go nowhere, with the same bookkeeping as every
+/// backend's: the queue it records for, its chain of list slots, the next one
+/// beginCommands hands out, and how many it has handed out that still record.
 struct NullCommandPool {
     std::uint32_t queue = 0;
-    core::FixedVector<CommandListHandle> recording;
+    std::uint32_t first = core::SlotChains::kEnd;
+    std::uint32_t next = core::SlotChains::kEnd;
+    std::uint32_t recording = 0;
 };
 
-/// Commands that go nowhere: the pool they came from and whether rendering is
-/// open.
+/// Commands that go nowhere: the pool and slot they came from and whether
+/// rendering is open.
 struct NullCommandList {
     CommandPoolHandle pool;
+    std::uint32_t slot = 0;
     bool rendering = false;
 };
 
@@ -41,7 +45,7 @@ class NullDevice final : public Device {
 public:
     /// rhi outlives this. The device has a graphics queue and then the queues
     /// asked for, which run nothing.
-    NullDevice(NullInstance& rhi, const DeviceQueues& queues);
+    NullDevice(NullInstance& rhi, const DeviceDesc& desc);
     ~NullDevice() override;
     NullDevice(const NullDevice&) = delete;
     NullDevice& operator=(const NullDevice&) = delete;
@@ -55,7 +59,7 @@ public:
     [[nodiscard]] core::Result<void> destroySwapchain(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<void> acquire(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<void> present(SwapchainHandle swapchain) override;
-    [[nodiscard]] core::Result<CommandPoolHandle> createCommandPool(std::uint32_t queue) override;
+    [[nodiscard]] core::Result<CommandPoolHandle> createCommandPool(const CommandPoolDesc& desc) override;
     [[nodiscard]] core::Result<void> resetCommandPool(CommandPoolHandle commandPool) override;
     [[nodiscard]] core::Result<void> destroyCommandPool(CommandPoolHandle commandPool) override;
     [[nodiscard]] core::Result<CommandListHandle> beginCommands(CommandPoolHandle commandPool) override;
@@ -74,18 +78,19 @@ private:
     [[nodiscard]] core::Result<NullCommandList*> commandListFor(CommandListHandle commandList);
     [[nodiscard]] core::Result<void> checkToken(Token token) const;
     [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
+    // Ends a list that was submitted or discarded: its slot waits for the
+    // pool's reset.
+    void end(CommandListHandle commandList);
 
     NullInstance* instance_;
-    // The same room and limits as every backend's device; command lists are
-    // made on the frame path, so their pool is made at its limit.
-    static constexpr std::uint32_t kSwapchainCapacity = 4;
-    static constexpr std::uint32_t kSwapchainLimit = 256;
-    static constexpr std::uint32_t kCommandPoolCapacity = 4;
-    static constexpr std::uint32_t kCommandPoolLimit = 256;
-    static constexpr std::uint32_t kCommandListLimit = 4096;
+    DeviceDesc desc_;
+    // Every pool is made at its maximum, so nothing after creation allocates.
     core::Pool<NullSwapchain, Swapchain> swapchains_;
     core::Pool<NullCommandPool, CommandPool> commandPools_;
     core::Pool<NullCommandList, CommandList> commandLists_;
+    // A slot for each list the device holds, and the list recording in it.
+    core::SlotChains slots_;
+    std::vector<CommandListHandle> live_;
     std::vector<QueueType> queues_;
     std::vector<std::uint64_t> submitted_;
 };

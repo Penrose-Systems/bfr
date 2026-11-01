@@ -8,7 +8,7 @@
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/swapchain.h"
 #include "core/fixed_vector.h"
-#include "core/inline_vector.h"
+#include "core/slot_chains.h"
 #include "vulkan/queue_families.h"
 #include "vulkan/vulkan_swapchain.h"
 
@@ -26,47 +26,43 @@ namespace bfr::rhi::vulkan {
 
 class VulkanInstance;
 
-// Room for a few windows' swapchains and command pools before their pools
-// grow, and limits no tool should reach. Command lists are made on the frame
-// path, so their pool, and every array a frame fills, is made at its limit.
-inline constexpr std::uint32_t kSwapchainCapacity = 4;
-inline constexpr std::uint32_t kSwapchainLimit = 256;
-inline constexpr std::uint32_t kCommandPoolCapacity = 4;
-inline constexpr std::uint32_t kCommandPoolLimit = 256;
-inline constexpr std::uint32_t kCommandListLimit = 4096;
-
-/// A command pool and the buffers allocated from it: how many are handed out
-/// since the last reset, the lists still recording from it, and the timeline
-/// value its last submit signals. Destroying it frees its buffers.
-class VulkanCommandPool {
-public:
-    VulkanCommandPool(VkDevice device, const VolkDeviceTable& table, VkCommandPool pool, std::uint32_t queue);
-    ~VulkanCommandPool();
-    VulkanCommandPool(const VulkanCommandPool&) = delete;
-    VulkanCommandPool& operator=(const VulkanCommandPool&) = delete;
-    VulkanCommandPool(VulkanCommandPool&&) = delete;
-    VulkanCommandPool& operator=(VulkanCommandPool&&) = delete;
-
-    /// Gives up the VkCommandPool, which the caller then owns.
-    [[nodiscard]] VkCommandPool release();
-
-    VkCommandPool pool;
-    std::uint32_t queue;
-    core::FixedVector<VkCommandBuffer> buffers{kCommandListLimit};
-    std::uint32_t used = 0;
-    core::FixedVector<CommandListHandle> recording{kCommandListLimit};
+/// A command pool: its VkCommandPool, the queue it records for, its chain of
+/// list slots, each holding a buffer made with the pool, the next slot
+/// beginCommands hands out, how many lists it handed out still record, and
+/// the timeline value its last submit signals. Plain data: the device
+/// destroys the VkCommandPool, once the GPU is done with it.
+struct VulkanCommandPool {
+    VkCommandPool pool = VK_NULL_HANDLE;
+    std::uint32_t queue = 0;
+    std::uint32_t first = core::SlotChains::kEnd;
+    std::uint32_t next = core::SlotChains::kEnd;
+    std::uint32_t recording = 0;
     std::uint64_t lastSubmit = 0;
+};
 
-private:
-    VkDevice device_;
-    const VolkDeviceTable* table_;
+/// A list slot: the buffer its pool made in it, and the list recording on it.
+struct VulkanListSlot {
+    VkCommandBuffer buffer = VK_NULL_HANDLE;
+    CommandListHandle live;
+};
+
+/// A destroyed pool the GPU may still run lists from, and the timeline value
+/// that frees it.
+struct VulkanRetiredPool {
+    VkCommandPool pool = VK_NULL_HANDLE;
+    std::uint32_t first = core::SlotChains::kEnd;
+    std::uint64_t value = 0;
 };
 
 /// One of the device's queues: its VkQueue and family, the timeline each
 /// submit signals the next value of, the value last submitted, the arrays a
 /// submit is built in, and the pools destroyed while the GPU may still run
-/// their lists, each with the value that frees it. Used by one thread at a
-/// time under lock, which present shares; submitted is read from any thread.
+/// their lists. Used by one thread at a time under lock, which present
+/// shares; submitted is read from any thread.
+///
+/// Why the arrays: submit runs every frame, so it fills these in place rather
+/// than building vectors. They are made with the queue, when the device is
+/// created, sized from the device's maximums, so no submit touches the heap.
 struct VulkanQueue {
     QueueType type = QueueType::Graphics;
     std::uint32_t family = 0;
@@ -79,19 +75,20 @@ struct VulkanQueue {
     core::FixedVector<VulkanSwapchain*> chains;
     // The largest value a submit waits for on each queue, by queue index.
     std::vector<std::uint64_t> waitValues;
-    std::vector<std::pair<VkCommandPool, std::uint64_t>> retired;
+    core::FixedVector<VulkanRetiredPool> retired;
     std::atomic<std::uint32_t> retiredCount{0};
     std::mutex lock;
 };
 
-/// Commands recorded on one buffer: the pool it came from, the swapchain
-/// rendering is open on, and every swapchain rendered to, whose images the
-/// submit waits for and signals.
+/// Commands recorded on one buffer: the pool and slot it came from, the
+/// swapchain rendering is open on, and the chain of render slots naming every
+/// swapchain rendered to, whose images the submit waits for and signals.
 struct VulkanCommandList {
     VkCommandBuffer buffer = VK_NULL_HANDLE;
     CommandPoolHandle pool;
+    std::uint32_t slot = 0;
     std::optional<SwapchainHandle> rendering;
-    core::InlineVector<SwapchainHandle, kSwapchainLimit> rendered;
+    std::uint32_t rendered = core::SlotChains::kEnd;
 };
 
 class VulkanDevice final : public Device {
@@ -99,16 +96,17 @@ public:
     /// A device over device, which rhi made on adapter with one graphics queue
     /// on families.graphics, queues.compute on families.compute and queues.copy
     /// on families.transfer; rhi outlives it. hasBudget says whether adapter
-    /// has VK_EXT_memory_budget. Fails with RhiDeviceFailed, destroying device,
-    /// when the API refuses a queue's timeline.
+    /// has VK_EXT_memory_budget; desc's maximums size everything the device
+    /// holds. Fails with RhiDeviceFailed, destroying device, when the API
+    /// refuses a queue's timeline.
     [[nodiscard]] static core::Result<std::unique_ptr<VulkanDevice>> create(VulkanInstance& rhi,
                                                                             VkPhysicalDevice adapter, VkDevice device,
                                                                             const QueueFamilies& families,
-                                                                            const DeviceQueues& queues, bool hasBudget);
+                                                                            const DeviceDesc& desc, bool hasBudget);
 
     /// For create.
     VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const QueueFamilies& families,
-                 bool hasBudget);
+                 const DeviceDesc& desc, bool hasBudget);
     ~VulkanDevice() override;
     VulkanDevice(const VulkanDevice&) = delete;
     VulkanDevice& operator=(const VulkanDevice&) = delete;
@@ -122,7 +120,7 @@ public:
     [[nodiscard]] core::Result<void> destroySwapchain(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<void> acquire(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<void> present(SwapchainHandle swapchain) override;
-    [[nodiscard]] core::Result<CommandPoolHandle> createCommandPool(std::uint32_t queue) override;
+    [[nodiscard]] core::Result<CommandPoolHandle> createCommandPool(const CommandPoolDesc& desc) override;
     [[nodiscard]] core::Result<void> resetCommandPool(CommandPoolHandle commandPool) override;
     [[nodiscard]] core::Result<void> destroyCommandPool(CommandPoolHandle commandPool) override;
     [[nodiscard]] core::Result<CommandListHandle> beginCommands(CommandPoolHandle commandPool) override;
@@ -136,11 +134,16 @@ public:
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
-    [[nodiscard]] core::Result<void> openQueues(const QueueFamilies& families, const DeviceQueues& queues);
+    [[nodiscard]] core::Result<void> openQueues(const QueueFamilies& families, const DeviceDesc& desc);
     [[nodiscard]] core::Result<std::uint64_t> completedValue(const VulkanQueue& queue) const;
     [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
     [[nodiscard]] core::Result<void> checkToken(Token token) const;
+    // Destroys the retired pools the GPU is done with and frees their slots.
+    // Runs on the frame path: it calls the API and moves indices, nothing more.
     void collectPools(VulkanQueue& queue);
+    // Ends a list that was submitted or discarded; its slot waits for the
+    // pool's reset.
+    void end(CommandListHandle commandList);
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
     [[nodiscard]] core::Result<VulkanSwapchain*> swapchainFor(SwapchainHandle swapchain);
@@ -156,12 +159,23 @@ private:
     std::uint32_t graphicsFamily_;
     std::uint32_t presentFamily_;
     bool hasBudget_;
+    DeviceDesc desc_;
     std::vector<std::unique_ptr<VulkanQueue>> queues_;
     VkQueue presentQueue_ = VK_NULL_HANDLE;
     VulkanQueue* presentOn_ = nullptr;
     core::Pool<VulkanSwapchain, Swapchain> swapchains_;
     core::Pool<VulkanCommandPool, CommandPool> commandPools_;
     core::Pool<VulkanCommandList, CommandList> commandLists_;
+    // A slot for each list the device holds, and one for each swapchain a
+    // recording list renders to, so beginCommands and beginRendering only
+    // take indices. Both are made here, at the device's maximum of lists.
+    core::SlotChains listSlots_;
+    std::vector<VulkanListSlot> lists_;
+    core::SlotChains renderSlots_;
+    std::vector<SwapchainHandle> renders_;
+    // Live pools and destroyed ones not yet collected, held to
+    // desc_.maxCommandPools so every queue's retired array has room.
+    std::atomic<std::uint32_t> poolsHeld_{0};
 };
 
 } // namespace bfr::rhi::vulkan

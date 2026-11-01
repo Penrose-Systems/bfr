@@ -1,6 +1,10 @@
 # The C API definitions keep the snake_case parameter names bfr.h gives them;
 # the helpers beside them stay camelBack.
+# bfr_submit reads the caller's handle and token arrays in place as the rhi
+# types, whose layouts c_api.cpp asserts are the C ones, so a submit copies
+# nothing; that read is a reinterpret_cast, so the check is off here.
 InheritParentConfig: true
+Checks: '-cppcoreguidelines-pro-type-reinterpret-cast'
 CheckOptions:
     - key: readability-identifier-naming.ParameterIgnoredRegexp
       value: '^[a-z]+(_[a-z]+)+$'

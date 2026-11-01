@@ -10,6 +10,7 @@
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "null/null_device.h"
+#include "rhi/device_limits.h"
 
 #include <array>
 #include <cstddef>
@@ -94,12 +95,15 @@ core::Result<void> NullInstance::checkAdapter(std::size_t adapter) const {
 
 core::Result<std::unique_ptr<Device>> NullInstance::createDevice(std::size_t adapter,
                                                                  const core::window::NativeWindow& /*presentTo*/,
-                                                                 const DeviceQueues& queues) {
+                                                                 const DeviceDesc& desc) {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkLimits(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // The null device presents to every window, by presenting nowhere.
-    return std::make_unique<NullDevice>(*this, queues);
+    return std::make_unique<NullDevice>(*this, desc);
 }
 
 core::Result<FormatCaps> NullInstance::formatCaps(std::size_t adapter, Format format) const {

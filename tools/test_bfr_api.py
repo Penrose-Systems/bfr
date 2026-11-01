@@ -69,10 +69,40 @@ def broken(change) -> dict:
     return spec
 
 
+def with_default(spec: dict) -> dict:
+    """spec with a constant, and a buffer_desc member that defaults to it."""
+    spec["constants"] = {"default_alignment": {"value": 16, "doc": "What an alignment of 0 means."}}
+    spec["structs"]["buffer_desc"]["members"].append(
+        {"name": "alignment", "type": "u32", "default": "default_alignment", "doc": "Bytes to align to."}
+    )
+    return spec
+
+
 class CheckTests(unittest.TestCase):
     def assert_rejected(self, change, message: str) -> None:
         with self.assertRaisesRegex(SpecError, message):
             Api(broken(change))
+
+    def test_a_default_must_name_a_constant(self) -> None:
+        def change(spec: dict) -> None:
+            with_default(spec)
+            spec["structs"]["buffer_desc"]["members"][-1]["default"] = "nothing"
+
+        self.assert_rejected(change, "default must name a constant")
+
+    def test_a_default_must_be_on_an_unsigned_integer(self) -> None:
+        def change(spec: dict) -> None:
+            with_default(spec)
+            spec["structs"]["buffer_desc"]["members"][-1]["type"] = "f32"
+
+        self.assert_rejected(change, "default must name a constant")
+
+    def test_a_constant_must_be_a_non_negative_integer(self) -> None:
+        def change(spec: dict) -> None:
+            with_default(spec)
+            spec["constants"]["default_alignment"]["value"] = -1
+
+        self.assert_rejected(change, "non-negative integer")
 
     def test_an_enum_value_without_an_explicit_value_is_rejected(self) -> None:
         self.assert_rejected(lambda s: s["enums"]["result"]["values"].update(other=None), "explicit value")

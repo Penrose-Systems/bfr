@@ -13,6 +13,7 @@
 #include "d3d12/d3d12_formats.h"
 #include "d3d12/d3d12_result.h"
 #include "d3d12/d3d12_swapchain.h"
+#include "rhi/device_limits.h"
 
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
@@ -228,8 +229,11 @@ core::Result<void> D3D12Instance::checkAdapter(std::size_t adapter) const {
 
 core::Result<std::unique_ptr<Device>> D3D12Instance::createDevice(std::size_t adapter,
                                                                   const core::window::NativeWindow& presentTo,
-                                                                  const DeviceQueues& queues) {
+                                                                  const DeviceDesc& desc) {
     if (auto checked = checkAdapter(adapter); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkLimits(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     // Every device presents to a Win32 window or to none, so a window only has
@@ -241,7 +245,7 @@ core::Result<std::unique_ptr<Device>> D3D12Instance::createDevice(std::size_t ad
     }
     const D3D12Adapter& native = native_[adapter];
     const Caps& caps = adapters_[adapter].caps;
-    return D3D12Device::create(*this, native.device, native.adapter, caps.memory.heaps.size(), queues);
+    return D3D12Device::create(*this, native.device, native.adapter, caps.memory.heaps.size(), desc);
 }
 
 core::Result<FormatCaps> D3D12Instance::formatCaps(std::size_t adapter, Format format) const {

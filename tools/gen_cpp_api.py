@@ -50,6 +50,8 @@ BUILTINS = {
     "opaque": "void*",
     "string": "std::string_view",
 }
+# The types whose C++ and C forms are the same bits. bool is not: C's is 32 bits.
+MIRRORED = {"u8", "u32", "u64", "i32", "f32", "size"}
 
 
 def pascal(name: str) -> str:
@@ -99,7 +101,9 @@ class Plan:
         self.api = api
         if "result" not in api.enums or "get_last_error" not in api.functions:
             raise SpecError("the C++ wrapper needs the result enum and get_last_error")
-        self.destroys = {entry["destroy"] for entry in [*api.objects.values(), *api.handles.values()]}
+        # A plain handle's destroy is a call like any other, on its parent.
+        self.destroys = {entry["destroy"] for name, entry in [*api.objects.items(), *api.handles.items()]
+                         if not api.is_plain(name)}
         self.methods: dict[str, list[Method]] = {name: [] for name in [*api.objects, *api.handles, FREE]}
         for name, function in api.functions.items():
             if name in self.destroys or name == "get_last_error":
@@ -137,7 +141,7 @@ class Plan:
         if function.get("returns") not in (None, "result"):
             raise SpecError(f"{name}: the C++ generator does not yet handle a function returning {function['returns']}")
         handle = types[1] if len(types) > 1 and params[1].get("pointer") is None else None
-        if handle in api.handles and api.handles[handle]["parent"] == types[0]:
+        if handle in api.handles and api.handles[handle]["parent"] == types[0] and not api.is_plain(handle):
             method = Method(name, handle, self._method_name(name, types[0], handle), self_params=params[:2])
         elif types and types[0] in api.objects:
             method = Method(name, types[0], self._method_name(name, types[0], None), self_params=params[:1])
@@ -221,8 +225,9 @@ class Plan:
             if member.get("array"):
                 if member.get("pointer") != "in" or name in self.out_structs:
                     raise SpecError(f"{where}: the C++ generator handles an array member only passed in")
-                if kind == "string" or kind in api.callbacks or kind in api.objects:
-                    raise SpecError(f"{where}: the C++ generator does not yet handle an array of {kind}")
+                if not self.is_mirror(kind):
+                    raise SpecError(f"{where}: an array member must be of a plain handle or a struct of numbers, "
+                                    "which pass to C without a copy")
                 continue
             if member.get("pointer"):
                 raise SpecError(f"{where}: the C++ generator does not yet handle pointer members")
@@ -253,6 +258,18 @@ class Plan:
         """Whether the struct's C form is built from handle classes, so its
         conversion must follow their definitions."""
         return any(m["type"] in self.api.handles for m in self.arrays_of(struct))
+
+    def is_mirror(self, kind: str) -> bool:
+        """Whether kind's C++ type is laid out exactly as its C type, so an
+        array of it passes to C as it is: a plain handle, or a struct of only
+        numbers. The header asserts the layout."""
+        api = self.api
+        if kind in api.handles:
+            return api.is_plain(kind)
+        struct = api.structs.get(kind)
+        return struct is not None and not struct.get("extensible") and not struct.get("extends") and all(
+            m["type"] in MIRRORED and not m.get("fixed") and not m.get("array") and not m.get("pointer")
+            for m in struct["members"])
 
     def counts_of(self, struct: str) -> set[str]:
         """The members that only count an array member."""
@@ -371,6 +388,7 @@ class Renderer:
             "#include <span>",
             "#include <string>",
             "#include <string_view>",
+            "#include <type_traits>",
             "#include <utility>",
             "#include <vector>",
             "",
@@ -467,8 +485,15 @@ class Renderer:
             if member.get("array"):
                 self.emit(f"    std::span<const {cpp_type(api, member['type'])}> {camel(member['name'])}{{}};")
                 continue
+            if member.get("default"):
+                self.emit(f"    {member_type(api, member, out)} {camel(member['name'])} = {macro(member['default'])};")
+                continue
             self.emit(f"    {member_type(api, member, out)} {camel(member['name'])}{{}};")
         self.emit("};")
+        if any(self.plan.is_mirror(m["type"]) and m["type"] == name for s in api.structs.values()
+               for m in s["members"] if m.get("array")):
+            self.mirror_asserts(pascal(name), c_name(name),
+                                [(camel(m["name"]), m["name"]) for m in struct["members"]])
 
     def detail(self) -> None:
         api = self.api
@@ -519,17 +544,13 @@ class Renderer:
             fields.append(f".chain = {{.next = nullptr, .type = {macro('struct_type', name)}}}")
         params += [f"{pascal(c['type'])}* {camel(c['name'])}" for c in callbacks]
         arrays = self.plan.arrays_of(name)
-        params += [f"detail::SmallBuffer<{c_type(a['type'])}>& {camel(a['name'])}" for a in arrays]
         counts = {a["array"]: a for a in arrays}
         for member in struct["members"]:
             if member.get("array"):
-                element = member["type"]
-                if element in api.handles:
-                    convert = "element.get()"
-                else:
-                    convert = to_c(api, element, "element")
-                fields.append(f".{member['name']} = {camel(member['name'])}.fill(value.{camel(member['name'])}, "
-                              f"[](const {cpp_type(api, element)}& element) {{ return {convert}; }})")
+                # Laid out as the C type, as asserted where it is defined, so
+                # the caller's array is passed as it is: no copy, no allocation.
+                fields.append(f".{member['name']} = reinterpret_cast<const {c_type(member['type'])}*>("
+                              f"value.{camel(member['name'])}.data())")
             elif member["name"] in counts:
                 array = counts[member["name"]]
                 fields.append(f".{member['name']} = static_cast<{c_type(member['type'])}>("
@@ -619,8 +640,40 @@ class Renderer:
              f"{member}({camel(name)}), keepAlive_({keep_alive})"),
         )
 
+    def plain_class(self, name: str) -> None:
+        api = self.api
+        cls, member = pascal(name), f"{camel(name)}_"
+        creators = sorted({owner for owner, methods in self.plan.methods.items() for m in methods
+                           if m.returned is not None and m.returned["type"] == name})
+        destroy = pascal(api.handles[name]["parent"]) + "::" + camel(api.handles[name]["destroy"])
+        self.emit("")
+        self.emit(*doc(api.handles[name]["doc"] + f" A plain value, copied freely: its pool owns what it names, "
+                       f"and {destroy} discards it."))
+        self.emit(f"class {cls} {{", "public:", f"    {cls}() = default;", "",
+                  "    /// The C value, for calls bfr.hpp does not wrap.",
+                  f"    [[nodiscard]] {c_name(name)} get() const {{ return {member}; }}",
+                  f"    [[nodiscard]] explicit operator bool() const {{ return {member}.bits != 0; }}",
+                  f"    constexpr bool operator==(const {cls}&) const = default;",
+                  "", "private:", f"    explicit {cls}({c_name(name)} {camel(name)}) : {member}({camel(name)}) {{}}")
+        for creator in creators:
+            self.emit(f"    friend class {pascal(creator)};")
+        self.emit("", f"    {c_name(name)} {member}{{}};", "};")
+        self.mirror_asserts(cls, c_name(name), [(member, "bits")])
+
+    def mirror_asserts(self, cls: str, c_type_name: str, members: list[tuple[str, str]]) -> None:
+        """Asserts cls is laid out exactly as c_type_name, so an array of one
+        is read as an array of the other."""
+        self.emit(f"static_assert(sizeof({cls}) == sizeof({c_type_name}) && alignof({cls}) == alignof({c_type_name}) &&",
+                  f"              std::is_standard_layout_v<{cls}> && std::is_trivially_copyable_v<{cls}>);")
+        if all(not cpp.endswith("_") for cpp, _ in members):
+            for cpp, c in members:
+                self.emit(f"static_assert(offsetof({cls}, {cpp}) == offsetof({c_type_name}, {c}));")
+
     def handle_class(self, name: str) -> None:
         handle = self.api.handles[name]
+        if self.api.is_plain(name):
+            self.plain_class(name)
+            return
         parent = handle["parent"]
         parent_member, member = f"{camel(parent)}_", f"{camel(name)}_"
         destroy = f"{c_name(handle['destroy'])}({parent_member}, {member})"
@@ -652,11 +705,15 @@ class Renderer:
                     template = ["template <class... Extensions>",
                                 f"    requires(detail::kExtends<Extensions, {pascal(kind)}> && ...)"]
                     params.append("const Extensions&... extensions")
+            elif api.is_plain(kind):
+                params.append(f"{pascal(kind)} {camel(param['name'])}")
             elif kind in api.handles:
                 params.append(f"const {pascal(kind)}& {camel(param['name'])}")
             else:
                 params.append(f"{cpp_type(api, kind)} {camel(param['name'])}")
-        if method.returned is None:
+        if self.api.functions[method.function].get("returns") is None:
+            returns = "void"
+        elif method.returned is None:
             returns = "Expected<void>"
         elif method.count is not None:
             returns = f"Expected<std::vector<{pascal(method.returned['type'])}>>"
@@ -678,7 +735,8 @@ class Renderer:
         self.emit(*(f"    {line}" for line in template))
         qualifiers = "static " if method.static else ""
         const = self.const(method)
-        self.emit(f"    [[nodiscard]] {qualifiers}{returns} {method.name}({params}){const};")
+        nodiscard = "" if returns == "void" else "[[nodiscard]] "
+        self.emit(f"    {nodiscard}{qualifiers}{returns} {method.name}({params}){const};")
 
     def method_definition(self, owner: str, method: Method) -> None:
         api = self.api
@@ -722,10 +780,6 @@ class Renderer:
                                     "of a static create")
                 callback_state = state
             c_value = f"c{pascal(param['name'])}"
-            for array in self.plan.arrays_of(kind):
-                buffer = f"{c_value}{pascal(array['name'])}"
-                self.emit(f"    detail::SmallBuffer<{c_type(array['type'])}> {buffer};")
-                extra.append(buffer)
             self.emit(f"    const {c_name(kind)} {c_value} = detail::toC({', '.join([name, *extra])});")
             args.append(f"&{c_value}")
         if callback_state is not None:
@@ -745,11 +799,18 @@ class Renderer:
                 args_in_order = self.ordered_args(method, args, {returned["name"]: f"&{name}"})
             else:
                 args_in_order = self.ordered_args(method, args, {})
-            self.emit(*failure_check(f"{call}({', '.join(args_in_order)})"))
-            if returned is None:
+            if function.get("returns") is None:
+                self.emit(f"    {call}({', '.join(args_in_order)});")
+            else:
+                self.emit(*failure_check(f"{call}({', '.join(args_in_order)})"))
+            if function.get("returns") is None:
+                pass
+            elif returned is None:
                 self.emit("    return {};")
             elif kind in api.objects:
                 self.emit(f"    return {pascal(kind)}{{{name}, {keep_alive}}};")
+            elif api.is_plain(kind):
+                self.emit(f"    return {pascal(kind)}{{{name}}};")
             elif kind in api.handles:
                 self.emit(f"    return {pascal(kind)}{{{camel(api.handles[kind]['parent'])}_, {name}, keepAlive_}};")
             elif kind in api.structs:

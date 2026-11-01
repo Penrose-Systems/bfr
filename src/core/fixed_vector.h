@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace bfr::core {
@@ -27,6 +28,11 @@ public:
 
     /// Removes every value equal to value.
     void erase(const T& value) { std::erase(values_, value); }
+    /// Removes every value pred is true for, keeping the storage.
+    template <class Pred>
+    void eraseIf(Pred pred) {
+        std::erase_if(values_, std::move(pred));
+    }
     void clear() { values_.clear(); }
 
     [[nodiscard]] std::size_t size() const { return values_.size(); }

@@ -8,7 +8,7 @@
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/swapchain.h"
 #include "core/fixed_vector.h"
-#include "core/inline_vector.h"
+#include "core/slot_chains.h"
 #include "d3d12/d3d12_swapchain.h"
 
 #include <d3d12.h>
@@ -29,37 +29,44 @@ namespace bfr::rhi::d3d12 {
 
 class D3D12Instance;
 
-// Room for a few windows' swapchains and command pools before their pools
-// grow, and limits no tool should reach. Command lists are made on the frame
-// path, so their pool, and every array a frame fills, is made at its limit.
-inline constexpr std::uint32_t kSwapchainCapacity = 4;
-inline constexpr std::uint32_t kSwapchainLimit = 256;
-inline constexpr std::uint32_t kCommandPoolCapacity = 4;
-inline constexpr std::uint32_t kCommandPoolLimit = 256;
-inline constexpr std::uint32_t kCommandListLimit = 4096;
-
-/// A command pool: an allocator and a list for each list recording at once,
-/// since D3D12 lets one list record from an allocator at a time; how many are
-/// handed out since the last reset, the lists still recording, and the fence
-/// value its last submit signals.
+/// A command pool: the queue it records for, its chain of list slots, each
+/// holding an allocator and a list made with the pool, the next slot
+/// beginCommands hands out, how many lists it handed out still record, and
+/// the fence value its last submit signals. Plain data: the device releases
+/// the slots' objects once the GPU is done with them.
 struct D3D12CommandPool {
-    struct Entry {
-        Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
-        Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> list;
-    };
     std::uint32_t queue = 0;
-    core::FixedVector<Entry> entries{kCommandListLimit};
-    std::uint32_t used = 0;
-    core::FixedVector<CommandListHandle> recording{kCommandListLimit};
+    std::uint32_t first = core::SlotChains::kEnd;
+    std::uint32_t next = core::SlotChains::kEnd;
+    std::uint32_t recording = 0;
     std::uint64_t lastSubmit = 0;
+};
+
+/// A list slot: an allocator and a list for it, since D3D12 lets one list
+/// record from an allocator at a time, and the list recording on it.
+struct D3D12ListSlot {
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> list;
+    CommandListHandle live;
+};
+
+/// A destroyed pool the GPU may still run lists from, and the fence value
+/// that frees it.
+struct D3D12RetiredPool {
+    std::uint32_t first = core::SlotChains::kEnd;
+    std::uint64_t value = 0;
 };
 
 /// One of the device's queues: its ID3D12CommandQueue and the list type it
 /// takes, the fence each submit signals the next value of with the event waits
 /// use, the value last submitted, the arrays a submit is built in, and the
-/// allocators of pools destroyed while the GPU may still run their lists, each
-/// with the value that frees them. Used by one thread at a time under lock,
-/// which present shares; submitted is read from any thread.
+/// pools destroyed while the GPU may still run their lists. Used by one thread
+/// at a time under lock, which present shares; submitted is read from any
+/// thread.
+///
+/// Why the arrays: submit runs every frame, so it fills these in place rather
+/// than building vectors. They are made with the queue, when the device is
+/// created, sized from the device's maximums, so no submit touches the heap.
 struct D3D12Queue {
     QueueType type = QueueType::Graphics;
     D3D12_COMMAND_LIST_TYPE listType = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -67,22 +74,24 @@ struct D3D12Queue {
     Microsoft::WRL::ComPtr<ID3D12Fence> fence;
     HANDLE event = nullptr;
     std::atomic<std::uint64_t> submitted{0};
-    core::FixedVector<ID3D12CommandList*> lists{kCommandListLimit};
-    core::FixedVector<D3D12Swapchain*> chains{kSwapchainLimit};
-    std::vector<std::pair<core::FixedVector<D3D12CommandPool::Entry>, std::uint64_t>> retired;
+    core::FixedVector<ID3D12CommandList*> lists;
+    core::FixedVector<D3D12Swapchain*> chains;
+    core::FixedVector<D3D12RetiredPool> retired;
     std::atomic<std::uint32_t> retiredCount{0};
     std::mutex lock;
 };
 
-/// Commands recorded on one list: the pool it came from, the swapchain
-/// rendering is open on, what becomes of its image when rendering ends, and
-/// every swapchain rendered to, whose images the submit marks as sent.
+/// Commands recorded on one list: the list, which its slot owns, the pool and
+/// slot it came from, the swapchain rendering is open on, what becomes of its
+/// image when rendering ends, and the chain of render slots naming every
+/// swapchain rendered to, whose images the submit marks as sent.
 struct D3D12CommandList {
-    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> list;
+    ID3D12GraphicsCommandList* list = nullptr;
     CommandPoolHandle pool;
+    std::uint32_t slot = 0;
     std::optional<SwapchainHandle> rendering;
     StoreOp storeOp = StoreOp::Store;
-    core::InlineVector<SwapchainHandle, kSwapchainLimit> rendered;
+    std::uint32_t rendered = core::SlotChains::kEnd;
 };
 
 class D3D12Device final : public Device {
@@ -92,11 +101,11 @@ public:
     /// RhiDeviceFailed when D3D12 gives no queue or fence.
     [[nodiscard]] static core::Result<std::unique_ptr<D3D12Device>> create(
         D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device, Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter,
-        std::size_t heapCount, const DeviceQueues& queues);
+        std::size_t heapCount, const DeviceDesc& desc);
 
     /// For create.
     D3D12Device(D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device,
-                Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter, std::size_t heapCount);
+                Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter, std::size_t heapCount, const DeviceDesc& desc);
     ~D3D12Device() override;
     D3D12Device(const D3D12Device&) = delete;
     D3D12Device& operator=(const D3D12Device&) = delete;
@@ -110,7 +119,7 @@ public:
     [[nodiscard]] core::Result<void> destroySwapchain(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<void> acquire(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<void> present(SwapchainHandle swapchain) override;
-    [[nodiscard]] core::Result<CommandPoolHandle> createCommandPool(std::uint32_t queue) override;
+    [[nodiscard]] core::Result<CommandPoolHandle> createCommandPool(const CommandPoolDesc& desc) override;
     [[nodiscard]] core::Result<void> resetCommandPool(CommandPoolHandle commandPool) override;
     [[nodiscard]] core::Result<void> destroyCommandPool(CommandPoolHandle commandPool) override;
     [[nodiscard]] core::Result<CommandListHandle> beginCommands(CommandPoolHandle commandPool) override;
@@ -124,11 +133,19 @@ public:
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
-    [[nodiscard]] core::Result<void> open(const DeviceQueues& queues);
+    [[nodiscard]] core::Result<void> open(const DeviceDesc& desc);
     [[nodiscard]] core::Result<void> waitFor(D3D12Queue& queue, std::uint64_t value);
     [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
     [[nodiscard]] core::Result<void> checkToken(Token token) const;
+    // Releases the retired pools the GPU is done with and frees their slots.
+    // Runs on the frame path: it releases API objects and moves indices,
+    // nothing more.
     void collectPools(D3D12Queue& queue);
+    // Releases the objects in a chain of list slots and gives the chain back.
+    void releaseSlots(std::uint32_t first);
+    // Ends a list that was submitted or discarded; its slot waits for the
+    // pool's reset.
+    void end(CommandListHandle commandList);
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
     void discard(ID3D12GraphicsCommandList* list);
@@ -140,10 +157,21 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
     Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter_;
     std::size_t heapCount_;
+    DeviceDesc desc_;
     std::vector<std::unique_ptr<D3D12Queue>> queues_;
     core::Pool<D3D12Swapchain, Swapchain> swapchains_;
     core::Pool<D3D12CommandPool, CommandPool> commandPools_;
     core::Pool<D3D12CommandList, CommandList> commandLists_;
+    // A slot for each list the device holds, and one for each swapchain a
+    // recording list renders to, so beginCommands and beginRendering only
+    // take indices. Both are made here, at the device's maximum of lists.
+    core::SlotChains listSlots_;
+    std::vector<D3D12ListSlot> lists_;
+    core::SlotChains renderSlots_;
+    std::vector<SwapchainHandle> renders_;
+    // Live pools and destroyed ones not yet collected, held to
+    // desc_.maxCommandPools so every queue's retired array has room.
+    std::atomic<std::uint32_t> poolsHeld_{0};
 };
 
 } // namespace bfr::rhi::d3d12

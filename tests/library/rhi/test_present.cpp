@@ -57,7 +57,7 @@ struct HeadlessSwapchain {
         const auto images = device->resizeSwapchain(swapchain, kWidth, kHeight);
         INFO(failureOf(images));
         REQUIRE(images.has_value());
-        const auto madePool = device->createCommandPool(0);
+        const auto madePool = device->createCommandPool({.queue = 0, .listCount = kPoolLists});
         INFO(failureOf(madePool));
         REQUIRE(madePool.has_value());
         pool = *madePool;
@@ -203,7 +203,7 @@ TEST_CASE("Device resets a command pool only once its lists are submitted and ru
         CHECK(device.poll(*token).value_or(false));
         CHECK(device.resetCommandPool(headless.pool).has_value());
 
-        const auto other = device.createCommandPool(0);
+        const auto other = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(other.has_value());
         const auto orphan = device.beginCommands(*other);
         REQUIRE(orphan.has_value());
@@ -225,7 +225,8 @@ TEST_CASE("Device refuses a pool, a submit and a token on a queue it does not ha
         Device& device = *headless.device;
         constexpr std::uint32_t kMissing = 7;
 
-        CHECK(device.createCommandPool(kMissing).error().code == bfr::core::ErrorCode::RhiInvalidCall);
+        CHECK(device.createCommandPool({.queue = kMissing, .listCount = kPoolLists}).error().code ==
+              bfr::core::ErrorCode::RhiInvalidCall);
         CHECK(device.submit({.queue = kMissing, .commandLists = {}, .waits = {}}).error().code ==
               bfr::core::ErrorCode::RhiInvalidCall);
         CHECK(device.wait(Token{.queue = kMissing, .value = 0}).error().code == bfr::core::ErrorCode::RhiInvalidCall);
@@ -284,12 +285,13 @@ TEST_CASE("Device runs a compute queue beside graphics when the adapter has one"
         REQUIRE(opened.has_value());
         Device& device = **opened;
         if (computeQueues == 0) {
-            CHECK(device.createCommandPool(1).error().code == bfr::core::ErrorCode::RhiInvalidCall);
+            CHECK(device.createCommandPool({.queue = 1, .listCount = kPoolLists}).error().code ==
+                  bfr::core::ErrorCode::RhiInvalidCall);
             return;
         }
 
-        const auto graphicsPool = device.createCommandPool(0);
-        const auto computePool = device.createCommandPool(1);
+        const auto graphicsPool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        const auto computePool = device.createCommandPool({.queue = 1, .listCount = kPoolLists});
         REQUIRE(graphicsPool.has_value());
         REQUIRE(computePool.has_value());
         const auto graphics = device.beginCommands(*graphicsPool);
@@ -322,6 +324,65 @@ TEST_CASE("Device runs a compute queue beside graphics when the adapter has one"
         CHECK(device.resetCommandPool(*graphicsPool).has_value());
         CHECK(device.destroyCommandPool(*computePool).has_value());
         CHECK(device.destroyCommandPool(*graphicsPool).has_value());
+        CHECK(device.destroySwapchain(*swapchain).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device holds the lists, pools and swapchains it was opened for, and no more", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        auto created = createInstance(recordingInto(backend, messages), kValidation);
+        REQUIRE(created.has_value());
+        Instance& rhi = **created;
+        const std::size_t adapter = headlessAdapter(rhi);
+        constexpr std::uint32_t kLists = 2;
+        CHECK(rhi.createDevice(adapter, kHeadless, {.maxCommandLists = 0}).error().code ==
+              bfr::core::ErrorCode::RhiInvalidCall);
+        auto opened = rhi.createDevice(adapter, kHeadless,
+                                       {.maxCommandLists = kLists, .maxCommandPools = 1, .maxSwapchains = 1});
+        INFO(failureOf(opened));
+        REQUIRE(opened.has_value());
+        Device& device = **opened;
+
+        const auto swapchain = device.createSwapchain(kHeadless, swapchainDesc(rhi));
+        REQUIRE(swapchain.has_value());
+        CHECK(device.createSwapchain(kHeadless, swapchainDesc(rhi)).error().code ==
+              bfr::core::ErrorCode::RhiLimitReached);
+
+        CHECK(device.createCommandPool({.queue = 0, .listCount = kLists + 1}).error().code ==
+              bfr::core::ErrorCode::RhiLimitReached);
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kLists});
+        INFO(failureOf(pool));
+        REQUIRE(pool.has_value());
+        CHECK(device.createCommandPool({.queue = 0, .listCount = 0}).error().code ==
+              bfr::core::ErrorCode::RhiLimitReached);
+
+        // The pool hands out each of its lists once until it is reset.
+        const auto first = device.beginCommands(*pool);
+        const auto second = device.beginCommands(*pool);
+        REQUIRE(first.has_value());
+        REQUIRE(second.has_value());
+        CHECK(device.beginCommands(*pool).error().code == bfr::core::ErrorCode::RhiLimitReached);
+        const std::array lists{*first, *second};
+        const auto token = device.submit({.queue = 0, .commandLists = lists, .waits = {}});
+        INFO(failureOf(token));
+        REQUIRE(token.has_value());
+        REQUIRE(device.wait(*token).has_value());
+        REQUIRE(device.resetCommandPool(*pool).has_value());
+        const auto again = device.beginCommands(*pool);
+        REQUIRE(again.has_value());
+        CHECK(*again != *first);
+        CHECK(*again != *second);
+        REQUIRE(device.destroyCommandList(*again).has_value());
+
+        // A destroyed pool's lists and room come back for the next pool.
+        REQUIRE(device.destroyCommandPool(*pool).has_value());
+        const auto next = device.createCommandPool({.queue = 0, .listCount = kLists});
+        INFO(failureOf(next));
+        REQUIRE(next.has_value());
+        CHECK(device.destroyCommandPool(*next).has_value());
         CHECK(device.destroySwapchain(*swapchain).has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());

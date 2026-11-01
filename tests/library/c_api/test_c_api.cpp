@@ -1,3 +1,4 @@
+#include "allocation/allocation_counter.h"
 #include "bfr/bfr.h"
 #include "bfr/core/log.h"
 
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <format>
 #include <memory>
@@ -65,13 +67,13 @@ auto eachBackend() {
     return Catch::Generators::from_range(backends);
 }
 
-// An instance on backend with validation on, recording its messages, destroyed
-// at scope end.
+// An instance on backend, with validation on unless told otherwise, recording
+// its messages, destroyed at scope end.
 struct Instance {
-    Instance(bfr_backend backend, std::vector<std::string>& messages) {
+    Instance(bfr_backend backend, std::vector<std::string>& messages, bfr_bool validation = BFR_TRUE) {
         const bfr_instance_desc desc{.next = nullptr,
                                      .backend = backend,
-                                     .validation = BFR_TRUE,
+                                     .validation = validation,
                                      .message_callback = record,
                                      .min_severity = BFR_MESSAGE_SEVERITY_WARNING,
                                      .message_user_data = &messages};
@@ -94,8 +96,14 @@ struct HeadlessDevice {
         std::uint32_t count = 0;
         REQUIRE(bfr_get_adapters(instance, &count, nullptr) == BFR_RESULT_SUCCESS);
         for (std::uint32_t adapter = 0; adapter < count && device == nullptr; ++adapter) {
-            const bfr_device_desc desc{
-                .next = nullptr, .adapter = adapter, .window = kHeadless, .compute_queues = 0, .copy_queues = 0};
+            const bfr_device_desc desc{.next = nullptr,
+                                       .adapter = adapter,
+                                       .window = kHeadless,
+                                       .compute_queues = 0,
+                                       .copy_queues = 0,
+                                       .max_command_lists = 0,
+                                       .max_command_pools = 0,
+                                       .max_swapchains = 0};
             const bfr_result result = bfr_create_device(instance, &desc, &device);
             INFO(lastError());
             REQUIRE((result == BFR_RESULT_SUCCESS || result == BFR_RESULT_ERROR_PRESENT_UNSUPPORTED));
@@ -779,5 +787,94 @@ TEST_CASE("C API gives a device's memory budget or says the driver can't", "[c_a
     const bool unsupported = result == BFR_RESULT_ERROR_UNSUPPORTED;
     CHECK((result == BFR_RESULT_SUCCESS || unsupported));
     CHECK((unsupported || budget.heap_count == caps.memory.heap_count));
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+// Validation stays off: its layer allocates through the operator new this
+// program counts.
+TEST_CASE("C API allocates and frees nothing on the heap frame after frame", "[c_api][gpu]") {
+    if (!bfr::test::AllocationCounter::counts()) {
+        SKIP("a sanitizer replaces operator new, so allocations are not counted");
+    }
+    const bfr_backend backend = GENERATE(eachBackend());
+    // More than the 16 a submit once held in place before it went to the heap;
+    // the first two render to the swapchain.
+    constexpr std::uint32_t kLists = 20;
+    constexpr std::uint32_t kRendering = 2;
+    constexpr int kFrames = 8;
+    constexpr bfr_rendering_desc kClear{.next = nullptr,
+                                        .load_op = BFR_LOAD_OP_CLEAR,
+                                        .store_op = BFR_STORE_OP_STORE,
+                                        .clear_color = {0, 0, 0, 1}};
+    std::vector<std::string> messages;
+    {
+        const Instance instance{backend, messages, BFR_FALSE};
+        const HeadlessDevice device{instance.instance};
+        const bfr_swapchain_desc swapchainDesc{.next = nullptr,
+                                               .window = kHeadless,
+                                               .image_count = device.images,
+                                               .present_mode = BFR_PRESENT_MODE_FIFO,
+                                               .format = {},
+                                               .color_space = {},
+                                               .alpha_mode = {}};
+        bfr_swapchain swapchain{};
+        REQUIRE(bfr_create_swapchain(device.device, &swapchainDesc, &swapchain) == BFR_RESULT_SUCCESS);
+        bfr_swapchain_images images{};
+        REQUIRE(bfr_resize_swapchain(device.device, swapchain, kWidth, kHeight, &images) == BFR_RESULT_SUCCESS);
+        const bfr_command_pool_desc poolDesc{.next = nullptr, .queue = 0, .list_count = kLists};
+        bfr_command_pool pool{};
+        REQUIRE(bfr_create_command_pool(device.device, &poolDesc, &pool) == BFR_RESULT_SUCCESS);
+
+        // The first call that failed, kept without a string so keeping it allocates nothing.
+        const char* failed = nullptr;
+        std::size_t allocations = 0;
+        std::size_t frees = 0;
+        {
+            const bfr::test::AllocationCounter counter;
+            const auto check = [&failed](const char* call, bfr_result result) {
+                if (result < 0 && failed == nullptr) {
+                    failed = call;
+                }
+                return result >= 0;
+            };
+            bfr_token last{};
+            for (int frame = 0; frame < kFrames && failed == nullptr; ++frame) {
+                check("bfr_wait", bfr_wait(device.device, &last));
+                check("bfr_reset_command_pool", bfr_reset_command_pool(device.device, pool));
+                check("bfr_acquire", bfr_acquire(device.device, swapchain));
+                std::array<bfr_command_list, kLists> lists{};
+                for (std::uint32_t index = 0; index < kLists; ++index) {
+                    check("bfr_begin_commands", bfr_begin_commands(device.device, pool, &lists.at(index)));
+                    if (index < kRendering) {
+                        check("bfr_begin_rendering",
+                              bfr_begin_rendering(device.device, lists.at(index), swapchain, &kClear));
+                        check("bfr_end_rendering", bfr_end_rendering(device.device, lists.at(index)));
+                    }
+                }
+                const bfr_submit_desc submit{.next = nullptr,
+                                             .queue = 0,
+                                             .command_lists = lists.data(),
+                                             .command_list_count = kLists,
+                                             .waits = &last,
+                                             .wait_count = frame == 0 ? 0U : 1U};
+                bfr_token token{};
+                if (check("bfr_submit", bfr_submit(device.device, &submit, &token))) {
+                    last = token;
+                }
+                check("bfr_present", bfr_present(device.device, swapchain));
+                bfr_bool complete = BFR_FALSE;
+                check("bfr_poll", bfr_poll(device.device, &last, &complete));
+            }
+            check("bfr_wait", bfr_wait(device.device, &last));
+            allocations = counter.allocations();
+            frees = counter.frees();
+        }
+        INFO("first failure: " << (failed == nullptr ? "none" : failed) << " " << lastError());
+        CHECK(failed == nullptr);
+        CHECK(allocations == 0);
+        CHECK(frees == 0);
+        bfr_destroy_command_pool(device.device, pool);
+        bfr_destroy_swapchain(device.device, swapchain);
+    }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

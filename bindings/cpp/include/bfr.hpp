@@ -18,6 +18,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -707,6 +708,17 @@ struct DeviceDesc {
     std::uint32_t computeQueues{};
     /// Copy queues to open; 0 is none. Fails with error_unsupported when the adapter has fewer.
     std::uint32_t copyQueues{};
+    /// Command lists the device holds at once, across all its pools, and the most swapchains its
+    /// recording lists render to at once; past it, calls fail with error_limit_reached. Room for
+    /// them is made with the device, so recording and submitting never allocate. A bfr_submit of
+    /// more lists than this fails with error_invalid_argument.
+    std::uint32_t maxCommandLists = BFR_DEFAULT_MAX_COMMAND_LISTS;
+    /// Command pools the device holds at once; past it, bfr_create_command_pool fails with
+    /// error_limit_reached.
+    std::uint32_t maxCommandPools = BFR_DEFAULT_MAX_COMMAND_POOLS;
+    /// Swapchains the device holds at once; past it, bfr_create_swapchain fails with
+    /// error_limit_reached.
+    std::uint32_t maxSwapchains = BFR_DEFAULT_MAX_SWAPCHAINS;
 };
 
 /// How to create a swapchain.
@@ -756,6 +768,9 @@ struct RenderingDesc {
 struct CommandPoolDesc {
     /// The queue its lists record for; 0 is the graphics queue.
     std::uint32_t queue{};
+    /// Lists the pool holds, made with it from the device's max_command_lists. bfr_begin_commands
+    /// hands them out in turn until bfr_reset_command_pool gives them back.
+    std::uint32_t listCount{};
 };
 
 /// A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was
@@ -765,6 +780,10 @@ struct Token {
     std::uint32_t queue{};
     std::uint64_t value{};
 };
+static_assert(sizeof(Token) == sizeof(bfr_token) && alignof(Token) == alignof(bfr_token) &&
+              std::is_standard_layout_v<Token> && std::is_trivially_copyable_v<Token>);
+static_assert(offsetof(Token, queue) == offsetof(bfr_token, queue));
+static_assert(offsetof(Token, value) == offsetof(bfr_token, value));
 
 /// What to send to a queue.
 struct SubmitDesc {
@@ -1195,6 +1214,9 @@ inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
         .window = toC(value.window),
         .compute_queues = value.computeQueues,
         .copy_queues = value.copyQueues,
+        .max_command_lists = value.maxCommandLists,
+        .max_command_pools = value.maxCommandPools,
+        .max_swapchains = value.maxSwapchains,
     };
 }
 
@@ -1220,7 +1242,7 @@ inline bfr_rendering_desc toC(const RenderingDesc& value, const bfr_chain* next)
 }
 
 inline bfr_command_pool_desc toC(const CommandPoolDesc& value, const bfr_chain* next) {
-    return {.next = next, .queue = value.queue};
+    return {.next = next, .queue = value.queue, .list_count = value.listCount};
 }
 
 inline bfr_token toC(const Token& value) {
@@ -1630,8 +1652,17 @@ public:
     /// has no images until the first bfr_resize_swapchain gives it a size.
     [[nodiscard]] Expected<Swapchain> createSwapchain(const SwapchainDesc& desc) const;
 
-    /// Creates a command pool, as desc says.
+    /// Creates a command pool, as desc says, with its lists made. Fails with error_limit_reached at
+    /// the device's max_command_pools, or when fewer than desc.list_count of its max_command_lists
+    /// are free.
     [[nodiscard]] Expected<CommandPool> createCommandPool(const CommandPoolDesc& desc) const;
+
+    /// Begins rendering to the image bfr_acquire took from swapchain, as desc says. Ends with
+    /// bfr_end_rendering.
+    [[nodiscard]] Expected<void> beginRendering(CommandList commandList, const Swapchain& swapchain, const RenderingDesc& desc) const;
+
+    /// Ends the rendering bfr_begin_rendering began; the image is then ready to present.
+    [[nodiscard]] Expected<void> endRendering(CommandList commandList) const;
 
     /// Sends recorded command lists to a queue, which runs them after what it was sent before and
     /// after the GPU passes the waits, and writes the token their completion signals. The command
@@ -1644,6 +1675,10 @@ public:
 
     /// Writes whether the GPU has passed token, without blocking.
     [[nodiscard]] Expected<bool> poll(const Token& token) const;
+
+    /// Discards a command list that was not submitted; the pool hands it out again after its next
+    /// reset. A handle that is already submitted or destroyed does nothing.
+    void destroyCommandList(CommandList commandList) const;
 
 private:
     Device(bfr_device* device, detail::KeepAlive keepAlive) : device_(device), keepAlive_(detail::share(device, &bfr_destroy_device, std::move(keepAlive))) {}
@@ -1742,7 +1777,8 @@ public:
     /// has not passed the token of the pool's last submit; bfr_wait on it first.
     [[nodiscard]] Expected<void> reset();
 
-    /// Starts recording a command list from the pool.
+    /// Starts recording the pool's next list. Fails with error_limit_reached when every list it
+    /// holds was handed out since it was last reset.
     [[nodiscard]] Expected<CommandList> beginCommands();
 
 private:
@@ -1757,57 +1793,35 @@ private:
 
 /// Commands recorded for the GPU, from bfr_begin_commands until bfr_submit sends them to the queue
 /// of the pool they came from. Calls on one command list must not overlap; the caller synchronizes
-/// them.
+/// them. A plain value, copied freely: its pool owns what it names, and Device::destroyCommandList
+/// discards it.
 class CommandList {
 public:
-    /// Owns nothing, as a moved-from CommandList does.
     CommandList() = default;
-    /// Discards a command list that was not submitted. A handle that is already submitted or
-    /// destroyed does nothing.
-    ~CommandList() { bfr_destroy_command_list(device_, commandList_); }
-    CommandList(const CommandList&) = delete;
-    CommandList& operator=(const CommandList&) = delete;
-    CommandList(CommandList&& other) noexcept : device_(std::exchange(other.device_, nullptr)), commandList_(std::exchange(other.commandList_, {})), keepAlive_(std::move(other.keepAlive_)) {}
-    CommandList& operator=(CommandList&& other) noexcept {
-        if (this != &other) {
-            bfr_destroy_command_list(device_, commandList_);
-            device_ = std::exchange(other.device_, nullptr);
-            commandList_ = std::exchange(other.commandList_, {});
-            keepAlive_ = std::move(other.keepAlive_);
-        }
-        return *this;
-    }
 
-    /// The C value, for calls bfr.hpp does not wrap; this still owns it.
+    /// The C value, for calls bfr.hpp does not wrap.
     [[nodiscard]] bfr_command_list get() const { return commandList_; }
     [[nodiscard]] explicit operator bool() const { return commandList_.bits != 0; }
-
-    /// Begins rendering to the image bfr_acquire took from swapchain, as desc says. Ends with
-    /// bfr_end_rendering.
-    [[nodiscard]] Expected<void> beginRendering(const Swapchain& swapchain, const RenderingDesc& desc);
-
-    /// Ends the rendering bfr_begin_rendering began; the image is then ready to present.
-    [[nodiscard]] Expected<void> endRendering();
+    constexpr bool operator==(const CommandList&) const = default;
 
 private:
-    CommandList(bfr_device* device, bfr_command_list commandList, detail::KeepAlive keepAlive) : device_(device), commandList_(commandList), keepAlive_(std::move(keepAlive)) {}
+    explicit CommandList(bfr_command_list commandList) : commandList_(commandList) {}
     friend class CommandPool;
 
-    bfr_device* device_ = nullptr;
     bfr_command_list commandList_{};
-    // Keeps the Device that made this alive until this is destroyed.
-    detail::KeepAlive keepAlive_;
 };
+static_assert(sizeof(CommandList) == sizeof(bfr_command_list) && alignof(CommandList) == alignof(bfr_command_list) &&
+              std::is_standard_layout_v<CommandList> && std::is_trivially_copyable_v<CommandList>);
 
 namespace detail {
 
-inline bfr_submit_desc toC(const SubmitDesc& value, const bfr_chain* next, detail::SmallBuffer<bfr_command_list>& commandLists, detail::SmallBuffer<bfr_token>& waits) {
+inline bfr_submit_desc toC(const SubmitDesc& value, const bfr_chain* next) {
     return {
         .next = next,
         .queue = value.queue,
-        .command_lists = commandLists.fill(value.commandLists, [](const CommandList& element) { return element.get(); }),
+        .command_lists = reinterpret_cast<const bfr_command_list*>(value.commandLists.data()),
         .command_list_count = static_cast<uint32_t>(value.commandLists.size()),
-        .waits = waits.fill(value.waits, [](const Token& element) { return toC(element); }),
+        .waits = reinterpret_cast<const bfr_token*>(value.waits.data()),
         .wait_count = static_cast<uint32_t>(value.waits.size()),
     };
 }
@@ -1955,10 +1969,23 @@ inline Expected<CommandPool> Device::createCommandPool(const CommandPoolDesc& de
     return CommandPool{device_, commandPool, keepAlive_};
 }
 
+inline Expected<void> Device::beginRendering(CommandList commandList, const Swapchain& swapchain, const RenderingDesc& desc) const {
+    const bfr_rendering_desc cDesc = detail::toC(desc, nullptr);
+    if (const bfr_result result = bfr_begin_rendering(device_, commandList.get(), swapchain.get(), &cDesc); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::endRendering(CommandList commandList) const {
+    if (const bfr_result result = bfr_end_rendering(device_, commandList.get()); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
 inline Expected<Token> Device::submit(const SubmitDesc& desc) const {
-    detail::SmallBuffer<bfr_command_list> cDescCommandLists;
-    detail::SmallBuffer<bfr_token> cDescWaits;
-    const bfr_submit_desc cDesc = detail::toC(desc, nullptr, cDescCommandLists, cDescWaits);
+    const bfr_submit_desc cDesc = detail::toC(desc, nullptr);
     bfr_token token{};
     if (const bfr_result result = bfr_submit(device_, &cDesc, &token); result < 0) {
         return std::unexpected(detail::failure(result));
@@ -1981,6 +2008,10 @@ inline Expected<bool> Device::poll(const Token& token) const {
         return std::unexpected(detail::failure(result));
     }
     return complete != BFR_FALSE;
+}
+
+inline void Device::destroyCommandList(CommandList commandList) const {
+    bfr_destroy_command_list(device_, commandList.get());
 }
 
 inline Expected<SwapchainImages> Swapchain::resize(std::uint32_t width, std::uint32_t height) {
@@ -2017,22 +2048,7 @@ inline Expected<CommandList> CommandPool::beginCommands() {
     if (const bfr_result result = bfr_begin_commands(device_, commandPool_, &commandList); result < 0) {
         return std::unexpected(detail::failure(result));
     }
-    return CommandList{device_, commandList, keepAlive_};
-}
-
-inline Expected<void> CommandList::beginRendering(const Swapchain& swapchain, const RenderingDesc& desc) {
-    const bfr_rendering_desc cDesc = detail::toC(desc, nullptr);
-    if (const bfr_result result = bfr_begin_rendering(device_, commandList_, swapchain.get(), &cDesc); result < 0) {
-        return std::unexpected(detail::failure(result));
-    }
-    return {};
-}
-
-inline Expected<void> CommandList::endRendering() {
-    if (const bfr_result result = bfr_end_rendering(device_, commandList_); result < 0) {
-        return std::unexpected(detail::failure(result));
-    }
-    return {};
+    return CommandList{commandList};
 }
 
 /// Lists the backends this build has, in bfr_backend order.
