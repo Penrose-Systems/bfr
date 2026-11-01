@@ -3,12 +3,16 @@
 #include "bfr/core/error.h"
 #include "bfr/core/pool.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/buffer.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/swapchain.h"
 #include "core/slot_chains.h"
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace bfr::rhi::null {
@@ -39,6 +43,16 @@ struct NullCommandList {
     CommandPoolHandle pool;
     std::uint32_t slot = 0;
     bool rendering = false;
+    // The serial of the submit this list is gathered into, so a list named
+    // twice in one submit is caught in a single pass.
+    std::uint64_t queued = 0;
+};
+
+/// A buffer the GPU never sees: where it lives, and the bytes the CPU maps
+/// when it is upload or readback memory.
+struct NullBuffer {
+    BufferMemory memory = BufferMemory::Device;
+    std::vector<std::byte> bytes;
 };
 
 class NullDevice final : public Device {
@@ -70,12 +84,16 @@ public:
     [[nodiscard]] core::Result<void> wait(Token token) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
+    [[nodiscard]] core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
     [[nodiscard]] core::Result<NullSwapchain*> swapchainFor(SwapchainHandle swapchain);
     [[nodiscard]] core::Result<NullCommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<NullCommandList*> commandListFor(CommandListHandle commandList);
+    [[nodiscard]] core::Result<NullBuffer*> bufferFor(BufferHandle buffer);
     [[nodiscard]] core::Result<void> checkToken(Token token) const;
     [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
     // Ends a list that was submitted or discarded: its slot waits for the
@@ -91,8 +109,15 @@ private:
     // A slot for each list the device holds, and the list recording in it.
     core::SlotChains slots_;
     std::vector<CommandListHandle> live_;
+    // Buffers are made off the frame path, so their pool may grow.
+    static constexpr std::uint32_t kBufferCapacity = 256;
+    static constexpr std::uint32_t kBufferLimit = 1U << 20U;
+    core::Pool<NullBuffer, Buffer> buffers_;
     std::vector<QueueType> queues_;
     std::vector<std::uint64_t> submitted_;
+    // Counts submits on every queue, so each has a serial of its own, even one
+    // that fails, which the token value a queue hands out does not give.
+    std::atomic<std::uint64_t> submitSerial_{0};
 };
 
 } // namespace bfr::rhi::null

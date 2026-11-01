@@ -3,22 +3,28 @@
 #include "bfr/core/error.h"
 #include "bfr/core/pool.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/buffer.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/swapchain.h"
 #include "core/fixed_vector.h"
 #include "core/slot_chains.h"
+#include "core/submissions.h"
 #include "vulkan/queue_families.h"
+#include "vulkan/vma.h"
+#include "vulkan/vulkan_buffer.h"
 #include "vulkan/vulkan_swapchain.h"
 
 #include <volk.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -89,6 +95,9 @@ struct VulkanCommandList {
     std::uint32_t slot = 0;
     std::optional<SwapchainHandle> rendering;
     std::uint32_t rendered = core::SlotChains::kEnd;
+    // The serial of the submit this list is gathered into, so a list named
+    // twice in one submit is caught in a single pass.
+    std::uint64_t queued = 0;
 };
 
 class VulkanDevice final : public Device {
@@ -104,7 +113,7 @@ public:
                                                                             const QueueFamilies& families,
                                                                             const DeviceDesc& desc, bool hasBudget);
 
-    /// For create.
+    /// For create, with the number of queues create opens.
     VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const QueueFamilies& families,
                  const DeviceDesc& desc, bool hasBudget);
     ~VulkanDevice() override;
@@ -131,6 +140,9 @@ public:
     [[nodiscard]] core::Result<void> wait(Token token) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
+    [[nodiscard]] core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
@@ -144,11 +156,16 @@ private:
     // Ends a list that was submitted or discarded; its slot waits for the
     // pool's reset.
     void end(CommandListHandle commandList);
+    // Destroys the buffers retired under submission IDs every queue has passed.
+    void collectBuffers();
+    // Warns of each kind of object the caller left when the device goes.
+    void warnLeftovers() const;
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
     [[nodiscard]] core::Result<VulkanSwapchain*> swapchainFor(SwapchainHandle swapchain);
     [[nodiscard]] core::Result<VulkanCommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<VulkanCommandList*> commandListFor(CommandListHandle commandList);
+    [[nodiscard]] core::Result<VulkanBuffer*> bufferFor(BufferHandle buffer);
 
     VulkanInstance* instance_;
     VkPhysicalDevice adapter_;
@@ -176,6 +193,17 @@ private:
     // Live pools and destroyed ones not yet collected, held to
     // desc_.maxCommandPools so every queue's retired array has room.
     std::atomic<std::uint32_t> poolsHeld_{0};
+    // Counts submits on every queue, so each has a serial of its own, even one
+    // that fails, which the token value a queue hands out does not give.
+    std::atomic<std::uint64_t> submitSerial_{0};
+
+    // Every queue family the device's queues are on, which each buffer is shared by.
+    std::vector<std::uint32_t> families_;
+    core::Submissions submissions_;
+    VmaAllocator allocator_ = VK_NULL_HANDLE;
+    static constexpr std::uint32_t kBufferCapacity = 256;
+    static constexpr std::uint32_t kBufferLimit = 1U << 20U;
+    core::Pool<VulkanBuffer, Buffer> buffers_;
 };
 
 } // namespace bfr::rhi::vulkan

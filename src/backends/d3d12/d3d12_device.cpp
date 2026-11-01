@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -63,6 +64,11 @@ core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rh
     if (auto opened = made->open(desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
+    auto allocator = createAllocator(made->device_.Get(), made->adapter_.Get());
+    if (!allocator) {
+        return std::unexpected(std::move(allocator.error()));
+    }
+    made->allocator_ = std::move(*allocator);
     return made;
 }
 
@@ -79,7 +85,9 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       listSlots_(desc.maxCommandLists),
       lists_(desc.maxCommandLists),
       renderSlots_(desc.maxCommandLists),
-      renders_(desc.maxCommandLists) {}
+      renders_(desc.maxCommandLists),
+      submissions_(1 + desc.compute + desc.copy),
+      buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
 core::Result<void> D3D12Device::open(const DeviceDesc& desc) {
     const auto open = [this, &desc](QueueType type, D3D12_COMMAND_LIST_TYPE listType) -> core::Result<void> {
@@ -130,8 +138,9 @@ D3D12Device::~D3D12Device() {
     // A failed wait leaves nothing to do but release, and no result to report
     // it through, so it is sent as an error whatever BFR_LOGGING says.
     if (auto idle = waitIdle(); !idle) {
-        instance_->logger().send(core::Severity::Error,
-                                 std::format("{}; destroying the device anyway", idle.error().message.view()));
+        core::Message message;
+        message.format("{}; destroying the device anyway", idle.error().message.view());
+        instance_->logger().send(core::Severity::Error, message.view());
     }
     if (swapchains_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} swapchains were left when the device went", swapchains_.size());
@@ -144,7 +153,13 @@ D3D12Device::~D3D12Device() {
     commandLists_.forEach([this](D3D12CommandList& list) { discard(list.list); });
     commandLists_.clear();
     commandPools_.clear();
-    // The slots' vector releases every allocator and list as it goes.
+    if (buffers_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} buffers were left when the device went", buffers_.size());
+    }
+    // Every buffer gives its memory back before the allocator goes.
+    buffers_.clear();
+    allocator_.Reset();
+    // The slots' vector releases every command allocator and list as it goes.
     for (const auto& queue : queues_) {
         if (queue->event != nullptr) {
             CloseHandle(queue->event);
@@ -156,7 +171,7 @@ core::Result<void> D3D12Device::waitFor(D3D12Queue& queue, std::uint64_t value) 
     if (queue.fence->GetCompletedValue() >= value) {
         return {};
     }
-    const std::scoped_lock lock{queue.lock};
+    const std::scoped_lock lock{queue.waitLock};
     if (const HRESULT result = queue.fence->SetEventOnCompletion(value, queue.event); FAILED(result)) {
         return deviceFailed("ID3D12Fence::SetEventOnCompletion", result);
     }
@@ -407,22 +422,25 @@ core::Result<void> D3D12Device::destroyCommandPool(CommandPoolHandle commandPool
     if (!pool) {
         return std::unexpected(std::move(pool.error()));
     }
-    for (std::uint32_t slot = (*pool)->first; slot != core::SlotChains::kEnd; slot = listSlots_.next(slot)) {
+    const D3D12CommandPool gone = **pool;
+    for (std::uint32_t slot = gone.first; slot != core::SlotChains::kEnd; slot = listSlots_.next(slot)) {
         if (const D3D12CommandList* list = commandLists_.find(lists_[slot].live); list != nullptr) {
             discard(list->list);
             renderSlots_.give(list->rendered);
         }
         commandLists_.erase(std::exchange(lists_[slot].live, {}));
     }
-    D3D12Queue& queue = *queues_[(*pool)->queue];
+    // Out of the table before its room comes back, so a createCommandPool
+    // that finds the room finds a free entry too.
+    commandPools_.erase(commandPool);
+    D3D12Queue& queue = *queues_[gone.queue];
     {
         const std::scoped_lock lock{queue.lock};
         // poolsHeld_ counts this pool until it is collected, so there is room.
-        std::ignore = queue.retired.push({.first = (*pool)->first, .value = (*pool)->lastSubmit});
+        std::ignore = queue.retired.push({.first = gone.first, .value = gone.lastSubmit});
         queue.retiredCount.store(static_cast<std::uint32_t>(queue.retired.size()), std::memory_order_release);
         collectPools(queue);
     }
-    commandPools_.erase(commandPool);
     return {};
 }
 
@@ -553,11 +571,18 @@ core::Result<Token> D3D12Device::submit(const SubmitDesc& desc) {
     const std::scoped_lock lock{queue.lock};
     queue.lists.clear();
     queue.chains.clear();
+    // Each submit has a serial of its own, so a list named twice is caught
+    // in this one pass, without searching what was gathered so far.
+    const std::uint64_t serial = submitSerial_.fetch_add(1, std::memory_order_relaxed) + 1;
     for (const CommandListHandle commandList : desc.commandLists) {
         auto list = commandListFor(commandList);
         if (!list) {
             return std::unexpected(std::move(list.error()));
         }
+        if ((*list)->queued == serial) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "the list is named twice in the submit");
+        }
+        (*list)->queued = serial;
         if ((*list)->rendering.has_value()) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is still open; end it first");
         }
@@ -588,25 +613,40 @@ core::Result<Token> D3D12Device::submit(const SubmitDesc& desc) {
         }
     }
     const std::uint64_t value = queue.submitted.load(std::memory_order_relaxed) + 1;
+    // The lists are spent whether or not the submit goes through. Their pools
+    // remember it only once the GPU is sent it: a value no submit signals
+    // would otherwise keep the pool from ever being reset or freed. A Signal
+    // that fails after ExecuteCommandLists is the device removed, when
+    // nothing runs.
+    const auto finish = [this, &desc, value](bool sent) {
+        for (const CommandListHandle commandList : desc.commandLists) {
+            const D3D12CommandList* list = commandLists_.find(commandList);
+            if (list == nullptr) {
+                continue;
+            }
+            if (D3D12CommandPool* pool = commandPools_.find(list->pool); sent && pool != nullptr) {
+                pool->lastSubmit = value;
+            }
+            end(commandList);
+        }
+    };
     core::Result<void> closed;
     for (const CommandListHandle commandList : desc.commandLists) {
-        D3D12CommandList* list = commandLists_.find(commandList);
+        const D3D12CommandList* list = commandLists_.find(commandList);
         if (list == nullptr) {
             continue;
-        }
-        if (D3D12CommandPool* pool = commandPools_.find(list->pool); pool != nullptr) {
-            pool->lastSubmit = value;
         }
         if (const HRESULT result = list->list->Close(); FAILED(result) && closed) {
             closed = deviceFailed("ID3D12GraphicsCommandList::Close", result);
         }
-        end(commandList);
     }
     if (!closed) {
+        finish(false);
         return std::unexpected(std::move(closed.error()));
     }
     for (const Token wait : desc.waits) {
         if (const HRESULT result = queue.queue->Wait(queues_[wait.queue]->fence.Get(), wait.value); FAILED(result)) {
+            finish(false);
             return std::unexpected(deviceFailed("ID3D12CommandQueue::Wait", result).error());
         }
     }
@@ -614,9 +654,11 @@ core::Result<Token> D3D12Device::submit(const SubmitDesc& desc) {
         queue.queue->ExecuteCommandLists(static_cast<UINT>(queue.lists.size()), queue.lists.data());
     }
     if (const HRESULT result = queue.queue->Signal(queue.fence.Get(), value); FAILED(result)) {
+        finish(false);
         return std::unexpected(deviceFailed("ID3D12CommandQueue::Signal", result).error());
     }
     queue.submitted.store(value, std::memory_order_release);
+    finish(true);
     for (D3D12Swapchain* chain : queue.chains) {
         chain->setSubmitted();
     }

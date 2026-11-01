@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <expected>
 #include <format>
@@ -87,7 +88,9 @@ MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Devi
       listSlots_(desc.maxCommandLists),
       lists_(desc.maxCommandLists),
       renderSlots_(desc.maxCommandLists),
-      renders_(desc.maxCommandLists) {}
+      renders_(desc.maxCommandLists),
+      submissions_(1 + desc.compute + desc.copy),
+      buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
 core::Result<void> MetalDevice::open(const DeviceDesc& desc) {
     const AutoreleasePool pool;
@@ -132,8 +135,9 @@ MetalDevice::~MetalDevice() {
     // A failed wait leaves nothing to do but release, and no result to report
     // it through, so it is sent as an error whatever BFR_LOGGING says.
     if (auto idle = waitIdle(); !idle) {
-        instance_->logger().send(core::Severity::Error,
-                                 std::format("{}; destroying the device anyway", idle.error().message.view()));
+        core::Message message;
+        message.format("{}; destroying the device anyway", idle.error().message.view());
+        instance_->logger().send(core::Severity::Error, message.view());
     }
     if (swapchains_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} swapchains were left when the device went", swapchains_.size());
@@ -147,6 +151,10 @@ MetalDevice::~MetalDevice() {
     commandLists_.forEach([](MetalCommandList& list) { discard(list); });
     commandLists_.clear();
     commandPools_.clear();
+    if (buffers_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} buffers were left when the device went", buffers_.size());
+    }
+    buffers_.clear();
     // The slots' vector releases every allocator and buffer as it goes.
 }
 
@@ -353,6 +361,14 @@ core::Result<CommandPoolHandle> MetalDevice::createCommandPool(const CommandPool
             return std::unexpected(deviceFailed("command buffer").error());
         }
         lists_[slot].buffer = adopt(buffer);
+        MTL4::RenderPassDescriptor* pass = MTL4::RenderPassDescriptor::alloc()->init();
+        if (pass == nullptr) {
+            release();
+            return std::unexpected(deviceFailed("render pass descriptor").error());
+        }
+        lists_[slot].pass = adopt(pass);
+        // Asked for once here, so the attachment exists before the first pass.
+        std::ignore = pass->colorAttachments()->object(0);
     }
     const CommandPoolHandle commandPool = commandPools_.emplace(
         MetalCommandPool{.queue = desc.queue, .first = *first, .next = *first, .recording = 0, .lastSubmit = 0});
@@ -395,22 +411,25 @@ core::Result<void> MetalDevice::destroyCommandPool(CommandPoolHandle commandPool
     if (!pool) {
         return std::unexpected(std::move(pool.error()));
     }
-    for (std::uint32_t slot = (*pool)->first; slot != core::SlotChains::kEnd; slot = listSlots_.next(slot)) {
+    const MetalCommandPool gone = **pool;
+    for (std::uint32_t slot = gone.first; slot != core::SlotChains::kEnd; slot = listSlots_.next(slot)) {
         if (MetalCommandList* list = commandLists_.find(lists_[slot].live); list != nullptr) {
             discard(*list);
             renderSlots_.give(list->rendered);
         }
         commandLists_.erase(std::exchange(lists_[slot].live, {}));
     }
-    MetalQueue& queue = *queues_[(*pool)->queue];
+    // Out of the table before its room comes back, so a createCommandPool
+    // that finds the room finds a free entry too.
+    commandPools_.erase(commandPool);
+    MetalQueue& queue = *queues_[gone.queue];
     {
         const std::scoped_lock lock{queue.lock};
         // poolsHeld_ counts this pool until it is collected, so there is room.
-        std::ignore = queue.retired.push({.first = (*pool)->first, .value = (*pool)->lastSubmit});
+        std::ignore = queue.retired.push({.first = gone.first, .value = gone.lastSubmit});
         queue.retiredCount.store(static_cast<std::uint32_t>(queue.retired.size()), std::memory_order_release);
         collectPools(queue);
     }
-    commandPools_.erase(commandPool);
     return {};
 }
 
@@ -489,8 +508,10 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
         renders_[*slot] = swapchain;
     }
 
+    // The slot's descriptor is refilled; the pool drains the autoreleased
+    // encoder reference, and pushing one is a pointer onto the thread's page.
     const AutoreleasePool pool;
-    const auto pass = adopt(MTL4::RenderPassDescriptor::alloc()->init());
+    MTL4::RenderPassDescriptor* pass = lists_[(*list)->slot].pass.get();
     MTL::RenderPassColorAttachmentDescriptor* color = pass->colorAttachments()->object(0);
     color->setTexture(drawable->texture());
     color->setLoadAction(loadActionFor(desc.loadOp));
@@ -498,7 +519,7 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
     color->setClearColor(
         MTL::ClearColor::Make(static_cast<double>(desc.clearColor[0]), static_cast<double>(desc.clearColor[1]),
                               static_cast<double>(desc.clearColor[2]), static_cast<double>(desc.clearColor[3])));
-    MTL4::RenderCommandEncoder* encoder = (*list)->buffer->renderCommandEncoder(pass.get());
+    MTL4::RenderCommandEncoder* encoder = (*list)->buffer->renderCommandEncoder(pass);
     if (encoder == nullptr) {
         return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no render command encoder");
     }
@@ -534,11 +555,18 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
     const std::scoped_lock lock{queue.lock};
     queue.buffers.clear();
     queue.chains.clear();
+    // Each submit has a serial of its own, so a list named twice is caught
+    // in this one pass, without searching what was gathered so far.
+    const std::uint64_t serial = submitSerial_.fetch_add(1, std::memory_order_relaxed) + 1;
     for (const CommandListHandle commandList : desc.commandLists) {
         auto list = commandListFor(commandList);
         if (!list) {
             return std::unexpected(std::move(list.error()));
         }
+        if ((*list)->queued == serial) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "the list is named twice in the submit");
+        }
+        (*list)->queued = serial;
         if ((*list)->rendering.has_value()) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is still open; end it first");
         }

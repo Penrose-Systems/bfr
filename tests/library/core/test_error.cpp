@@ -4,6 +4,7 @@
 
 #include <expected>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -90,4 +91,20 @@ TEST_CASE("Message cuts text longer than it holds and marks the cut", "[core][un
     CHECK(copied.view() == formatted.view());
     const Message exact{std::string(Message::kCapacity, 'y')};
     CHECK(exact.view() == std::string(Message::kCapacity, 'y'));
+}
+
+TEST_CASE("Message cuts text between UTF-8 characters, never inside one", "[core][unit]") {
+    using bfr::core::Message;
+    // Each character is two bytes, so a cut inside one leaves an odd prefix.
+    constexpr std::string_view kTwoBytes = "\u00e9";
+    std::string longer;
+    while (longer.size() <= Message::kCapacity) {
+        longer += kTwoBytes;
+    }
+    const Message cut{longer};
+    REQUIRE(cut.view().ends_with("..."));
+    const std::string_view kept = cut.view().substr(0, cut.view().size() - 3);
+    CHECK(kept.size() % kTwoBytes.size() == 0);
+    CHECK(cut.view().size() <= Message::kCapacity);
+    CHECK(longer.starts_with(kept));
 }

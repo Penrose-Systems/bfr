@@ -3,15 +3,19 @@
 #include "bfr/core/error.h"
 #include "bfr/core/pool.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/buffer.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/swapchain.h"
 #include "core/fixed_vector.h"
 #include "core/slot_chains.h"
+#include "core/submissions.h"
+#include "d3d12/d3d12_buffer.h"
 #include "d3d12/d3d12_swapchain.h"
 
 #include <d3d12.h>
+#include <D3D12MemAlloc.h>
 #include <dxgi1_6.h>
 #include <windows.h>
 #include <wrl/client.h>
@@ -22,6 +26,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -73,6 +78,8 @@ struct D3D12Queue {
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
     Microsoft::WRL::ComPtr<ID3D12Fence> fence;
     HANDLE event = nullptr;
+    // Waits share the event, so they take turns; lock stays free for submits.
+    std::mutex waitLock;
     std::atomic<std::uint64_t> submitted{0};
     core::FixedVector<ID3D12CommandList*> lists;
     core::FixedVector<D3D12Swapchain*> chains;
@@ -92,6 +99,9 @@ struct D3D12CommandList {
     std::optional<SwapchainHandle> rendering;
     StoreOp storeOp = StoreOp::Store;
     std::uint32_t rendered = core::SlotChains::kEnd;
+    // The serial of the submit this list is gathered into, so a list named
+    // twice in one submit is caught in a single pass.
+    std::uint64_t queued = 0;
 };
 
 class D3D12Device final : public Device {
@@ -103,7 +113,7 @@ public:
         D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device, Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter,
         std::size_t heapCount, const DeviceDesc& desc);
 
-    /// For create.
+    /// For create, with the number of queues create opens.
     D3D12Device(D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device,
                 Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter, std::size_t heapCount, const DeviceDesc& desc);
     ~D3D12Device() override;
@@ -130,6 +140,9 @@ public:
     [[nodiscard]] core::Result<void> wait(Token token) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
+    [[nodiscard]] core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
@@ -146,12 +159,15 @@ private:
     // Ends a list that was submitted or discarded; its slot waits for the
     // pool's reset.
     void end(CommandListHandle commandList);
+    // Destroys the buffers retired under submission IDs every queue has passed.
+    void collectBuffers();
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
     void discard(ID3D12GraphicsCommandList* list);
     [[nodiscard]] core::Result<D3D12Swapchain*> swapchainFor(SwapchainHandle swapchain);
     [[nodiscard]] core::Result<D3D12CommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<D3D12CommandList*> commandListFor(CommandListHandle commandList);
+    [[nodiscard]] core::Result<D3D12Buffer*> bufferFor(BufferHandle buffer);
 
     D3D12Instance* instance_;
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
@@ -172,6 +188,15 @@ private:
     // Live pools and destroyed ones not yet collected, held to
     // desc_.maxCommandPools so every queue's retired array has room.
     std::atomic<std::uint32_t> poolsHeld_{0};
+    // Counts submits on every queue, so each has a serial of its own, even one
+    // that fails, which the token value a queue hands out does not give.
+    std::atomic<std::uint64_t> submitSerial_{0};
+
+    core::Submissions submissions_;
+    Microsoft::WRL::ComPtr<D3D12MA::Allocator> allocator_;
+    static constexpr std::uint32_t kBufferCapacity = 256;
+    static constexpr std::uint32_t kBufferLimit = 1U << 20U;
+    core::Pool<D3D12Buffer, Buffer> buffers_;
 };
 
 } // namespace bfr::rhi::d3d12

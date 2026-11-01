@@ -51,8 +51,6 @@ constexpr const char* kValidationLayer = "VK_LAYER_KHRONOS_validation";
 // The oldest Vulkan an adapter may report and still be listed.
 constexpr std::uint32_t kFloorVersion = VK_API_VERSION_1_3;
 
-constexpr std::uint32_t kInstanceVersion = VK_API_VERSION_1_3;
-
 // "major.minor" of a packed Vulkan version, with ".patch" when it isn't zero.
 std::string versionName(std::uint32_t version) {
     const std::string name = std::format("{}.{}", VK_API_VERSION_MAJOR(version), VK_API_VERSION_MINOR(version));

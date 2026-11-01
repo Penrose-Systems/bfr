@@ -2,11 +2,14 @@
 
 #include "bfr/core/error.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/buffer.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/swapchain.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace bfr::rhi {
 
@@ -111,6 +114,27 @@ public:
     /// again after its next reset. A null handle does nothing. Fails with RhiInvalidHandle when the list is already
     /// gone.
     [[nodiscard]] virtual core::Result<void> destroyCommandList(CommandListHandle commandList) = 0;
+
+    /// A buffer as desc says. Cold: it frees buffers the GPU is done with,
+    /// so it is not for the frame path. Fails with RhiInvalidCall for a desc
+    /// of no bytes or no usage, RhiOutOfMemory when the API says the memory
+    /// ran out, RhiLimitReached at the device's maximum, and RhiDeviceFailed
+    /// when the API refuses the desc or gives no buffer.
+    [[nodiscard]] virtual core::Result<BufferHandle> createBuffer(const BufferDesc& desc) = 0;
+
+    /// Where the CPU reaches an upload or readback buffer, borrowed until the
+    /// buffer is destroyed. CPU writes reach the GPU, and GPU writes reach the
+    /// CPU once their token completes, without a flush. Fails with
+    /// RhiInvalidCall for device memory and RhiInvalidHandle when the buffer
+    /// is destroyed.
+    [[nodiscard]] virtual core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) = 0;
+
+    /// Destroys the buffer once the GPU has passed every submit made before
+    /// the call; the handle is invalid at once. Cold: it records the point
+    /// the buffer waits for and frees what the GPU is done with, so it is not
+    /// for the frame path. A null handle does nothing. Fails with
+    /// RhiInvalidHandle when the buffer is already destroyed.
+    [[nodiscard]] virtual core::Result<void> destroyBuffer(BufferHandle buffer) = 0;
 
     /// How much of each heap the process may use and uses now. Fails with
     /// RhiUnsupported when the driver can't say.

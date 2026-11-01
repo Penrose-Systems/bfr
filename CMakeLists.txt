@@ -97,6 +97,10 @@ add_library(bfr_objects OBJECT
     src/core/error.cpp
     src/rhi/instance.cpp)
 bfr_apply_compiler_flags(bfr_objects)
+# The C layer reads the caller's arrays in place as the layout-identical rhi
+# types, which strict aliasing would let the compiler assume never happens.
+set_source_files_properties(src/c_api/c_api.cpp PROPERTIES
+    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-fno-strict-aliasing>")
 # Private headers are named from src: "vulkan/vulkan_instance.h".
 target_include_directories(bfr_objects
     PUBLIC include
@@ -118,17 +122,20 @@ set(bfr_backend_objects "")
 if(BFR_BACKEND_VULKAN)
     find_package(volk CONFIG REQUIRED)
     find_package(VulkanUtilityLibraries CONFIG REQUIRED)
+    find_package(VulkanMemoryAllocator CONFIG REQUIRED)
     target_sources(bfr_objects PRIVATE
         src/backends/vulkan/instance_table.cpp
         src/backends/vulkan/queue_families.cpp
         src/backends/vulkan/swapchain_settings.cpp
+        src/backends/vulkan/vulkan_buffer.cpp
         src/backends/vulkan/vulkan_caps.cpp
         src/backends/vulkan/vulkan_device.cpp
         src/backends/vulkan/vulkan_loader.cpp
         src/backends/vulkan/vulkan_instance.cpp
         src/backends/vulkan/vulkan_surface.cpp
         src/backends/vulkan/vulkan_swapchain.cpp)
-    target_link_libraries(bfr_objects PRIVATE volk::volk_headers Vulkan::UtilityHeaders)
+    target_link_libraries(bfr_objects PRIVATE volk::volk_headers Vulkan::UtilityHeaders
+        GPUOpen::VulkanMemoryAllocator)
     # The window systems the Vulkan backend makes surfaces on. Only volk and
     # the surface code see them: the Xlib and Windows headers they pull in
     # define macros that would leak into the rest. volk keeps its tables the
@@ -147,13 +154,22 @@ if(BFR_BACKEND_VULKAN)
     target_compile_definitions(bfr_volk PRIVATE ${bfr_vulkan_platforms})
     set_target_properties(bfr_volk PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
     list(APPEND bfr_backend_objects bfr_volk)
+    # VMA, the allocator the Vulkan backend's buffers take memory from.
+    add_library(bfr_vma OBJECT src/backends/vulkan/vma.cpp)
+    target_include_directories(bfr_vma PRIVATE src/backends)
+    target_link_libraries(bfr_vma PRIVATE volk::volk_headers GPUOpen::VulkanMemoryAllocator)
+    set_target_properties(bfr_vma PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
+    list(APPEND bfr_backend_objects bfr_vma)
 endif()
 
 if(BFR_BACKEND_D3D12)
     if(NOT WIN32)
         message(FATAL_ERROR "The D3D12 backend builds only on Windows")
     endif()
+    # D3D12MA, the allocator the D3D12 backend's buffers take memory from.
+    find_package(D3D12MemoryAllocator CONFIG REQUIRED)
     target_sources(bfr_objects PRIVATE
+        src/backends/d3d12/d3d12_buffer.cpp
         src/backends/d3d12/d3d12_caps.cpp
         src/backends/d3d12/d3d12_device.cpp
         src/backends/d3d12/d3d12_formats.cpp
@@ -162,7 +178,7 @@ if(BFR_BACKEND_D3D12)
     # The Windows headers define macros, min and max among them, that would
     # leak into every file that includes a backend's header.
     target_compile_definitions(bfr_objects PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-    target_link_libraries(bfr_objects PRIVATE d3d12 dxgi)
+    target_link_libraries(bfr_objects PRIVATE d3d12 dxgi GPUOpen::D3D12MemoryAllocator)
 endif()
 
 if(BFR_BACKEND_METAL)
@@ -174,6 +190,7 @@ if(BFR_BACKEND_METAL)
     # BFR_METAL_CPP_INCLUDE_DIR.
     find_path(BFR_METAL_CPP_INCLUDE_DIR Metal/Metal.hpp REQUIRED)
     target_sources(bfr_objects PRIVATE
+        src/backends/metal/metal_buffer.cpp
         src/backends/metal/metal_caps.cpp
         src/backends/metal/metal_device.cpp
         src/backends/metal/metal_formats.cpp

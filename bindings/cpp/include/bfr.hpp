@@ -622,6 +622,26 @@ enum class StoreOp : std::int32_t {
     return {};
 }
 
+/// Where a buffer's memory is, and whether the CPU maps it.
+enum class BufferMemory : std::int32_t {
+    /// On or nearest the GPU; the CPU does not map it.
+    Device = BFR_BUFFER_MEMORY_DEVICE,
+    /// The CPU writes it and the GPU reads it.
+    Upload = BFR_BUFFER_MEMORY_UPLOAD,
+    /// The GPU writes it and the CPU reads it.
+    Readback = BFR_BUFFER_MEMORY_READBACK,
+};
+
+/// value's name in bfr.yaml; empty for a value BufferMemory doesn't have.
+[[nodiscard]] constexpr std::string_view name(BufferMemory value) {
+    switch (value) {
+    case BufferMemory::Device: return "device";
+    case BufferMemory::Upload: return "upload";
+    case BufferMemory::Readback: return "readback";
+    }
+    return {};
+}
+
 /// Which window system a bfr_window comes from, for the platforms that have more than one.
 enum class WindowSystem : std::int32_t {
     /// The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -668,6 +688,8 @@ class Swapchain;
 class CommandPool;
 
 class CommandList;
+
+class Buffer;
 
 /// How to create an instance.
 struct InstanceDesc {
@@ -772,6 +794,29 @@ struct CommandPoolDesc {
     /// Lists the pool holds, made with it from the device's max_command_lists. bfr_begin_commands
     /// hands them out in turn until bfr_reset_command_pool gives them back.
     std::uint32_t listCount{};
+};
+
+/// What the GPU does with a buffer. Set every use it will have.
+struct BufferUsage {
+    bool copySrc{};
+    bool copyDst{};
+    /// Shaders read it as constants.
+    bool uniform{};
+    /// Shaders read and write it.
+    bool storage{};
+    /// Indexed draws read it.
+    bool index{};
+    /// Indirect draws and dispatches read their arguments from it.
+    bool indirect{};
+};
+
+/// How to create a buffer.
+struct BufferDesc {
+    /// Bytes.
+    std::uint64_t size{};
+    /// 0 is device.
+    BufferMemory memory{};
+    BufferUsage usage{};
 };
 
 /// A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was
@@ -1246,6 +1291,26 @@ inline bfr_command_pool_desc toC(const CommandPoolDesc& value, const bfr_chain* 
     return {.next = next, .queue = value.queue, .list_count = value.listCount};
 }
 
+inline bfr_buffer_usage toC(const BufferUsage& value) {
+    return {
+        .copy_src = value.copySrc ? BFR_TRUE : BFR_FALSE,
+        .copy_dst = value.copyDst ? BFR_TRUE : BFR_FALSE,
+        .uniform = value.uniform ? BFR_TRUE : BFR_FALSE,
+        .storage = value.storage ? BFR_TRUE : BFR_FALSE,
+        .index = value.index ? BFR_TRUE : BFR_FALSE,
+        .indirect = value.indirect ? BFR_TRUE : BFR_FALSE,
+    };
+}
+
+inline bfr_buffer_desc toC(const BufferDesc& value, const bfr_chain* next) {
+    return {
+        .next = next,
+        .size = value.size,
+        .memory = static_cast<bfr_buffer_memory>(value.memory),
+        .usage = toC(value.usage),
+    };
+}
+
 inline bfr_token toC(const Token& value) {
     return {.queue = value.queue, .value = value.value};
 }
@@ -1627,8 +1692,8 @@ public:
     /// Owns nothing, as a moved-from Device does.
     Device() = default;
     /// Destroys a device once the GPU has finished with it, with every handle it still owns. Null
-    /// does nothing. A Device with CommandList or CommandPool or Swapchain objects left lives on
-    /// until the last of them is destroyed, so they may be destroyed in any order.
+    /// does nothing. A Device with Buffer or CommandList or CommandPool or Swapchain objects left
+    /// lives on until the last of them is destroyed, so they may be destroyed in any order.
     ~Device() = default;
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
@@ -1680,6 +1745,13 @@ public:
     /// Discards a command list that was not submitted; the pool hands it out again after its next
     /// reset. A handle that is already submitted or destroyed does nothing.
     void destroyCommandList(CommandList commandList) const;
+
+    /// Creates a buffer, as desc says. Not for the frame path: it frees buffers the GPU is done
+    /// with. Fails with error_invalid_argument for a desc of no bytes or no usage,
+    /// error_out_of_memory when the backend says the memory ran out, error_limit_reached at the
+    /// device's maximum of buffers, and error_device_failed when the backend refuses the desc or
+    /// gives no buffer.
+    [[nodiscard]] Expected<Buffer> createBuffer(const BufferDesc& desc) const;
 
 private:
     Device(bfr_device* device, detail::KeepAlive keepAlive) : device_(device), keepAlive_(detail::share(device, &bfr_destroy_device, std::move(keepAlive))) {}
@@ -1813,6 +1885,48 @@ private:
 };
 static_assert(sizeof(CommandList) == sizeof(bfr_command_list) && alignof(CommandList) == alignof(bfr_command_list) &&
               std::is_standard_layout_v<CommandList> && std::is_trivially_copyable_v<CommandList>);
+
+/// Memory the GPU reads and writes, as its bfr_buffer_usage says.
+class Buffer {
+public:
+    /// Owns nothing, as a moved-from Buffer does.
+    Buffer() = default;
+    /// Destroys a buffer once the GPU has finished with it; the handle is invalid at once. Not for
+    /// the frame path: it records the point the buffer waits for and frees what the GPU is done
+    /// with. A handle that is already destroyed does nothing.
+    ~Buffer() { bfr_destroy_buffer(device_, buffer_); }
+    Buffer(const Buffer&) = delete;
+    Buffer& operator=(const Buffer&) = delete;
+    Buffer(Buffer&& other) noexcept : device_(std::exchange(other.device_, nullptr)), buffer_(std::exchange(other.buffer_, {})), keepAlive_(std::move(other.keepAlive_)) {}
+    Buffer& operator=(Buffer&& other) noexcept {
+        if (this != &other) {
+            bfr_destroy_buffer(device_, buffer_);
+            device_ = std::exchange(other.device_, nullptr);
+            buffer_ = std::exchange(other.buffer_, {});
+            keepAlive_ = std::move(other.keepAlive_);
+        }
+        return *this;
+    }
+
+    /// The C value, for calls bfr.hpp does not wrap; this still owns it.
+    [[nodiscard]] bfr_buffer get() const { return buffer_; }
+    [[nodiscard]] explicit operator bool() const { return buffer_.bits != 0; }
+
+    /// Writes where the CPU reaches an upload or readback buffer. The pointer stays valid until the
+    /// buffer is destroyed. CPU writes reach the GPU, and GPU writes reach the CPU once their token
+    /// completes, without a flush. Fails with error_invalid_argument for device memory, and
+    /// error_invalid_handle when the buffer is destroyed.
+    [[nodiscard]] Expected<void*> map();
+
+private:
+    Buffer(bfr_device* device, bfr_buffer buffer, detail::KeepAlive keepAlive) : device_(device), buffer_(buffer), keepAlive_(std::move(keepAlive)) {}
+    friend class Device;
+
+    bfr_device* device_ = nullptr;
+    bfr_buffer buffer_{};
+    // Keeps the Device that made this alive until this is destroyed.
+    detail::KeepAlive keepAlive_;
+};
 
 namespace detail {
 
@@ -2015,6 +2129,15 @@ inline void Device::destroyCommandList(CommandList commandList) const {
     bfr_destroy_command_list(device_, commandList.get());
 }
 
+inline Expected<Buffer> Device::createBuffer(const BufferDesc& desc) const {
+    const bfr_buffer_desc cDesc = detail::toC(desc, nullptr);
+    bfr_buffer buffer{};
+    if (const bfr_result result = bfr_create_buffer(device_, &cDesc, &buffer); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return Buffer{device_, buffer, keepAlive_};
+}
+
 inline Expected<SwapchainImages> Swapchain::resize(std::uint32_t width, std::uint32_t height) {
     bfr_swapchain_images images{};
     if (const bfr_result result = bfr_resize_swapchain(device_, swapchain_, width, height, &images); result < 0) {
@@ -2050,6 +2173,14 @@ inline Expected<CommandList> CommandPool::beginCommands() {
         return std::unexpected(detail::failure(result));
     }
     return CommandList{commandList};
+}
+
+inline Expected<void*> Buffer::map() {
+    void* data{};
+    if (const bfr_result result = bfr_map_buffer(device_, buffer_, &data); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return data;
 }
 
 /// Lists the backends this build has, in bfr_backend order.

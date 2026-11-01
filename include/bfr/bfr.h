@@ -385,6 +385,17 @@ typedef enum bfr_store_op {
     BFR_STORE_OP_FORCE32 = 0x7FFFFFFF
 } bfr_store_op;
 
+// Where a buffer's memory is, and whether the CPU maps it.
+typedef enum bfr_buffer_memory {
+    // On or nearest the GPU; the CPU does not map it.
+    BFR_BUFFER_MEMORY_DEVICE = 0,
+    // The CPU writes it and the GPU reads it.
+    BFR_BUFFER_MEMORY_UPLOAD = 1,
+    // The GPU writes it and the CPU reads it.
+    BFR_BUFFER_MEMORY_READBACK = 2,
+    BFR_BUFFER_MEMORY_FORCE32 = 0x7FFFFFFF
+} bfr_buffer_memory;
+
 // Which window system a bfr_window comes from, for the platforms that have more than one.
 typedef enum bfr_window_system {
     // The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -438,6 +449,12 @@ typedef struct bfr_command_pool {
 typedef struct bfr_command_list {
     uint64_t bits;
 } bfr_command_list;
+
+// Memory the GPU reads and writes, as its bfr_buffer_usage says. A generational handle; 0 is never
+// valid.
+typedef struct bfr_buffer {
+    uint64_t bits;
+} bfr_buffer;
 
 // Receives BFR's messages and validation's. Without one, BFR prints nothing. Called on any thread,
 // including threads BFR or the driver owns, until the instance and every device made from it are
@@ -562,6 +579,30 @@ typedef struct bfr_command_pool_desc {
     // hands them out in turn until bfr_reset_command_pool gives them back.
     uint32_t list_count;
 } bfr_command_pool_desc;
+
+// What the GPU does with a buffer. Set every use it will have.
+typedef struct bfr_buffer_usage {
+    bfr_bool copy_src;
+    bfr_bool copy_dst;
+    // Shaders read it as constants.
+    bfr_bool uniform;
+    // Shaders read and write it.
+    bfr_bool storage;
+    // Indexed draws read it.
+    bfr_bool index;
+    // Indirect draws and dispatches read their arguments from it.
+    bfr_bool indirect;
+} bfr_buffer_usage;
+
+// How to create a buffer.
+typedef struct bfr_buffer_desc {
+    const bfr_chain* next;
+    // Bytes.
+    uint64_t size;
+    // 0 is device.
+    bfr_buffer_memory memory;
+    bfr_buffer_usage usage;
+} bfr_buffer_desc;
 
 // A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was submitted
 // has run. An all-zero token has already completed.
@@ -1128,6 +1169,26 @@ BFR_API bfr_result bfr_poll(bfr_device* device, const bfr_token* token, bfr_bool
 // Discards a command list that was not submitted; the pool hands it out again after its next reset.
 // A handle that is already submitted or destroyed does nothing.
 BFR_API void bfr_destroy_command_list(bfr_device* device, bfr_command_list command_list);
+
+// Creates a buffer, as desc says. Not for the frame path: it frees buffers the GPU is done with.
+// Fails with error_invalid_argument for a desc of no bytes or no usage, error_out_of_memory when
+// the backend says the memory ran out, error_limit_reached at the device's maximum of buffers, and
+// error_device_failed when the backend refuses the desc or gives no buffer.
+BFR_API bfr_result bfr_create_buffer(
+    bfr_device* device,
+    const bfr_buffer_desc* desc,
+    bfr_buffer* buffer);
+
+// Writes where the CPU reaches an upload or readback buffer. The pointer stays valid until the
+// buffer is destroyed. CPU writes reach the GPU, and GPU writes reach the CPU once their token
+// completes, without a flush. Fails with error_invalid_argument for device memory, and
+// error_invalid_handle when the buffer is destroyed.
+BFR_API bfr_result bfr_map_buffer(bfr_device* device, bfr_buffer buffer, void** data);
+
+// Destroys a buffer once the GPU has finished with it; the handle is invalid at once. Not for the
+// frame path: it records the point the buffer waits for and frees what the GPU is done with. A
+// handle that is already destroyed does nothing.
+BFR_API void bfr_destroy_buffer(bfr_device* device, bfr_buffer buffer);
 
 #ifdef __cplusplus
 }

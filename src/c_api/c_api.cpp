@@ -5,6 +5,7 @@
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/buffer.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
@@ -244,6 +245,44 @@ bfr_command_pool toC(bfr::rhi::CommandPoolHandle handle) {
 
 bfr::rhi::CommandPoolHandle fromC(bfr_command_pool handle) {
     return bfr::rhi::CommandPoolHandle::fromBits(handle.bits);
+}
+
+bfr_buffer toC(bfr::rhi::BufferHandle handle) {
+    return {.bits = handle.bits};
+}
+
+bfr::rhi::BufferHandle fromC(bfr_buffer handle) {
+    return bfr::rhi::BufferHandle::fromBits(handle.bits);
+}
+
+// The buffer desc asks for. Nothing when its memory is not one BFR has; error
+// says which.
+std::optional<bfr::rhi::BufferDesc> bufferIn(const bfr_buffer_desc& desc, bfr::core::Message& error) {
+    using namespace bfr::rhi;
+    BufferDesc buffer{.size = desc.size,
+                      .memory = BufferMemory::Device,
+                      .usage = {.copySrc = desc.usage.copy_src != BFR_FALSE,
+                                .copyDst = desc.usage.copy_dst != BFR_FALSE,
+                                .uniform = desc.usage.uniform != BFR_FALSE,
+                                .storage = desc.usage.storage != BFR_FALSE,
+                                .index = desc.usage.index != BFR_FALSE,
+                                .indirect = desc.usage.indirect != BFR_FALSE}};
+    switch (desc.memory) {
+        case BFR_BUFFER_MEMORY_DEVICE:
+            buffer.memory = BufferMemory::Device;
+            break;
+        case BFR_BUFFER_MEMORY_UPLOAD:
+            buffer.memory = BufferMemory::Upload;
+            break;
+        case BFR_BUFFER_MEMORY_READBACK:
+            buffer.memory = BufferMemory::Readback;
+            break;
+        case BFR_BUFFER_MEMORY_FORCE32:
+        default:
+            error.format("buffer memory {} is not one BFR has", static_cast<std::int64_t>(desc.memory));
+            return std::nullopt;
+    }
+    return buffer;
 }
 
 bfr_command_list toC(bfr::rhi::CommandListHandle handle) {
@@ -1212,6 +1251,55 @@ bfr_result bfr_get_budget(bfr_device* device, bfr_memory_budget* budget) {
             heaps[budget->heap_count++] = {.budget = heap.budget, .usage = heap.usage};
         }
         return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_create_buffer(bfr_device* device, const bfr_buffer_desc* desc, bfr_buffer* buffer) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr || buffer == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and buffer must not be null");
+        }
+        *buffer = {};
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_buffer_desc takes no chained structs");
+        }
+        bfr::core::Message error;
+        const auto wanted = bufferIn(*desc, error);
+        if (!wanted) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto created = device->device->createBuffer(*wanted);
+        if (!created) {
+            return fail(created.error());
+        }
+        *buffer = toC(*created);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_map_buffer(bfr_device* device, bfr_buffer buffer, void** data) {
+    return guarded([&] {
+        if (device == nullptr || data == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and data must not be null");
+        }
+        *data = nullptr;
+        const auto mapped = device->device->mapBuffer(fromC(buffer));
+        if (!mapped) {
+            return fail(mapped.error());
+        }
+        *data = mapped->data();
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+void bfr_destroy_buffer(bfr_device* device, bfr_buffer buffer) {
+    quietly([&] {
+        if (device == nullptr) {
+            return;
+        }
+        if (const auto destroyed = device->device->destroyBuffer(fromC(buffer)); !destroyed) {
+            lastError() = destroyed.error().message;
+        }
     });
 }
 

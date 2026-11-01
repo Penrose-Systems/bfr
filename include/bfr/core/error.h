@@ -90,7 +90,9 @@ public:
                 markCut();
             }
         } catch (...) {
-            assign("the message could not be formatted");
+            // The unfilled format is what is known for certain, so it is the
+            // message, never text BFR makes up.
+            assign(format.get());
         }
     }
 
@@ -103,10 +105,26 @@ public:
     bool operator==(std::string_view other) const { return view() == other; }
 
 private:
+    // Ends the text with kCut at a character boundary: a UTF-8 character
+    // that straddles the cut goes whole, so the text stays valid UTF-8.
     void markCut() noexcept {
-        constexpr std::string_view kCut = "...";
-        std::ranges::copy(kCut, chars_.begin() + static_cast<std::ptrdiff_t>(kCapacity - kCut.size()));
+        char* at = chars_.data() + (kCapacity - kCut.size());
+        while (at != chars_.data() && isContinuation(*at)) {
+            --at;
+        }
+        std::ranges::copy(kCut, at);
+        size_ = static_cast<std::size_t>(at - chars_.data()) + kCut.size();
     }
+
+    // Whether byte continues a multi-byte UTF-8 character: 10xxxxxx.
+    [[nodiscard]] static bool isContinuation(char byte) noexcept {
+        constexpr unsigned kMask = 0xC0U;
+        constexpr unsigned kContinuation = 0x80U;
+        return (static_cast<unsigned char>(byte) & kMask) == kContinuation;
+    }
+
+    static constexpr std::string_view kCut = "...";
+    static_assert(kCapacity > kCut.size());
 
     std::array<char, kCapacity> chars_{};
     std::size_t size_ = 0;

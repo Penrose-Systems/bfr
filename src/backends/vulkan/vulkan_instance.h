@@ -58,6 +58,12 @@ public:
     /// Where the Instance and its devices send their messages.
     [[nodiscard]] const core::Logger& logger() const { return messages_.logger; }
 
+    /// The Vulkan version the instance is created at.
+    static constexpr std::uint32_t kInstanceVersion = VK_API_VERSION_1_3;
+
+    /// The VkInstance, which lives as long as this.
+    [[nodiscard]] VkInstance handle() const { return instance_; }
+
     /// The instance's functions, which this Instance and its devices call through.
     [[nodiscard]] const InstanceTable& instanceTable() const { return vk_; }
 

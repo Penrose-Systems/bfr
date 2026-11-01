@@ -287,6 +287,13 @@ enums:
       store: {value: 0, doc: What was rendered is kept.}
       dont_care: {value: 1, doc: It may be dropped.}
 
+  buffer_memory:
+    doc: Where a buffer's memory is, and whether the CPU maps it.
+    values:
+      device: {value: 0, doc: On or nearest the GPU; the CPU does not map it.}
+      upload: {value: 1, doc: The CPU writes it and the GPU reads it.}
+      readback: {value: 2, doc: The GPU writes it and the CPU reads it.}
+
   window_system:
     doc: >-
       Which window system a bfr_window comes from, for the platforms that have
@@ -336,6 +343,11 @@ handles:
       Commands recorded for the GPU, from bfr_begin_commands until bfr_submit
       sends them to the queue of the pool they came from. Calls on one command
       list must not overlap; the caller synchronizes them.
+
+  buffer:
+    parent: device
+    destroy: destroy_buffer
+    doc: Memory the GPU reads and writes, as its bfr_buffer_usage says.
 
 callbacks:
   message_callback:
@@ -483,6 +495,24 @@ structs:
         doc: >-
           Lists the pool holds, made with it from the device's max_command_lists. bfr_begin_commands
           hands them out in turn until bfr_reset_command_pool gives them back.
+
+  buffer_usage:
+    doc: What the GPU does with a buffer. Set every use it will have.
+    members:
+      - {name: copy_src, type: bool}
+      - {name: copy_dst, type: bool}
+      - {name: uniform, type: bool, doc: Shaders read it as constants.}
+      - {name: storage, type: bool, doc: Shaders read and write it.}
+      - {name: index, type: bool, doc: Indexed draws read it.}
+      - {name: indirect, type: bool, doc: Indirect draws and dispatches read their arguments from it.}
+
+  buffer_desc:
+    doc: How to create a buffer.
+    extensible: true
+    members:
+      - {name: size, type: u64, doc: Bytes.}
+      - {name: memory, type: buffer_memory, doc: 0 is device.}
+      - {name: usage, type: buffer_usage}
 
   token:
     doc: >-
@@ -1055,3 +1085,39 @@ functions:
     params:
       - {name: device, type: device}
       - {name: command_list, type: command_list}
+
+  create_buffer:
+    doc: >-
+      Creates a buffer, as desc says. Not for the frame path: it frees buffers
+      the GPU is done with. Fails with error_invalid_argument for a desc of no
+      bytes or no usage, error_out_of_memory when the backend says the memory
+      ran out, error_limit_reached at the device's maximum of buffers, and
+      error_device_failed when the backend refuses the desc or gives no buffer.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: buffer_desc, pointer: in}
+      - {name: buffer, type: buffer, pointer: out}
+
+  map_buffer:
+    doc: >-
+      Writes where the CPU reaches an upload or readback buffer. The pointer
+      stays valid until the buffer is destroyed. CPU writes reach the GPU, and
+      GPU writes reach the CPU once their token completes, without a flush.
+      Fails with error_invalid_argument for device memory, and
+      error_invalid_handle when the buffer is destroyed.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: buffer, type: buffer}
+      - {name: data, type: opaque, pointer: out}
+
+  destroy_buffer:
+    doc: >-
+      Destroys a buffer once the GPU has finished with it; the handle is invalid
+      at once. Not for the frame path: it records the point the buffer waits
+      for and frees what the GPU is done with. A handle that is already
+      destroyed does nothing.
+    params:
+      - {name: device, type: device}
+      - {name: buffer, type: buffer}

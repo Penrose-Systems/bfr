@@ -212,6 +212,7 @@ TEST_CASE("C API destroy calls take null and stale handles", "[c_api][unit]") {
     bfr_destroy_instance(nullptr);
     bfr_destroy_device(nullptr);
     bfr_destroy_swapchain(nullptr, bfr_swapchain{.bits = 0});
+    bfr_destroy_buffer(nullptr, bfr_buffer{.bits = 0});
 }
 
 TEST_CASE("C API lists adapters in two calls", "[c_api][gpu]") {
@@ -428,6 +429,43 @@ TEST_CASE("C API reports a destroyed swapchain as invalid and destroys it again 
     CHECK(bfr_resize_swapchain(device.device, swapchain, kWidth, kHeight, &images) == BFR_RESULT_ERROR_INVALID_HANDLE);
     bfr_destroy_swapchain(device.device, swapchain);
     CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("stale"));
+}
+
+TEST_CASE("C API creates, maps and destroys a buffer, and refuses what it can't map", "[c_api][gpu]") {
+    constexpr std::uint64_t kSize = 256;
+    const bfr_backend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    const Instance instance{backend, messages};
+    const HeadlessDevice device{instance.instance};
+    bfr_buffer_desc desc{.next = nullptr,
+                         .size = kSize,
+                         .memory = BFR_BUFFER_MEMORY_UPLOAD,
+                         .usage = {.copy_src = BFR_TRUE,
+                                   .copy_dst = BFR_FALSE,
+                                   .uniform = BFR_FALSE,
+                                   .storage = BFR_FALSE,
+                                   .index = BFR_FALSE,
+                                   .indirect = BFR_FALSE}};
+    bfr_buffer upload{};
+    REQUIRE(bfr_create_buffer(device.device, &desc, &upload) == BFR_RESULT_SUCCESS);
+    desc.memory = BFR_BUFFER_MEMORY_DEVICE;
+    bfr_buffer local{};
+    REQUIRE(bfr_create_buffer(device.device, &desc, &local) == BFR_RESULT_SUCCESS);
+    desc.memory = static_cast<bfr_buffer_memory>(kNotAValue);
+    bfr_buffer stray{};
+    void* data = nullptr;
+
+    CHECK(bfr_create_buffer(device.device, &desc, &stray) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(stray.bits == 0);
+    CHECK(bfr_map_buffer(device.device, upload, &data) == BFR_RESULT_SUCCESS);
+    CHECK(data != nullptr);
+    CHECK(bfr_map_buffer(device.device, local, &data) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(data == nullptr);
+    bfr_destroy_buffer(device.device, upload);
+    bfr_destroy_buffer(device.device, local);
+    CHECK(bfr_map_buffer(device.device, upload, &data) == BFR_RESULT_ERROR_INVALID_HANDLE);
+    bfr_destroy_buffer(device.device, upload);
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
 TEST_CASE("C API keeps an instance alive until its last device is destroyed", "[c_api][gpu]") {

@@ -18,7 +18,12 @@
         { "name": "wayland", "platform": "linux" }
       ]
     },
+    {
+      "name": "d3d12-memory-allocator",
+      "platform": "windows"
+    },
     "volk",
+    "vulkan-memory-allocator",
     "vulkan-utility-libraries",
     "vulkan-validationlayers"
   ]

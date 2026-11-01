@@ -329,6 +329,67 @@ TEST_CASE("Device runs a compute queue beside graphics when the adapter has one"
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("Device refuses a submit that names one list twice, and the list is still submittable", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        auto created = createInstance(recordingInto(backend, messages), kValidation);
+        REQUIRE(created.has_value());
+        Instance& rhi = **created;
+        auto opened = rhi.createDevice(headlessAdapter(rhi), kHeadless, {});
+        INFO(failureOf(opened));
+        REQUIRE(opened.has_value());
+        Device& device = **opened;
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+
+        const std::array twice{*list, *list};
+        CHECK(device.submit({.queue = 0, .commandLists = twice, .waits = {}}).error().code ==
+              bfr::core::ErrorCode::RhiInvalidCall);
+        const auto token = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+        INFO(failureOf(token));
+        REQUIRE(token.has_value());
+        CHECK(device.wait(*token).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device frees a pool destroyed while the GPU runs its lists once the GPU is done", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        auto created = createInstance(recordingInto(backend, messages), kValidation);
+        REQUIRE(created.has_value());
+        Instance& rhi = **created;
+        auto opened = rhi.createDevice(headlessAdapter(rhi), kHeadless,
+                                       {.maxCommandLists = kPoolLists, .maxCommandPools = 1});
+        INFO(failureOf(opened));
+        REQUIRE(opened.has_value());
+        Device& device = **opened;
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+        const auto token = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+        INFO(failureOf(token));
+        REQUIRE(token.has_value());
+
+        // Destroyed before the GPU is known to be done, the pool is gone from
+        // the caller at once, and its room is back once the GPU has passed it.
+        REQUIRE(device.destroyCommandPool(*pool).has_value());
+        CHECK(device.resetCommandPool(*pool).error().code == bfr::core::ErrorCode::RhiInvalidHandle);
+        REQUIRE(device.wait(*token).has_value());
+        const auto next = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        INFO(failureOf(next));
+        REQUIRE(next.has_value());
+        CHECK(device.destroyCommandPool(*next).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("Device holds the lists, pools and swapchains it was opened for, and no more", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;

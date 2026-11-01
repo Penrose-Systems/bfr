@@ -3,12 +3,15 @@
 #include "bfr/core/error.h"
 #include "bfr/core/pool.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/buffer.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/swapchain.h"
 #include "core/fixed_vector.h"
 #include "core/slot_chains.h"
+#include "core/submissions.h"
+#include "metal/metal_buffer.h"
 #include "metal/metal_swapchain.h"
 #include "metal/metal_util.h"
 
@@ -22,10 +25,12 @@
 #include <TargetConditionals.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -51,6 +56,9 @@ struct MetalCommandPool {
 struct MetalListSlot {
     Ref<MTL4::CommandAllocator> allocator;
     Ref<MTL4::CommandBuffer> buffer;
+    // Made with the slot and filled in by each beginRendering, so a pass
+    // allocates no descriptor.
+    Ref<MTL4::RenderPassDescriptor> pass;
     CommandListHandle live;
 };
 
@@ -95,6 +103,9 @@ struct MetalCommandList {
     Ref<MTL4::RenderCommandEncoder> encoder;
     std::optional<SwapchainHandle> rendering;
     std::uint32_t rendered = core::SlotChains::kEnd;
+    // The serial of the submit this list is gathered into, so a list named
+    // twice in one submit is caught in a single pass.
+    std::uint64_t queued = 0;
 };
 
 class MetalDevice final : public Device {
@@ -131,6 +142,9 @@ public:
     [[nodiscard]] core::Result<void> wait(Token token) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
+    [[nodiscard]] core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
@@ -146,12 +160,15 @@ private:
     // Ends a list that was submitted or discarded; its slot waits for the
     // pool's reset.
     void end(CommandListHandle commandList);
+    // Destroys the buffers retired under submission IDs every queue has passed.
+    void collectBuffers();
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
     static void discard(MetalCommandList& list);
     [[nodiscard]] core::Result<MetalSwapchain*> swapchainFor(SwapchainHandle swapchain);
     [[nodiscard]] core::Result<MetalCommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<MetalCommandList*> commandListFor(CommandListHandle commandList);
+    [[nodiscard]] core::Result<MetalBuffer*> bufferFor(BufferHandle buffer);
 
     MetalInstance* instance_;
     Ref<MTL::Device> device_;
@@ -170,6 +187,14 @@ private:
     // Live pools and destroyed ones not yet collected, held to
     // desc_.maxCommandPools so every queue's retired array has room.
     std::atomic<std::uint32_t> poolsHeld_{0};
+    // Counts submits on every queue, so each has a serial of its own, even one
+    // that fails, which the token value a queue hands out does not give.
+    std::atomic<std::uint64_t> submitSerial_{0};
+
+    core::Submissions submissions_;
+    static constexpr std::uint32_t kBufferCapacity = 256;
+    static constexpr std::uint32_t kBufferLimit = 1U << 20U;
+    core::Pool<MetalBuffer, Buffer> buffers_;
 };
 
 } // namespace bfr::rhi::metal

@@ -3,15 +3,20 @@
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/buffer.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/swapchain.h"
 #include "core/slot_chains.h"
 #include "null/null_instance.h"
+#include "rhi/buffer_check.h"
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <format>
+#include <span>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -25,7 +30,8 @@ NullDevice::NullDevice(NullInstance& rhi, const DeviceDesc& desc)
       commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
       commandLists_("command lists", desc.maxCommandLists, desc.maxCommandLists, rhi.logger()),
       slots_(desc.maxCommandLists),
-      live_(desc.maxCommandLists) {
+      live_(desc.maxCommandLists),
+      buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()) {
     queues_.push_back(QueueType::Graphics);
     queues_.insert(queues_.end(), desc.compute, QueueType::Compute);
     queues_.insert(queues_.end(), desc.copy, QueueType::Copy);
@@ -38,6 +44,9 @@ NullDevice::~NullDevice() {
         BFR_LOG_WARN(instance_->logger(), "{} swapchains were left when the device went", swapchains_.size());
     }
     swapchains_.clear();
+    if (buffers_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} buffers were left when the device went", buffers_.size());
+    }
 }
 
 core::Result<SwapchainHandle> NullDevice::createSwapchain(const core::window::NativeWindow& window,
@@ -276,11 +285,18 @@ core::Result<Token> NullDevice::submit(const SubmitDesc& desc) {
             return std::unexpected(std::move(checked.error()));
         }
     }
+    // Each submit has a serial of its own, so a list named twice is caught
+    // in this one pass, without searching what was gathered so far.
+    const std::uint64_t serial = submitSerial_.fetch_add(1, std::memory_order_relaxed) + 1;
     for (const CommandListHandle commandList : desc.commandLists) {
         auto list = commandListFor(commandList);
         if (!list) {
             return std::unexpected(std::move(list.error()));
         }
+        if ((*list)->queued == serial) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "the list is named twice in the submit");
+        }
+        (*list)->queued = serial;
         if ((*list)->rendering) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is still open; end it first");
         }
@@ -329,6 +345,52 @@ void NullDevice::end(CommandListHandle commandList) {
     }
     live_[list->slot] = {};
     commandLists_.erase(commandList);
+}
+
+core::Result<NullBuffer*> NullDevice::bufferFor(BufferHandle buffer) {
+    NullBuffer* found = buffers_.find(buffer);
+    if (found == nullptr) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the buffer handle is stale");
+    }
+    return found;
+}
+
+core::Result<BufferHandle> NullDevice::createBuffer(const BufferDesc& desc) {
+    if (auto checked = checkBufferDesc(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    NullBuffer made{.memory = desc.memory, .bytes = {}};
+    if (desc.memory != BufferMemory::Device) {
+        made.bytes.resize(desc.size);
+    }
+    const BufferHandle buffer = buffers_.emplace(std::move(made));
+    if (buffer.isNull()) {
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} buffers", kBufferLimit);
+    }
+    return buffer;
+}
+
+core::Result<std::span<std::byte>> NullDevice::mapBuffer(BufferHandle buffer) {
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    if ((*found)->memory == BufferMemory::Device) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "the buffer is in device memory, which the CPU does not map");
+    }
+    return std::span{(*found)->bytes};
+}
+
+core::Result<void> NullDevice::destroyBuffer(BufferHandle buffer) {
+    if (buffer.isNull()) {
+        return {};
+    }
+    // The GPU runs nothing, so nothing can still be using it.
+    if (!buffers_.erase(buffer)) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the buffer handle is stale");
+    }
+    return {};
 }
 
 core::Result<MemoryBudget> NullDevice::budget() const {
