@@ -89,6 +89,11 @@ public:
     [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
+    /// The queue refuses the next submit, as a driver's may: the lists named
+    /// are spent, no token is made, and the device goes on. For the tests,
+    /// which no real driver fails on demand.
+    void refuseNextSubmit() { refuseNextSubmit_.store(true, std::memory_order_release); }
+
 private:
     [[nodiscard]] core::Result<NullSwapchain*> swapchainFor(SwapchainHandle swapchain);
     [[nodiscard]] core::Result<NullCommandPool*> commandPoolFor(CommandPoolHandle commandPool);
@@ -120,6 +125,7 @@ private:
     // Counts submits on every queue, so each has a serial of its own, even one
     // that fails, which the token value a queue hands out does not give.
     std::atomic<std::uint64_t> submitSerial_{0};
+    std::atomic<bool> refuseNextSubmit_{false};
 };
 
 } // namespace bfr::rhi::null

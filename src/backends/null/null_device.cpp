@@ -307,8 +307,14 @@ core::Result<Token> NullDevice::submit(const SubmitDesc& desc) {
                                  pool->queue, desc.queue);
         }
     }
+    // The lists are spent whether or not the submit goes through, as on every
+    // backend; a refused one makes no token.
+    const bool refused = refuseNextSubmit_.exchange(false, std::memory_order_acq_rel);
     for (const CommandListHandle commandList : desc.commandLists) {
         end(commandList);
+    }
+    if (refused) {
+        return core::failure(core::ErrorCode::RhiDeviceFailed, "the queue refused the submit, as it was told to");
     }
     return Token{.queue = desc.queue, .value = submitted_[desc.queue].fetch_add(1, std::memory_order_acq_rel) + 1};
 }
