@@ -3,11 +3,11 @@
 #include "bfr/bfr.h"
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <format>
+#include <iterator>
 #include <span>
 #include <string>
 #include <string_view>
@@ -71,7 +71,7 @@ public:
     /// Replaces the text with text.
     void assign(std::string_view text) noexcept {
         size_ = std::min(text.size(), kCapacity);
-        std::ranges::copy(text.substr(0, size_), chars_.begin());
+        std::ranges::copy(text.substr(0, size_), std::begin(chars_));
         if (text.size() > kCapacity) {
             markCut();
         }
@@ -84,7 +84,7 @@ public:
     template <class... Args>
     void format(std::format_string<Args...> format, Args&&... args) noexcept {
         try {
-            const auto written = std::format_to_n(chars_.begin(), kCapacity, format, std::forward<Args>(args)...);
+            const auto written = std::format_to_n(std::begin(chars_), kCapacity, format, std::forward<Args>(args)...);
             size_ = std::min(static_cast<std::size_t>(written.size), kCapacity);
             if (static_cast<std::size_t>(written.size) > kCapacity) {
                 markCut();
@@ -97,7 +97,7 @@ public:
     }
 
     void clear() { size_ = 0; }
-    [[nodiscard]] std::string_view view() const { return {chars_.data(), size_}; }
+    [[nodiscard]] std::string_view view() const { return {std::data(chars_), size_}; }
     // Implicit, so a message reads as text wherever one is given or asked for.
     operator std::string_view() const { return view(); }
     /// A std::string of the text, for cold code and tests; it allocates.
@@ -108,12 +108,12 @@ private:
     // Ends the text with kCut at a character boundary: a UTF-8 character
     // that straddles the cut goes whole, so the text stays valid UTF-8.
     void markCut() noexcept {
-        char* at = chars_.data() + (kCapacity - kCut.size());
-        while (at != chars_.data() && isContinuation(*at)) {
+        char* at = std::data(chars_) + (kCapacity - kCut.size());
+        while (at != std::data(chars_) && isContinuation(*at)) {
             --at;
         }
         std::ranges::copy(kCut, at);
-        size_ = static_cast<std::size_t>(at - chars_.data()) + kCut.size();
+        size_ = static_cast<std::size_t>(at - std::data(chars_)) + kCut.size();
     }
 
     // Whether byte continues a multi-byte UTF-8 character: 10xxxxxx.
@@ -126,7 +126,11 @@ private:
     static constexpr std::string_view kCut = "...";
     static_assert(kCapacity > kCut.size());
 
-    std::array<char, kCapacity> chars_{};
+    // A plain array, not std::array, so it is left as it is until written: a
+    // std::array member is zero-filled on every construction, 1 KiB each
+    // time, and a message is made on the frame path whenever a call there
+    // fails or logs. Only the size_ bytes written are ever read.
+    char chars_[kCapacity];
     std::size_t size_ = 0;
 };
 

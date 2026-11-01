@@ -114,7 +114,9 @@ private:
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<NullBuffer, Buffer> buffers_;
     std::vector<QueueType> queues_;
-    std::vector<std::uint64_t> submitted_;
+    // The value last submitted on each queue, made once; submits on one queue
+    // may come from several threads.
+    std::vector<std::atomic<std::uint64_t>> submitted_;
     // Counts submits on every queue, so each has a serial of its own, even one
     // that fails, which the token value a queue hands out does not give.
     std::atomic<std::uint64_t> submitSerial_{0};

@@ -35,7 +35,7 @@ NullDevice::NullDevice(NullInstance& rhi, const DeviceDesc& desc)
     queues_.push_back(QueueType::Graphics);
     queues_.insert(queues_.end(), desc.compute, QueueType::Compute);
     queues_.insert(queues_.end(), desc.copy, QueueType::Copy);
-    submitted_.assign(queues_.size(), 0);
+    submitted_ = std::vector<std::atomic<std::uint64_t>>(queues_.size());
 }
 
 NullDevice::~NullDevice() {
@@ -163,10 +163,11 @@ core::Result<void> NullDevice::checkToken(Token token) const {
     if (auto checked = checkQueue(token.queue); !checked) {
         return checked;
     }
-    if (token.value > submitted_[token.queue]) {
+    const std::uint64_t last = submitted_[token.queue].load(std::memory_order_acquire);
+    if (token.value > last) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "no submit has returned token {} on queue {}; the last is {}", token.value, token.queue,
-                             submitted_[token.queue]);
+                             last);
     }
     return {};
 }
@@ -309,7 +310,7 @@ core::Result<Token> NullDevice::submit(const SubmitDesc& desc) {
     for (const CommandListHandle commandList : desc.commandLists) {
         end(commandList);
     }
-    return Token{.queue = desc.queue, .value = ++submitted_[desc.queue]};
+    return Token{.queue = desc.queue, .value = submitted_[desc.queue].fetch_add(1, std::memory_order_acq_rel) + 1};
 }
 
 core::Result<void> NullDevice::wait(Token token) {

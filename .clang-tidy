@@ -3,7 +3,10 @@
 # cppcoreguidelines-non-private-member-variables-in-classes is the same check
 # as misc-non-private-member-variables-in-classes, so both are off. A function
 # keeps its work together rather than being split for size, so the size and
-# complexity checks are off.
+# complexity checks are off. Plain arrays are allowed, and left out of the
+# member-init check: text held in a fixed array, such as core::Message, is
+# written before it is read, and a std::array member is zero-filled on every
+# construction, a cost on the frame path.
 Checks: >
     -*,
     bugprone-*,
@@ -12,6 +15,7 @@ Checks: >
     -cert-err58-cpp,
     clang-analyzer-*,
     cppcoreguidelines-*,
+    -cppcoreguidelines-avoid-c-arrays,
     -cppcoreguidelines-non-private-member-variables-in-classes,
     -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
     -cppcoreguidelines-pro-bounds-pointer-arithmetic,
@@ -19,6 +23,7 @@ Checks: >
     misc-*,
     -misc-non-private-member-variables-in-classes,
     modernize-*,
+    -modernize-avoid-c-arrays,
     -modernize-use-trailing-return-type,
     performance-*,
     readability-*,
@@ -35,6 +40,8 @@ HeaderFilterRegex: '.*/(include/bfr|src|tests|bindings/cpp/include)/.*'
 FormatStyle: file
 
 CheckOptions:
+    - key: cppcoreguidelines-pro-type-member-init.IgnoreArrays
+      value: true
     - key: readability-identifier-naming.NamespaceCase
       value: lower_case
     - key: readability-identifier-naming.ClassCase

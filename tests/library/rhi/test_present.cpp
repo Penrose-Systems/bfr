@@ -22,6 +22,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -386,6 +387,79 @@ TEST_CASE("Device frees a pool destroyed while the GPU runs its lists once the G
         INFO(failureOf(next));
         REQUIRE(next.has_value());
         CHECK(device.destroyCommandPool(*next).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device serves pools made, submitted, waited on and destroyed from several threads at once",
+          "[rhi][agnostic]") {
+    // Each thread holds one pool at a time, live or awaiting the GPU, so a
+    // device of one pool per thread never runs out. Catch2 is not called off
+    // the test thread: each thread records what failed, checked after joining.
+    constexpr std::uint32_t kThreads = 4;
+    constexpr int kRounds = 8;
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        auto created = createInstance(recordingInto(backend, messages), kValidation);
+        REQUIRE(created.has_value());
+        Instance& rhi = **created;
+        auto opened = rhi.createDevice(headlessAdapter(rhi), kHeadless,
+                                       {.maxCommandLists = kThreads * kPoolLists, .maxCommandPools = kThreads});
+        INFO(failureOf(opened));
+        REQUIRE(opened.has_value());
+        Device& device = **opened;
+
+        std::array<std::string, kThreads> failures;
+        {
+            std::vector<std::jthread> threads;
+            threads.reserve(kThreads);
+            for (std::string& failure : failures) {
+                threads.emplace_back([&device, &failure] {
+                    for (int round = 0; round < kRounds && failure.empty(); ++round) {
+                        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+                        if (!pool) {
+                            failure = "createCommandPool: " + pool.error().message.text();
+                            return;
+                        }
+                        const auto list = device.beginCommands(*pool);
+                        if (!list) {
+                            failure = "beginCommands: " + list.error().message.text();
+                            return;
+                        }
+                        const auto token = device.submit(
+                            {.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+                        if (!token) {
+                            failure = "submit: " + token.error().message.text();
+                            return;
+                        }
+                        if (const auto waited = device.wait(*token); !waited) {
+                            failure = "wait: " + waited.error().message.text();
+                            return;
+                        }
+                        if (const auto destroyed = device.destroyCommandPool(*pool); !destroyed) {
+                            failure = "destroyCommandPool: " + destroyed.error().message.text();
+                            return;
+                        }
+                    }
+                });
+            }
+        }
+        for (const std::string& failure : failures) {
+            CHECK(failure.empty());
+        }
+
+        // Every pool's room is back once the threads are done.
+        std::vector<CommandPoolHandle> pools;
+        for (std::uint32_t index = 0; index < kThreads; ++index) {
+            const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+            INFO(failureOf(pool));
+            REQUIRE(pool.has_value());
+            pools.push_back(*pool);
+        }
+        for (const CommandPoolHandle pool : pools) {
+            CHECK(device.destroyCommandPool(pool).has_value());
+        }
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
