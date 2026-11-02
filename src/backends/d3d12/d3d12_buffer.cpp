@@ -2,6 +2,7 @@
 
 #include "bfr/core/error.h"
 #include "bfr/rhi/buffer.h"
+#include "bfr/rhi/command_list.h"
 #include "d3d12/d3d12_device.h"
 #include "d3d12/d3d12_result.h"
 #include "rhi/buffer_check.h"
@@ -126,6 +127,27 @@ core::Result<BufferHandle> D3D12Device::createBuffer(const BufferDesc& desc) {
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} buffers", kBufferLimit);
     }
     return buffer;
+}
+
+core::Result<void> D3D12Device::copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
+                                           std::span<const BufferCopy> regions) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto from = bufferFor(src);
+    if (!from) {
+        return std::unexpected(std::move(from.error()));
+    }
+    auto to = bufferFor(dst);
+    if (!to) {
+        return std::unexpected(std::move(to.error()));
+    }
+    for (const BufferCopy& region : regions) {
+        (*list)->list->CopyBufferRegion((*to)->resource.Get(), region.dstOffset, (*from)->resource.Get(),
+                                        region.srcOffset, region.size);
+    }
+    return {};
 }
 
 core::Result<std::span<std::byte>> D3D12Device::mapBuffer(BufferHandle buffer) {

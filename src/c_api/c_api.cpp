@@ -305,6 +305,14 @@ static_assert(sizeof(bfr_token) == sizeof(bfr::rhi::Token) && alignof(bfr_token)
               offsetof(bfr_token, queue) == offsetof(bfr::rhi::Token, queue) &&
               offsetof(bfr_token, value) == offsetof(bfr::rhi::Token, value));
 
+// bfr_copy_buffer reads the caller's regions as the rhi type, in place.
+static_assert(sizeof(bfr_buffer_copy) == sizeof(bfr::rhi::BufferCopy) &&
+              alignof(bfr_buffer_copy) == alignof(bfr::rhi::BufferCopy) &&
+              std::is_standard_layout_v<bfr::rhi::BufferCopy> && std::is_trivially_copyable_v<bfr::rhi::BufferCopy> &&
+              offsetof(bfr_buffer_copy, src_offset) == offsetof(bfr::rhi::BufferCopy, srcOffset) &&
+              offsetof(bfr_buffer_copy, dst_offset) == offsetof(bfr::rhi::BufferCopy, dstOffset) &&
+              offsetof(bfr_buffer_copy, size) == offsetof(bfr::rhi::BufferCopy, size));
+
 bfr::rhi::Token fromC(const bfr_token& token) {
     return {.queue = token.queue, .value = token.value};
 }
@@ -1057,6 +1065,32 @@ bfr_result bfr_end_rendering(bfr_device* device, bfr_command_list command_list) 
         }
         const auto ended = device->device->endRendering(fromC(command_list));
         return ended ? BFR_RESULT_SUCCESS : fail(ended.error());
+    });
+}
+
+bfr_result bfr_copy_buffer(bfr_device* device, bfr_command_list command_list, bfr_buffer src, bfr_buffer dst,
+                           const bfr_buffer_copy* regions, uint32_t region_count) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        if (region_count != 0 && regions == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "regions must not be null when region_count is not 0");
+        }
+        const std::span<const bfr::rhi::BufferCopy> copies{reinterpret_cast<const bfr::rhi::BufferCopy*>(regions),
+                                                           region_count};
+        const auto copied = device->device->copyBuffer(fromC(command_list), fromC(src), fromC(dst), copies);
+        return copied ? BFR_RESULT_SUCCESS : fail(copied.error());
+    });
+}
+
+bfr_result bfr_barrier(bfr_device* device, bfr_command_list command_list) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto recorded = device->device->barrier(fromC(command_list));
+        return recorded ? BFR_RESULT_SUCCESS : fail(recorded.error());
     });
 }
 

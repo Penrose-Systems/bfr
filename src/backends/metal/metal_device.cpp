@@ -12,8 +12,12 @@
 #include "metal/metal_swapchain.h"
 #include "metal/metal_util.h"
 
+#include <Foundation/NSError.hpp>
 #include <Metal/MTL4CommandAllocator.hpp>
+#include <Metal/MTL4CommandEncoder.hpp>
+#include <Metal/MTL4ComputeCommandEncoder.hpp>
 #include <Metal/MTLCommandBuffer.hpp>
+#include <Metal/MTLCommandEncoder.hpp>
 #include <Metal/MTLCommandQueue.hpp>
 #include <Metal/MTLDevice.hpp>
 #include <Metal/MTLEvent.hpp>
@@ -94,6 +98,14 @@ MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Devi
 
 core::Result<void> MetalDevice::open(const DeviceDesc& desc) {
     const AutoreleasePool pool;
+    const Ref<MTL::ResidencySetDescriptor> residency = adopt(MTL::ResidencySetDescriptor::alloc()->init());
+    NS::Error* error = nullptr;
+    MTL::ResidencySet* set = device_->newResidencySet(residency.get(), &error);
+    if (set == nullptr) {
+        return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no residency set: {}",
+                             error != nullptr ? error->localizedDescription()->utf8String() : "no reason given");
+    }
+    residency_ = adopt(set);
     const auto open = [this, &desc](QueueType type) -> core::Result<void> {
         auto queue = std::make_unique<MetalQueue>();
         queue->type = type;
@@ -107,6 +119,7 @@ core::Result<void> MetalDevice::open(const DeviceDesc& desc) {
             return deviceFailed("command queue");
         }
         queue->queue = adopt(native);
+        queue->queue->addResidencySet(residency_.get());
         MTL::SharedEvent* event = device_->newSharedEvent();
         if (event == nullptr) {
             return deviceFailed("event");
@@ -539,6 +552,25 @@ core::Result<void> MetalDevice::endRendering(CommandListHandle commandList) {
     (*list)->encoder->endEncoding();
     (*list)->encoder.reset();
     (*list)->rendering.reset();
+    return {};
+}
+
+// Metal 4 tracks no hazards. A consumer barrier blocks every stage of its own
+// pass and all later passes on the queue until every stage of the earlier
+// passes is done, so a pass of its own leaves nothing pending.
+core::Result<void> MetalDevice::barrier(CommandListHandle commandList) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    // The pool drains the autoreleased encoder reference.
+    const AutoreleasePool pool;
+    MTL4::ComputeCommandEncoder* encoder = (*list)->buffer->computeCommandEncoder();
+    if (encoder == nullptr) {
+        return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no compute command encoder");
+    }
+    encoder->barrierAfterQueueStages(MTL::StageAll, MTL::StageAll, MTL4::VisibilityOptionDevice);
+    encoder->endEncoding();
     return {};
 }
 

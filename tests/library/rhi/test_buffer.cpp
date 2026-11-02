@@ -17,6 +17,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -136,6 +137,99 @@ TEST_CASE("Device ends a buffer handle destroyed after a submit at once, and the
         CHECK(device.destroyBuffer(buffer).has_value());
         CHECK(device.mapBuffer(buffer).error().code == ErrorCode::RhiInvalidHandle);
         CHECK(device.wait(*token).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device copies bytes through device memory to readback, in one list or across a token wait",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    const bool acrossSubmits = GENERATE(false, true);
+    constexpr std::uint64_t kHalf = kSize / 2;
+    std::vector<std::string> messages;
+    {
+        const BufferDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const BufferHandle upload = created(device, kUploadBuffer);
+        const BufferHandle middle = created(device, {.size = kSize,
+                                                     .memory = BufferMemory::Device,
+                                                     .usage = {.copySrc = true, .copyDst = true}});
+        const BufferHandle readback = created(device, kReadbackBuffer);
+        const auto written = device.mapBuffer(upload);
+        REQUIRE(written.has_value());
+        for (std::size_t index = 0; index < written->size(); ++index) {
+            (*written)[index] = static_cast<std::byte>(static_cast<unsigned char>(index));
+        }
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+
+        // Whole into device memory, then its halves swapped into readback.
+        const BufferCopy whole{.srcOffset = 0, .dstOffset = 0, .size = kSize};
+        const std::array swapped{BufferCopy{.srcOffset = 0, .dstOffset = kHalf, .size = kHalf},
+                                 BufferCopy{.srcOffset = kHalf, .dstOffset = 0, .size = kHalf}};
+        auto first = device.beginCommands(*pool);
+        REQUIRE(first.has_value());
+        CHECK(device.copyBuffer(*first, upload, middle, std::span{&whole, 1}).has_value());
+        Token token{};
+        if (acrossSubmits) {
+            const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*first, 1}, .waits = {}});
+            INFO(failureOf(sent));
+            REQUIRE(sent.has_value());
+            auto second = device.beginCommands(*pool);
+            REQUIRE(second.has_value());
+            CHECK(device.copyBuffer(*second, middle, readback, swapped).has_value());
+            const auto last = device.submit(
+                {.queue = 0, .commandLists = std::span{&*second, 1}, .waits = std::span{&*sent, 1}});
+            INFO(failureOf(last));
+            REQUIRE(last.has_value());
+            token = *last;
+        }
+        else {
+            CHECK(device.barrier(*first).has_value());
+            CHECK(device.copyBuffer(*first, middle, readback, swapped).has_value());
+            const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*first, 1}, .waits = {}});
+            INFO(failureOf(sent));
+            REQUIRE(sent.has_value());
+            token = *sent;
+        }
+        REQUIRE(device.wait(token).has_value());
+
+        const auto read = device.mapBuffer(readback);
+        REQUIRE(read.has_value());
+        CHECK(std::ranges::equal(read->first(kHalf), written->subspan(kHalf)));
+        CHECK(std::ranges::equal(read->subspan(kHalf), written->first(kHalf)));
+        for (const BufferHandle buffer : {upload, middle, readback}) {
+            CHECK(device.destroyBuffer(buffer).has_value());
+        }
+        CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device fails a copy and a barrier with RhiInvalidHandle for a list or buffer that is gone",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const BufferDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const BufferHandle upload = created(device, kUploadBuffer);
+        const BufferHandle gone = created(device, kReadbackBuffer);
+        REQUIRE(device.destroyBuffer(gone).has_value());
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+        const BufferCopy region{.srcOffset = 0, .dstOffset = 0, .size = kSize};
+
+        CHECK(device.copyBuffer(*list, upload, gone, std::span{&region, 1}).error().code ==
+              ErrorCode::RhiInvalidHandle);
+        CHECK(device.destroyCommandList(*list).has_value());
+        CHECK(device.copyBuffer(*list, upload, upload, std::span{&region, 1}).error().code ==
+              ErrorCode::RhiInvalidHandle);
+        CHECK(device.barrier(*list).error().code == ErrorCode::RhiInvalidHandle);
+        CHECK(device.destroyBuffer(upload).has_value());
         CHECK(device.destroyCommandPool(*pool).has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());

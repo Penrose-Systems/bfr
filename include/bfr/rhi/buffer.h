@@ -43,4 +43,11 @@ struct BufferDesc {
     BufferUsage usage;
 };
 
+/// One range copied from a source buffer to a destination buffer, in bytes.
+struct BufferCopy {
+    std::uint64_t srcOffset = 0;
+    std::uint64_t dstOffset = 0;
+    std::uint64_t size = 0;
+};
+
 } // namespace bfr::rhi

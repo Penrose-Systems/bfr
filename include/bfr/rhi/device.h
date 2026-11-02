@@ -93,6 +93,19 @@ public:
     /// present. Fails with RhiInvalidCall when none is open.
     [[nodiscard]] virtual core::Result<void> endRendering(CommandListHandle commandList) = 0;
 
+    /// Records copies of regions from src to dst, outside rendering. src has
+    /// copySrc usage and is device or upload memory; dst has copyDst usage and
+    /// is device or readback memory. Commands after a barrier in the list, or
+    /// in a later submit that waits on its token, see what was copied. Fails
+    /// with RhiInvalidHandle when the list or a buffer is gone.
+    [[nodiscard]] virtual core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src,
+                                                        BufferHandle dst, std::span<const BufferCopy> regions) = 0;
+
+    /// Records a barrier, outside rendering: commands recorded after it in the
+    /// list start once those before it have finished, and see what they
+    /// wrote. Fails with RhiInvalidHandle when the list is gone.
+    [[nodiscard]] virtual core::Result<void> barrier(CommandListHandle commandList) = 0;
+
     /// Sends desc's command lists to its queue, which runs them after what it
     /// was sent before and after the GPU passes the waits, ends the lists, and
     /// returns the token their completion signals. Calls for one queue must

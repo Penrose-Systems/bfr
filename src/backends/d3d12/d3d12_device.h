@@ -51,7 +51,7 @@ struct D3D12CommandPool {
 /// record from an allocator at a time, and the list recording on it.
 struct D3D12ListSlot {
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
-    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> list;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList7> list;
     CommandListHandle live;
 };
 
@@ -93,7 +93,7 @@ struct D3D12Queue {
 /// image when rendering ends, and the chain of render slots naming every
 /// swapchain rendered to, whose images the submit marks as sent.
 struct D3D12CommandList {
-    ID3D12GraphicsCommandList* list = nullptr;
+    ID3D12GraphicsCommandList7* list = nullptr;
     CommandPoolHandle pool;
     std::uint32_t slot = 0;
     std::optional<SwapchainHandle> rendering;
@@ -136,6 +136,9 @@ public:
     [[nodiscard]] core::Result<void> beginRendering(CommandListHandle commandList, SwapchainHandle swapchain,
                                                     const RenderingDesc& desc) override;
     [[nodiscard]] core::Result<void> endRendering(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
+                                                std::span<const BufferCopy> regions) override;
+    [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
     [[nodiscard]] core::Result<void> wait(Token token) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
@@ -163,7 +166,7 @@ private:
     void collectBuffers();
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
-    void discard(ID3D12GraphicsCommandList* list);
+    void discard(ID3D12GraphicsCommandList7* list);
     [[nodiscard]] core::Result<D3D12Swapchain*> swapchainFor(SwapchainHandle swapchain);
     [[nodiscard]] core::Result<D3D12CommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<D3D12CommandList*> commandListFor(CommandListHandle commandList);

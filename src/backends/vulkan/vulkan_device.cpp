@@ -86,6 +86,22 @@ VkImageMemoryBarrier2 layoutBarrier(VkImage image, VkImageLayout from, VkImageLa
     return barrier;
 }
 
+// Every write recorded before it, made visible to the accesses after it.
+void recordMemoryBarrier(const VolkDeviceTable& table, VkCommandBuffer buffer, VkPipelineStageFlags2 after,
+                         VkAccessFlags2 access) {
+    VkMemoryBarrier2 barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    barrier.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+    barrier.dstStageMask = after;
+    barrier.dstAccessMask = access;
+    VkDependencyInfo dependency{};
+    dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dependency.memoryBarrierCount = 1;
+    dependency.pMemoryBarriers = &barrier;
+    table.vkCmdPipelineBarrier2(buffer, &dependency);
+}
+
 void recordBarrier(const VolkDeviceTable& table, VkCommandBuffer buffer, const VkImageMemoryBarrier2& barrier) {
     VkDependencyInfo dependency{};
     dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -589,6 +605,16 @@ core::Result<void> VulkanDevice::endRendering(CommandListHandle commandList) {
     return {};
 }
 
+core::Result<void> VulkanDevice::barrier(CommandListHandle commandList) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    recordMemoryBarrier(table_, (*list)->buffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                        VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    return {};
+}
+
 core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
     if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
@@ -703,6 +729,9 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
         if (list == nullptr) {
             continue;
         }
+        // A wait on the token alone does not make the list's writes visible
+        // to the CPU; this does, as mapBuffer promises.
+        recordMemoryBarrier(table_, list->buffer, VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
         if (const VkResult result = table_.vkEndCommandBuffer(list->buffer); result != VK_SUCCESS && ended) {
             ended = failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkEndCommandBuffer", .result = result});
         }

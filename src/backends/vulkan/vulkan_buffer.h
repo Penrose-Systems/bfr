@@ -30,6 +30,7 @@ public:
     VulkanBuffer(VulkanBuffer&& other) noexcept;
     VulkanBuffer& operator=(VulkanBuffer&&) = delete;
 
+    [[nodiscard]] VkBuffer buffer() const { return buffer_; }
     [[nodiscard]] BufferMemory memory() const { return memory_; }
     [[nodiscard]] std::span<std::byte> mapped() const { return mapped_; }
 

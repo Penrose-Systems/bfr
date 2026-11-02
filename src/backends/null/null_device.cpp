@@ -11,6 +11,7 @@
 #include "null/null_instance.h"
 #include "rhi/buffer_check.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -277,6 +278,35 @@ core::Result<void> NullDevice::endRendering(CommandListHandle commandList) {
     return {};
 }
 
+// The null queues run nothing, so a copy is made as it is recorded: what the
+// tests read back is what was written before the copy was recorded.
+core::Result<void> NullDevice::copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
+                                          std::span<const BufferCopy> regions) {
+    if (auto list = commandListFor(commandList); !list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto from = bufferFor(src);
+    if (!from) {
+        return std::unexpected(std::move(from.error()));
+    }
+    auto to = bufferFor(dst);
+    if (!to) {
+        return std::unexpected(std::move(to.error()));
+    }
+    for (const BufferCopy& region : regions) {
+        std::ranges::copy(std::span{(*from)->bytes}.subspan(region.srcOffset, region.size),
+                          std::span{(*to)->bytes}.subspan(region.dstOffset).begin());
+    }
+    return {};
+}
+
+core::Result<void> NullDevice::barrier(CommandListHandle commandList) {
+    if (auto list = commandListFor(commandList); !list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    return {};
+}
+
 core::Result<Token> NullDevice::submit(const SubmitDesc& desc) {
     if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
@@ -366,10 +396,8 @@ core::Result<BufferHandle> NullDevice::createBuffer(const BufferDesc& desc) {
     if (auto checked = checkBufferDesc(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    NullBuffer made{.memory = desc.memory, .bytes = {}};
-    if (desc.memory != BufferMemory::Device) {
-        made.bytes.resize(desc.size);
-    }
+    // Device memory holds bytes too, so copies through it carry them.
+    NullBuffer made{.memory = desc.memory, .bytes = std::vector<std::byte>(desc.size)};
     const BufferHandle buffer = buffers_.emplace(std::move(made));
     if (buffer.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} buffers", kBufferLimit);

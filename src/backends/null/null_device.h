@@ -80,6 +80,9 @@ public:
     [[nodiscard]] core::Result<void> beginRendering(CommandListHandle commandList, SwapchainHandle swapchain,
                                                     const RenderingDesc& desc) override;
     [[nodiscard]] core::Result<void> endRendering(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
+                                                std::span<const BufferCopy> regions) override;
+    [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
     [[nodiscard]] core::Result<void> wait(Token token) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;

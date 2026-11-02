@@ -604,6 +604,16 @@ typedef struct bfr_buffer_desc {
     bfr_buffer_usage usage;
 } bfr_buffer_desc;
 
+// One range copied from a source buffer to a destination buffer.
+typedef struct bfr_buffer_copy {
+    // Bytes into the source.
+    uint64_t src_offset;
+    // Bytes into the destination.
+    uint64_t dst_offset;
+    // Bytes.
+    uint64_t size;
+} bfr_buffer_copy;
+
 // A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was submitted
 // has run. An all-zero token has already completed.
 typedef struct bfr_token {
@@ -1152,6 +1162,22 @@ BFR_API bfr_result bfr_begin_rendering(
 
 // Ends the rendering bfr_begin_rendering began; the image is then ready to present.
 BFR_API bfr_result bfr_end_rendering(bfr_device* device, bfr_command_list command_list);
+
+// Records copies of regions from src to dst, outside rendering. src has copy_src usage and is
+// device or upload memory; dst has copy_dst usage and is device or readback memory. Commands after
+// a bfr_barrier in the list, or in a later submit that waits on its token, see what was copied.
+// regions: An array of region_count elements.
+BFR_API bfr_result bfr_copy_buffer(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_buffer src,
+    bfr_buffer dst,
+    const bfr_buffer_copy* regions,
+    uint32_t region_count);
+
+// Records a barrier, outside rendering: commands recorded after it in the list start once those
+// before it have finished, and see what they wrote.
+BFR_API bfr_result bfr_barrier(bfr_device* device, bfr_command_list command_list);
 
 // Sends recorded command lists to a queue, which runs them after what it was sent before and after
 // the GPU passes the waits, and writes the token their completion signals. The command lists are

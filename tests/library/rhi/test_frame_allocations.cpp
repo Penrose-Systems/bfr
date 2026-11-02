@@ -1,6 +1,7 @@
 #include "allocation/allocation_counter.h"
 #include "bfr/core/error.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/instance.h"
@@ -41,6 +42,10 @@ constexpr int kRetireFrame = 2;
 
 const bfr::core::window::NativeWindow kHeadless = bfr::core::window::Headless{};
 
+// What the first list after the rendering ones copies each frame.
+constexpr std::uint64_t kCopyBytes = 256;
+constexpr BufferCopy kCopy{.srcOffset = 0, .dstOffset = 0, .size = kCopyBytes};
+
 constexpr RenderingDesc kClear{.loadOp = LoadOp::Clear, .storeOp = StoreOp::Store, .clearColor = {0, 0, 0, 1}};
 
 // What one frame's calls failed with, or nothing; it holds no string, so
@@ -76,6 +81,12 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
         const auto retiring = device->createCommandPool({.queue = 0, .listCount = 1});
         INFO(failureOf(retiring));
         REQUIRE(retiring.has_value());
+        const auto source = device->createBuffer(
+            {.size = kCopyBytes, .memory = BufferMemory::Upload, .usage = {.copySrc = true}});
+        REQUIRE(source.has_value());
+        const auto target = device->createBuffer(
+            {.size = kCopyBytes, .memory = BufferMemory::Device, .usage = {.copyDst = true}});
+        REQUIRE(target.has_value());
 
         FrameFailure failed;
         std::size_t allocations = 0;
@@ -103,6 +114,10 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
                     if (index < kRenderingLists) {
                         check("beginRendering", device->beginRendering(*commands, *swapchain, kClear));
                         check("endRendering", device->endRendering(*commands));
+                    }
+                    if (index == kRenderingLists) {
+                        check("copyBuffer", device->copyBuffer(*commands, *source, *target, std::span{&kCopy, 1}));
+                        check("barrier", device->barrier(*commands));
                     }
                 }
                 const std::array<Token, 2> waits{last, last};
@@ -134,6 +149,8 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
         CHECK(frees == 0);
         CHECK(device->destroyCommandPool(*pool).has_value());
         CHECK(device->destroySwapchain(*swapchain).has_value());
+        CHECK(device->destroyBuffer(*source).has_value());
+        CHECK(device->destroyBuffer(*target).has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

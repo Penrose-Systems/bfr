@@ -153,10 +153,9 @@ given, whatever order threads recorded them in.
 _Avoid_: execute, commit, flush
 
 **Barrier**:
-A statement by the caller of a resource's access before and after a point in
-a command list, with stage, access and texture layout. In the core the
-caller states every barrier; a tracker that infers them is a separate
-authority.
+A point in a command list after which its later commands start once its
+earlier ones have finished, and see what they wrote. In the core the caller
+records every barrier; a tracker that infers them is a separate authority.
 _Avoid_: transition, resource state
 
 **Rendering scope**:

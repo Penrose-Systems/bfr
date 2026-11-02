@@ -819,6 +819,21 @@ struct BufferDesc {
     BufferUsage usage{};
 };
 
+/// One range copied from a source buffer to a destination buffer.
+struct BufferCopy {
+    /// Bytes into the source.
+    std::uint64_t srcOffset{};
+    /// Bytes into the destination.
+    std::uint64_t dstOffset{};
+    /// Bytes.
+    std::uint64_t size{};
+};
+static_assert(sizeof(BufferCopy) == sizeof(bfr_buffer_copy) && alignof(BufferCopy) == alignof(bfr_buffer_copy) &&
+              std::is_standard_layout_v<BufferCopy> && std::is_trivially_copyable_v<BufferCopy>);
+static_assert(offsetof(BufferCopy, srcOffset) == offsetof(bfr_buffer_copy, src_offset));
+static_assert(offsetof(BufferCopy, dstOffset) == offsetof(bfr_buffer_copy, dst_offset));
+static_assert(offsetof(BufferCopy, size) == offsetof(bfr_buffer_copy, size));
+
 /// A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was
 /// submitted has run. An all-zero token has already completed.
 struct Token {
@@ -1311,6 +1326,10 @@ inline bfr_buffer_desc toC(const BufferDesc& value, const bfr_chain* next) {
     };
 }
 
+inline bfr_buffer_copy toC(const BufferCopy& value) {
+    return {.src_offset = value.srcOffset, .dst_offset = value.dstOffset, .size = value.size};
+}
+
 inline bfr_token toC(const Token& value) {
     return {.queue = value.queue, .value = value.value};
 }
@@ -1730,6 +1749,16 @@ public:
     /// Ends the rendering bfr_begin_rendering began; the image is then ready to present.
     [[nodiscard]] Expected<void> endRendering(CommandList commandList) const;
 
+    /// Records copies of regions from src to dst, outside rendering. src has copy_src usage and is
+    /// device or upload memory; dst has copy_dst usage and is device or readback memory. Commands
+    /// after a bfr_barrier in the list, or in a later submit that waits on its token, see what was
+    /// copied.
+    [[nodiscard]] Expected<void> copyBuffer(CommandList commandList, const Buffer& src, const Buffer& dst, std::span<const BufferCopy> regions) const;
+
+    /// Records a barrier, outside rendering: commands recorded after it in the list start once
+    /// those before it have finished, and see what they wrote.
+    [[nodiscard]] Expected<void> barrier(CommandList commandList) const;
+
     /// Sends recorded command lists to a queue, which runs them after what it was sent before and
     /// after the GPU passes the waits, and writes the token their completion signals. The command
     /// lists are gone afterwards. Calls on one queue must not overlap; the caller synchronizes
@@ -2094,6 +2123,20 @@ inline Expected<void> Device::beginRendering(CommandList commandList, const Swap
 
 inline Expected<void> Device::endRendering(CommandList commandList) const {
     if (const bfr_result result = bfr_end_rendering(device_, commandList.get()); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::copyBuffer(CommandList commandList, const Buffer& src, const Buffer& dst, std::span<const BufferCopy> regions) const {
+    if (const bfr_result result = bfr_copy_buffer(device_, commandList.get(), src.get(), dst.get(), reinterpret_cast<const bfr_buffer_copy*>(regions.data()), static_cast<uint32_t>(regions.size())); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::barrier(CommandList commandList) const {
+    if (const bfr_result result = bfr_barrier(device_, commandList.get()); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return {};

@@ -138,6 +138,9 @@ public:
     [[nodiscard]] core::Result<void> beginRendering(CommandListHandle commandList, SwapchainHandle swapchain,
                                                     const RenderingDesc& desc) override;
     [[nodiscard]] core::Result<void> endRendering(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
+                                                std::span<const BufferCopy> regions) override;
+    [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
     [[nodiscard]] core::Result<void> wait(Token token) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
@@ -192,6 +195,11 @@ private:
     std::atomic<std::uint64_t> submitSerial_{0};
 
     core::Submissions submissions_;
+    // Every buffer, attached to every queue, so the GPU may use any of them.
+    // Declared before buffers_, which take themselves out of it as they go,
+    // under residencyLock_: Metal's residency sets are not thread-safe.
+    Ref<MTL::ResidencySet> residency_;
+    std::mutex residencyLock_;
     static constexpr std::uint32_t kBufferCapacity = 256;
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<MetalBuffer, Buffer> buffers_;

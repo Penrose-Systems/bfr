@@ -2,17 +2,23 @@
 
 #include "bfr/core/error.h"
 #include "bfr/rhi/buffer.h"
+#include "bfr/rhi/command_list.h"
 #include "metal/metal_device.h"
 #include "metal/metal_util.h"
 #include "rhi/buffer_check.h"
 
 #include <Metal/Metal.hpp>
+#include <Metal/MTL4ComputeCommandEncoder.hpp>
+#include <Metal/MTLAllocation.hpp>
+#include <Metal/MTLBuffer.hpp>
+#include <Metal/MTLResidencySet.hpp>
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <format>
+#include <mutex>
 #include <span>
 #include <utility>
 
@@ -27,17 +33,35 @@ MTL::ResourceOptions optionsFor(BufferMemory memory) {
 
 } // namespace
 
-core::Result<MetalBuffer> createMetalBuffer(MTL::Device& device, const BufferDesc& desc) {
-    MetalBuffer made{.buffer = adopt(device.newBuffer(desc.size, optionsFor(desc.memory))),
-                     .memory = desc.memory,
-                     .mapped = {}};
-    if (!made.buffer) {
+Resident::Resident(Ref<MTL::ResidencySet> set, const MTL::Allocation* allocation)
+    : set_(std::move(set)), allocation_(allocation) {
+    set_->addAllocation(allocation_);
+}
+
+Resident::~Resident() {
+    if (allocation_ != nullptr) {
+        set_->removeAllocation(allocation_);
+    }
+}
+
+Resident::Resident(Resident&& other) noexcept
+    : set_(std::move(other.set_)), allocation_(std::exchange(other.allocation_, nullptr)) {}
+
+core::Result<MetalBuffer> createMetalBuffer(MTL::Device& device, const BufferDesc& desc,
+                                            Ref<MTL::ResidencySet> residency) {
+    Ref<MTL::Buffer> buffer = adopt(device.newBuffer(desc.size, optionsFor(desc.memory)));
+    if (!buffer) {
         return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no buffer of {} bytes", desc.size);
     }
+    std::span<std::byte> mapped;
     if (desc.memory != BufferMemory::Device) {
-        made.mapped = {static_cast<std::byte*>(made.buffer->contents()), static_cast<std::size_t>(desc.size)};
+        mapped = {static_cast<std::byte*>(buffer->contents()), static_cast<std::size_t>(desc.size)};
     }
-    return made;
+    Resident resident{std::move(residency), buffer.get()};
+    return MetalBuffer{.buffer = std::move(buffer),
+                       .memory = desc.memory,
+                       .mapped = mapped,
+                       .resident = std::move(resident)};
 }
 
 // The device's buffer calls, beside the buffers they make.
@@ -51,8 +75,11 @@ core::Result<MetalBuffer*> MetalDevice::bufferFor(BufferHandle buffer) {
 }
 
 void MetalDevice::collectBuffers() {
+    // The buffers collected leave the residency set, which is not thread-safe.
+    const std::scoped_lock lock{residencyLock_};
     buffers_.collect(
         submissions_.completed([this](std::uint32_t queue) { return queues_[queue]->event->signaledValue(); }));
+    residency_->commit();
 }
 
 core::Result<BufferHandle> MetalDevice::createBuffer(const BufferDesc& desc) {
@@ -62,15 +89,47 @@ core::Result<BufferHandle> MetalDevice::createBuffer(const BufferDesc& desc) {
     // Cold, so buffers the GPU is done with are freed here, never on the
     // frame path: freeing one frees the allocator's memory.
     collectBuffers();
-    auto made = createMetalBuffer(*device_.get(), desc);
+    // Held until made is gone, which takes it out of the set if it is not kept.
+    const std::scoped_lock lock{residencyLock_};
+    auto made = createMetalBuffer(*device_.get(), desc, residency_);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }
+    residency_->commit();
     const BufferHandle buffer = buffers_.emplace(std::move(*made));
     if (buffer.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} buffers", kBufferLimit);
     }
     return buffer;
+}
+
+core::Result<void> MetalDevice::copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
+                                           std::span<const BufferCopy> regions) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto from = bufferFor(src);
+    if (!from) {
+        return std::unexpected(std::move(from.error()));
+    }
+    auto to = bufferFor(dst);
+    if (!to) {
+        return std::unexpected(std::move(to.error()));
+    }
+    // Metal 4 copies on a compute encoder. The pool drains the autoreleased
+    // encoder reference.
+    const AutoreleasePool pool;
+    MTL4::ComputeCommandEncoder* encoder = (*list)->buffer->computeCommandEncoder();
+    if (encoder == nullptr) {
+        return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no compute command encoder");
+    }
+    for (const BufferCopy& region : regions) {
+        encoder->copyFromBuffer((*from)->buffer.get(), region.srcOffset, (*to)->buffer.get(), region.dstOffset,
+                                region.size);
+    }
+    encoder->endEncoding();
+    return {};
 }
 
 core::Result<std::span<std::byte>> MetalDevice::mapBuffer(BufferHandle buffer) {

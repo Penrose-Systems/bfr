@@ -2,6 +2,7 @@
 
 #include "bfr/core/error.h"
 #include "bfr/rhi/buffer.h"
+#include "bfr/rhi/command_list.h"
 #include "rhi/buffer_check.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_device.h"
@@ -174,6 +175,27 @@ core::Result<std::span<std::byte>> VulkanDevice::mapBuffer(BufferHandle buffer) 
                              "the buffer is in device memory, which the CPU does not map");
     }
     return (*found)->mapped();
+}
+
+core::Result<void> VulkanDevice::copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
+                                            std::span<const BufferCopy> regions) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto from = bufferFor(src);
+    if (!from) {
+        return std::unexpected(std::move(from.error()));
+    }
+    auto to = bufferFor(dst);
+    if (!to) {
+        return std::unexpected(std::move(to.error()));
+    }
+    for (const BufferCopy& region : regions) {
+        const VkBufferCopy copy{.srcOffset = region.srcOffset, .dstOffset = region.dstOffset, .size = region.size};
+        table_.vkCmdCopyBuffer((*list)->buffer, (*from)->buffer(), (*to)->buffer(), 1, &copy);
+    }
+    return {};
 }
 
 core::Result<void> VulkanDevice::destroyBuffer(BufferHandle buffer) {

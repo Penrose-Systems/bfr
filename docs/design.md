@@ -134,10 +134,12 @@ encoder switching needs lookahead.
   semaphore, D3D12 fence, Metal shared event). A completion token is
   `{queue, value}`. Submissions wait on and signal tokens; the CPU waits on
   or polls them. Binary semaphores exist only inside the swapchain.
-- Barriers are explicit and batched: per resource (with subresource range)
-  and global memory barriers, each with stage and access before and after,
-  plus a texture layout. Shaped after Vulkan synchronization 2 and D3D12
-  enhanced barriers, which map almost one to one.
+- Barriers are explicit: the caller records a full barrier, after which the
+  list's later commands start once its earlier ones have finished, and see
+  what they wrote. Each backend has one natively (a Vulkan memory barrier,
+  a D3D12 global barrier, a Metal 4 consumer barrier). A finer form, by
+  resource, stage and access, comes only if measurement shows the full one
+  costs too much.
 - D3D12 requires enhanced barriers; adapters without them are
   rejected. Reason: a legacy-barrier path doubles the sync code.
   Enhanced barriers are an optional driver feature checked at runtime; the

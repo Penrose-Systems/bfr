@@ -514,6 +514,13 @@ structs:
       - {name: memory, type: buffer_memory, doc: 0 is device.}
       - {name: usage, type: buffer_usage}
 
+  buffer_copy:
+    doc: One range copied from a source buffer to a destination buffer.
+    members:
+      - {name: src_offset, type: u64, doc: Bytes into the source.}
+      - {name: dst_offset, type: u64, doc: Bytes into the destination.}
+      - {name: size, type: u64, doc: Bytes.}
+
   token:
     doc: >-
       A point on a queue's timeline, which bfr_submit writes and the GPU passes
@@ -1044,6 +1051,30 @@ functions:
 
   end_rendering:
     doc: Ends the rendering bfr_begin_rendering began; the image is then ready to present.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+
+  copy_buffer:
+    doc: >-
+      Records copies of regions from src to dst, outside rendering. src has
+      copy_src usage and is device or upload memory; dst has copy_dst usage and
+      is device or readback memory. Commands after a bfr_barrier in the list,
+      or in a later submit that waits on its token, see what was copied.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: src, type: buffer}
+      - {name: dst, type: buffer}
+      - {name: regions, type: buffer_copy, array: region_count, pointer: in}
+      - {name: region_count, type: u32}
+
+  barrier:
+    doc: >-
+      Records a barrier, outside rendering: commands recorded after it in the
+      list start once those before it have finished, and see what they wrote.
     returns: result
     params:
       - {name: device, type: device}

@@ -228,6 +228,38 @@ class PlacementTests(unittest.TestCase):
         self.assertIn("static_assert(sizeof(Buffer) == sizeof(bfr_buffer)", rendered)
         self.assertIn(".buffer_count = static_cast<uint32_t>(value.buffers.size())", rendered)
 
+    def test_an_array_param_passed_in_becomes_a_span_passed_to_c_as_it_is(self) -> None:
+        spec = with_more(MINIMAL)
+        spec["structs"]["range"] = {"doc": "A range.", "members": [{"name": "size", "type": "u64"}]}
+        spec["functions"]["device_fill"] = {
+            "doc": "Fills.",
+            "returns": "result",
+            "params": [
+                {"name": "device", "type": "device"},
+                {"name": "ranges", "type": "range", "array": "range_count", "pointer": "in"},
+                {"name": "range_count", "type": "u32"},
+            ],
+        }
+        rendered = render(Api(spec))
+        self.assertIn("[[nodiscard]] Expected<void> fill(std::span<const Range> ranges) const;", rendered)
+        self.assertIn("bfr_device_fill(device_, reinterpret_cast<const bfr_range*>(ranges.data()), "
+                      "static_cast<uint32_t>(ranges.size()))", rendered)
+        self.assertIn("static_assert(sizeof(Range) == sizeof(bfr_range)", rendered)
+
+    def test_an_array_param_that_would_need_a_copy_is_rejected(self) -> None:
+        def change(spec: dict) -> None:
+            spec["functions"]["device_send"] = {
+                "doc": "Sends.",
+                "returns": "result",
+                "params": [
+                    {"name": "device", "type": "device"},
+                    {"name": "buffers", "type": "buffer", "array": "buffer_count", "pointer": "in"},
+                    {"name": "buffer_count", "type": "u32"},
+                ],
+            }
+
+        self.assert_rejected(change, "without a copy")
+
     def test_an_array_member_that_would_need_a_copy_is_rejected(self) -> None:
         def change(spec: dict) -> None:
             spec["structs"]["batch"] = {

@@ -177,8 +177,16 @@ class Plan:
             method.owner in api.handles and api.handles[method.owner]["parent"] == api.handles[returned]["parent"]
         ):
             raise SpecError(f"{name}: a {returned} is made by a method of its parent or of a handle with that parent")
-        method.inputs = [p for p in rest if p is not method.returned and p is not method.count]
+        # An array passed in is a span, which carries its own count.
+        spans = {p["array"] for p in rest if p.get("array") and p.get("pointer") == "in"}
+        method.inputs = [p for p in rest
+                         if p is not method.returned and p is not method.count and p["name"] not in spans]
         for param in method.inputs:
+            if param.get("array") and param.get("pointer") == "in":
+                if not self.is_mirror(param["type"]):
+                    raise SpecError(f"{name}.{param['name']}: an array param must be of a plain handle or a "
+                                    "struct of numbers, which pass to C without a copy")
+                continue
             if param.get("pointer") not in (None, "in") or param.get("array"):
                 raise SpecError(f"{name}.{param['name']}: the C++ generator does not yet handle this param")
             if param.get("pointer") == "in" and param["type"] not in api.structs:
@@ -491,8 +499,10 @@ class Renderer:
                 continue
             self.emit(f"    {member_type(api, member, out)} {camel(member['name'])}{{}};")
         self.emit("};")
-        if any(self.plan.is_mirror(m["type"]) and m["type"] == name for s in api.structs.values()
-               for m in s["members"] if m.get("array")):
+        arrays = [m for s in api.structs.values() for m in s["members"] if m.get("array")]
+        arrays += [p for f in api.functions.values() for p in f["params"]
+                   if p.get("array") and p.get("pointer") == "in"]
+        if any(self.plan.is_mirror(m["type"]) and m["type"] == name for m in arrays):
             self.mirror_asserts(pascal(name), c_name(name),
                                 [(camel(m["name"]), m["name"]) for m in struct["members"]])
 
@@ -700,7 +710,9 @@ class Renderer:
         params = []
         for param in method.inputs:
             kind = param["type"]
-            if param.get("pointer") == "in":
+            if param.get("array"):
+                params.append(f"std::span<const {cpp_type(api, kind)}> {camel(param['name'])}")
+            elif param.get("pointer") == "in":
                 params.append(f"const {pascal(kind)}& {camel(param['name'])}")
                 if self.plan.is_extensible(kind):
                     template = ["template <class... Extensions>",
@@ -756,8 +768,13 @@ class Renderer:
         args = [f"{camel(p['type'])}_" for p in method.self_params]
         # The state of a callback the desc names, which the object made keeps.
         callback_state = None
+        counts: dict[str, str] = {}
         for param in method.inputs:
             kind, name = param["type"], camel(param["name"])
+            if param.get("array"):
+                args.append(f"reinterpret_cast<const {c_type(kind)}*>({name}.data())")
+                counts[param["array"]] = f"static_cast<uint32_t>({name}.size())"
+                continue
             if kind in api.handles:
                 args.append(f"{name}.get()")
                 continue
@@ -797,9 +814,9 @@ class Renderer:
                 kind, name = returned["type"], camel(returned["name"])
                 initial = " = nullptr" if kind in api.objects else "{}"
                 self.emit(f"    {c_type(kind)}{'*' if kind in api.objects else ''} {name}{initial};")
-                args_in_order = self.ordered_args(method, args, {returned["name"]: f"&{name}"})
+                args_in_order = self.ordered_args(method, args, {returned["name"]: f"&{name}", **counts})
             else:
-                args_in_order = self.ordered_args(method, args, {})
+                args_in_order = self.ordered_args(method, args, counts)
             if function.get("returns") is None:
                 self.emit(f"    {call}({', '.join(args_in_order)});")
             else:

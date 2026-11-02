@@ -235,7 +235,7 @@ core::Result<void> D3D12Device::waitIdle() {
     return {};
 }
 
-void D3D12Device::discard(ID3D12GraphicsCommandList* list) {
+void D3D12Device::discard(ID3D12GraphicsCommandList7* list) {
     if (const HRESULT result = list->Close(); FAILED(result)) {
         BFR_LOG_WARN(instance_->logger(), "ID3D12GraphicsCommandList::Close: {} (0x{:08X})",
                      D3D12Failure::nameOf(result), static_cast<std::uint32_t>(result));
@@ -519,7 +519,7 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
         }
         renders_[*slot] = swapchain;
     }
-    ID3D12GraphicsCommandList* recording = (*list)->list;
+    ID3D12GraphicsCommandList7* recording = (*list)->list;
     const D3D12_RESOURCE_BARRIER toRender = transition(image, D3D12_RESOURCE_STATE_PRESENT,
                                                        D3D12_RESOURCE_STATE_RENDER_TARGET);
     recording->ResourceBarrier(1, &toRender);
@@ -547,7 +547,7 @@ core::Result<void> D3D12Device::endRendering(CommandListHandle commandList) {
         return std::unexpected(std::move(chain.error()));
     }
     ID3D12Resource* image = (*chain)->image();
-    ID3D12GraphicsCommandList* recording = (*list)->list;
+    ID3D12GraphicsCommandList7* recording = (*list)->list;
     if ((*list)->storeOp == StoreOp::DontCare) {
         recording->DiscardResource(image, nullptr);
     }
@@ -555,6 +555,48 @@ core::Result<void> D3D12Device::endRendering(CommandListHandle commandList) {
                                                         D3D12_RESOURCE_STATE_PRESENT);
     recording->ResourceBarrier(1, &toPresent);
     (*list)->rendering.reset();
+    return {};
+}
+
+namespace {
+
+// Every write a list of type may make, which a barrier waits on. The spec
+// warns on D3D12_BARRIER_ACCESS_COMMON before a barrier and allows each queue
+// type only its own accesses ("Command Queue Access Compatibility").
+// Raytracing writes are left out: BFR records none, and whether a device
+// without raytracing takes the bit is not documented.
+D3D12_BARRIER_ACCESS writesOf(D3D12_COMMAND_LIST_TYPE type) {
+    using std::to_underlying;
+    auto writes = to_underlying(D3D12_BARRIER_ACCESS_COPY_DEST);
+    if (type != D3D12_COMMAND_LIST_TYPE_COPY) {
+        writes |= to_underlying(D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
+    }
+    if (type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
+        writes |= to_underlying(D3D12_BARRIER_ACCESS_RENDER_TARGET) |
+                  to_underlying(D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE) |
+                  to_underlying(D3D12_BARRIER_ACCESS_STREAM_OUTPUT) | to_underlying(D3D12_BARRIER_ACCESS_RESOLVE_DEST);
+    }
+    // A flag enum holds any OR of its flags, which the analyzer does not know.
+    return static_cast<D3D12_BARRIER_ACCESS>(writes); // NOLINT(clang-analyzer-optin.core.EnumCastOutOfRange)
+}
+
+} // namespace
+
+core::Result<void> D3D12Device::barrier(CommandListHandle commandList) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    const D3D12CommandPool* pool = commandPools_.find((*list)->pool);
+    if (pool == nullptr) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the list's pool is gone");
+    }
+    const D3D12_GLOBAL_BARRIER global{.SyncBefore = D3D12_BARRIER_SYNC_ALL,
+                                      .SyncAfter = D3D12_BARRIER_SYNC_ALL,
+                                      .AccessBefore = writesOf(queues_[pool->queue]->listType),
+                                      .AccessAfter = D3D12_BARRIER_ACCESS_COMMON};
+    const D3D12_BARRIER_GROUP group{.Type = D3D12_BARRIER_TYPE_GLOBAL, .NumBarriers = 1, .pGlobalBarriers = &global};
+    (*list)->list->Barrier(1, &group);
     return {};
 }
 
