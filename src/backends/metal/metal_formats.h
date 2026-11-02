@@ -20,6 +20,10 @@
 
 namespace bfr::rhi::metal {
 
+/// format's Metal pixel format; Invalid where Metal has none, which Metal
+/// then refuses.
+[[nodiscard]] MTL::PixelFormat pixelFormatFor(Format format);
+
 /// What a swapchain on a CAMetalLayer may be: nothing, since Metal has no call
 /// that says.
 [[nodiscard]] SwapchainCaps surfaceCapsFor();

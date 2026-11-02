@@ -77,8 +77,10 @@ core::Result<MetalBuffer*> MetalDevice::bufferFor(BufferHandle buffer) {
 void MetalDevice::collectBuffers() {
     // The buffers collected leave the residency set, which is not thread-safe.
     const std::scoped_lock lock{residencyLock_};
-    buffers_.collect(
-        submissions_.completed([this](std::uint32_t queue) { return queues_[queue]->event->signaledValue(); }));
+    const std::uint64_t completed = submissions_.completed(
+        [this](std::uint32_t queue) { return queues_[queue]->event->signaledValue(); });
+    buffers_.collect(completed);
+    textures_.collect(completed);
     residency_->commit();
 }
 

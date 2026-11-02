@@ -642,6 +642,70 @@ enum class BufferMemory : std::int32_t {
     return {};
 }
 
+/// The shape of a texture.
+enum class TextureDimension : std::int32_t {
+    /// Width by height, in layers.
+    D2 = BFR_TEXTURE_DIMENSION_D2,
+    /// Width, in layers.
+    D1 = BFR_TEXTURE_DIMENSION_D1,
+    /// Width by height by depth.
+    D3 = BFR_TEXTURE_DIMENSION_D3,
+    /// Six square faces per cube, in layers: a multiple of 6, face by face, width equal to height.
+    Cube = BFR_TEXTURE_DIMENSION_CUBE,
+};
+
+/// value's name in bfr.yaml; empty for a value TextureDimension doesn't have.
+[[nodiscard]] constexpr std::string_view name(TextureDimension value) {
+    switch (value) {
+    case TextureDimension::D2: return "d2";
+    case TextureDimension::D1: return "d1";
+    case TextureDimension::D3: return "d3";
+    case TextureDimension::Cube: return "cube";
+    }
+    return {};
+}
+
+/// How a texture's memory is arranged for what the GPU does with it next. bfr_texture_barrier moves
+/// a texture between layouts; BFR keeps no record of the one it is in.
+enum class TextureLayout : std::int32_t {
+    /// Its contents are not kept. Only a layout to move from.
+    Undefined = BFR_TEXTURE_LAYOUT_UNDEFINED,
+    /// Copies read it.
+    CopySrc = BFR_TEXTURE_LAYOUT_COPY_SRC,
+    /// Copies write it.
+    CopyDst = BFR_TEXTURE_LAYOUT_COPY_DST,
+};
+
+/// value's name in bfr.yaml; empty for a value TextureLayout doesn't have.
+[[nodiscard]] constexpr std::string_view name(TextureLayout value) {
+    switch (value) {
+    case TextureLayout::Undefined: return "undefined";
+    case TextureLayout::CopySrc: return "copy_src";
+    case TextureLayout::CopyDst: return "copy_dst";
+    }
+    return {};
+}
+
+/// Which part of a texel a copy moves.
+enum class TextureAspect : std::int32_t {
+    /// The texel, of any format but a depth or stencil one.
+    Color = BFR_TEXTURE_ASPECT_COLOR,
+    /// The depth of a depth format.
+    Depth = BFR_TEXTURE_ASPECT_DEPTH,
+    /// The stencil of a stencil format.
+    Stencil = BFR_TEXTURE_ASPECT_STENCIL,
+};
+
+/// value's name in bfr.yaml; empty for a value TextureAspect doesn't have.
+[[nodiscard]] constexpr std::string_view name(TextureAspect value) {
+    switch (value) {
+    case TextureAspect::Color: return "color";
+    case TextureAspect::Depth: return "depth";
+    case TextureAspect::Stencil: return "stencil";
+    }
+    return {};
+}
+
 /// Which window system a bfr_window comes from, for the platforms that have more than one.
 enum class WindowSystem : std::int32_t {
     /// The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -690,6 +754,8 @@ class CommandPool;
 class CommandList;
 
 class Buffer;
+
+class Texture;
 
 /// How to create an instance.
 struct InstanceDesc {
@@ -833,6 +899,117 @@ static_assert(sizeof(BufferCopy) == sizeof(bfr_buffer_copy) && alignof(BufferCop
 static_assert(offsetof(BufferCopy, srcOffset) == offsetof(bfr_buffer_copy, src_offset));
 static_assert(offsetof(BufferCopy, dstOffset) == offsetof(bfr_buffer_copy, dst_offset));
 static_assert(offsetof(BufferCopy, size) == offsetof(bfr_buffer_copy, size));
+
+/// What the GPU does with a texture. Set every use it will have.
+struct TextureUsage {
+    bool copySrc{};
+    bool copyDst{};
+    /// Shaders sample it.
+    bool sampled{};
+    /// Shaders read and write it.
+    bool storage{};
+    /// Rendering writes color to it.
+    bool colorAttachment{};
+    /// Rendering tests and writes depth or stencil in it.
+    bool depthStencil{};
+};
+
+/// How to create a texture, in device memory. The CPU reaches it only by copies through a buffer.
+struct TextureDesc {
+    /// 0 is d2.
+    TextureDimension dimension{};
+    Format format{};
+    /// Texels.
+    std::uint32_t width{};
+    /// Texels; 1 for d1.
+    std::uint32_t height{};
+    /// Texels for d3; 1 otherwise.
+    std::uint32_t depth{};
+    /// 1 for d3; for cube, a multiple of 6.
+    std::uint32_t layers{};
+    std::uint32_t mipLevels{};
+    /// Samples per texel; 1 unless rendering multisamples it.
+    std::uint32_t samples{};
+    TextureUsage usage{};
+};
+
+/// One region copied between a buffer and one layer and mip level of a single-sampled texture.
+/// bytes_per_row is a multiple of the format's block bytes and, when it is not 0, of
+/// bfr_caps_limits.copy_row_pitch_alignment; buffer_offset a multiple of the block bytes and, when
+/// it is not 0, of copy_offset_alignment. rows_per_image is at least height and a multiple of the
+/// block height. A depth or stencil aspect copies its whole mip level, with buffer_offset a
+/// multiple of 4, and takes 4 bytes a texel for depth, 2 for a 16-bit depth, and 1 for stencil.
+struct BufferTextureCopy {
+    /// Bytes into the buffer.
+    std::uint64_t bufferOffset{};
+    /// Bytes between the starts of two rows of texel blocks in the buffer.
+    std::uint64_t bytesPerRow{};
+    /// Rows of texels between the starts of two depth slices in the buffer.
+    std::uint32_t rowsPerImage{};
+    std::uint32_t mipLevel{};
+    std::uint32_t layer{};
+    TextureAspect aspect{};
+    std::uint32_t x{};
+    std::uint32_t y{};
+    std::uint32_t z{};
+    /// Texels.
+    std::uint32_t width{};
+    /// Texels.
+    std::uint32_t height{};
+    /// Texels.
+    std::uint32_t depth{};
+};
+static_assert(sizeof(BufferTextureCopy) == sizeof(bfr_buffer_texture_copy) && alignof(BufferTextureCopy) == alignof(bfr_buffer_texture_copy) &&
+              std::is_standard_layout_v<BufferTextureCopy> && std::is_trivially_copyable_v<BufferTextureCopy>);
+static_assert(offsetof(BufferTextureCopy, bufferOffset) == offsetof(bfr_buffer_texture_copy, buffer_offset));
+static_assert(offsetof(BufferTextureCopy, bytesPerRow) == offsetof(bfr_buffer_texture_copy, bytes_per_row));
+static_assert(offsetof(BufferTextureCopy, rowsPerImage) == offsetof(bfr_buffer_texture_copy, rows_per_image));
+static_assert(offsetof(BufferTextureCopy, mipLevel) == offsetof(bfr_buffer_texture_copy, mip_level));
+static_assert(offsetof(BufferTextureCopy, layer) == offsetof(bfr_buffer_texture_copy, layer));
+static_assert(offsetof(BufferTextureCopy, aspect) == offsetof(bfr_buffer_texture_copy, aspect));
+static_assert(offsetof(BufferTextureCopy, x) == offsetof(bfr_buffer_texture_copy, x));
+static_assert(offsetof(BufferTextureCopy, y) == offsetof(bfr_buffer_texture_copy, y));
+static_assert(offsetof(BufferTextureCopy, z) == offsetof(bfr_buffer_texture_copy, z));
+static_assert(offsetof(BufferTextureCopy, width) == offsetof(bfr_buffer_texture_copy, width));
+static_assert(offsetof(BufferTextureCopy, height) == offsetof(bfr_buffer_texture_copy, height));
+static_assert(offsetof(BufferTextureCopy, depth) == offsetof(bfr_buffer_texture_copy, depth));
+
+/// One region copied between two textures of one format and sample count, from one layer and mip
+/// level to another, every aspect of it. A depth-stencil or multisampled texture copies its whole
+/// mip level.
+struct TextureCopy {
+    std::uint32_t srcMipLevel{};
+    std::uint32_t srcLayer{};
+    std::uint32_t srcX{};
+    std::uint32_t srcY{};
+    std::uint32_t srcZ{};
+    std::uint32_t dstMipLevel{};
+    std::uint32_t dstLayer{};
+    std::uint32_t dstX{};
+    std::uint32_t dstY{};
+    std::uint32_t dstZ{};
+    /// Texels.
+    std::uint32_t width{};
+    /// Texels.
+    std::uint32_t height{};
+    /// Texels.
+    std::uint32_t depth{};
+};
+static_assert(sizeof(TextureCopy) == sizeof(bfr_texture_copy) && alignof(TextureCopy) == alignof(bfr_texture_copy) &&
+              std::is_standard_layout_v<TextureCopy> && std::is_trivially_copyable_v<TextureCopy>);
+static_assert(offsetof(TextureCopy, srcMipLevel) == offsetof(bfr_texture_copy, src_mip_level));
+static_assert(offsetof(TextureCopy, srcLayer) == offsetof(bfr_texture_copy, src_layer));
+static_assert(offsetof(TextureCopy, srcX) == offsetof(bfr_texture_copy, src_x));
+static_assert(offsetof(TextureCopy, srcY) == offsetof(bfr_texture_copy, src_y));
+static_assert(offsetof(TextureCopy, srcZ) == offsetof(bfr_texture_copy, src_z));
+static_assert(offsetof(TextureCopy, dstMipLevel) == offsetof(bfr_texture_copy, dst_mip_level));
+static_assert(offsetof(TextureCopy, dstLayer) == offsetof(bfr_texture_copy, dst_layer));
+static_assert(offsetof(TextureCopy, dstX) == offsetof(bfr_texture_copy, dst_x));
+static_assert(offsetof(TextureCopy, dstY) == offsetof(bfr_texture_copy, dst_y));
+static_assert(offsetof(TextureCopy, dstZ) == offsetof(bfr_texture_copy, dst_z));
+static_assert(offsetof(TextureCopy, width) == offsetof(bfr_texture_copy, width));
+static_assert(offsetof(TextureCopy, height) == offsetof(bfr_texture_copy, height));
+static_assert(offsetof(TextureCopy, depth) == offsetof(bfr_texture_copy, depth));
 
 /// A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was
 /// submitted has run. An all-zero token has already completed.
@@ -1330,6 +1507,67 @@ inline bfr_buffer_copy toC(const BufferCopy& value) {
     return {.src_offset = value.srcOffset, .dst_offset = value.dstOffset, .size = value.size};
 }
 
+inline bfr_texture_usage toC(const TextureUsage& value) {
+    return {
+        .copy_src = value.copySrc ? BFR_TRUE : BFR_FALSE,
+        .copy_dst = value.copyDst ? BFR_TRUE : BFR_FALSE,
+        .sampled = value.sampled ? BFR_TRUE : BFR_FALSE,
+        .storage = value.storage ? BFR_TRUE : BFR_FALSE,
+        .color_attachment = value.colorAttachment ? BFR_TRUE : BFR_FALSE,
+        .depth_stencil = value.depthStencil ? BFR_TRUE : BFR_FALSE,
+    };
+}
+
+inline bfr_texture_desc toC(const TextureDesc& value, const bfr_chain* next) {
+    return {
+        .next = next,
+        .dimension = static_cast<bfr_texture_dimension>(value.dimension),
+        .format = static_cast<bfr_format>(value.format),
+        .width = value.width,
+        .height = value.height,
+        .depth = value.depth,
+        .layers = value.layers,
+        .mip_levels = value.mipLevels,
+        .samples = value.samples,
+        .usage = toC(value.usage),
+    };
+}
+
+inline bfr_buffer_texture_copy toC(const BufferTextureCopy& value) {
+    return {
+        .buffer_offset = value.bufferOffset,
+        .bytes_per_row = value.bytesPerRow,
+        .rows_per_image = value.rowsPerImage,
+        .mip_level = value.mipLevel,
+        .layer = value.layer,
+        .aspect = static_cast<bfr_texture_aspect>(value.aspect),
+        .x = value.x,
+        .y = value.y,
+        .z = value.z,
+        .width = value.width,
+        .height = value.height,
+        .depth = value.depth,
+    };
+}
+
+inline bfr_texture_copy toC(const TextureCopy& value) {
+    return {
+        .src_mip_level = value.srcMipLevel,
+        .src_layer = value.srcLayer,
+        .src_x = value.srcX,
+        .src_y = value.srcY,
+        .src_z = value.srcZ,
+        .dst_mip_level = value.dstMipLevel,
+        .dst_layer = value.dstLayer,
+        .dst_x = value.dstX,
+        .dst_y = value.dstY,
+        .dst_z = value.dstZ,
+        .width = value.width,
+        .height = value.height,
+        .depth = value.depth,
+    };
+}
+
 inline bfr_token toC(const Token& value) {
     return {.queue = value.queue, .value = value.value};
 }
@@ -1711,8 +1949,9 @@ public:
     /// Owns nothing, as a moved-from Device does.
     Device() = default;
     /// Destroys a device once the GPU has finished with it, with every handle it still owns. Null
-    /// does nothing. A Device with Buffer or CommandList or CommandPool or Swapchain objects left
-    /// lives on until the last of them is destroyed, so they may be destroyed in any order.
+    /// does nothing. A Device with Buffer or CommandList or CommandPool or Swapchain or Texture
+    /// objects left lives on until the last of them is destroyed, so they may be destroyed in any
+    /// order.
     ~Device() = default;
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
@@ -1759,6 +1998,25 @@ public:
     /// those before it have finished, and see what they wrote.
     [[nodiscard]] Expected<void> barrier(CommandList commandList) const;
 
+    /// Records a barrier, as bfr_barrier does, that also moves every layer and mip level of texture
+    /// from layout before to layout after. Outside rendering.
+    [[nodiscard]] Expected<void> textureBarrier(CommandList commandList, const Texture& texture, TextureLayout before, TextureLayout after) const;
+
+    /// Records copies of regions from buffer to texture, which is in layout copy_dst, outside
+    /// rendering. buffer has copy_src usage and texture copy_dst. What was copied is seen as
+    /// bfr_copy_buffer says.
+    [[nodiscard]] Expected<void> copyBufferToTexture(CommandList commandList, const Buffer& buffer, const Texture& texture, std::span<const BufferTextureCopy> regions) const;
+
+    /// Records copies of regions from texture, which is in layout copy_src, to buffer, outside
+    /// rendering. texture has copy_src usage and buffer copy_dst. What was copied is seen as
+    /// bfr_copy_buffer says.
+    [[nodiscard]] Expected<void> copyTextureToBuffer(CommandList commandList, const Texture& texture, const Buffer& buffer, std::span<const BufferTextureCopy> regions) const;
+
+    /// Records copies of regions from src, which is in layout copy_src, to dst, which is in layout
+    /// copy_dst, outside rendering. src has copy_src usage and dst copy_dst. What was copied is
+    /// seen as bfr_copy_buffer says.
+    [[nodiscard]] Expected<void> copyTexture(CommandList commandList, const Texture& src, const Texture& dst, std::span<const TextureCopy> regions) const;
+
     /// Sends recorded command lists to a queue, which runs them after what it was sent before and
     /// after the GPU passes the waits, and writes the token their completion signals. The command
     /// lists are gone afterwards. Calls on one queue must not overlap; the caller synchronizes
@@ -1781,6 +2039,12 @@ public:
     /// device's maximum of buffers, and error_device_failed when the backend refuses the desc or
     /// gives no buffer.
     [[nodiscard]] Expected<Buffer> createBuffer(const BufferDesc& desc) const;
+
+    /// Creates a texture, as desc says. Not for the frame path: it frees textures the GPU is done
+    /// with. Fails with error_out_of_memory when the backend says memory ran out,
+    /// error_limit_reached at the device's maximum of textures, and error_device_failed when the
+    /// backend refuses the desc or gives no texture.
+    [[nodiscard]] Expected<Texture> createTexture(const TextureDesc& desc) const;
 
 private:
     Device(bfr_device* device, detail::KeepAlive keepAlive) : device_(device), keepAlive_(detail::share(device, &bfr_destroy_device, std::move(keepAlive))) {}
@@ -1953,6 +2217,42 @@ private:
 
     bfr_device* device_ = nullptr;
     bfr_buffer buffer_{};
+    // Keeps the Device that made this alive until this is destroyed.
+    detail::KeepAlive keepAlive_;
+};
+
+/// Texels the GPU reads and writes, as its bfr_texture_usage says.
+class Texture {
+public:
+    /// Owns nothing, as a moved-from Texture does.
+    Texture() = default;
+    /// Destroys a texture once the GPU has finished with it; the handle is invalid at once. Not for
+    /// the frame path: it records the point the texture waits for and frees what the GPU is done
+    /// with. A handle that is already destroyed does nothing.
+    ~Texture() { bfr_destroy_texture(device_, texture_); }
+    Texture(const Texture&) = delete;
+    Texture& operator=(const Texture&) = delete;
+    Texture(Texture&& other) noexcept : device_(std::exchange(other.device_, nullptr)), texture_(std::exchange(other.texture_, {})), keepAlive_(std::move(other.keepAlive_)) {}
+    Texture& operator=(Texture&& other) noexcept {
+        if (this != &other) {
+            bfr_destroy_texture(device_, texture_);
+            device_ = std::exchange(other.device_, nullptr);
+            texture_ = std::exchange(other.texture_, {});
+            keepAlive_ = std::move(other.keepAlive_);
+        }
+        return *this;
+    }
+
+    /// The C value, for calls bfr.hpp does not wrap; this still owns it.
+    [[nodiscard]] bfr_texture get() const { return texture_; }
+    [[nodiscard]] explicit operator bool() const { return texture_.bits != 0; }
+
+private:
+    Texture(bfr_device* device, bfr_texture texture, detail::KeepAlive keepAlive) : device_(device), texture_(texture), keepAlive_(std::move(keepAlive)) {}
+    friend class Device;
+
+    bfr_device* device_ = nullptr;
+    bfr_texture texture_{};
     // Keeps the Device that made this alive until this is destroyed.
     detail::KeepAlive keepAlive_;
 };
@@ -2142,6 +2442,34 @@ inline Expected<void> Device::barrier(CommandList commandList) const {
     return {};
 }
 
+inline Expected<void> Device::textureBarrier(CommandList commandList, const Texture& texture, TextureLayout before, TextureLayout after) const {
+    if (const bfr_result result = bfr_texture_barrier(device_, commandList.get(), texture.get(), static_cast<bfr_texture_layout>(before), static_cast<bfr_texture_layout>(after)); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::copyBufferToTexture(CommandList commandList, const Buffer& buffer, const Texture& texture, std::span<const BufferTextureCopy> regions) const {
+    if (const bfr_result result = bfr_copy_buffer_to_texture(device_, commandList.get(), buffer.get(), texture.get(), reinterpret_cast<const bfr_buffer_texture_copy*>(regions.data()), static_cast<uint32_t>(regions.size())); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::copyTextureToBuffer(CommandList commandList, const Texture& texture, const Buffer& buffer, std::span<const BufferTextureCopy> regions) const {
+    if (const bfr_result result = bfr_copy_texture_to_buffer(device_, commandList.get(), texture.get(), buffer.get(), reinterpret_cast<const bfr_buffer_texture_copy*>(regions.data()), static_cast<uint32_t>(regions.size())); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::copyTexture(CommandList commandList, const Texture& src, const Texture& dst, std::span<const TextureCopy> regions) const {
+    if (const bfr_result result = bfr_copy_texture(device_, commandList.get(), src.get(), dst.get(), reinterpret_cast<const bfr_texture_copy*>(regions.data()), static_cast<uint32_t>(regions.size())); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
 inline Expected<Token> Device::submit(const SubmitDesc& desc) const {
     const bfr_submit_desc cDesc = detail::toC(desc, nullptr);
     bfr_token token{};
@@ -2179,6 +2507,15 @@ inline Expected<Buffer> Device::createBuffer(const BufferDesc& desc) const {
         return std::unexpected(detail::failure(result));
     }
     return Buffer{device_, buffer, keepAlive_};
+}
+
+inline Expected<Texture> Device::createTexture(const TextureDesc& desc) const {
+    const bfr_texture_desc cDesc = detail::toC(desc, nullptr);
+    bfr_texture texture{};
+    if (const bfr_result result = bfr_create_texture(device_, &cDesc, &texture); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return Texture{device_, texture, keepAlive_};
 }
 
 inline Expected<SwapchainImages> Swapchain::resize(std::uint32_t width, std::uint32_t height) {

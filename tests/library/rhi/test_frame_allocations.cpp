@@ -4,9 +4,11 @@
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
+#include "bfr/rhi/format.h"
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "bfr/rhi/swapchain.h"
+#include "bfr/rhi/texture.h"
 #include "rhi_test_support.h"
 
 #include <catch2/catch_message.hpp>
@@ -45,6 +47,20 @@ const bfr::core::window::NativeWindow kHeadless = bfr::core::window::Headless{};
 // What the first list after the rendering ones copies each frame.
 constexpr std::uint64_t kCopyBytes = 256;
 constexpr BufferCopy kCopy{.srcOffset = 0, .dstOffset = 0, .size = kCopyBytes};
+// The same bytes copied into one row of a texture: 64 rgba8 texels.
+constexpr std::uint32_t kRowTexels = 64;
+constexpr BufferTextureCopy kTextureCopy{.bufferOffset = 0,
+                                         .bytesPerRow = kCopyBytes,
+                                         .rowsPerImage = 1,
+                                         .mipLevel = 0,
+                                         .layer = 0,
+                                         .aspect = TextureAspect::Color,
+                                         .x = 0,
+                                         .y = 0,
+                                         .z = 0,
+                                         .width = kRowTexels,
+                                         .height = 1,
+                                         .depth = 1};
 
 constexpr RenderingDesc kClear{.loadOp = LoadOp::Clear, .storeOp = StoreOp::Store, .clearColor = {0, 0, 0, 1}};
 
@@ -87,6 +103,17 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
         const auto target = device->createBuffer(
             {.size = kCopyBytes, .memory = BufferMemory::Device, .usage = {.copyDst = true}});
         REQUIRE(target.has_value());
+        const auto texture = device->createTexture({.dimension = TextureDimension::D2,
+                                                    .format = Format::Rgba8Unorm,
+                                                    .width = kRowTexels,
+                                                    .height = 1,
+                                                    .depth = 1,
+                                                    .layers = 1,
+                                                    .mipLevels = 1,
+                                                    .samples = 1,
+                                                    .usage = {.copyDst = true}});
+        INFO(failureOf(texture));
+        REQUIRE(texture.has_value());
 
         FrameFailure failed;
         std::size_t allocations = 0;
@@ -118,6 +145,10 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
                     if (index == kRenderingLists) {
                         check("copyBuffer", device->copyBuffer(*commands, *source, *target, std::span{&kCopy, 1}));
                         check("barrier", device->barrier(*commands));
+                        check("textureBarrier", device->textureBarrier(*commands, *texture, TextureLayout::Undefined,
+                                                                       TextureLayout::CopyDst));
+                        check("copyBufferToTexture",
+                              device->copyBufferToTexture(*commands, *source, *texture, std::span{&kTextureCopy, 1}));
                     }
                 }
                 const std::array<Token, 2> waits{last, last};
@@ -151,6 +182,7 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
         CHECK(device->destroySwapchain(*swapchain).has_value());
         CHECK(device->destroyBuffer(*source).has_value());
         CHECK(device->destroyBuffer(*target).has_value());
+        CHECK(device->destroyTexture(*texture).has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

@@ -107,8 +107,10 @@ core::Result<D3D12Buffer*> D3D12Device::bufferFor(BufferHandle buffer) {
 }
 
 void D3D12Device::collectBuffers() {
-    buffers_.collect(
-        submissions_.completed([this](std::uint32_t queue) { return queues_[queue]->fence->GetCompletedValue(); }));
+    const std::uint64_t completed = submissions_.completed(
+        [this](std::uint32_t queue) { return queues_[queue]->fence->GetCompletedValue(); });
+    buffers_.collect(completed);
+    textures_.collect(completed);
 }
 
 core::Result<BufferHandle> D3D12Device::createBuffer(const BufferDesc& desc) {

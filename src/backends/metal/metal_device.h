@@ -13,6 +13,7 @@
 #include "core/submissions.h"
 #include "metal/metal_buffer.h"
 #include "metal/metal_swapchain.h"
+#include "metal/metal_texture.h"
 #include "metal/metal_util.h"
 
 #include <CoreGraphics/CGColorSpace.h>
@@ -141,6 +142,16 @@ public:
     [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
                                                 std::span<const BufferCopy> regions) override;
     [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<void> textureBarrier(CommandListHandle commandList, TextureHandle texture,
+                                                    TextureLayout before, TextureLayout after) override;
+    [[nodiscard]] core::Result<void> copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,
+                                                         TextureHandle texture,
+                                                         std::span<const BufferTextureCopy> regions) override;
+    [[nodiscard]] core::Result<void> copyTextureToBuffer(CommandListHandle commandList, TextureHandle texture,
+                                                         BufferHandle buffer,
+                                                         std::span<const BufferTextureCopy> regions) override;
+    [[nodiscard]] core::Result<void> copyTexture(CommandListHandle commandList, TextureHandle src, TextureHandle dst,
+                                                 std::span<const TextureCopy> regions) override;
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
     [[nodiscard]] core::Result<void> wait(Token token) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
@@ -148,6 +159,8 @@ public:
     [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
     [[nodiscard]] core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroyTexture(TextureHandle texture) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
@@ -163,7 +176,8 @@ private:
     // Ends a list that was submitted or discarded; its slot waits for the
     // pool's reset.
     void end(CommandListHandle commandList);
-    // Destroys the buffers retired under submission IDs every queue has passed.
+    // Destroys the buffers and textures retired under submission IDs every
+    // queue has passed.
     void collectBuffers();
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
@@ -172,6 +186,7 @@ private:
     [[nodiscard]] core::Result<MetalCommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<MetalCommandList*> commandListFor(CommandListHandle commandList);
     [[nodiscard]] core::Result<MetalBuffer*> bufferFor(BufferHandle buffer);
+    [[nodiscard]] core::Result<MetalTexture*> textureFor(TextureHandle texture);
 
     MetalInstance* instance_;
     Ref<MTL::Device> device_;
@@ -195,14 +210,17 @@ private:
     std::atomic<std::uint64_t> submitSerial_{0};
 
     core::Submissions submissions_;
-    // Every buffer, attached to every queue, so the GPU may use any of them.
-    // Declared before buffers_, which take themselves out of it as they go,
-    // under residencyLock_: Metal's residency sets are not thread-safe.
+    // Every buffer and texture, attached to every queue, so the GPU may use
+    // any of them.
+    // Declared before buffers_ and textures_, which take themselves out of it
+    // as they go, under residencyLock_: Metal's residency sets are not
+    // thread-safe.
     Ref<MTL::ResidencySet> residency_;
     std::mutex residencyLock_;
     static constexpr std::uint32_t kBufferCapacity = 256;
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<MetalBuffer, Buffer> buffers_;
+    core::Pool<MetalTexture, Texture> textures_;
 };
 
 } // namespace bfr::rhi::metal

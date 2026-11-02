@@ -13,6 +13,7 @@
 #include "core/submissions.h"
 #include "d3d12/d3d12_buffer.h"
 #include "d3d12/d3d12_swapchain.h"
+#include "d3d12/d3d12_texture.h"
 
 #include <d3d12.h>
 #include <D3D12MemAlloc.h>
@@ -139,6 +140,16 @@ public:
     [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
                                                 std::span<const BufferCopy> regions) override;
     [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<void> textureBarrier(CommandListHandle commandList, TextureHandle texture,
+                                                    TextureLayout before, TextureLayout after) override;
+    [[nodiscard]] core::Result<void> copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,
+                                                         TextureHandle texture,
+                                                         std::span<const BufferTextureCopy> regions) override;
+    [[nodiscard]] core::Result<void> copyTextureToBuffer(CommandListHandle commandList, TextureHandle texture,
+                                                         BufferHandle buffer,
+                                                         std::span<const BufferTextureCopy> regions) override;
+    [[nodiscard]] core::Result<void> copyTexture(CommandListHandle commandList, TextureHandle src, TextureHandle dst,
+                                                 std::span<const TextureCopy> regions) override;
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
     [[nodiscard]] core::Result<void> wait(Token token) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
@@ -146,6 +157,8 @@ public:
     [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
     [[nodiscard]] core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroyTexture(TextureHandle texture) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
@@ -162,7 +175,8 @@ private:
     // Ends a list that was submitted or discarded; its slot waits for the
     // pool's reset.
     void end(CommandListHandle commandList);
-    // Destroys the buffers retired under submission IDs every queue has passed.
+    // Destroys the buffers and textures retired under submission IDs every
+    // queue has passed.
     void collectBuffers();
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
@@ -171,6 +185,9 @@ private:
     [[nodiscard]] core::Result<D3D12CommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<D3D12CommandList*> commandListFor(CommandListHandle commandList);
     [[nodiscard]] core::Result<D3D12Buffer*> bufferFor(BufferHandle buffer);
+    [[nodiscard]] core::Result<D3D12Texture*> textureFor(TextureHandle texture);
+    // The barrier barrier() records, ordering every resource on the list's queue.
+    [[nodiscard]] core::Result<D3D12_GLOBAL_BARRIER> fullBarrierFor(const D3D12CommandList& list);
 
     D3D12Instance* instance_;
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
@@ -200,6 +217,7 @@ private:
     static constexpr std::uint32_t kBufferCapacity = 256;
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<D3D12Buffer, Buffer> buffers_;
+    core::Pool<D3D12Texture, Texture> textures_;
 };
 
 } // namespace bfr::rhi::d3d12

@@ -55,6 +55,11 @@ struct NullBuffer {
     std::vector<std::byte> bytes;
 };
 
+/// A texture, which holds no texels: no format has a use without a GPU.
+struct NullTexture {
+    TextureDesc desc;
+};
+
 class NullDevice final : public Device {
 public:
     /// rhi outlives this. The device has a graphics queue and then the queues
@@ -83,6 +88,16 @@ public:
     [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
                                                 std::span<const BufferCopy> regions) override;
     [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<void> textureBarrier(CommandListHandle commandList, TextureHandle texture,
+                                                    TextureLayout before, TextureLayout after) override;
+    [[nodiscard]] core::Result<void> copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,
+                                                         TextureHandle texture,
+                                                         std::span<const BufferTextureCopy> regions) override;
+    [[nodiscard]] core::Result<void> copyTextureToBuffer(CommandListHandle commandList, TextureHandle texture,
+                                                         BufferHandle buffer,
+                                                         std::span<const BufferTextureCopy> regions) override;
+    [[nodiscard]] core::Result<void> copyTexture(CommandListHandle commandList, TextureHandle src, TextureHandle dst,
+                                                 std::span<const TextureCopy> regions) override;
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
     [[nodiscard]] core::Result<void> wait(Token token) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
@@ -90,6 +105,8 @@ public:
     [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
     [[nodiscard]] core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroyTexture(TextureHandle texture) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
     /// The queue refuses the next submit, as a driver's may: the lists named
@@ -102,6 +119,10 @@ private:
     [[nodiscard]] core::Result<NullCommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<NullCommandList*> commandListFor(CommandListHandle commandList);
     [[nodiscard]] core::Result<NullBuffer*> bufferFor(BufferHandle buffer);
+    [[nodiscard]] core::Result<NullTexture*> textureFor(TextureHandle texture);
+    // Fails with RhiInvalidHandle when the list or either texture is gone.
+    [[nodiscard]] core::Result<void> checkNames(CommandListHandle commandList, TextureHandle first,
+                                                TextureHandle second);
     [[nodiscard]] core::Result<void> checkToken(Token token) const;
     [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
     // Ends a list that was submitted or discarded: its slot waits for the
@@ -121,6 +142,7 @@ private:
     static constexpr std::uint32_t kBufferCapacity = 256;
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<NullBuffer, Buffer> buffers_;
+    core::Pool<NullTexture, Texture> textures_;
     std::vector<QueueType> queues_;
     // The value last submitted on each queue, made once; submits on one queue
     // may come from several threads.

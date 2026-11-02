@@ -6,6 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/swapchain.h"
+#include "bfr/rhi/texture.h"
 #include "core/fixed_vector.h"
 #include "core/slot_chains.h"
 #include "d3d12/d3d12_instance.h"
@@ -87,7 +88,8 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       renderSlots_(desc.maxCommandLists),
       renders_(desc.maxCommandLists),
       submissions_(1 + desc.compute + desc.copy),
-      buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()) {}
+      buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
+      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
 core::Result<void> D3D12Device::open(const DeviceDesc& desc) {
     const auto open = [this, &desc](QueueType type, D3D12_COMMAND_LIST_TYPE listType) -> core::Result<void> {
@@ -156,8 +158,12 @@ D3D12Device::~D3D12Device() {
     if (buffers_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} buffers were left when the device went", buffers_.size());
     }
-    // Every buffer gives its memory back before the allocator goes.
+    if (textures_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} textures were left when the device went", textures_.size());
+    }
+    // Every buffer and texture gives its memory back before the allocator goes.
     buffers_.clear();
+    textures_.clear();
     allocator_.Reset();
     // The slots' vector releases every command allocator and list as it goes.
     for (const auto& queue : queues_) {
@@ -580,23 +586,90 @@ D3D12_BARRIER_ACCESS writesOf(D3D12_COMMAND_LIST_TYPE type) {
     return static_cast<D3D12_BARRIER_ACCESS>(writes); // NOLINT(clang-analyzer-optin.core.EnumCastOutOfRange)
 }
 
+// Texture layouts as enhanced barriers take them. Copies use COMMON, the one
+// layout every queue type takes them in, so a texture moves between queues
+// without a change of layout.
+D3D12_BARRIER_LAYOUT layoutFor(TextureLayout layout) {
+    return layout == TextureLayout::Undefined ? D3D12_BARRIER_LAYOUT_UNDEFINED : D3D12_BARRIER_LAYOUT_COMMON;
+}
+
+D3D12_BARRIER_ACCESS accessFor(TextureLayout layout) {
+    switch (layout) {
+        case TextureLayout::CopySrc:
+            return D3D12_BARRIER_ACCESS_COPY_SOURCE;
+        case TextureLayout::CopyDst:
+            return D3D12_BARRIER_ACCESS_COPY_DEST;
+        case TextureLayout::Undefined:
+        default:
+            return D3D12_BARRIER_ACCESS_NO_ACCESS;
+    }
+}
+
 } // namespace
+
+core::Result<D3D12_GLOBAL_BARRIER> D3D12Device::fullBarrierFor(const D3D12CommandList& list) {
+    const D3D12CommandPool* pool = commandPools_.find(list.pool);
+    if (pool == nullptr) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the list's pool is gone");
+    }
+    return D3D12_GLOBAL_BARRIER{.SyncBefore = D3D12_BARRIER_SYNC_ALL,
+                                .SyncAfter = D3D12_BARRIER_SYNC_ALL,
+                                .AccessBefore = writesOf(queues_[pool->queue]->listType),
+                                .AccessAfter = D3D12_BARRIER_ACCESS_COMMON};
+}
 
 core::Result<void> D3D12Device::barrier(CommandListHandle commandList) {
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    const D3D12CommandPool* pool = commandPools_.find((*list)->pool);
-    if (pool == nullptr) {
-        return core::failure(core::ErrorCode::RhiInvalidHandle, "the list's pool is gone");
+    const auto global = fullBarrierFor(**list);
+    if (!global) {
+        return std::unexpected(global.error());
     }
-    const D3D12_GLOBAL_BARRIER global{.SyncBefore = D3D12_BARRIER_SYNC_ALL,
-                                      .SyncAfter = D3D12_BARRIER_SYNC_ALL,
-                                      .AccessBefore = writesOf(queues_[pool->queue]->listType),
-                                      .AccessAfter = D3D12_BARRIER_ACCESS_COMMON};
-    const D3D12_BARRIER_GROUP group{.Type = D3D12_BARRIER_TYPE_GLOBAL, .NumBarriers = 1, .pGlobalBarriers = &global};
+    const D3D12_BARRIER_GROUP group{.Type = D3D12_BARRIER_TYPE_GLOBAL, .NumBarriers = 1, .pGlobalBarriers = &*global};
     (*list)->list->Barrier(1, &group);
+    return {};
+}
+
+core::Result<void> D3D12Device::textureBarrier(CommandListHandle commandList, TextureHandle texture,
+                                               TextureLayout before, TextureLayout after) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto found = textureFor(texture);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    const auto global = fullBarrierFor(**list);
+    if (!global) {
+        return std::unexpected(global.error());
+    }
+    // A texture barrier orders only the texture, so the full one goes with it.
+    // Mip 0xffffffff with no mip count names every subresource; moving from
+    // UNDEFINED discards, which a placed render target or depth texture needs
+    // before its first use.
+    constexpr UINT kAllSubresources = 0xffffffff;
+    const D3D12_TEXTURE_BARRIER moved{.SyncBefore = D3D12_BARRIER_SYNC_ALL,
+                                      .SyncAfter = D3D12_BARRIER_SYNC_ALL,
+                                      .AccessBefore = accessFor(before),
+                                      .AccessAfter = accessFor(after),
+                                      .LayoutBefore = layoutFor(before),
+                                      .LayoutAfter = layoutFor(after),
+                                      .pResource = (*found)->resource.Get(),
+                                      .Subresources = {.IndexOrFirstMipLevel = kAllSubresources,
+                                                       .NumMipLevels = 0,
+                                                       .FirstArraySlice = 0,
+                                                       .NumArraySlices = 0,
+                                                       .FirstPlane = 0,
+                                                       .NumPlanes = 0},
+                                      .Flags = before == TextureLayout::Undefined ? D3D12_TEXTURE_BARRIER_FLAG_DISCARD
+                                                                                  : D3D12_TEXTURE_BARRIER_FLAG_NONE};
+    const std::array groups{
+        D3D12_BARRIER_GROUP{.Type = D3D12_BARRIER_TYPE_GLOBAL, .NumBarriers = 1, .pGlobalBarriers = &*global},
+        D3D12_BARRIER_GROUP{.Type = D3D12_BARRIER_TYPE_TEXTURE, .NumBarriers = 1, .pTextureBarriers = &moved}};
+    (*list)->list->Barrier(static_cast<UINT32>(groups.size()), groups.data());
     return {};
 }
 

@@ -7,6 +7,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/swapchain.h"
+#include "bfr/rhi/texture.h"
 #include "core/slot_chains.h"
 #include "null/null_instance.h"
 #include "rhi/buffer_check.h"
@@ -32,7 +33,8 @@ NullDevice::NullDevice(NullInstance& rhi, const DeviceDesc& desc)
       commandLists_("command lists", desc.maxCommandLists, desc.maxCommandLists, rhi.logger()),
       slots_(desc.maxCommandLists),
       live_(desc.maxCommandLists),
-      buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()) {
+      buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
+      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()) {
     queues_.push_back(QueueType::Graphics);
     queues_.insert(queues_.end(), desc.compute, QueueType::Compute);
     queues_.insert(queues_.end(), desc.copy, QueueType::Copy);
@@ -47,6 +49,9 @@ NullDevice::~NullDevice() {
     swapchains_.clear();
     if (buffers_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} buffers were left when the device went", buffers_.size());
+    }
+    if (textures_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} textures were left when the device went", textures_.size());
     }
 }
 
@@ -424,6 +429,73 @@ core::Result<void> NullDevice::destroyBuffer(BufferHandle buffer) {
     // The GPU runs nothing, so nothing can still be using it.
     if (!buffers_.erase(buffer)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the buffer handle is stale");
+    }
+    return {};
+}
+
+core::Result<NullTexture*> NullDevice::textureFor(TextureHandle texture) {
+    NullTexture* found = textures_.find(texture);
+    if (found == nullptr) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the texture handle is stale");
+    }
+    return found;
+}
+
+// No format has a use without a GPU, so a texture holds no texels and its
+// copies move none; the calls only name what they are given.
+core::Result<TextureHandle> NullDevice::createTexture(const TextureDesc& desc) {
+    const TextureHandle texture = textures_.emplace(NullTexture{.desc = desc});
+    if (texture.isNull()) {
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} textures", kBufferLimit);
+    }
+    return texture;
+}
+
+core::Result<void> NullDevice::destroyTexture(TextureHandle texture) {
+    if (texture.isNull()) {
+        return {};
+    }
+    // The GPU runs nothing, so nothing can still be using it.
+    if (!textures_.erase(texture)) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the texture handle is stale");
+    }
+    return {};
+}
+
+core::Result<void> NullDevice::textureBarrier(CommandListHandle commandList, TextureHandle texture, TextureLayout,
+                                              TextureLayout) {
+    return checkNames(commandList, texture, texture);
+}
+
+core::Result<void> NullDevice::copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,
+                                                   TextureHandle texture, std::span<const BufferTextureCopy>) {
+    if (auto found = bufferFor(buffer); !found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    return checkNames(commandList, texture, texture);
+}
+
+core::Result<void> NullDevice::copyTextureToBuffer(CommandListHandle commandList, TextureHandle texture,
+                                                   BufferHandle buffer, std::span<const BufferTextureCopy>) {
+    if (auto found = bufferFor(buffer); !found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    return checkNames(commandList, texture, texture);
+}
+
+core::Result<void> NullDevice::copyTexture(CommandListHandle commandList, TextureHandle src, TextureHandle dst,
+                                           std::span<const TextureCopy>) {
+    return checkNames(commandList, src, dst);
+}
+
+core::Result<void> NullDevice::checkNames(CommandListHandle commandList, TextureHandle first, TextureHandle second) {
+    if (auto list = commandListFor(commandList); !list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    for (const TextureHandle texture : {first, second}) {
+        if (auto found = textureFor(texture); !found) {
+            return std::unexpected(std::move(found.error()));
+        }
     }
     return {};
 }

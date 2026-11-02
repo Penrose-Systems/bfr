@@ -13,6 +13,7 @@
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "bfr/rhi/swapchain.h"
+#include "bfr/rhi/texture.h"
 
 #include <algorithm>
 #include <array>
@@ -285,6 +286,51 @@ std::optional<bfr::rhi::BufferDesc> bufferIn(const bfr_buffer_desc& desc, bfr::c
     return buffer;
 }
 
+bfr_texture toC(bfr::rhi::TextureHandle handle) {
+    return {.bits = handle.bits};
+}
+
+bfr::rhi::TextureHandle fromC(bfr_texture handle) {
+    return bfr::rhi::TextureHandle::fromBits(handle.bits);
+}
+
+// The C and C++ texture enums are the same numbers, so they cross as they are.
+static_assert(static_cast<int>(bfr::rhi::TextureDimension::Cube) == BFR_TEXTURE_DIMENSION_CUBE);
+static_assert(static_cast<int>(bfr::rhi::TextureLayout::CopyDst) == BFR_TEXTURE_LAYOUT_COPY_DST);
+static_assert(static_cast<int>(bfr::rhi::TextureAspect::Stencil) == BFR_TEXTURE_ASPECT_STENCIL);
+
+// The texture desc asks for. Nothing when its dimension or format is not one
+// BFR has; error says which.
+std::optional<bfr::rhi::TextureDesc> textureIn(const bfr_texture_desc& desc, bfr::core::Message& error) {
+    using namespace bfr::rhi;
+    if (desc.dimension < BFR_TEXTURE_DIMENSION_D2 || desc.dimension > BFR_TEXTURE_DIMENSION_CUBE) {
+        error.format("texture dimension {} is not one BFR has", static_cast<std::int64_t>(desc.dimension));
+        return std::nullopt;
+    }
+    const auto format = static_cast<std::int64_t>(desc.format);
+    const auto* found = std::ranges::find_if(kFormats, [format](Format known) {
+        return static_cast<std::int64_t>(known) == format;
+    });
+    if (found == kFormats.end()) {
+        error.format("format {} is not one BFR has", format);
+        return std::nullopt;
+    }
+    return TextureDesc{.dimension = static_cast<TextureDimension>(desc.dimension),
+                       .format = *found,
+                       .width = desc.width,
+                       .height = desc.height,
+                       .depth = desc.depth,
+                       .layers = desc.layers,
+                       .mipLevels = desc.mip_levels,
+                       .samples = desc.samples,
+                       .usage = {.copySrc = desc.usage.copy_src != BFR_FALSE,
+                                 .copyDst = desc.usage.copy_dst != BFR_FALSE,
+                                 .sampled = desc.usage.sampled != BFR_FALSE,
+                                 .storage = desc.usage.storage != BFR_FALSE,
+                                 .colorAttachment = desc.usage.color_attachment != BFR_FALSE,
+                                 .depthStencil = desc.usage.depth_stencil != BFR_FALSE}};
+}
+
 bfr_command_list toC(bfr::rhi::CommandListHandle handle) {
     return {.bits = handle.bits};
 }
@@ -312,6 +358,53 @@ static_assert(sizeof(bfr_buffer_copy) == sizeof(bfr::rhi::BufferCopy) &&
               offsetof(bfr_buffer_copy, src_offset) == offsetof(bfr::rhi::BufferCopy, srcOffset) &&
               offsetof(bfr_buffer_copy, dst_offset) == offsetof(bfr::rhi::BufferCopy, dstOffset) &&
               offsetof(bfr_buffer_copy, size) == offsetof(bfr::rhi::BufferCopy, size));
+
+// The texture copies read the caller's regions as the rhi types, in place.
+static_assert(sizeof(bfr_buffer_texture_copy) == sizeof(bfr::rhi::BufferTextureCopy) &&
+              alignof(bfr_buffer_texture_copy) == alignof(bfr::rhi::BufferTextureCopy) &&
+              std::is_standard_layout_v<bfr::rhi::BufferTextureCopy> &&
+              std::is_trivially_copyable_v<bfr::rhi::BufferTextureCopy> &&
+              offsetof(bfr_buffer_texture_copy, buffer_offset) == offsetof(bfr::rhi::BufferTextureCopy, bufferOffset) &&
+              offsetof(bfr_buffer_texture_copy, bytes_per_row) == offsetof(bfr::rhi::BufferTextureCopy, bytesPerRow) &&
+              offsetof(bfr_buffer_texture_copy, rows_per_image) ==
+                  offsetof(bfr::rhi::BufferTextureCopy, rowsPerImage) &&
+              offsetof(bfr_buffer_texture_copy, mip_level) == offsetof(bfr::rhi::BufferTextureCopy, mipLevel) &&
+              offsetof(bfr_buffer_texture_copy, layer) == offsetof(bfr::rhi::BufferTextureCopy, layer) &&
+              offsetof(bfr_buffer_texture_copy, aspect) == offsetof(bfr::rhi::BufferTextureCopy, aspect) &&
+              offsetof(bfr_buffer_texture_copy, x) == offsetof(bfr::rhi::BufferTextureCopy, x) &&
+              offsetof(bfr_buffer_texture_copy, y) == offsetof(bfr::rhi::BufferTextureCopy, y) &&
+              offsetof(bfr_buffer_texture_copy, z) == offsetof(bfr::rhi::BufferTextureCopy, z) &&
+              offsetof(bfr_buffer_texture_copy, width) == offsetof(bfr::rhi::BufferTextureCopy, width) &&
+              offsetof(bfr_buffer_texture_copy, height) == offsetof(bfr::rhi::BufferTextureCopy, height) &&
+              offsetof(bfr_buffer_texture_copy, depth) == offsetof(bfr::rhi::BufferTextureCopy, depth));
+static_assert(sizeof(bfr_texture_copy) == sizeof(bfr::rhi::TextureCopy) &&
+              alignof(bfr_texture_copy) == alignof(bfr::rhi::TextureCopy) &&
+              std::is_standard_layout_v<bfr::rhi::TextureCopy> && std::is_trivially_copyable_v<bfr::rhi::TextureCopy> &&
+              offsetof(bfr_texture_copy, src_mip_level) == offsetof(bfr::rhi::TextureCopy, srcMipLevel) &&
+              offsetof(bfr_texture_copy, src_layer) == offsetof(bfr::rhi::TextureCopy, srcLayer) &&
+              offsetof(bfr_texture_copy, src_x) == offsetof(bfr::rhi::TextureCopy, srcX) &&
+              offsetof(bfr_texture_copy, src_y) == offsetof(bfr::rhi::TextureCopy, srcY) &&
+              offsetof(bfr_texture_copy, src_z) == offsetof(bfr::rhi::TextureCopy, srcZ) &&
+              offsetof(bfr_texture_copy, dst_mip_level) == offsetof(bfr::rhi::TextureCopy, dstMipLevel) &&
+              offsetof(bfr_texture_copy, dst_layer) == offsetof(bfr::rhi::TextureCopy, dstLayer) &&
+              offsetof(bfr_texture_copy, dst_x) == offsetof(bfr::rhi::TextureCopy, dstX) &&
+              offsetof(bfr_texture_copy, dst_y) == offsetof(bfr::rhi::TextureCopy, dstY) &&
+              offsetof(bfr_texture_copy, dst_z) == offsetof(bfr::rhi::TextureCopy, dstZ) &&
+              offsetof(bfr_texture_copy, width) == offsetof(bfr::rhi::TextureCopy, width) &&
+              offsetof(bfr_texture_copy, height) == offsetof(bfr::rhi::TextureCopy, height) &&
+              offsetof(bfr_texture_copy, depth) == offsetof(bfr::rhi::TextureCopy, depth));
+
+// Fails, naming the value, when a region's aspect is not one BFR has: the
+// regions are read in place, so nothing else stops an unknown aspect.
+bfr_result checkAspects(std::span<const bfr_buffer_texture_copy> regions) {
+    for (const bfr_buffer_texture_copy& region : regions) {
+        if (region.aspect < BFR_TEXTURE_ASPECT_COLOR || region.aspect > BFR_TEXTURE_ASPECT_STENCIL) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "texture aspect {} is not one BFR has",
+                        static_cast<std::int64_t>(region.aspect));
+        }
+    }
+    return BFR_RESULT_SUCCESS;
+}
 
 bfr::rhi::Token fromC(const bfr_token& token) {
     return {.queue = token.queue, .value = token.value};
@@ -1094,6 +1187,80 @@ bfr_result bfr_barrier(bfr_device* device, bfr_command_list command_list) {
     });
 }
 
+bfr_result bfr_texture_barrier(bfr_device* device, bfr_command_list command_list, bfr_texture texture,
+                               bfr_texture_layout before, bfr_texture_layout after) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        for (const bfr_texture_layout layout : {before, after}) {
+            if (layout < BFR_TEXTURE_LAYOUT_UNDEFINED || layout > BFR_TEXTURE_LAYOUT_COPY_DST) {
+                return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "texture layout {} is not one BFR has",
+                            static_cast<std::int64_t>(layout));
+            }
+        }
+        const auto recorded = device->device->textureBarrier(fromC(command_list), fromC(texture),
+                                                             static_cast<bfr::rhi::TextureLayout>(before),
+                                                             static_cast<bfr::rhi::TextureLayout>(after));
+        return recorded ? BFR_RESULT_SUCCESS : fail(recorded.error());
+    });
+}
+
+bfr_result bfr_copy_buffer_to_texture(bfr_device* device, bfr_command_list command_list, bfr_buffer buffer,
+                                      bfr_texture texture, const bfr_buffer_texture_copy* regions,
+                                      uint32_t region_count) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        if (region_count != 0 && regions == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "regions must not be null when region_count is not 0");
+        }
+        if (const bfr_result checked = checkAspects({regions, region_count}); checked < 0) {
+            return checked;
+        }
+        const std::span copies{reinterpret_cast<const bfr::rhi::BufferTextureCopy*>(regions), region_count};
+        const auto copied = device->device->copyBufferToTexture(fromC(command_list), fromC(buffer), fromC(texture),
+                                                                copies);
+        return copied ? BFR_RESULT_SUCCESS : fail(copied.error());
+    });
+}
+
+bfr_result bfr_copy_texture_to_buffer(bfr_device* device, bfr_command_list command_list, bfr_texture texture,
+                                      bfr_buffer buffer, const bfr_buffer_texture_copy* regions,
+                                      uint32_t region_count) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        if (region_count != 0 && regions == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "regions must not be null when region_count is not 0");
+        }
+        if (const bfr_result checked = checkAspects({regions, region_count}); checked < 0) {
+            return checked;
+        }
+        const std::span copies{reinterpret_cast<const bfr::rhi::BufferTextureCopy*>(regions), region_count};
+        const auto copied = device->device->copyTextureToBuffer(fromC(command_list), fromC(texture), fromC(buffer),
+                                                                copies);
+        return copied ? BFR_RESULT_SUCCESS : fail(copied.error());
+    });
+}
+
+bfr_result bfr_copy_texture(bfr_device* device, bfr_command_list command_list, bfr_texture src, bfr_texture dst,
+                            const bfr_texture_copy* regions, uint32_t region_count) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        if (region_count != 0 && regions == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "regions must not be null when region_count is not 0");
+        }
+        const std::span copies{reinterpret_cast<const bfr::rhi::TextureCopy*>(regions), region_count};
+        const auto copied = device->device->copyTexture(fromC(command_list), fromC(src), fromC(dst), copies);
+        return copied ? BFR_RESULT_SUCCESS : fail(copied.error());
+    });
+}
+
 bfr_result bfr_submit(bfr_device* device, const bfr_submit_desc* desc, bfr_token* token) {
     return guarded([&] {
         if (device == nullptr || desc == nullptr) {
@@ -1332,6 +1499,40 @@ void bfr_destroy_buffer(bfr_device* device, bfr_buffer buffer) {
             return;
         }
         if (const auto destroyed = device->device->destroyBuffer(fromC(buffer)); !destroyed) {
+            lastError() = destroyed.error().message;
+        }
+    });
+}
+
+bfr_result bfr_create_texture(bfr_device* device, const bfr_texture_desc* desc, bfr_texture* texture) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr || texture == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and texture must not be null");
+        }
+        *texture = {};
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_texture_desc takes no chained structs");
+        }
+        bfr::core::Message error;
+        const auto wanted = textureIn(*desc, error);
+        if (!wanted) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto created = device->device->createTexture(*wanted);
+        if (!created) {
+            return fail(created.error());
+        }
+        *texture = toC(*created);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+void bfr_destroy_texture(bfr_device* device, bfr_texture texture) {
+    quietly([&] {
+        if (device == nullptr) {
+            return;
+        }
+        if (const auto destroyed = device->device->destroyTexture(fromC(texture)); !destroyed) {
             lastError() = destroyed.error().message;
         }
     });

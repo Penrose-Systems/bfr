@@ -275,9 +275,10 @@ class Plan:
         if kind in api.handles:
             return api.is_plain(kind)
         struct = api.structs.get(kind)
+        # An enum is laid out as its C type: both are 32-bit.
         return struct is not None and not struct.get("extensible") and not struct.get("extends") and all(
-            m["type"] in MIRRORED and not m.get("fixed") and not m.get("array") and not m.get("pointer")
-            for m in struct["members"])
+            (m["type"] in MIRRORED or m["type"] in api.enums) and not m.get("fixed") and not m.get("array")
+            and not m.get("pointer") for m in struct["members"])
 
     def counts_of(self, struct: str) -> set[str]:
         """The members that only count an array member."""

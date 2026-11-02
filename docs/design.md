@@ -140,6 +140,10 @@ encoder switching needs lookahead.
   a D3D12 global barrier, a Metal 4 consumer barrier). A finer form, by
   resource, stage and access, comes only if measurement shows the full one
   costs too much.
+- Textures move between named layouts with a texture barrier, which is also
+  a full barrier. The caller names the layout a texture is in and the one it
+  moves to; BFR keeps no record of it. Metal has no layouts, so there it is
+  the full barrier alone.
 - D3D12 requires enhanced barriers; adapters without them are
   rejected. Reason: a legacy-barrier path doubles the sync code.
   Enhanced barriers are an optional driver feature checked at runtime; the

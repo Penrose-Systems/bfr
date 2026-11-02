@@ -140,11 +140,13 @@ core::Result<VulkanBuffer*> VulkanDevice::bufferFor(BufferHandle buffer) {
 }
 
 void VulkanDevice::collectBuffers() {
-    buffers_.collect(submissions_.completed([this](std::uint32_t queue) {
+    const std::uint64_t completed = submissions_.completed([this](std::uint32_t queue) {
         // A queue that can't say what it passed has passed nothing yet.
-        const auto completed = completedValue(*queues_[queue]);
-        return completed ? *completed : 0;
-    }));
+        const auto passed = completedValue(*queues_[queue]);
+        return passed ? *passed : 0;
+    });
+    buffers_.collect(completed);
+    textures_.collect(completed);
 }
 
 core::Result<BufferHandle> VulkanDevice::createBuffer(const BufferDesc& desc) {

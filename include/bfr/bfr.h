@@ -396,6 +396,42 @@ typedef enum bfr_buffer_memory {
     BFR_BUFFER_MEMORY_FORCE32 = 0x7FFFFFFF
 } bfr_buffer_memory;
 
+// The shape of a texture.
+typedef enum bfr_texture_dimension {
+    // Width by height, in layers.
+    BFR_TEXTURE_DIMENSION_D2 = 0,
+    // Width, in layers.
+    BFR_TEXTURE_DIMENSION_D1 = 1,
+    // Width by height by depth.
+    BFR_TEXTURE_DIMENSION_D3 = 2,
+    // Six square faces per cube, in layers: a multiple of 6, face by face, width equal to height.
+    BFR_TEXTURE_DIMENSION_CUBE = 3,
+    BFR_TEXTURE_DIMENSION_FORCE32 = 0x7FFFFFFF
+} bfr_texture_dimension;
+
+// How a texture's memory is arranged for what the GPU does with it next. bfr_texture_barrier moves
+// a texture between layouts; BFR keeps no record of the one it is in.
+typedef enum bfr_texture_layout {
+    // Its contents are not kept. Only a layout to move from.
+    BFR_TEXTURE_LAYOUT_UNDEFINED = 0,
+    // Copies read it.
+    BFR_TEXTURE_LAYOUT_COPY_SRC = 1,
+    // Copies write it.
+    BFR_TEXTURE_LAYOUT_COPY_DST = 2,
+    BFR_TEXTURE_LAYOUT_FORCE32 = 0x7FFFFFFF
+} bfr_texture_layout;
+
+// Which part of a texel a copy moves.
+typedef enum bfr_texture_aspect {
+    // The texel, of any format but a depth or stencil one.
+    BFR_TEXTURE_ASPECT_COLOR = 0,
+    // The depth of a depth format.
+    BFR_TEXTURE_ASPECT_DEPTH = 1,
+    // The stencil of a stencil format.
+    BFR_TEXTURE_ASPECT_STENCIL = 2,
+    BFR_TEXTURE_ASPECT_FORCE32 = 0x7FFFFFFF
+} bfr_texture_aspect;
+
 // Which window system a bfr_window comes from, for the platforms that have more than one.
 typedef enum bfr_window_system {
     // The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -455,6 +491,12 @@ typedef struct bfr_command_list {
 typedef struct bfr_buffer {
     uint64_t bits;
 } bfr_buffer;
+
+// Texels the GPU reads and writes, as its bfr_texture_usage says. A generational handle; 0 is never
+// valid.
+typedef struct bfr_texture {
+    uint64_t bits;
+} bfr_texture;
 
 // Receives BFR's messages and validation's. Without one, BFR prints nothing. Called on any thread,
 // including threads BFR or the driver owns, until the instance and every device made from it are
@@ -613,6 +655,89 @@ typedef struct bfr_buffer_copy {
     // Bytes.
     uint64_t size;
 } bfr_buffer_copy;
+
+// What the GPU does with a texture. Set every use it will have.
+typedef struct bfr_texture_usage {
+    bfr_bool copy_src;
+    bfr_bool copy_dst;
+    // Shaders sample it.
+    bfr_bool sampled;
+    // Shaders read and write it.
+    bfr_bool storage;
+    // Rendering writes color to it.
+    bfr_bool color_attachment;
+    // Rendering tests and writes depth or stencil in it.
+    bfr_bool depth_stencil;
+} bfr_texture_usage;
+
+// How to create a texture, in device memory. The CPU reaches it only by copies through a buffer.
+typedef struct bfr_texture_desc {
+    const bfr_chain* next;
+    // 0 is d2.
+    bfr_texture_dimension dimension;
+    bfr_format format;
+    // Texels.
+    uint32_t width;
+    // Texels; 1 for d1.
+    uint32_t height;
+    // Texels for d3; 1 otherwise.
+    uint32_t depth;
+    // 1 for d3; for cube, a multiple of 6.
+    uint32_t layers;
+    uint32_t mip_levels;
+    // Samples per texel; 1 unless rendering multisamples it.
+    uint32_t samples;
+    bfr_texture_usage usage;
+} bfr_texture_desc;
+
+// One region copied between a buffer and one layer and mip level of a single-sampled texture.
+// bytes_per_row is a multiple of the format's block bytes and, when it is not 0, of
+// bfr_caps_limits.copy_row_pitch_alignment; buffer_offset a multiple of the block bytes and, when
+// it is not 0, of copy_offset_alignment. rows_per_image is at least height and a multiple of the
+// block height. A depth or stencil aspect copies its whole mip level, with buffer_offset a multiple
+// of 4, and takes 4 bytes a texel for depth, 2 for a 16-bit depth, and 1 for stencil.
+typedef struct bfr_buffer_texture_copy {
+    // Bytes into the buffer.
+    uint64_t buffer_offset;
+    // Bytes between the starts of two rows of texel blocks in the buffer.
+    uint64_t bytes_per_row;
+    // Rows of texels between the starts of two depth slices in the buffer.
+    uint32_t rows_per_image;
+    uint32_t mip_level;
+    uint32_t layer;
+    bfr_texture_aspect aspect;
+    uint32_t x;
+    uint32_t y;
+    uint32_t z;
+    // Texels.
+    uint32_t width;
+    // Texels.
+    uint32_t height;
+    // Texels.
+    uint32_t depth;
+} bfr_buffer_texture_copy;
+
+// One region copied between two textures of one format and sample count, from one layer and mip
+// level to another, every aspect of it. A depth-stencil or multisampled texture copies its whole
+// mip level.
+typedef struct bfr_texture_copy {
+    uint32_t src_mip_level;
+    uint32_t src_layer;
+    uint32_t src_x;
+    uint32_t src_y;
+    uint32_t src_z;
+    uint32_t dst_mip_level;
+    uint32_t dst_layer;
+    uint32_t dst_x;
+    uint32_t dst_y;
+    uint32_t dst_z;
+    // Texels.
+    uint32_t width;
+    // Texels.
+    uint32_t height;
+    // Texels.
+    uint32_t depth;
+} bfr_texture_copy;
 
 // A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was submitted
 // has run. An all-zero token has already completed.
@@ -1179,6 +1304,50 @@ BFR_API bfr_result bfr_copy_buffer(
 // before it have finished, and see what they wrote.
 BFR_API bfr_result bfr_barrier(bfr_device* device, bfr_command_list command_list);
 
+// Records a barrier, as bfr_barrier does, that also moves every layer and mip level of texture from
+// layout before to layout after. Outside rendering.
+BFR_API bfr_result bfr_texture_barrier(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_texture texture,
+    bfr_texture_layout before,
+    bfr_texture_layout after);
+
+// Records copies of regions from buffer to texture, which is in layout copy_dst, outside rendering.
+// buffer has copy_src usage and texture copy_dst. What was copied is seen as bfr_copy_buffer says.
+// regions: An array of region_count elements.
+BFR_API bfr_result bfr_copy_buffer_to_texture(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_buffer buffer,
+    bfr_texture texture,
+    const bfr_buffer_texture_copy* regions,
+    uint32_t region_count);
+
+// Records copies of regions from texture, which is in layout copy_src, to buffer, outside
+// rendering. texture has copy_src usage and buffer copy_dst. What was copied is seen as
+// bfr_copy_buffer says.
+// regions: An array of region_count elements.
+BFR_API bfr_result bfr_copy_texture_to_buffer(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_texture texture,
+    bfr_buffer buffer,
+    const bfr_buffer_texture_copy* regions,
+    uint32_t region_count);
+
+// Records copies of regions from src, which is in layout copy_src, to dst, which is in layout
+// copy_dst, outside rendering. src has copy_src usage and dst copy_dst. What was copied is seen as
+// bfr_copy_buffer says.
+// regions: An array of region_count elements.
+BFR_API bfr_result bfr_copy_texture(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_texture src,
+    bfr_texture dst,
+    const bfr_texture_copy* regions,
+    uint32_t region_count);
+
 // Sends recorded command lists to a queue, which runs them after what it was sent before and after
 // the GPU passes the waits, and writes the token their completion signals. The command lists are
 // gone afterwards. Calls on one queue must not overlap; the caller synchronizes them. Different
@@ -1215,6 +1384,20 @@ BFR_API bfr_result bfr_map_buffer(bfr_device* device, bfr_buffer buffer, void** 
 // frame path: it records the point the buffer waits for and frees what the GPU is done with. A
 // handle that is already destroyed does nothing.
 BFR_API void bfr_destroy_buffer(bfr_device* device, bfr_buffer buffer);
+
+// Creates a texture, as desc says. Not for the frame path: it frees textures the GPU is done with.
+// Fails with error_out_of_memory when the backend says memory ran out, error_limit_reached at the
+// device's maximum of textures, and error_device_failed when the backend refuses the desc or gives
+// no texture.
+BFR_API bfr_result bfr_create_texture(
+    bfr_device* device,
+    const bfr_texture_desc* desc,
+    bfr_texture* texture);
+
+// Destroys a texture once the GPU has finished with it; the handle is invalid at once. Not for the
+// frame path: it records the point the texture waits for and frees what the GPU is done with. A
+// handle that is already destroyed does nothing.
+BFR_API void bfr_destroy_texture(bfr_device* device, bfr_texture texture);
 
 #ifdef __cplusplus
 }

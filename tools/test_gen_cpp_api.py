@@ -246,6 +246,26 @@ class PlacementTests(unittest.TestCase):
                       "static_cast<uint32_t>(ranges.size()))", rendered)
         self.assertIn("static_assert(sizeof(Range) == sizeof(bfr_range)", rendered)
 
+    def test_a_struct_of_numbers_and_enums_passes_to_c_as_it_is(self) -> None:
+        spec = with_more(MINIMAL)
+        enum = next(iter(spec["enums"]))
+        spec["structs"]["range"] = {
+            "doc": "A range.",
+            "members": [{"name": "size", "type": "u64"}, {"name": "kind", "type": enum}],
+        }
+        spec["functions"]["device_fill"] = {
+            "doc": "Fills.",
+            "returns": "result",
+            "params": [
+                {"name": "device", "type": "device"},
+                {"name": "ranges", "type": "range", "array": "range_count", "pointer": "in"},
+                {"name": "range_count", "type": "u32"},
+            ],
+        }
+        rendered = render(Api(spec))
+        self.assertIn("reinterpret_cast<const bfr_range*>(ranges.data())", rendered)
+        self.assertIn("static_assert(offsetof(Range, kind) == offsetof(bfr_range, kind));", rendered)
+
     def test_an_array_param_that_would_need_a_copy_is_rejected(self) -> None:
         def change(spec: dict) -> None:
             spec["functions"]["device_send"] = {

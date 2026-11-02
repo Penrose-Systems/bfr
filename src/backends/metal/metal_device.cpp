@@ -94,7 +94,8 @@ MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Devi
       renderSlots_(desc.maxCommandLists),
       renders_(desc.maxCommandLists),
       submissions_(1 + desc.compute + desc.copy),
-      buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()) {}
+      buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
+      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
 core::Result<void> MetalDevice::open(const DeviceDesc& desc) {
     const AutoreleasePool pool;
@@ -168,6 +169,10 @@ MetalDevice::~MetalDevice() {
         BFR_LOG_WARN(instance_->logger(), "{} buffers were left when the device went", buffers_.size());
     }
     buffers_.clear();
+    if (textures_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} textures were left when the device went", textures_.size());
+    }
+    textures_.clear();
     // The slots' vector releases every allocator and buffer as it goes.
 }
 

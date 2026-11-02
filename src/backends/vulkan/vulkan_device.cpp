@@ -144,7 +144,8 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       renderSlots_(desc.maxCommandLists),
       renders_(desc.maxCommandLists),
       submissions_(1 + desc.compute + desc.copy),
-      buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()) {
+      buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
+      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
     table_.vkGetDeviceQueue(device_, presentFamily_, 0, &presentQueue_);
 }
@@ -847,6 +848,9 @@ void VulkanDevice::warnLeftovers() const {
     if (buffers_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} buffers were left when the device went", buffers_.size());
     }
+    if (textures_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} textures were left when the device went", textures_.size());
+    }
 }
 
 VulkanDevice::~VulkanDevice() {
@@ -863,8 +867,9 @@ VulkanDevice::~VulkanDevice() {
         [this](const VulkanCommandPool& pool) { table_.vkDestroyCommandPool(device_, pool.pool, nullptr); });
     commandPools_.clear();
     swapchains_.clear();
-    // Every buffer gives its memory back before the allocator goes.
+    // Every buffer and texture gives its memory back before the allocator goes.
     buffers_.clear();
+    textures_.clear();
     vmaDestroyAllocator(allocator_);
     for (const auto& queue : queues_) {
         for (const VulkanRetiredPool& retired : queue->retired) {

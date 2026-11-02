@@ -15,6 +15,7 @@
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_buffer.h"
 #include "vulkan/vulkan_swapchain.h"
+#include "vulkan/vulkan_texture.h"
 
 #include <volk.h>
 
@@ -139,6 +140,16 @@ public:
     [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
                                                 std::span<const BufferCopy> regions) override;
     [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<void> textureBarrier(CommandListHandle commandList, TextureHandle texture,
+                                                    TextureLayout before, TextureLayout after) override;
+    [[nodiscard]] core::Result<void> copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,
+                                                         TextureHandle texture,
+                                                         std::span<const BufferTextureCopy> regions) override;
+    [[nodiscard]] core::Result<void> copyTextureToBuffer(CommandListHandle commandList, TextureHandle texture,
+                                                         BufferHandle buffer,
+                                                         std::span<const BufferTextureCopy> regions) override;
+    [[nodiscard]] core::Result<void> copyTexture(CommandListHandle commandList, TextureHandle src, TextureHandle dst,
+                                                 std::span<const TextureCopy> regions) override;
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
     [[nodiscard]] core::Result<void> wait(Token token) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
@@ -146,6 +157,8 @@ public:
     [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
     [[nodiscard]] core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroyTexture(TextureHandle texture) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
@@ -159,7 +172,8 @@ private:
     // Ends a list that was submitted or discarded; its slot waits for the
     // pool's reset.
     void end(CommandListHandle commandList);
-    // Destroys the buffers retired under submission IDs every queue has passed.
+    // Destroys the buffers and textures retired under submission IDs every
+    // queue has passed.
     void collectBuffers();
     // Warns of each kind of object the caller left when the device goes.
     void warnLeftovers() const;
@@ -169,6 +183,7 @@ private:
     [[nodiscard]] core::Result<VulkanCommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<VulkanCommandList*> commandListFor(CommandListHandle commandList);
     [[nodiscard]] core::Result<VulkanBuffer*> bufferFor(BufferHandle buffer);
+    [[nodiscard]] core::Result<VulkanTexture*> textureFor(TextureHandle texture);
 
     VulkanInstance* instance_;
     VkPhysicalDevice adapter_;
@@ -207,6 +222,7 @@ private:
     static constexpr std::uint32_t kBufferCapacity = 256;
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<VulkanBuffer, Buffer> buffers_;
+    core::Pool<VulkanTexture, Texture> textures_;
 };
 
 } // namespace bfr::rhi::vulkan

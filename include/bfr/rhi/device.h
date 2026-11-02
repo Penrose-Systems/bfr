@@ -6,6 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/swapchain.h"
+#include "bfr/rhi/texture.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -106,6 +107,32 @@ public:
     /// wrote. Fails with RhiInvalidHandle when the list is gone.
     [[nodiscard]] virtual core::Result<void> barrier(CommandListHandle commandList) = 0;
 
+    /// Records a barrier, as barrier does, that also moves every layer and
+    /// mip level of texture from layout before to layout after. Outside
+    /// rendering. Fails with RhiInvalidHandle when the list or texture is gone.
+    [[nodiscard]] virtual core::Result<void> textureBarrier(CommandListHandle commandList, TextureHandle texture,
+                                                            TextureLayout before, TextureLayout after) = 0;
+
+    /// Records copies of regions from buffer to texture, which is in layout
+    /// CopyDst, outside rendering; api/bfr.yaml states the alignment the
+    /// regions keep. Seen as copyBuffer's are. Fails with RhiInvalidHandle
+    /// when the list, buffer or texture is gone.
+    [[nodiscard]] virtual core::Result<void> copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,
+                                                                 TextureHandle texture,
+                                                                 std::span<const BufferTextureCopy> regions) = 0;
+
+    /// Records copies of regions from texture, which is in layout CopySrc, to
+    /// buffer, outside rendering. Fails as copyBufferToTexture does.
+    [[nodiscard]] virtual core::Result<void> copyTextureToBuffer(CommandListHandle commandList, TextureHandle texture,
+                                                                 BufferHandle buffer,
+                                                                 std::span<const BufferTextureCopy> regions) = 0;
+
+    /// Records copies of regions from src, in layout CopySrc, to dst, in
+    /// layout CopyDst, of one format and sample count, outside rendering.
+    /// Fails with RhiInvalidHandle when the list or a texture is gone.
+    [[nodiscard]] virtual core::Result<void> copyTexture(CommandListHandle commandList, TextureHandle src,
+                                                         TextureHandle dst, std::span<const TextureCopy> regions) = 0;
+
     /// Sends desc's command lists to its queue, which runs them after what it
     /// was sent before and after the GPU passes the waits, ends the lists, and
     /// returns the token their completion signals. Calls for one queue must
@@ -148,6 +175,18 @@ public:
     /// for the frame path. A null handle does nothing. Fails with
     /// RhiInvalidHandle when the buffer is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroyBuffer(BufferHandle buffer) = 0;
+
+    /// A texture as desc says, in device memory. Cold: it frees textures the
+    /// GPU is done with. Fails with RhiOutOfMemory when the API says memory
+    /// ran out, RhiLimitReached at the device's maximum, and RhiDeviceFailed
+    /// when the API refuses the desc or gives no texture.
+    [[nodiscard]] virtual core::Result<TextureHandle> createTexture(const TextureDesc& desc) = 0;
+
+    /// Destroys the texture once the GPU has passed every submit made before
+    /// the call; the handle is invalid at once. Cold, as destroyBuffer is. A
+    /// null handle does nothing. Fails with RhiInvalidHandle when the texture
+    /// is already destroyed.
+    [[nodiscard]] virtual core::Result<void> destroyTexture(TextureHandle texture) = 0;
 
     /// How much of each heap the process may use and uses now. Fails with
     /// RhiUnsupported when the driver can't say.

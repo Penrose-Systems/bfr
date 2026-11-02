@@ -294,6 +294,31 @@ enums:
       upload: {value: 1, doc: The CPU writes it and the GPU reads it.}
       readback: {value: 2, doc: The GPU writes it and the CPU reads it.}
 
+  texture_dimension:
+    doc: The shape of a texture.
+    values:
+      d2: {value: 0, doc: "Width by height, in layers."}
+      d1: {value: 1, doc: "Width, in layers."}
+      d3: {value: 2, doc: Width by height by depth.}
+      cube: {value: 3, doc: "Six square faces per cube, in layers: a multiple of 6, face by face, width equal to height."}
+
+  texture_layout:
+    doc: >-
+      How a texture's memory is arranged for what the GPU does with it next.
+      bfr_texture_barrier moves a texture between layouts; BFR keeps no record
+      of the one it is in.
+    values:
+      undefined: {value: 0, doc: Its contents are not kept. Only a layout to move from.}
+      copy_src: {value: 1, doc: Copies read it.}
+      copy_dst: {value: 2, doc: Copies write it.}
+
+  texture_aspect:
+    doc: Which part of a texel a copy moves.
+    values:
+      color: {value: 0, doc: "The texel, of any format but a depth or stencil one."}
+      depth: {value: 1, doc: The depth of a depth format.}
+      stencil: {value: 2, doc: The stencil of a stencil format.}
+
   window_system:
     doc: >-
       Which window system a bfr_window comes from, for the platforms that have
@@ -348,6 +373,11 @@ handles:
     parent: device
     destroy: destroy_buffer
     doc: Memory the GPU reads and writes, as its bfr_buffer_usage says.
+
+  texture:
+    parent: device
+    destroy: destroy_texture
+    doc: Texels the GPU reads and writes, as its bfr_texture_usage says.
 
 callbacks:
   message_callback:
@@ -520,6 +550,77 @@ structs:
       - {name: src_offset, type: u64, doc: Bytes into the source.}
       - {name: dst_offset, type: u64, doc: Bytes into the destination.}
       - {name: size, type: u64, doc: Bytes.}
+
+  texture_usage:
+    doc: What the GPU does with a texture. Set every use it will have.
+    members:
+      - {name: copy_src, type: bool}
+      - {name: copy_dst, type: bool}
+      - {name: sampled, type: bool, doc: Shaders sample it.}
+      - {name: storage, type: bool, doc: Shaders read and write it.}
+      - {name: color_attachment, type: bool, doc: Rendering writes color to it.}
+      - {name: depth_stencil, type: bool, doc: Rendering tests and writes depth or stencil in it.}
+
+  texture_desc:
+    doc: >-
+      How to create a texture, in device memory. The CPU reaches it only by
+      copies through a buffer.
+    extensible: true
+    members:
+      - {name: dimension, type: texture_dimension, doc: 0 is d2.}
+      - {name: format, type: format}
+      - {name: width, type: u32, doc: Texels.}
+      - {name: height, type: u32, doc: Texels; 1 for d1.}
+      - {name: depth, type: u32, doc: Texels for d3; 1 otherwise.}
+      - {name: layers, type: u32, doc: "1 for d3; for cube, a multiple of 6."}
+      - {name: mip_levels, type: u32}
+      - {name: samples, type: u32, doc: Samples per texel; 1 unless rendering multisamples it.}
+      - {name: usage, type: texture_usage}
+
+  buffer_texture_copy:
+    doc: >-
+      One region copied between a buffer and one layer and mip level of a
+      single-sampled texture. bytes_per_row is a multiple of the format's
+      block bytes and, when it is not 0, of
+      bfr_caps_limits.copy_row_pitch_alignment; buffer_offset a multiple of
+      the block bytes and, when it is not 0, of copy_offset_alignment.
+      rows_per_image is at least height and a multiple of the block height. A
+      depth or stencil aspect copies its whole mip level, with buffer_offset a
+      multiple of 4, and takes 4 bytes a texel for depth, 2 for a 16-bit
+      depth, and 1 for stencil.
+    members:
+      - {name: buffer_offset, type: u64, doc: Bytes into the buffer.}
+      - {name: bytes_per_row, type: u64, doc: Bytes between the starts of two rows of texel blocks in the buffer.}
+      - {name: rows_per_image, type: u32, doc: Rows of texels between the starts of two depth slices in the buffer.}
+      - {name: mip_level, type: u32}
+      - {name: layer, type: u32}
+      - {name: aspect, type: texture_aspect}
+      - {name: x, type: u32}
+      - {name: y, type: u32}
+      - {name: z, type: u32}
+      - {name: width, type: u32, doc: Texels.}
+      - {name: height, type: u32, doc: Texels.}
+      - {name: depth, type: u32, doc: Texels.}
+
+  texture_copy:
+    doc: >-
+      One region copied between two textures of one format and sample count,
+      from one layer and mip level to another, every aspect of it. A
+      depth-stencil or multisampled texture copies its whole mip level.
+    members:
+      - {name: src_mip_level, type: u32}
+      - {name: src_layer, type: u32}
+      - {name: src_x, type: u32}
+      - {name: src_y, type: u32}
+      - {name: src_z, type: u32}
+      - {name: dst_mip_level, type: u32}
+      - {name: dst_layer, type: u32}
+      - {name: dst_x, type: u32}
+      - {name: dst_y, type: u32}
+      - {name: dst_z, type: u32}
+      - {name: width, type: u32, doc: Texels.}
+      - {name: height, type: u32, doc: Texels.}
+      - {name: depth, type: u32, doc: Texels.}
 
   token:
     doc: >-
@@ -1080,6 +1181,61 @@ functions:
       - {name: device, type: device}
       - {name: command_list, type: command_list}
 
+  texture_barrier:
+    doc: >-
+      Records a barrier, as bfr_barrier does, that also moves every layer and
+      mip level of texture from layout before to layout after. Outside
+      rendering.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: texture, type: texture}
+      - {name: before, type: texture_layout}
+      - {name: after, type: texture_layout}
+
+  copy_buffer_to_texture:
+    doc: >-
+      Records copies of regions from buffer to texture, which is in layout
+      copy_dst, outside rendering. buffer has copy_src usage and texture
+      copy_dst. What was copied is seen as bfr_copy_buffer says.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: buffer, type: buffer}
+      - {name: texture, type: texture}
+      - {name: regions, type: buffer_texture_copy, array: region_count, pointer: in}
+      - {name: region_count, type: u32}
+
+  copy_texture_to_buffer:
+    doc: >-
+      Records copies of regions from texture, which is in layout copy_src, to
+      buffer, outside rendering. texture has copy_src usage and buffer
+      copy_dst. What was copied is seen as bfr_copy_buffer says.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: texture, type: texture}
+      - {name: buffer, type: buffer}
+      - {name: regions, type: buffer_texture_copy, array: region_count, pointer: in}
+      - {name: region_count, type: u32}
+
+  copy_texture:
+    doc: >-
+      Records copies of regions from src, which is in layout copy_src, to dst,
+      which is in layout copy_dst, outside rendering. src has copy_src usage
+      and dst copy_dst. What was copied is seen as bfr_copy_buffer says.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: src, type: texture}
+      - {name: dst, type: texture}
+      - {name: regions, type: texture_copy, array: region_count, pointer: in}
+      - {name: region_count, type: u32}
+
   submit:
     doc: >-
       Sends recorded command lists to a queue, which runs them after what it
@@ -1152,3 +1308,26 @@ functions:
     params:
       - {name: device, type: device}
       - {name: buffer, type: buffer}
+
+  create_texture:
+    doc: >-
+      Creates a texture, as desc says. Not for the frame path: it frees
+      textures the GPU is done with. Fails with error_out_of_memory when the
+      backend says memory ran out, error_limit_reached at the device's maximum
+      of textures, and error_device_failed when the backend refuses the desc
+      or gives no texture.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: texture_desc, pointer: in}
+      - {name: texture, type: texture, pointer: out}
+
+  destroy_texture:
+    doc: >-
+      Destroys a texture once the GPU has finished with it; the handle is
+      invalid at once. Not for the frame path: it records the point the
+      texture waits for and frees what the GPU is done with. A handle that is
+      already destroyed does nothing.
+    params:
+      - {name: device, type: device}
+      - {name: texture, type: texture}
