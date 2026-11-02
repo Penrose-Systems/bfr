@@ -1426,6 +1426,1012 @@ Forge at a00d6d3, O3DE at 94790ad, Granite at 7c59ad8.
   `Gems/Atom/RHI/Code/Source/RHI.Reflect/Format.cpp:14`; Granite
   `vulkan/texture/texture_format.cpp:42`, 110).
 
+## Shaders and pipelines
+
+Facts behind shader modules, the binding model, compute and graphics
+pipelines, reflection, pipeline caches and pipeline lifetime: what roadmap
+step 4 (draws and dispatches) needs from step 3. Findings only, except the
+last subsection. Each item is SETTLED (primary source named) or OPEN (no
+primary source found; what was searched is named). Read on 2026-11-02:
+Vulkan-Docs `chapters/shaders.adoc`, `pipelines.adoc`, `drawing.adoc`,
+`commonvalidity/draw_common.adoc`, `commonvalidity/draw_vertex_binding.adoc`,
+`fundamentals.adoc`, `features.adoc`, `limits.adoc`, `devsandqueues.adoc`
+and `proposals/VK_EXT_shader_module_identifier.adoc`,
+`VK_EXT_descriptor_heap.adoc` (main b94f8bd, 2026-10-30, vk.xml header
+version 367); `vulkan_core.h` 1.4.357 for struct line numbers; DirectX-Specs
+`d3d/HLSL_SM_6_6_DynamicResources.md`, `ShaderCache.md`, `MlirPrograms.md`,
+`VulkanOn12.md` (master d5f41d5, 2026-10-30); hlsl-specs
+`proposals/infra/INF-0004-validator-hashing.md` (main); DirectX-Headers
+`include/directx/d3d12.h` (main faf928d, 2026-10-28); Microsoft Learn pages
+from the MicrosoftDocs `win32` and `sdk-api` sources; the DXC v1.9.2609
+Linux release package (`LICENSE-MS.txt`, `LICENSE-LLVM.txt`,
+`ReleaseNotes.md`, `include/dxc/dxcapi.h`) and DXC main `LICENSE.TXT`,
+`README.md`; SPIRV-Cross main 57e4efc (2026-10-28); Slang master 48802eb
+(`LICENSE`, `docs/user-guide/08-compiling.md`, `09-targets.md`,
+`a2-02-metal-target-specific.md`, `docs/command-line-slangc-reference.md`,
+`docs/generated/design/target-pipelines/index.md`); Mesa main
+`docs/license.rst`, `src/microsoft/spirv_to_dxil/spirv_to_dxil.h`,
+`src/microsoft/compiler/nir_to_dxil.c`; Apple documentation as served on
+2026-11-02 (pages listed under Sources) and the Metal shader converter
+product page; metal-cpp 370.63.1 as vendored in
+`build/metal-syntax/metal-cpp-stock`. Engines: Godot e7b12e7, NVRHI
+8e8c36e, Diligent bb821b7, The Forge a00d6d3, O3DE 94790ad, Granite 7c59ad8,
+Hazel c2050e08, SynapseEngine c1cc3e39 (AGPL, read only), Doriax 426c1b5.
+Engine paths are relative to each engine's root (SynapseEngine's to
+`SynapseEngine/SynapseEngine/`).
+
+### Shader input
+
+**a. Vulkan.**
+
+- SETTLED: a shader module holds SPIR-V. "If the VK_NV_glsl_shader
+  extension is not enabled, pCode must be a pointer to SPIR-V code"
+  (VUID-VkShaderModuleCreateInfo-pCode-07912); "codeSize must be greater
+  than 0" (-codeSize-01085). The module is named per stage with an entry
+  point string `pName` and optional `pSpecializationInfo`
+  (`VkPipelineShaderStageCreateInfo`, Vulkan spec "Pipelines").
+- SETTLED: on Vulkan 1.4, `VK_KHR_maintenance5` or
+  `VK_EXT_graphics_pipeline_library` (`pipelines.adoc:1110`), `module` may be
+  `VK_NULL_HANDLE`: "If module is VK_NULL_HANDLE, the shader code is defined
+  by the chained VkShaderModuleCreateInfo if present." On Vulkan 1.3
+  without that extension, "The shader code used by the pipeline is defined
+  by module." (Vulkan spec, `VkPipelineShaderStageCreateInfo`;
+  `VK_KHR_maintenance5` `promotedto="VK_VERSION_1_4"`, vk.xml)
+- SETTLED: "A shader module can be destroyed while pipelines created using
+  its shaders are still in use." (Vulkan spec, `vkDestroyShaderModule`)
+- SETTLED: `VK_EXT_shader_module_identifier` (ratified, depends on
+  `VK_EXT_pipeline_creation_cache_control` or Vulkan 1.3, vk.xml) lets a
+  stage name a module by identifier instead of SPIR-V; the lookup can
+  fail: "If a pipeline is not found, pipeline compilation is not possible
+  and the implementation must fail as specified by
+  VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT", and
+  "implementations may fail pipeline compilation with
+  VK_PIPELINE_COMPILE_REQUIRED for any reason." The identifier algorithm is
+  named by `shaderModuleIdentifierAlgorithmUUID`. (Vulkan spec "Pipelines"
+  and "Limits") Its proposal states the purpose: "an implementation already
+  has a pipeline blob in cache"; "this solution is intended to aid internal
+  implementation caching" (`proposals/VK_EXT_shader_module_identifier.adoc`).
+
+**b. D3D12.**
+
+- SETTLED: a PSO takes each stage as `D3D12_SHADER_BYTECODE` (`VS`, `PS`,
+  `DS`, `HS`, `GS` in `D3D12_GRAPHICS_PIPELINE_STATE_DESC`, `CS` in
+  `D3D12_COMPUTE_PIPELINE_STATE_DESC`; `d3d12.h:2579-2611`). There is no
+  separate shader object.
+- SETTLED: the runtime accepts only signed DXIL: "D3D12 will only accept
+  signed shaders. That means that if any patching or runtime optimizations
+  are performed, such as constant folding, the shader must be re-validated
+  and re-signed" (DirectX-Specs `ShaderCache.md`). The signature is a hash:
+  "after the DXIL validator successfully validates a binary it computes a
+  hash using a modified MD5 hash algorithm, which then gets encoded into the
+  shader binary" (INF-0004); "Upon successful validation the validator will
+  compute and store a hash in the 16-byte DX container digest field"
+  (DirectX-Specs `MlirPrograms.md`).
+- SETTLED, the current rules (INF-0004, "Detailed Design"): "Starting with
+  AgilitySDK version 1.615", a shader whose hash is the `BYPASS` sentinel
+  (`01010101010101010101010101010101`) runs "without validating the hash
+  regardless of whether the machine is in developer mode as long as the
+  shader targets a supported non-experimental shader model";
+  `PREVIEW_BYPASS` runs only in developer mode with experimental shader
+  models; "shaders with zero'd hash data will always be treated as invalid
+  by the runtime and rejected", with a stated exception: "legacy zero'd
+  hash shaders" are "treated as if they had the `PREVIEW_BYPASS` hash set"
+  until runtimes supporting those preview shaders are no longer supported.
+  The debug layer validates bypassed bytecode
+  by default (`D3D12_DEBUG_DEVICE_BYTECODE_VALIDATE_WHEN_HASH_BYPASSED`) and
+  "only reports validator error strings, but doesn't fail shader creation".
+- SETTLED: the hash algorithm is public: "DXIL Validator Hash is open
+  sourced" (DXC release notes, 1.8.2502), and "The compiler will now always
+  use the internal validator instead of searching for an external
+  DXIL.dll" (1.8.2505). The validator API remains:
+  `CLSID_DxcValidator`, `IDxcValidator`, `DxcValidatorFlags_InPlaceEdit`
+  (`dxcapi.h:1269` for `CLSID_DxcValidator`).
+- SETTLED: SM 6.6 and resource binding tier 3 together guarantee heap
+  indexing: "`ResourceDescriptorHeap`/`SamplerDescriptorHeap` ... must be
+  supported on devices that support both `D3D12_RESOURCE_BINDING_TIER_3`
+  and `D3D_SHADER_MODEL_6_6`" (DirectX-Specs
+  `HLSL_SM_6_6_DynamicResources.md`, "Device Capability").
+
+**c. Metal 4.**
+
+- SETTLED: Metal 4 pipelines take functions through descriptors, not
+  function objects: `MTL4LibraryFunctionDescriptor` names an `MTL::Library`
+  and a function name (metal-cpp `MTL4LibraryFunctionDescriptor.hpp:41-54`);
+  `MTL4ComputePipelineDescriptor::setComputeFunctionDescriptor`
+  (`MTL4ComputePipeline.hpp:51`); `MTL4RenderPipelineDescriptor`
+  `vertexFunctionDescriptor`, `fragmentFunctionDescriptor` (Apple,
+  `MTL4RenderPipelineDescriptor`).
+- SETTLED: a library comes from MSL source or from a compiled metallib.
+  Source: `MTL4LibraryDescriptor::setSource` ("the source code of the shader
+  language program to compile into a Metal library"; Apple and
+  `MTL4LibraryDescriptor.hpp:55`) passed to `MTL4Compiler::newLibrary`
+  (`MTL4Compiler.hpp:119`). Binary: `MTL::Device::newLibrary(dispatch_data_t)`
+  "from a dispatch-data instance that contains the functions in a
+  precompiled Metal library" (Apple `makeLibrary(data:)`;
+  `MTLDevice.hpp:461`).
+- SETTLED: `MTL4Compiler` builds libraries and pipeline states,
+  synchronously or asynchronously (`newComputePipelineState`,
+  `newRenderPipelineState`, each with an `NS::Error**` form and a
+  completion-handler form returning `CompilerTask*`;
+  `MTL4Compiler.hpp:103-134`). It is made with
+  `MTL::Device::newCompiler` (`MTLDevice.hpp:419`).
+- SETTLED: Slang's documentation states that MSL "source code is compiled
+  directly to platform-specific binaries by Apple's compiler" and Slang's
+  own `metallib` targets use the "Apple `metal` compiler" downstream (Slang
+  `09-targets.md`; `docs/generated/design/target-pipelines/index.md:123`).
+
+**d. DXC to SPIR-V and DXIL.**
+
+- SETTLED: one HLSL front end emits both: "used to compile High-Level
+  Shader Language (HLSL) programs into DirectX Intermediate Language (DXIL)
+  for DirectX and the Standard Portable Intermediate Representation
+  (SPIR-V) for Vulkan" (DXC `README.md`).
+- SETTLED, licence: DXC's source is under the "University of
+  Illinois/NCSA Open Source License" (DXC `LICENSE.TXT`), whose
+  third-party section ends "THE FOLLOWING LICENSES ARE FOR BUILD AND TEST
+  DEPENDENCIES ONLY", after which a GPL appears (`LICENSE.TXT:199`, 296).
+  The binary release package states "LICENSE-MIT.txt d3d12shader.h;
+  LICENSE-LLVM.txt all other files" (`ReleaseNotes.md`, "Licenses"); the
+  same package also carries `LICENSE-MS.txt`, "MICROSOFT SOFTWARE LICENSE
+  TERMS ... MICROSOFT DIRECTX SHADER COMPILER", granting use "solely for
+  use on Windows".
+- SETTLED: the hash is open source (1.8.2502) and the compiler always uses
+  its internal validator instead of an external DXIL.dll (1.8.2505)
+  (`ReleaseNotes.md:274`, `:314`). OPEN: neither note says the compiler
+  signs its output; the Linux package still ships `lib/libdxil.so` and
+  `bin/dxv`.
+- OPEN: which licence governs Microsoft's prebuilt release binaries. The
+  Linux tarball maps `LICENSE-LLVM.txt` to "all other files" yet also
+  contains `LICENSE-MS.txt` ("solely for use on Windows"); read
+  `ReleaseNotes.md`, `LICENSE-MS.txt`, the DXC README. Builds from the
+  NCSA-licensed source are not affected by this question.
+- SETTLED, platforms: releases are a Windows zip and a Linux x86_64 tarball
+  (DXC GitHub release v1.9.2609 assets); "DXC still has no official
+  release for macOS" (INF-0004). The Linux package ships `libdxcompiler.so`
+  and `libdxil.so`.
+- SETTLED, Metal: "When built from source DXC can utilize the Metal Shader
+  Converter if it is available during build and configuration time. This
+  allows DXC to generate Metal shader libraries directly using the `-metal`
+  flag." (DXC `README.md`)
+
+**e. SPIRV-Cross to MSL.**
+
+- SETTLED: licence: repository `LICENSE` is Apache 2.0; the MSL backend
+  files carry `SPDX-License-Identifier: Apache-2.0 OR MIT`
+  (`spirv_msl.cpp:3`, `spirv_msl.hpp:3`, `spirv_cross.cpp:3`).
+- SETTLED: it emits MSL source; options include `msl_version` (default
+  `make_msl_version(1, 2)`), `argument_buffers` and `argument_buffers_tier`
+  (`spirv_msl.hpp:306`, 350, 365). It runs inside an application at run
+  time: Godot calls `CompilerMSL::compile()` when it loads a shader on
+  macOS and iOS (`drivers/metal/rendering_shader_container_metal.cpp:665-686`).
+  O3DE and Doriax run it offline (`spirv-cross` CLI; Doriax's
+  `shadercompiler`).
+- SETTLED: no Metal 4 argument-table option: `MTL4` and "argument table"
+  do not occur in `spirv_msl.cpp`/`.hpp` (grepped).
+- SETTLED: a metallib still needs Apple's compiler after it: Godot calls
+  `/usr/bin/xcrun ... metal` only when exporting
+  (`drivers/metal/rendering_shader_container_metal.cpp:149-184`, 721-725),
+  O3DE runs `xcrun` "MslToAir" and "AirToMetallib"
+  (`Gems/Atom/RHI/Metal/Code/Source/RHI.Builders/ShaderPlatformInterface.cpp:424`,
+  433).
+
+**f. Metal Shader Converter (DXIL to metallib).**
+
+- SETTLED: "Metal shader converter converts shader intermediate
+  representations in LLVM IR bytecode into bytecode suitable to be loaded
+  into Metal. It's available as a command-line tool (metal-shaderconverter)
+  and a dynamic library (libmetalirconverter)." "In its most basic form,
+  Metal shader converter takes a DXIL file as input and produces a
+  metallib." Requirements: "macOS 13 Ventura and Xcode 15, or later";
+  "Metal shader converter for Windows requires Microsoft Windows 10 and
+  Microsoft Visual Studio 2019, or later"; output "require[s] a device that
+  supports Argument Buffers Tier 2, running macOS 14 Sonoma, iOS 17 or
+  later". Supported shader models listed: SM6.0 to SM6.6 ("Dynamic
+  resources" at 6.6). Current download: "Metal shader converter 4.0 beta".
+  (Apple, Metal shader converter page)
+- OPEN: the licence text. It ships in the download, which needs an Apple
+  developer sign-in; the product page names no licence; no local tree
+  vendors it (grepped all engines for `irconverter`, `metal shader
+  converter`). Not quoted, because it was not read.
+- OPEN: whether its output binds through Metal 4 argument tables or only
+  Metal 3 argument buffers; its manual (PDF) is behind the same sign-in.
+- SETTLED: no surveyed engine uses it (grepped `metal_irconverter`,
+  `IRCompiler`, `MetalShaderConverter` in all nine).
+
+**g. Slang.**
+
+- SETTLED, licence: `SPDX-License-Identifier: Apache-2.0 WITH
+  LLVM-exception` (Slang `LICENSE`).
+- SETTLED, targets: SPIR-V directly ("EmitSpirvDirectly ... Slang's
+  direct-to-SPIR-V backend", `08-compiling.md:1143`); DXIL through DXC
+  ("HLSL ... (plus downstream `DXIL` ...) ... DXC (for `DXIL*`)",
+  `target-pipelines/index.md:122`); MSL source and `metallib` through the
+  "Apple `metal` compiler" (`:123`; targets `metallib_2_3` to
+  `metallib_4_0`, `command-line-slangc-reference.md:1417-1422`). "Slang
+  support for Metal is a work in progress." (`09-targets.md`)
+- SETTLED, platforms: release v2026.20 ships Windows (x86_64, aarch64),
+  Linux (x86_64, aarch64), macOS (x86_64, aarch64) and WebAssembly builds
+  (GitHub release assets). It runs offline (`slangc`) or inside an
+  application: "the Slang compilation API, which can be used to integrate
+  Slang compilation into an application at runtime" (`08-compiling.md:12`).
+- SETTLED: Slang's docs on DXIL: "the runtime API only accepts
+  appropriately signed binaries (unless a developer mode is enabled on the
+  host machine). A DXIL validator `dxil.dll` is included in SDK releases,
+  and this validator can sign binaries that pass validation."
+  (`09-targets.md`)
+- SETTLED: SynapseEngine has an unregistered Slang compiler
+  (`Engine/Shader/Compiler/Slang/SlangShaderCompiler.cpp:32` targets
+  `SLANG_SPIRV`; no caller outside its directory). Granite's `slangmosh` is
+  not Slang: it compiles GLSL with shaderc (`slangmosh/slangmosh.cpp:92`,
+  105).
+
+**h. Mesa spirv_to_dxil (Godot's D3D12 path).**
+
+- SETTLED: Godot turns SPIR-V into DXIL at run time and at export through
+  Mesa's NIR: `#include <nir_to_dxil.h>`, `<spirv_to_dxil.h>`
+  (`drivers/d3d12/godot_nir.h:42-43`), `nir_to_dxil(...)`
+  (`drivers/d3d12/rendering_shader_container_d3d12.cpp:485`), with
+  `validator_version_max = NO_DXIL_VALIDATION` (:469) and a base of SM 6.2
+  (`rendering_shader_container_d3d12.h:77`), raised to 6.6 only for buffer
+  device address (`.cpp:474`).
+- SETTLED: Godot signs the DXIL itself: `sign_bytecode` calls
+  `compute_dxil_hash(w + 20, size - 20, w + 4)`
+  (`rendering_shader_container_d3d12.cpp:243-245`), "Based on the patched
+  public domain implementation released by Microsoft" in INF-0004
+  (`drivers/d3d12/dxil_hash.cpp:31-32`). It patches specialization
+  constants into DXIL at pipeline creation and re-signs
+  (`rendering_device_driver_d3d12.cpp:3397`, 3408). No `dxil.dll`,
+  `IDxcValidator` or `DxcCreateInstance` in Godot's drivers (grepped).
+- SETTLED: Mesa is a prebuilt download, not vendored:
+  `mesa_version = "25.3.1-3"` from `godotengine/godot-nir-static`
+  (`misc/scripts/install_d3d12_sdk_windows.py:36`, 74). That repository's
+  licence is MIT (GitHub repository metadata). Mesa: "Most of the Mesa code
+  is licensed under MIT license, but individual files may have their own
+  licenses" (`docs/license.rst`); `spirv_to_dxil.h` and `nir_to_dxil.c` carry
+  "Copyright © Microsoft Corporation" with the MIT permission text.
+- OPEN: the licence of every Mesa file linked into the godot-nir-static
+  libraries; only the two files above and `docs/license.rst` were read.
+- OPEN: platforms on which godot-nir-static builds. Godot's installer is a
+  Windows script (`install_d3d12_sdk_windows.py`); nothing else read.
+
+**i. Per-backend binaries, as NVRHI takes them.**
+
+- SETTLED: NVRHI's `createShader(const ShaderDesc&, const void* binary,
+  size_t binarySize)` takes one blob for the device's backend
+  (`include/nvrhi/nvrhi.h:3701`). Vulkan makes a module and keeps no bytes
+  (`src/vulkan/vulkan-shader.cpp:38-40`, 93); D3D12 copies the bytes
+  (`src/d3d12/d3d12-shader.cpp:72-74`) into the PSO desc
+  (`src/d3d12/d3d12-graphics.cpp:57`). NVRHI has no Metal backend (`ls src`:
+  `common d3d11 d3d12 validation vulkan`). The guide: "applications
+  typically cross-compile the shaders into SPIR-V using DXC and apply some
+  offsets to the binding slots" (`doc/ProgrammingGuide.md:124`). No DXIL
+  validation or signing in NVRHI (grepped `IDxcValidator`, `dxil.dll`).
+
+**j. What each engine compiles with, and when.**
+
+- SETTLED, Godot: GLSL to SPIR-V with glslang at run time
+  (`modules/glslang/register_types.cpp:134`); Vulkan keeps SPIR-V
+  (smolv-compressed, `drivers/vulkan/rendering_shader_container_vulkan.cpp:63`);
+  D3D12 gets DXIL through Mesa (h above); Metal gets MSL from SPIRV-Cross
+  at run time (`drivers/metal/rendering_shader_container_metal.cpp:665-686`)
+  plus a metallib only when exported. Godot's Metal driver is Metal 3:
+  `memnew(MTL3::RenderingDeviceDriverMetal(this))`
+  (`drivers/metal/rendering_context_driver_metal.cpp:109`); no `MTL4Compiler`
+  or `MTL4Archive` use outside `thirdparty` (grepped).
+- SETTLED, Diligent: HLSL to SPIR-V through glslang or DXC (`-spirv`,
+  `-fspv-target-env=vulkan1.2`, `Graphics/ShaderTools/src/DXCompiler.cpp:785`,
+  794) at run time, or raw SPIR-V; D3D12 DXIL through DXC, validated and
+  signed with `CLSID_DxcValidator` and `DxcValidatorFlags_InPlaceEdit`
+  (`DXCompiler.cpp:425-428`). Metal implementation is not public
+  (`Graphics/GraphicsEngineMetal/readme.md:4`).
+- SETTLED, The Forge: offline FSL (Python) to GLSL then glslang for
+  Vulkan, HLSL then `dxc` (`-Qstrip_reflect`, `-Qstrip_rootsignature`) for
+  D3D12, MSL then `xcrun metal` for Metal (`Common_3/Tools/ForgeShadingLanguage/compilers.py:32-38`,
+  160-193, 269-283, read with `git show HEAD:` since the checkout is
+  sparse); Metal loads with `newLibraryWithData`
+  (`Common_3/Graphics/Metal/MetalRenderer.mm:3333`). No DXIL validator call
+  (grepped).
+- SETTLED, O3DE: offline AZSL to HLSL (azslc), then `dxc` for DXIL (SM 6.2,
+  `Gems/Atom/RHI/DX12/Code/Source/RHI.Builders/ShaderPlatformInterface.cpp:259`)
+  and SPIR-V, then the `spirv-cross` CLI to MSL and `xcrun` to metallib
+  (`Gems/Atom/RHI/Metal/Code/Source/RHI.Builders/ShaderPlatformInterface.cpp:233`,
+  331). It patches DXIL and re-signs with code "from Renderdoc"
+  (`Gems/Atom/RHI/DX12/Code/Source/RHI/ShaderUtils.cpp:95`, 123).
+- SETTLED, Vulkan-only engines: Granite GLSL through shaderc, offline or at
+  run time (`compiler/compiler.cpp:283`,
+  `vulkan/managers/shader_manager.cpp:24`); Hazel GLSL through shaderc or HLSL
+  through DXC at run time, and loads a cached SPIR-V when compilation fails
+  (`Hazel/src/Hazel/Platform/Vulkan/ShaderCompiler/VulkanShaderCompiler.cpp:516`);
+  SynapseEngine GLSL through shaderc to SPIR-V 1.6
+  (`Engine/Shader/Compiler/Shaderc/ShadercShaderCompiler.cpp:27`). Doriax
+  (sokol_gfx: Vulkan, D3D11, Metal, GL; no D3D12) compiles GLSL with glslang,
+  then SPIRV-Cross to MSL 2.1 and HLSL SM 5.0 (`shadercompiler/src/spirvcross.cc:655-657`,
+  `editor/shader/ShaderBuilder.cpp:302`, 308).
+- SETTLED: no surveyed engine uses Metal 4 (`MTL4`) APIs outside vendored
+  headers (grepped all nine).
+
+### Resource binding
+
+**a. Vulkan.**
+
+- SETTLED: a pipeline is created with a `VkPipelineLayout`
+  (`VkGraphicsPipelineCreateInfo::layout`, `vulkan_core.h:4401`;
+  `VkComputePipelineCreateInfo::layout`, :4108), which holds set layouts
+  and push-constant ranges.
+- SETTLED: push constants: `maxPushConstantsSize` minimum is 128 bytes
+  (Vulkan spec, "Required Limits" table).
+- SETTLED: descriptor indexing is core 1.2; the `descriptorIndexing`
+  feature "indicates whether the implementation supports the minimum set of
+  descriptor indexing features"; "Enabling this feature ... does not imply
+  the other minimum descriptor indexing features are also enabled. Those
+  other descriptor indexing features must be enabled individually" (Vulkan
+  spec, "Features"). Update-after-bind limits have required minimums of
+  500000 (`maxUpdateAfterBindDescriptorsInAllPools`,
+  `maxPerStageDescriptorUpdateAfterBindSampledImages` and others; "Required
+  Limits").
+- SETTLED: `VK_EXT_descriptor_buffer` is `deprecatedby="VK_EXT_descriptor_heap"`;
+  `VK_EXT_descriptor_heap` is ratified and depends on Vulkan 1.4, or
+  `VK_KHR_extended_flags`/`VK_KHR_maintenance5` with buffer device address
+  (vk.xml 367). Its proposal: "Heaps can be accessed directly as arrays of
+  data in the shader, and this is intended to be used to implement Shader
+  Model 6.6 Resource Heaps in HLSL"; "This extension includes a new push
+  interface for data, replacing both push constants and push descriptors
+  ... (at least 256 bytes)"; it requires `VK_KHR_shader_untyped_pointers`
+  (`proposals/VK_EXT_descriptor_heap.adoc`). Granite selects it when the
+  device has it (`vulkan/descriptor_set.cpp:197`).
+
+**b. D3D12.**
+
+- SETTLED: "The maximum size of a root signature is 64 DWORDs." Descriptor
+  tables cost 1 DWORD, root constants 1 DWORD each, root descriptors 2;
+  static samplers cost nothing. Indirection cost: "zero for a root
+  constant, 1 for a root descriptor, and 2 for a descriptor table".
+  (Microsoft Learn, "Root Signature Limits")
+- SETTLED: "Only one descriptor heap of each type can be set at one time,
+  which means a maximum of 2 heaps (one sampler, one CBV/SRV/UAV)"
+  (Learn, `SetDescriptorHeaps`); "switching the current descriptor heap may
+  incur a wait for idle" (Learn, "Shader Visible Descriptor Heaps").
+  Shader-visible sampler heap maximum 2048; CBV/SRV/UAV heap 1,000,000 at
+  tiers 1-2 and "1,000,000+" at tier 3 (Learn, "Hardware Tiers").
+- SETTLED, SM 6.6 dynamic resources: the root signature must carry
+  `D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED` (0x400)
+  and/or `SAMPLER_HEAP_DIRECTLY_INDEXED` (0x800); "SetDescriptorHeaps must
+  be called, passing the corresponding heaps, before a call to
+  SetGraphicsRootSignature or SetComputeRootSignature that uses either"
+  flag; "SetDescriptorHeaps may not be called after
+  SetGraphicsRootSignature or SetComputeRootSignature with different heap
+  pointers before a Draw or Dispatch"; heap-indexed descriptors and data
+  "must both be considered volatile". "Shader to Root Signature validation
+  will fail if the shader creates resources from one of these heaps and
+  the corresponding flag is not set." (DirectX-Specs
+  `HLSL_SM_6_6_DynamicResources.md`)
+
+**c. Metal 4.**
+
+- SETTLED: Metal 4 encoders "don't have methods that bind individual
+  buffers, textures, and heaps. Instead, you configure the resource
+  bindings in an argument table and then bind that table to one or more
+  pipeline stages" (Apple, "Understanding the Metal 4 core API").
+  `MTL4RenderCommandEncoder.hpp` declares no `set*Bytes` (grepped `bytes`);
+  bindings are `setArgumentTable(table, stages)` (:84) and
+  `MTL4ComputeCommandEncoder::setArgumentTable` (:106).
+- SETTLED: "Metal takes a snapshot of the resources in the argument table
+  when you encode a draw, dispatch, or execute command." (Apple,
+  `setArgumentTable(_:stages:)`) A table binds a GPU address
+  (`setAddress(MTLGPUAddress, index)`), a texture or sampler by
+  `MTLResourceID` (`setTexture`, `setSamplerState`), or any resource by
+  `MTL::ResourceID` (`setResource`, `MTL4ArgumentTable.hpp:76`) (Apple
+  `MTL4ArgumentTable`).
+  `maxBufferBindCount`: "The maximum value of this parameter is 31."
+  (Apple)
+- SETTLED: bindless through Tier 2 argument buffers: "To directly encode
+  the argument buffer resources on these Tier 2 devices, write the
+  MTLBuffer.gpuAddress property — and for other resource types (samplers,
+  textures, and acceleration structures), the gpuResourceID property —
+  into the corresponding structure member" (iOS 16, macOS 13 and later);
+  "In MSL, you access Tier 2 argument buffers by indexing a pointer."
+  (Apple, "Improving CPU performance by using argument buffers")
+- SETTLED: residency: "each MTL4CommandBuffer instance doesn't create
+  strong references to resources" and "the framework considers all
+  resources untracked" (Apple, "Understanding the Metal 4 core API").
+
+**d. Engines: what is made ahead of time and what is recorded per draw.**
+
+- SETTLED, Godot (layouts per shader, from reflection): Vulkan set layouts
+  and one push-constant range per shader
+  (`drivers/vulkan/rendering_device_driver_vulkan.cpp:4522`, 4542-4548),
+  sets written at uniform-set creation (:4990, 5022), per draw
+  `vkCmdBindDescriptorSets` (:5797) and `vkCmdPushConstants` (:5329).
+  D3D12 root signature generated from reflection when the container is
+  built, push constants as root constants at parameter 0, up to two tables
+  per set, dynamic buffers as root CBV, SRV or UAV descriptors,
+  `HEAP_DIRECTLY_INDEXED` only for buffer device address
+  (`drivers/d3d12/rendering_shader_container_d3d12.cpp:536-540`, 561,
+  675-690, 759-760); per draw `SetGraphicsRootDescriptorTable`,
+  `SetGraphicsRoot32BitConstants` (`rendering_device_driver_d3d12.cpp:5091`,
+  4424). Metal: Tier 2 argument buffers filled with `gpuResourceID` at set
+  creation (`drivers/metal/rendering_device_driver_metal.cpp:1420`), bound
+  per draw with `setVertexBuffer` (`drivers/metal/metal3_objects.cpp:1911`);
+  push constants with `setVertexBytes` (:1047).
+- SETTLED, NVRHI (caller-built layouts): `BindingLayout` makes a Vulkan set
+  layout (`src/vulkan/vulkan-resource-bindings.cpp:244`) and D3D12 root
+  parameters (`src/d3d12/d3d12-resource-bindings.cpp:415-598`); the
+  pipeline layout or root signature is built from the pipeline's layouts
+  (vulkan :1000-1125; d3d12 `buildRootSignature` :663-792, cached by hash
+  :804). One push-constant block per pipeline, at most 128 bytes
+  (`include/nvrhi/nvrhi.h:80`, 3320). `HEAP_DIRECTLY_INDEXED` when tier 3
+  and SM 6.6 (`src/d3d12/d3d12-device.cpp:474`). Per draw it compares state
+  and rebinds what changed ("State is cached by NVRHI", `nvrhi.h:3326`;
+  `src/vulkan/vulkan-graphics.cpp:548`, 571).
+- SETTLED, Diligent: two Vulkan sets per resource signature plus at most one
+  push-constant range (`Graphics/GraphicsEngineVulkan/include/PipelineResourceSignatureVkImpl.hpp:108-111`,
+  `src/PipelineLayoutVk.cpp:185`); dynamic set allocated and written per
+  commit (`src/DeviceContextVkImpl.cpp:663`). D3D12 root signature 1.0 with
+  root constants, dynamic descriptors copied into a GPU-visible ring per
+  commit (`Graphics/GraphicsEngineD3D12/src/PipelineResourceSignatureD3D12Impl.cpp:644-656`).
+  No `HEAP_DIRECTLY_INDEXED` (grepped).
+- SETTLED, The Forge: four set frequencies fixed in shared headers
+  (`Common_3/Graphics/FSL/defaults.h:27-30`); one D3D12 root signature for
+  all graphics pipelines, compiled from an FSL string (`defaults.h:33-46`);
+  Metal one argument buffer per descriptor set, bound per draw with
+  `setVertexBuffer` (`Common_3/Graphics/Metal/MetalRenderer.mm:491`).
+- SETTLED, O3DE: one Vulkan set per shader resource group and root
+  constants as one push range (`Gems/Atom/RHI/Vulkan/Code/Source/RHI/PipelineLayout.cpp:255`,
+  278); D3D12 root signature 1.0 with root constants and per-group tables
+  (`Gems/Atom/RHI/DX12/Code/Source/RHI/PipelineLayout.cpp:122`, 392);
+  Metal argument buffers plus `setVertexBytes` for root constants
+  (`Gems/Atom/RHI/Metal/Code/Source/RHI/CommandList.cpp:235`).
+- SETTLED, Vulkan-only engines: Granite picks descriptor heap, descriptor
+  buffer, push descriptors or pooled sets by feature
+  (`vulkan/descriptor_set.cpp:197`, 78, 256); SynapseEngine uses descriptor
+  buffers and one push range of `maxPushConstantsSize` for all stages
+  (`Engine/Vk/Shader/ShaderProgram.h:32`, `ShaderProgram.cpp:193`); sokol
+  (Doriax) uses descriptor buffers with a fixed two-set layout and no push
+  constants (`engine/libs/sokol/sokol_gfx.h:21266`, 21469).
+- SETTLED: no surveyed engine binds through Metal 4 argument tables; Godot
+  is the only one writing `gpuResourceID` (grepped all nine).
+
+**e. Engines: allocation on the draw path.**
+
+- SETTLED, allocates: Godot Vulkan `thread_local LocalVector` resized per
+  bind, growing only past its high-water mark
+  (`drivers/vulkan/rendering_device_driver_vulkan.cpp:5771-5773`;
+  `core/templates/local_vector.h:82-89`); Godot Metal grows
+  `uniform_sets` to a high-water mark (resized only when too small, as on
+  Vulkan) and inserts into hash maps per bind
+  (`drivers/metal/metal3_objects.cpp:921-923`, 1107-1117); NVRHI D3D12 makes
+  a `std::make_shared<CommandListInstance>` per `open()` and grows
+  `referencedResources` per draw (`src/d3d12/d3d12-commandlist.cpp:266`,
+  `src/d3d12/d3d12-graphics.cpp:337`), and indexes an `unordered_map` with
+  `operator[]` per draw (`d3d12-graphics.cpp:535`); Diligent Vulkan resizes
+  a `std::vector` of dynamic offsets when a pipeline is set
+  (`Graphics/GraphicsEngineVulkan/src/DeviceContextVkImpl.cpp:393`); O3DE
+  Metal inserts into an `unordered_set` per draw
+  (`Gems/Atom/RHI/Metal/Code/Source/RHI/CommandList.cpp:480`); Granite
+  creates a descriptor pool when one runs out
+  (`vulkan/descriptor_set.cpp:397`, 414) and builds pipelines on the draw
+  path (Graphics pipelines, h); Hazel allocates a push-constant buffer per
+  draw (`Hazel/src/Hazel/Platform/Vulkan/VulkanRenderer.cpp:407`).
+- SETTLED, fixed storage: Godot D3D12 bind paths
+  (`rendering_device_driver_d3d12.cpp:5057-5097`, 4415-4430); NVRHI
+  `static_vector` binding arrays (`nvrhi.h:2651`); Diligent D3D12 placement
+  new into stack memory (`PipelineResourceSignatureD3D12Impl.cpp:631-643`);
+  The Forge fixed bound-set arrays (`Common_3/Graphics/Interfaces/IGraphics.h:1504`,
+  1569); sokol bump allocation in a preallocated descriptor buffer, overflow
+  an error (`sokol_gfx.h:20055-20057`).
+
+### Compute pipelines
+
+**a. Create-info.**
+
+- SETTLED, Vulkan: `VkComputePipelineCreateInfo { flags, stage, layout,
+  basePipelineHandle, basePipelineIndex }` (`vulkan_core.h:4103-4111`); the
+  stage carries module, entry point and specialization constants.
+- SETTLED, D3D12: `D3D12_COMPUTE_PIPELINE_STATE_DESC { pRootSignature, CS,
+  NodeMask, CachedPSO, Flags }` (`d3d12.h:2604-2611`).
+- SETTLED, Metal 4: `MTL4ComputePipelineDescriptor`:
+  `computeFunctionDescriptor`, `maxTotalThreadsPerThreadgroup`,
+  `requiredThreadsPerThreadgroup`, `threadGroupSizeIsMultipleOfThreadExecutionWidth`,
+  `supportIndirectCommandBuffers`, `supportBinaryLinking`,
+  `staticLinkingDescriptor` (`MTL4ComputePipeline.hpp:41-62`; Apple). No
+  layout or argument-table shape is given at creation (none in the
+  descriptor).
+
+**b. Workgroup size.**
+
+- SETTLED, Vulkan: the local workgroup size is in the shader, "set by
+  assigning a value to the LocalSize or LocalSizeId execution mode or via
+  an object decorated by the WorkgroupSize decoration" (Vulkan spec,
+  "Compute Shaders"); "Support for LocalSizeId was added with
+  VK_KHR_maintenance4 and promoted to core in Version 1.3" (Vulkan spec,
+  `WorkgroupSize`). `vkCmdDispatch` takes "the number of local workgroups to
+  dispatch" per dimension (Vulkan spec, "Dispatching Commands").
+- SETTLED, D3D12: `Dispatch(ThreadGroupCountX, Y, Z)`, "The number of
+  groups dispatched in the x direction", at most 65535 (Learn,
+  `ID3D12GraphicsCommandList::Dispatch`); the group size is the shader's
+  `numthreads`, compiled into the DXIL.
+- SETTLED, Metal 4: the thread count per threadgroup is a dispatch
+  argument of `dispatchThreadgroups(MTL::Size threadgroupsPerGrid, MTL::Size
+  threadsPerThreadgroup)`, `dispatchThreadgroups(GPUAddress indirect,
+  MTL::Size threadsPerThreadgroup)` and `dispatchThreads(MTL::Size
+  threadsPerGrid, MTL::Size threadsPerThreadgroup)`
+  (`MTL4ComputeCommandEncoder.hpp:80-83`); the indirect
+  `dispatchThreads(MTL::GPUAddress indirectBuffer)` takes none from the CPU
+  (`:84`).
+  `requiredThreadsPerThreadgroup`: "When you set this value, you are
+  responsible for ensuring that the threadsPerThreadgroup argument of any
+  compute dispatch matches it. Setting this property is optional, except
+  in cases where the pipeline uses CooperativeTensors. This property's
+  default value is 0, which disables its effect." (Apple)
+- SETTLED, engines, how Metal gets it: Godot reflects SPIR-V
+  `local_size` into the container and passes it at dispatch
+  (`servers/rendering/rendering_shader_container.cpp:340-342`;
+  `drivers/metal/rendering_device_driver_metal.cpp:1326`;
+  `drivers/metal/metal3_objects.cpp:1727`); The Forge parses `NUM_THREADS`
+  offline into its binary header and uses it at dispatch
+  (`Common_3/Graphics/Metal/MetalRenderer.mm:4412`); O3DE and Diligent take
+  it from the caller (`Gems/Atom/RHI/Metal/Code/Source/RHI/CommandList.cpp:196`;
+  Diligent `Graphics/GraphicsEngine/interface/DeviceContext.h:900-901`,
+  "only used by Metal backend"). NVRHI's `dispatch` takes only group counts
+  (`nvrhi.h:3391`) and it has no Metal backend.
+
+**c. Fixed at creation, set at record.**
+
+- SETTLED: Vulkan fixes the stage, layout and specialization constants;
+  D3D12 fixes the root signature and CS; Metal 4 fixes the function and
+  thread limits. At record: Vulkan binds sets and push constants, D3D12
+  binds heaps, root signature and root arguments
+  (`HLSL_SM_6_6_DynamicResources.md` ordering above), Metal 4 sets the
+  argument table and passes threads per threadgroup to each direct dispatch
+  (b).
+- SETTLED: on D3D12 the root signature is set on the command list
+  separately from the PSO (`SetComputeRootSignature`, ordering rule in
+  Resource binding, b).
+- OPEN: a primary source for the rule that the root signature set at
+  record must match the PSO's `pRootSignature`; the Learn PSO desc page
+  says only "A pointer to the ID3D12RootSignature object".
+
+### Graphics pipelines
+
+**a. What creation takes.**
+
+- SETTLED, Vulkan: `VkGraphicsPipelineCreateInfo` holds stages, vertex
+  input, input assembly, tessellation, viewport, rasterization,
+  multisample, depth/stencil, colour blend and dynamic state, `layout`,
+  `renderPass` and `subpass` (`vulkan_core.h:4386-4406`). With dynamic
+  rendering, attachment formats come from `VkPipelineRenderingCreateInfo
+  { viewMask, colorAttachmentCount, pColorAttachmentFormats,
+  depthAttachmentFormat, stencilAttachmentFormat }` (:7924-7932).
+- SETTLED, D3D12: `D3D12_GRAPHICS_PIPELINE_STATE_DESC { pRootSignature, VS,
+  PS, DS, HS, GS, StreamOutput, BlendState, SampleMask, RasterizerState,
+  DepthStencilState, InputLayout, IBStripCutValue, PrimitiveTopologyType,
+  NumRenderTargets, RTVFormats[8], DSVFormat, SampleDesc, NodeMask,
+  CachedPSO, Flags }` (`d3d12.h:2579-2602`).
+- SETTLED, Metal 4: `MTL4RenderPipelineDescriptor`: vertex and fragment
+  function descriptors, optional `vertexDescriptor`,
+  `inputPrimitiveTopology` (`MTLPrimitiveTopologyClass`: unspecified,
+  point, line, triangle; `MTLRenderPipeline.hpp:99-104`),
+  `rasterSampleCount`, `isRasterizationEnabled`, `alphaToCoverageState`,
+  `alphaToOneState`, `colorAttachments` (each: `pixelFormat`,
+  `blendingState`, blend factors and operations, `writeMask`),
+  `colorAttachmentMappingState`, `maxVertexAmplificationCount` (Apple;
+  `MTL4RenderPipeline.hpp:53-185`). "Compared to MTLRenderPipelineDescriptor,
+  this interface doesn't offer a mechanism to hint to Metal mutability of
+  vertex and fragment buffers. Additionally, using this descriptor, you
+  don't specify binary archives." (Apple)
+- SETTLED: `MTL4RenderPipelineDescriptor` has no depth or stencil
+  attachment pixel format: none in Apple's property list nor in metal-cpp
+  (`depthAttachmentPixelFormat` occurs only in the Metal 3
+  `MTLRenderPipeline.hpp:237`, 284).
+- SETTLED: Metal depth and stencil test state is a separate object,
+  `MTL::Device::newDepthStencilState` (`MTLDevice.hpp:438`), set with
+  `setDepthStencilState` on the encoder (`MTL4RenderCommandEncoder.hpp:98`).
+  Cull mode, front-facing winding, triangle fill mode, depth bias, depth
+  clip mode, depth bounds, stencil reference, blend colour, viewports and
+  scissors are encoder state (`MTL4RenderCommandEncoder.hpp:92-125`,
+  `setViewport` at `:124-125`; Apple `MTL4RenderCommandEncoder` topics).
+- SETTLED: Metal 4 colour formats may be left unspecialized and filled in
+  later: "Configure the properties that vary across the various pipeline
+  states to their unspecialized value, such as MTLPixelFormat.unspecialized
+  for the pixelFormat property", then `newRenderPipelineStateBySpecialization`
+  (Apple, "Using the Metal 4 compilation API"; `MTL4Compiler.hpp:132`).
+
+**b. Topology.**
+
+- SETTLED, Vulkan: topology is in the pipeline unless
+  `VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY` (core 1.3); then, without
+  `dynamicPrimitiveTopologyUnrestricted`, the set topology "must be of the
+  same topology class as the pipeline
+  VkPipelineInputAssemblyStateCreateInfo::topology state"
+  (VUID-vkCmdDraw-dynamicPrimitiveTopologyUnrestricted-07500). Classes:
+  point, line, triangle, patch (Vulkan spec, "Topology Class").
+- SETTLED, D3D12: "the input-assembler primitive topology type (point,
+  line, triangle, patch) is set within the PSO"; "The primitive adjacency
+  and ordering (line list, line strip ...) is set from within a command
+  list using IASetPrimitiveTopology" (Learn, "Managing Graphics Pipeline
+  State in Direct3D 12").
+- SETTLED, Metal 4: the pipeline holds a topology class
+  (`inputPrimitiveTopology`); each draw names `MTL::PrimitiveType`
+  (`drawIndexedPrimitives`, `MTL4RenderCommandEncoder.hpp:66-69`;
+  `drawPrimitives`, `:76-79`).
+
+**c. Dynamic state.**
+
+- SETTLED, Vulkan 1.0 dynamic states: viewport, scissor, line width, depth
+  bias, blend constants, depth bounds, stencil compare mask, write mask,
+  reference. Vulkan 1.3 core adds cull mode, front face, primitive topology,
+  viewport and scissor with count, vertex input binding stride, depth test,
+  depth write, depth compare op, depth bounds test, stencil test, stencil
+  op, rasterizer discard, depth bias enable, primitive restart enable
+  (vk.xml 367, `VkDynamicState` and `VK_GRAPHICS_VERSION_1_3`).
+  Polygon mode, sample count, sample mask, blend enable and equations and
+  colour write masks are not core 1.3 dynamic states (same lists).
+- SETTLED, D3D12: set on the command list: viewports, scissors, blend
+  factor, stencil reference, primitive order (Learn, "Managing Graphics
+  Pipeline State"); depth bounds (`OMSetDepthBounds`, `d3d12.h:7854`); front/back stencil
+  reference (`OMSetFrontAndBackStencilRef`, `d3d12.h:39064`). Depth bias and
+  strip cut are dynamic only if the PSO has
+  `D3D12_PIPELINE_STATE_FLAG_DYNAMIC_DEPTH_BIAS` /
+  `_DYNAMIC_INDEX_BUFFER_STRIP_CUT` (`d3d12.h:2572-2573`) and the device
+  reports `DynamicDepthBiasSupported` (OPTIONS16) /
+  `DynamicIndexBufferStripCutSupported` (OPTIONS15) (`d3d12.h:3261-3269`;
+  DirectX-Specs `VulkanOn12.md`: "the assigned pipeline MUST have been
+  created with D3D12DDI_PIPELINE_STATE_FLAG_DYNAMIC_DEPTH_BIAS").
+- SETTLED, Metal 4: see a above; cull, winding, fill, depth bias, depth
+  clip, depth/stencil state, stencil reference, blend colour, viewport and
+  scissor are all encoder state.
+
+**d. Attachments at draw time.**
+
+- SETTLED, Vulkan: with `vkCmdBeginRendering`, the bound pipeline's
+  `colorAttachmentCount` must equal the rendering's, and each attachment's
+  format must equal the pipeline's format, or the pipeline's be
+  `VK_FORMAT_UNDEFINED` where the view is null (VUID-vkCmdDraw-colorAttachmentCount-06179,
+  -dynamicRenderingUnusedAttachments-08910, -08912); `viewMask` must match
+  (-viewMask-06178).
+- SETTLED, D3D12: "D3D12 currently requires/validates that
+  DXGI_SAMPLE_DESC::Count matches the sample count of the bound render
+  target(s) and depth stencil" (DirectX-Specs `VulkanOn12.md`).
+- OPEN: a D3D12 primary source stating that bound RTV/DSV formats must
+  equal the PSO's `RTVFormats`/`DSVFormat`; searched the Learn pages for
+  the PSO desc, `OMSetRenderTargets` not fetched.
+
+**e. Common to all three, and one-backend fields.**
+
+- SETTLED, fixed at creation on all three: shader functions; colour
+  attachment count and formats (Metal allows them unspecialized); sample
+  count (`rasterizationSamples`, `SampleDesc.Count`, `rasterSampleCount`);
+  per-attachment blend enable, factors, operations and write mask;
+  alpha-to-coverage. (a above)
+- SETTLED, topology class: fixed at creation on D3D12 (topology type) and
+  on Vulkan (topology, unless `dynamicPrimitiveTopologyUnrestricted`). Metal
+  may leave it open (`PrimitiveTopologyClassUnspecified = 0`,
+  `MTLRenderPipeline.hpp:100`); OPEN: no source read says a Metal draw must
+  match a class that was set.
+- SETTLED, rasterizer discard: Vulkan `rasterizerDiscardEnable` (dynamic in
+  1.3), Metal `isRasterizationEnabled` (pipeline). OPEN: a D3D12
+  equivalent; not searched beyond the PSO desc fields, which have none.
+- SETTLED, fixed on Vulkan and D3D12, encoder state on Metal: cull mode,
+  front face, fill mode, depth bias, depth clip, depth test/write/compare,
+  stencil test and ops (`D3D12_RASTERIZER_DESC` `FillMode`, `CullMode`,
+  `FrontCounterClockwise`, `DepthBias`, `DepthClipEnable`, Learn; a, c
+  above). On Vulkan 1.3 all but fill mode and depth clip may be made
+  dynamic (c).
+- SETTLED, only some backends:
+  - depth/stencil attachment format: Vulkan (`depthAttachmentFormat`,
+    `stencilAttachmentFormat`) and D3D12 (`DSVFormat`); Metal 4 has none;
+  - binding layout at creation: Vulkan `layout`, D3D12 `pRootSignature`;
+    Metal 4 none;
+  - `SampleMask`: Vulkan `pSampleMask`, D3D12 `SampleMask`; Metal 4
+    descriptor has none (Apple property list);
+  - strip-cut / primitive restart: Vulkan `primitiveRestartEnable` (a bool),
+    D3D12 `IBStripCutValue` (disabled, 0xFFFF or 0xFFFFFFFF; Learn
+    `D3D12_INDEX_BUFFER_STRIP_CUT_VALUE`); Metal 4 descriptor has none;
+  - `viewMask` (Vulkan) and `maxVertexAmplificationCount` (Metal);
+  - colour attachment remapping (`colorAttachmentMappingState`, Metal 4 only);
+  - `NodeMask` and `CachedPSO` (D3D12 only); `StreamOutput` (D3D12 only).
+- SETTLED, vertex input: Vulkan `pVertexInputState`, D3D12 `InputLayout`
+  and Metal `vertexDescriptor` (optional: "Configures an optional vertex
+  descriptor for the vertex input", Apple) all describe fixed-function
+  fetch. Godot's D3D12 root signature sets
+  `ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT` only when the shader has vertex
+  inputs (`drivers/d3d12/rendering_shader_container_d3d12.cpp:755`).
+- OPEN: a cited rule, per API, that a pipeline with no vertex attributes
+  (design.md's intent is vertex pulling) needs nothing more than an empty
+  description; not searched.
+
+**f. Engines.**
+
+- SETTLED, attachment model: dynamic rendering in NVRHI
+  (`src/vulkan/vulkan-graphics.cpp:412-419`), Diligent (with a render-pass
+  fallback, `Graphics/GraphicsEngineVulkan/src/PipelineStateVkImpl.cpp:465-469`),
+  The Forge (when supported, `Common_3/Graphics/Vulkan/Vulkan.c:7117`),
+  SynapseEngine and sokol; render passes in Godot
+  (`drivers/vulkan/rendering_device_driver_vulkan.cpp:6293`), O3DE, Granite
+  and Hazel. NVRHI pipelines take a `FramebufferInfo` (colour formats,
+  depth format, sample count) and "can then be used with any framebuffer
+  which has the same FramebufferInfo" (`nvrhi.h:1315-1320`,
+  `doc/ProgrammingGuide.md:150`).
+- SETTLED, Vulkan dynamic states used: NVRHI viewport and scissor always,
+  blend constants, stencil reference and shading rate when needed
+  (`src/vulkan/vulkan-graphics.cpp:390-399`); Godot viewport and scissor
+  always, seven more by flag (`rendering_device_driver_vulkan.cpp:6103-6136`);
+  Diligent viewport, blend constants, stencil reference, scissor when
+  enabled (`PipelineStateVkImpl.cpp:427-447`); The Forge viewport, scissor,
+  blend constants, depth bounds, stencil reference
+  and sample locations (`Vulkan.c:7357-7365`); SynapseEngine draws with
+  shader objects and sets all state dynamically
+  (`Engine/Vk/Rendering/RenderUtils.cpp:62-137`); its one `VkPipeline` is an
+  AMDX execution-graph pipeline
+  (`Engine/Render/Passes/Culling/Geometry/GeometryWorkGraphCullingPass.cpp:131`).
+- SETTLED, Metal: Godot, The Forge and O3DE store cull, winding, fill,
+  depth bias and the depth-stencil state object with the pipeline and set
+  them on the encoder when the pipeline is bound
+  (`drivers/metal/metal_objects_shared.h:1007-1043`;
+  `Common_3/Graphics/Metal/MetalRenderer.mm:4041-4049`;
+  `Gems/Atom/RHI/Metal/Code/Source/RHI/CommandList.cpp:702`, 793-797).
+- SETTLED, D3D12 strip cut: Godot sets 0xFFFF with a TODO that 32-bit
+  indices need another value (`rendering_device_driver_d3d12.cpp:5398-5399`);
+  Diligent sets 0xFFFFFFFF for strip topologies (`Graphics/GraphicsEngineD3D12/src/PipelineStateD3D12Impl.cpp:699-703`);
+  The Forge sets DISABLED (`Common_3/Graphics/Direct3D12/Direct3D12.c:4945-4965`);
+  NVRHI and O3DE zero-initialise the desc and never set it
+  (`src/d3d12/d3d12-graphics.cpp:52`;
+  `Gems/Atom/RHI/DX12/Code/Source/RHI/PipelineState.cpp:51`), and
+  `D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED` is 0 (`d3d12.h:2549`). All
+  set `SampleMask` to all ones or the caller's.
+- SETTLED, Granite creates pipelines lazily on the draw path, keyed by a
+  state hash (`vulkan/command_buffer.cpp:1763-1765`), allocating on a miss
+  (`vulkan/shader.cpp:1148`).
+
+### Shader reflection
+
+- SETTLED, Vulkan: needs the pipeline layout (set layouts, push-constant
+  ranges) at pipeline creation (Resource binding, a). Nothing else; the
+  workgroup size is in the SPIR-V.
+- SETTLED, D3D12: needs a root signature at PSO creation and the root
+  parameter indices at record; the workgroup size is in the DXIL. With a
+  root signature embedded in the shader the compiler validates it ("This
+  validation is run at shader compilation time if a root signature is
+  attached to the entry point", `HLSL_SM_6_6_DynamicResources.md`).
+- SETTLED, Metal 4: needs the threads per threadgroup at every direct
+  dispatch (Compute pipelines, b) and the argument-table slot of each binding;
+  pipeline reflection is opt-in (`MTL4::ShaderReflection`:
+  `ShaderReflectionNone`, `BindingInfo`, `BufferTypeInfo`,
+  `MTL4PipelineState.hpp:54-58`, set through `PipelineOptions`).
+- OPEN: Metal shader converter's reflection JSON (fields, threadgroup
+  size); its manual is behind the developer sign-in.
+- SETTLED, engines: Godot extracts with SPIRV-Reflect and stores
+  `compute_local_size`, `push_constant_size`, per-binding type, set and
+  stage, spec constants and vertex/fragment masks
+  (`servers/rendering/rendering_shader_container.h:58-93`); Vulkan uses the
+  sets and push-constant size, D3D12 the bindings and push-constant size
+  for the root signature, Metal the local size and push constants
+  (`rendering_device_driver_metal.cpp:1326`, 1340-1342). NVRHI does no
+  reflection: the caller supplies binding and input layouts (grepped
+  `reflect`, `numthreads`, `LocalSize`). Diligent reflects SPIR-V with
+  SPIRV-Cross and DXIL with `ID3D12ShaderReflection`
+  (`Graphics/ShaderTools/src/SPIRVShaderResources.cpp:910`;
+  `Graphics/GraphicsEngineD3D12/src/ShaderResourcesD3D12.cpp:64-73`). The
+  Forge and O3DE reflect at build time only (FSL headers; azslc JSON).
+  Granite, Hazel, SynapseEngine and Doriax reflect SPIR-V (SPIRV-Cross or
+  spirv-reflect) for bindings and push-constant size; none of the four
+  extracts the workgroup size (grepped `LocalSize`, `workgroup`).
+
+### Pipeline caches
+
+**a. Vulkan.**
+
+- SETTLED: cache data begins with `VkPipelineCacheHeaderVersionOne
+  { headerSize, headerVersion, vendorID, deviceID, pipelineCacheUUID }`,
+  where `pipelineCacheUUID` is "the
+  VkPhysicalDeviceProperties::pipelineCacheUUID of the implementation".
+  "providing invalid pipeline cache data as input to any Vulkan API
+  commands will result in the provided pipeline cache data being ignored."
+  (Vulkan spec, "Pipeline Cache Header") The UUID is "used to identify a
+  compatible device and driver combination to use when serializing and
+  de-serializing pipeline state" (`devsandqueues.adoc:652-656`).
+- SETTLED: "The use of the pipeline cache object in these commands is
+  internally synchronized, and the same pipeline cache object can be used
+  in multiple threads simultaneously", unless created with
+  `VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT` (Vulkan spec,
+  `vkCreatePipelineCache`).
+- SETTLED: `VK_KHR_pipeline_binary` (ratified; vk.xml 367) adds
+  `pipelineBinaryPrefersInternalCache`: "applications should not store
+  pipeline binaries in their own on-disk caches" when set (Vulkan spec,
+  "Limits"). Granite uses it with its own UUID check
+  (`vulkan/pipeline_cache.cpp:294`).
+
+**b. D3D12.**
+
+- SETTLED: two mechanisms: `D3D12_SHADER_CACHE_SUPPORT_SINGLE_PSO`
+  ("supports the CachedPSO member", "always supported") and `_LIBRARY`
+  ("supports the ID3D12PipelineLibrary interface", a driver capability) (Learn,
+  `D3D12_SHADER_CACHE_SUPPORT_FLAGS`).
+- SETTLED: `CachedPSO` "contains data specific to the hardware, driver, and
+  machine that it was retrieved from"; "If the driver has been upgraded
+  ... you might see a D3D12_ERROR_DRIVER_VERSION_MISMATCH return code, or if
+  you're running on a different GPU, the D3D12_ERROR_ADAPTER_NOT_FOUND
+  return code"; "The rest of the data in the PSO needs to still be valid,
+  and needs to match the cached PSO, otherwise E_INVALIDARG might be
+  returned." (Learn, `D3D12_CACHED_PIPELINE_STATE`)
+- SETTLED: `CreatePipelineLibrary` returns "E_INVALIDARG if the blob is
+  corrupted or unrecognized, D3D12_ERROR_DRIVER_VERSION_MISMATCH if the
+  provided data came from an old driver or runtime, and
+  D3D12_ERROR_ADAPTER_NOT_FOUND if the data came from different hardware";
+  the blob "must remain valid for the lifetime of the object returned. For
+  efficiency reasons, the data is not copied." "The pipeline library is
+  thread-safe to use ... with one exception: multiple threads loading the
+  same PSO ... should synchronize themselves." (Learn,
+  `ID3D12Device1::CreatePipelineLibrary`)
+- SETTLED: for `CachedPSO` and `ID3D12PipelineLibrary`, compatibility is
+  reported only by the errors above; no source read names an identifier to
+  compare before loading them.
+- SETTLED: D3D12 does report a shader-cache identity for Advanced Shader
+  Delivery: `D3D12_FEATURE_SHADER_CACHE_ABI_SUPPORT` (`d3d12.h:2752`) fills
+  `D3D12_FEATURE_DATA_SHADERCACHE_ABI_SUPPORT { szAdapterFamily[128],
+  MinimumABISupportVersion, MaximumABISupportVersion, CompilerVersion,
+  ApplicationProfileVersion }` (`d3d12.h:31608-31615`). A precompiled
+  shader database "is usable by an adapter if the adapter family matches,
+  the psdb abi version is between the supported min/max Abi version
+  inclusive, and the top 32 bits of the application profile version
+  matches" (DirectX-Specs `ShaderCacheRegistrationAPI.md:425-445`). It is a
+  family and a version range, not one UUID, and it governs precompiled
+  shader databases, not `CachedPSO` or pipeline libraries.
+
+**c. Metal 4.**
+
+- SETTLED: `MTL4Archive` is "A read-only container that stores pipeline
+  states from a shader compiler", made with `MTL::Device::newArchive(url)`
+  (`MTLDevice.hpp:396`); it can make pipeline states directly
+  (`MTL4Archive.hpp`), or be listed in `MTL4CompilerTaskOptions::lookupArchives`:
+  "Only add MTL4Archive instances to the array that are compatible with the
+  Metal device." (Apple)
+- SETTLED: archives are written by an `MTL4PipelineDataSetSerializer`
+  attached to a compiler: `serializeAsArchiveAndFlushToURL` or
+  `serializeAsPipelinesScript` for the offline `metal-tt` tool; "your
+  program can't read data out of data set serializer instances" (Apple
+  `MTL4PipelineDataSetSerializer`; `MTL4PipelineDataSetSerializer.hpp`).
+  "both Metal 3 and 4 can load binary archives" (Apple, "Using the Metal 4
+  compilation API").
+- OPEN: how to tell whether an archive is compatible with a device before
+  use, and what `newArchive` or a lookup does with an incompatible one;
+  Apple's `makeArchive(url:)` page says only "or nil if the function
+  failed".
+
+**d. Engines.**
+
+- SETTLED: Godot writes its own header for VkPipelineCache data with
+  vendor, device, driver version, `pipelineCacheUUID` and pointer size and
+  checks each on load (`drivers/vulkan/rendering_device_driver_vulkan.cpp:1631-1636`,
+  5361-5366); its D3D12 and Metal caches return false
+  (`rendering_device_driver_d3d12.cpp:4434-4435`;
+  `rendering_device_driver_metal.cpp:1642-1648`, binary archive commented
+  out). NVRHI keeps one empty VkPipelineCache, never saved, and no D3D12
+  cache (`src/vulkan/vulkan-device.cpp:243-246`; grepped
+  `ID3D12PipelineLibrary`, `CachedPSO`). Diligent and The Forge use
+  `ID3D12PipelineLibrary` (Diligent always created empty,
+  `Graphics/GraphicsEngineD3D12/src/PipelineStateCacheD3D12Impl.cpp:49`;
+  The Forge from saved data, `Common_3/Graphics/Direct3D12/Direct3D12.c:5201`)
+  and leave `CachedPSO` null. O3DE serialises VkPipelineCache,
+  `ID3D12PipelineLibrary` and `MTLBinaryArchive`
+  (`Gems/Atom/RHI/{Vulkan,DX12,Metal}/Code/Source/RHI/PipelineLibrary.cpp`).
+  The Forge's Metal cache is an empty function
+  (`MetalRenderer.mm:3655`). Granite checks `pipelineCacheUUID` and uses
+  Fossilize (`vulkan/device.cpp:734`; `CMakeLists.txt:37`).
+
+**e. BFR's `cache_uuid`.**
+
+- SETTLED: `cache_uuid` ("A pipeline cache loads only on an adapter with
+  the same cache_uuid", `api/bfr.yaml:676`) is filled from Vulkan's
+  `pipelineCacheUUID` (`src/backends/vulkan/vulkan_caps.cpp:197`). The D3D12
+  and Metal `infoOf` functions do not set `cacheUuid`
+  (`src/backends/d3d12/d3d12_caps.cpp:67-79`,
+  `src/backends/metal/metal_caps.cpp:36-42`), so it is all zeros there.
+  Neither has a single UUID for `CachedPSO`, pipeline libraries or
+  `MTL4Archive` (b, c above); D3D12's shader-cache ABI data is a family
+  plus a version range (b above).
+- SETTLED: Vulkan's own header check also uses `vendorID` and `deviceID`
+  (a above); `cache_uuid` alone is not the whole check the header makes.
+- SETTLED, so: the field carries meaning on Vulkan only. On D3D12 and Metal
+  every adapter reports the same all-zero `cache_uuid`, so the rule in
+  `api/bfr.yaml:676` would call a cache from any D3D12 or Metal adapter
+  loadable on any other.
+
+### Creation and destruction
+
+- SETTLED, cost: "Avoid visual stutter by creating pipeline states at a
+  noncritical time, such as during launch, because of the time it can take
+  to make them" (Apple, `MTL4RenderCommandEncoder`); "graphics drivers may
+  need time to evaluate and build each pipeline state" (Apple,
+  `MTLRenderPipelineState`). D3D12 PSOs "are finalized upon creation"
+  (Learn, "Important changes from Direct3D 11 to Direct3D 12"). Vulkan:
+  linking the whole pipeline "allows the optimization of shaders based on
+  their input/outputs and eliminates expensive draw time state validation"
+  (Vulkan spec, "Pipelines"); the shader module identifier proposal says
+  "Applications compile PSOs late -> stutter!". No spec gives a figure.
+- SETTLED, threading: Vulkan pipeline cache use is internally synchronized
+  (Pipeline caches, a). `MTL4Compiler` is declared `Sendable`, and it
+  "applies multithreading in macOS and iOS by default" (Apple). D3D12
+  pipeline libraries are thread-safe except loading one PSO from two
+  threads (b above).
+- OPEN: a D3D12 primary statement that `CreateGraphicsPipelineState` and
+  `CreateComputePipelineState` may be called concurrently; the Learn
+  `ID3D12Device` page has none (grepped "thread").
+- SETTLED, Vulkan lifetime: "All submitted commands that refer to pipeline
+  must have completed execution" before `vkDestroyPipeline`
+  (VUID-vkDestroyPipeline-pipeline-00765). "Vulkan objects passed in during
+  the creation or allocation of another object may be accessed by the
+  implementation any time that the created/allocated object is accessed
+  unless explicitly stated otherwise" (Vulkan spec, "Object Lifetime"), so
+  shader modules are a stated exception (Shader input, a), and so is the
+  pipeline layout on Vulkan 1.3: `VK_KHR_maintenance4` (promoted to 1.3,
+  `vk.xml:28394`) lets the application "destroy their VkPipelineLayout
+  object immediately after it was used to create another object. It is no
+  longer necessary to keep its handle valid while the created object is in
+  use." (`appendices/VK_KHR_maintenance4.adoc:31-34`)
+- SETTLED, D3D12 lifetime: "All resource and description memory lifetimes
+  are the sole responsibly of the app" (Learn, "Important changes"); a
+  pipeline library's input blob must outlive the library (b above).
+- SETTLED, Metal 4: command buffers hold no strong references to resources
+  (Resource binding, c).
+- OPEN: whether an `MTL4CommandBuffer` retains the pipeline states encoded
+  into it; the Apple text names resources only.
+- SETTLED, BFR today: destroying a buffer or texture retires its handle
+  against `Submissions::mark()`, the submission ID covering every queue
+  ("an object lives until the GPU has run every submit made before it was
+  destroyed", `src/core/submissions.h:9-16`), through `Pool::retire`
+  (`include/bfr/core/pool.h:114-125`), and collects completed ones
+  (`src/backends/vulkan/vulkan_buffer.cpp:210-218`; the same in
+  `vulkan_texture.cpp:189-192`, `d3d12_buffer.cpp:174-178`,
+  `d3d12_texture.cpp:192-195`, `metal_buffer.cpp:156-160`,
+  `metal_texture.cpp:140-143`).
+- SETTLED, engines: Godot defers pipeline and shader frees to the frame
+  slot's next turn (`servers/rendering/rendering_device.cpp:7844-7848`,
+  8296-8322); Diligent and O3DE (Vulkan, D3D12) queue releases
+  (`Graphics/GraphicsEngineVulkan/src/PipelineStateVkImpl.cpp:1194`;
+  `Gems/Atom/RHI/Vulkan/Code/Source/RHI/PipelineState.cpp:98`); NVRHI holds
+  references from command lists until their submission completes
+  (`src/vulkan/vulkan-queue.cpp:349-351`); The Forge and O3DE Metal destroy
+  at once (`Common_3/Graphics/Vulkan/Vulkan.c:7505`;
+  `Gems/Atom/RHI/Metal/Code/Source/RHI/PipelineState.cpp:418-452`). Godot
+  creates pipelines on worker threads, with the driver call outside its
+  device lock (`servers/rendering/renderer_rd/pipeline_hash_map_rd.h:151`;
+  `rendering_device.cpp:5072`); O3DE: "Pipeline states can be acquired at
+  any time and from any thread" (`Gems/Atom/RHI/Code/Include/Atom/RHI/PipelineStateCache.h:89-91`).
+
+### Options for the shader input
+
+Facts per option, from the items above. Licences are as read; OPEN where
+not read.
+
+1. **Per-backend binaries from the caller (NVRHI's way).** BFR takes
+   SPIR-V, DXIL and metallib (or MSL) and passes each to its API
+   (Shader input, a-c). No compiler in BFR. The caller's toolchain must
+   sign DXIL (b) and give Metal the threadgroup size per dispatch
+   (Compute pipelines, b). design.md records the intent that a device
+   rebuild uses "bytecode for every backend the app may switch to".
+2. **DXC to SPIR-V and DXIL, SPIRV-Cross to MSL.** HLSL in. DXC: NCSA
+   licence for source; release binaries Windows and Linux only; uses its
+   internal validator since 1.8.2505 (whether it signs: OPEN, b); licence
+   of the prebuilt binaries OPEN (d). SPIRV-Cross: Apache-2.0 OR MIT, a library Godot runs at run
+   time on Apple platforms, emits MSL source with no Metal 4 argument-table
+   option (e). The surveyed engines that make a metallib do it with
+   `xcrun metal` on macOS (Godot at export, O3DE, The Forge). Used by O3DE
+   (offline) and Diligent (run time, DXC to SPIR-V only).
+3. **DXC to DXIL, Metal Shader Converter to metallib.** HLSL in. Converter:
+   macOS and Windows, command line and library, SM 6.0-6.6, output for
+   Argument Buffers Tier 2; licence OPEN (f). No surveyed engine uses it.
+4. **Slang.** Slang source in. Apache-2.0 WITH LLVM-exception. Releases
+   for Windows, Linux, macOS; offline or at run time through its
+   compilation API. SPIR-V directly; DXIL through DXC; MSL directly and
+   metallib through Apple's `metal`; Metal "a work in progress" (g). Used by
+   no surveyed engine's live path.
+5. **SPIR-V in, Mesa spirv_to_dxil for D3D12, SPIRV-Cross for Metal
+   (Godot's way).** GLSL or any SPIR-V producer in. Mesa files read are
+   MIT; godot-nir-static MIT; Godot signs DXIL with the public hash and
+   runs it at run time and export (h). Godot's Mesa installer is a Windows
+   script; other host platforms OPEN.
+
 ## Sources
 
 - Godot: `servers/rendering/rendering_device.h` in
@@ -1522,3 +2528,68 @@ Forge at a00d6d3, O3DE at 94790ad, Granite at 7c59ad8.
   [DiligentGraphics/DiligentCore](https://github.com/DiligentGraphics/DiligentCore),
   [o3de/o3de](https://github.com/o3de/o3de),
   [Themaister/Granite](https://github.com/Themaister/Granite)
+- Vulkan shaders and pipelines:
+  [shader modules](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#shader-modules),
+  [compute shaders](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#shaders-compute),
+  [pipelines](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#pipelines),
+  [pipeline cache header](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#pipelines-cache-header),
+  [topology class](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#drawing-primitive-topology-class),
+  [object lifetime](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#fundamentals-objectmodel-lifetime),
+  [VK_EXT_shader_module_identifier proposal](https://github.com/KhronosGroup/Vulkan-Docs/blob/main/proposals/VK_EXT_shader_module_identifier.adoc),
+  [VK_EXT_descriptor_heap proposal](https://github.com/KhronosGroup/Vulkan-Docs/blob/main/proposals/VK_EXT_descriptor_heap.adoc);
+  `vulkan_core.h` in
+  [KhronosGroup/Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers)
+- D3D12 shaders and pipelines:
+  [HLSL SM 6.6 dynamic resources](https://github.com/microsoft/DirectX-Specs/blob/master/d3d/HLSL_SM_6_6_DynamicResources.md),
+  [D3D12 shader cache APIs](https://github.com/microsoft/DirectX-Specs/blob/master/d3d/ShaderCache.md),
+  [MLIR programs (bytecode validation)](https://github.com/microsoft/DirectX-Specs/blob/master/d3d/MlirPrograms.md),
+  [INF-0004 validator hashing](https://github.com/microsoft/hlsl-specs/blob/main/proposals/infra/INF-0004-validator-hashing.md),
+  [Root signature limits](https://learn.microsoft.com/en-us/windows/win32/direct3d12/root-signature-limits),
+  [Shader visible descriptor heaps](https://learn.microsoft.com/en-us/windows/win32/direct3d12/shader-visible-descriptor-heaps),
+  [Hardware tiers](https://learn.microsoft.com/en-us/windows/win32/direct3d12/hardware-support),
+  [SetDescriptorHeaps](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12graphicscommandlist-setdescriptorheaps),
+  [Managing graphics pipeline state](https://learn.microsoft.com/en-us/windows/win32/direct3d12/managing-graphics-pipeline-state-in-direct3d-12),
+  [Important changes from Direct3D 11](https://learn.microsoft.com/en-us/windows/win32/direct3d12/important-changes-from-directx-11-to-directx-12),
+  [D3D12_GRAPHICS_PIPELINE_STATE_DESC](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_graphics_pipeline_state_desc),
+  [D3D12_RASTERIZER_DESC](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_rasterizer_desc),
+  [D3D12_CACHED_PIPELINE_STATE](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_cached_pipeline_state),
+  [CreatePipelineLibrary](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device1-createpipelinelibrary),
+  [D3D12_SHADER_CACHE_SUPPORT_FLAGS](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_shader_cache_support_flags),
+  [Dispatch](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12graphicscommandlist-dispatch);
+  `include/directx/d3d12.h` in
+  [microsoft/DirectX-Headers](https://github.com/microsoft/DirectX-Headers)
+- DXC: `README.md`, `LICENSE.TXT` and release v1.9.2609 (`LICENSE-MS.txt`,
+  `LICENSE-LLVM.txt`, `ReleaseNotes.md`, `include/dxc/dxcapi.h`) in
+  [microsoft/DirectXShaderCompiler](https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.9.2609)
+- SPIRV-Cross: `LICENSE`, `spirv_msl.hpp`, `spirv_msl.cpp` in
+  [KhronosGroup/SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)
+- Slang: release v2026.20 assets, `LICENSE`, `docs/user-guide/08-compiling.md`, `09-targets.md`,
+  `a2-02-metal-target-specific.md`, `docs/command-line-slangc-reference.md`,
+  `docs/generated/design/target-pipelines/index.md` in
+  [shader-slang/slang](https://github.com/shader-slang/slang)
+- Mesa: `docs/license.rst`, `src/microsoft/spirv_to_dxil/spirv_to_dxil.h`,
+  `src/microsoft/compiler/nir_to_dxil.c` in
+  [mesa/mesa](https://gitlab.freedesktop.org/mesa/mesa);
+  [godotengine/godot-nir-static](https://github.com/godotengine/godot-nir-static)
+- Metal shader converter:
+  [developer.apple.com/metal/shader-converter](https://developer.apple.com/metal/shader-converter/)
+- Metal 4 shaders and pipelines:
+  [Using the Metal 4 compilation API](https://developer.apple.com/documentation/metal/using-the-metal-4-compilation-api),
+  [MTL4Compiler](https://developer.apple.com/documentation/metal/mtl4compiler),
+  [MTL4LibraryDescriptor](https://developer.apple.com/documentation/metal/mtl4librarydescriptor),
+  [MTL4LibraryFunctionDescriptor](https://developer.apple.com/documentation/metal/mtl4libraryfunctiondescriptor),
+  [MTL4RenderPipelineDescriptor](https://developer.apple.com/documentation/metal/mtl4renderpipelinedescriptor),
+  [MTL4ComputePipelineDescriptor](https://developer.apple.com/documentation/metal/mtl4computepipelinedescriptor),
+  [requiredThreadsPerThreadgroup](https://developer.apple.com/documentation/metal/mtl4computepipelinedescriptor/requiredthreadsperthreadgroup),
+  [MTL4ArgumentTable](https://developer.apple.com/documentation/metal/mtl4argumenttable),
+  [MTL4ArgumentTableDescriptor](https://developer.apple.com/documentation/metal/mtl4argumenttabledescriptor),
+  [setArgumentTable(_:stages:)](https://developer.apple.com/documentation/metal/mtl4rendercommandencoder/setargumenttable(_:stages:)),
+  [MTL4RenderCommandEncoder](https://developer.apple.com/documentation/metal/mtl4rendercommandencoder),
+  [MTL4Archive](https://developer.apple.com/documentation/metal/mtl4archive),
+  [MTL4CompilerTaskOptions lookupArchives](https://developer.apple.com/documentation/metal/mtl4compilertaskoptions/lookuparchives),
+  [MTL4PipelineDataSetSerializer](https://developer.apple.com/documentation/metal/mtl4pipelinedatasetserializer),
+  [makeLibrary(data:)](https://developer.apple.com/documentation/metal/mtldevice/makelibrary(data:)),
+  [MTLRenderPipelineState](https://developer.apple.com/documentation/metal/mtlrenderpipelinestate),
+  [Improving CPU performance by using argument buffers](https://developer.apple.com/documentation/metal/improving-cpu-performance-by-using-argument-buffers)
+- Engines (shaders and pipelines): [Themaister/Granite](https://github.com/Themaister/Granite);
+  Hazel, SynapseEngine and Doriax at the commits named in the section intro
