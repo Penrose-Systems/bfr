@@ -1430,8 +1430,8 @@ Forge at a00d6d3, O3DE at 94790ad, Granite at 7c59ad8.
 
 Facts behind shader modules, the binding model, compute and graphics
 pipelines, reflection, pipeline caches and pipeline lifetime: what roadmap
-step 4 (draws and dispatches) needs from step 3. Findings only, except the
-last subsection. Each item is SETTLED (primary source named) or OPEN (no
+step 4 (draws and dispatches) needs from step 3. Findings only, except
+"Options for the shader input". Each item is SETTLED (primary source named) or OPEN (no
 primary source found; what was searched is named). Read on 2026-11-02:
 Vulkan-Docs `chapters/shaders.adoc`, `pipelines.adoc`, `drawing.adoc`,
 `commonvalidity/draw_common.adoc`, `commonvalidity/draw_vertex_binding.adoc`,
@@ -2432,6 +2432,500 @@ not read.
    runs it at run time and export (h). Godot's Mesa installer is a Windows
    script; other host platforms OPEN.
 
+### Bindless layout across shader compilers
+
+What a caller's compiled shader expects from one device-wide bindless
+layout, per compiler and backend. Read on 2026-11-02: Vulkan-Docs main
+b94f8bd (`xml/vk.xml`, `chapters/features.adoc`, `descriptorsets.adoc`,
+`interfaces.adoc`, `limits.adoc`, `extensions.adoc`,
+`appendices/VK_EXT_mutable_descriptor_type.adoc`,
+`appendices/roadmap/Roadmap-2022.adoc`, `-2024.adoc`, `-2026.adoc`,
+`proposals/VK_EXT_mutable_descriptor_type.adoc`); `vulkan_core.h`
+1.4.357; Vulkan-Profiles main 96b1622 (`profiles/`); DXC main b9cd7c6
+(`docs/SPIR-V.rst`, `include/dxc/Support/HLSLOptions.td`,
+`tools/clang/lib/SPIRV/DeclResultIdMapper.cpp`,
+`tools/clang/test/CodeGenSPIRV/`); Slang master 9b46bca
+(`docs/user-guide/03-convenience-features.md`,
+`a2-02-metal-target-specific.md`, `docs/command-line-slangc-reference.md`,
+`source/slang/hlsl.meta.slang`, `slang-capabilities.capdef`); SPIRV-Cross
+main 57e4efc (`spirv_msl.hpp`, `spirv_msl.cpp`, `main.cpp`,
+`shaders-msl/`, `reference/shaders-msl/`); Mesa main b5b73e5
+(`docs/features.txt` and the Vulkan drivers' physical-device files);
+MoltenVK main 5189f8d (`Docs/MoltenVK_Runtime_UserGuide.md`); the NVIDIA
+Vulkan driver page; gpuinfo.org (Vulkan Hardware Database) pages named
+per item, fetched 2026-11-02; Apple Metal Feature Set Tables dated
+2026-10-23, Metal Shading Language Specification 4.1 dated 2026-06-04, the
+Metal shader converter page and the WWDC23 session 10124 transcript;
+Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
+`sdk-api` (docs 656e965). Engines at the commits in the section intro.
+
+**a. `VK_EXT_mutable_descriptor_type`: status.**
+
+- SETTLED: ratified, not promoted to any core version. vk.xml:
+  `VK_EXT_mutable_descriptor_type` (number 495) has `ratified="vulkan"`,
+  `specialuse="d3demulation"`, `depends="VK_KHR_maintenance3,VK_VERSION_1_1"`
+  and no `promotedto` (vk.xml:29837); `VK_VALVE_mutable_descriptor_type`
+  (number 352) has `promotedto="VK_EXT_mutable_descriptor_type"` and no
+  `ratified` attribute (vk.xml:27576). Mesa lists it under "Khronos
+  extensions that are not part of any Vulkan version"
+  (`docs/features.txt:543`, 679).
+- SETTLED: special use `d3demulation`: "Extension is intended to support
+  D3D emulation layers, and applications ported from D3D, by adding
+  functionality specific to D3D" (`extensions.adoc:982-984`); "This
+  extension is primarily intended to be useful for API layering efforts"
+  (`appendices/VK_EXT_mutable_descriptor_type.adoc`, Description).
+- SETTLED: no Khronos profile requires it. Not named in the Roadmap 2022,
+  2024 or 2026 appendices (grepped `mutable`). Not named in any profile
+  definition in Vulkan-Profiles 96b1622 (`VP_KHR_roadmap`,
+  `VP_ANDROID_baseline_2021`/`2022`, `VP_ANDROID_15`-`18` requirements,
+  `VP_ANDROID_15`/`16` minimums, `VP_ANDROID_vulkan_profile_2021`/`2022`/`2025`,
+  `VP_LUNARG_minimum_requirements`); the other matches are captured device
+  reports (`profiles/LunarG/*/vp_gpuinfo_*.json`), test data and schema
+  files. `VP_LUNARG_desktop_baseline_2026` is built from 23 reports, 21 of
+  which have it, so its intersection leaves it out. Roadmap 2026 requires
+  `VK_KHR_shader_untyped_pointers` but not `VK_EXT_descriptor_heap`
+  (`Roadmap-2026.adoc:89-110`).
+- SETTLED: MoltenVK's supported-extension list does not include it
+  (`MoltenVK_Runtime_UserGuide.md:232` onward; it lists
+  `VK_EXT_descriptor_indexing`, :339). MoltenVK is not a BFR target.
+
+**b. `VK_EXT_mutable_descriptor_type`: what it requires, and its limits.**
+
+- SETTLED: the feature struct has one member:
+  `VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT { sType; pNext;
+  VkBool32 mutableDescriptorType; }` (`vulkan_core.h:21054-21058`). There
+  is no properties struct (grepped `MutableDescriptorTypeProperties`). A
+  layout lists each mutable binding's types in
+  `VkMutableDescriptorTypeCreateInfoEXT` and `VkMutableDescriptorTypeListEXT`
+  (:21062-21074).
+- SETTLED: guaranteed types: `mutableDescriptorType` means "any
+  combination" of `SAMPLED_IMAGE`, `STORAGE_IMAGE`, `UNIFORM_TEXEL_BUFFER`,
+  `STORAGE_TEXEL_BUFFER`, `UNIFORM_BUFFER`, `STORAGE_BUFFER` must be
+  supported (`features.adoc:5950-5959`). `SAMPLER` is not in that list.
+  The proposal: "Samplers live in separate heaps in DirectX 12, and do not
+  need to be mutable like this"; anything beyond the minimum set is queried
+  with `vkGetDescriptorSetLayoutSupport`
+  (`proposals/VK_EXT_mutable_descriptor_type.adoc:100-117`).
+- SETTLED: update-after-bind and non-uniform indexing narrow the guarantee:
+  "`VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT` with descriptorType of
+  `VK_DESCRIPTOR_TYPE_MUTABLE_EXT` relaxes the list of required descriptor
+  types to the descriptor types which have the corresponding
+  update-after-bind feature enabled"; non-uniform indexing is supported
+  only "if all descriptor types in a VkMutableDescriptorTypeListEXT ...
+  have the corresponding non-uniform indexing features enabled"
+  (`features.adoc:5961-5977`). The proposal names the case: "An example
+  here would be `VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER` which may not be
+  supported with update-after-bind on some implementations" (:113-115).
+- SETTLED: BFR's Vulkan floor enables update-after-bind for sampled
+  images, storage images and storage buffers, and non-uniform indexing
+  for the same three (`src/backends/vulkan/vulkan_caps.cpp:39-68`). It
+  does not enable `descriptorBindingUniformBufferUpdateAfterBind`, the
+  two texel-buffer update-after-bind features, or non-uniform indexing for
+  uniform buffers or texel buffers. Roadmap 2022 requires update-after-bind
+  for sampled image, storage image, storage buffer, uniform texel buffer
+  and storage texel buffer, not for uniform buffer
+  (`Roadmap-2022.adoc:63-72`).
+- SETTLED: gpuinfo coverage of the update-after-bind features BFR's floor
+  lacks (`listfeaturescore12.php`, Recent (1y), Vulkan 1.3 and up, % of
+  devices): `descriptorBindingUniformBufferUpdateAfterBind` Windows 81.86,
+  Linux 88.47, Android 93.7; uniform and storage texel buffer
+  update-after-bind Windows 99.07, Linux 97.74, Android 93.7. Of the 78
+  Windows devices listed without uniform-buffer update-after-bind, 69 are
+  NVIDIA (`listdevicescoverage.php?core=1.2&feature=descriptorBindingUniformBufferUpdateAfterBind&platform=windows&option=not`,
+  same filters).
+- SETTLED: limits. A mutable descriptor "counts as one individual resource
+  and one for every unique resource limit per descriptor set type that is
+  present in the associated binding's VkMutableDescriptorTypeListEXT"
+  (`interfaces.adoc:1672-1680`). Required minimums:
+  `maxPerStageDescriptorUpdateAfterBindUniformBuffers` 12,
+  `maxDescriptorSetUpdateAfterBindUniformBuffers` 72 (n × 12, n the number
+  of supported shader stages, footnote 8, `limits.adoc:7627-7632`; an
+  update-after-bind limit may be 0 when its feature is unsupported,
+  footnote 9, `:7635-7639`); the sampled-image,
+  storage-image, storage-buffer and sampler update-after-bind limits are
+  500000 (`limits.adoc:7135-7160`). gpuinfo value distribution of
+  `maxPerStageDescriptorUpdateAfterBindUniformBuffers` on Windows
+  (`displaycoreproperty.php?core=1.2&name=maxPerStageDescriptorUpdateAfterBindUniformBuffers&platform=windows`,
+  Recent (1y), reports, no Vulkan 1.3 filter on this page): 1048576 in
+  1782, 15 in 391, 4294967295 in 281, 33554432 in 232, 16777216 in 91,
+  1000000 in 62, 12 in 3, 0 in 2, among others. OPEN: which vendors report 15 (the report list behind that
+  bucket was not read in full).
+- SETTLED: a mutable descriptor's size "is equal to the maximum size of any
+  descriptor type included in the pDescriptorTypes list"
+  (`limits.adoc:4600-4606`). A layout that exceeds any of the physical
+  device limits (not only `maxPerSetDescriptors`) needs
+  `vkGetDescriptorSetLayoutSupport` to have returned supported
+  (VUID-vkCreateDescriptorSetLayout-support-09582,
+  `descriptorsets.adoc:64-68`); a large mutable binding listing
+  `UNIFORM_BUFFER` counts against the uniform-buffer limits.
+- SETTLED, usage rules: the mutable binding needs the feature
+  (VUID-VkDescriptorSetLayoutCreateInfo-mutableDescriptorType-04595), a
+  type list in the pNext chain (-pBindings-07303) and no immutable samplers
+  (-descriptorType-04594); the list must not contain `MUTABLE_EXT`, the
+  two dynamic buffer types or inline uniform blocks
+  (VUID-VkMutableDescriptorTypeListEXT-pDescriptorTypes-04600 to -04603);
+  push-descriptor layouts cannot hold it (-flags-04591,
+  `descriptorsets.adoc:162`) (`descriptorsets.adoc:166-205`, 320-345). The proposal: "For this to be
+  well defined, `VK_DESCRIPTOR_BINDING_FLAG_PARTIALLY_BOUND_BIT` must be
+  used on the mutable binding" (:269).
+- SETTLED: when it is needed. "If multiple shader variables are declared
+  with the same set and binding values, and with the same underlying
+  descriptor type, they can all be statically used within the same
+  shader"; with different types, "that shader can only be executed if the
+  variables with the unsupported type are not statically used"
+  (`interfaces.adoc:1718-1735`); that rule is about variables within one
+  shader. For a layout shared by every pipeline: the layout binding "must
+  be of a corresponding descriptor type" (`interfaces.adoc:1708`), and a
+  write to a binding that is not `MUTABLE_EXT` must use that binding's
+  type (`descriptorsets.adoc:3168-3171`). So a binding needs `MUTABLE_EXT`
+  as soon as it holds more than one descriptor type across all shaders.
+
+**c. `VK_EXT_mutable_descriptor_type`: device coverage.**
+
+- SETTLED, gpuinfo coverage (`listextensions.php?platform=<p>&age=recent&apiversion=1.3`,
+  "Device coverage", % of devices, Recent (1y), Vulkan 1.3 and up):
+
+  | Extension | All | Windows | Linux | Android |
+  |---|---|---|---|---|
+  | `VK_EXT_mutable_descriptor_type` | 53.93 | 73.49 | 87.22 | 33.54 |
+  | `VK_VALVE_mutable_descriptor_type` | 24.75 | 27.91 | 59.65 | 5.69 |
+  | `VK_EXT_descriptor_heap` | 16.4 | 33.02 | 38.1 | 2.54 |
+  | `VK_KHR_shader_untyped_pointers` | 25.87 | 40 | 63.41 | 4.36 |
+
+  The same page with the default filter (Recent (1y), all Vulkan
+  versions): `VK_EXT_mutable_descriptor_type` All 37.73, Windows 59.25,
+  Linux 81.74, Android 19.76, macOS 42.11.
+- SETTLED, which devices lack it (device lists
+  `listdevicescoverage.php?extension=VK_EXT_mutable_descriptor_type&platform=<p>&age=recent&apiversion=1.3`,
+  with and without `&option=not`; used for names and drivers, not for the
+  percentages above):
+  - NVIDIA proprietary driver: no Maxwell, Pascal or Volta device reports
+    it on Windows or Linux, including reports on 580-582 drivers (GeForce
+    840M to GTX 1080 Ti, MX110 to MX350, TITAN X, Xp and V, Quadro K, M
+    and P, Tesla M40, P4, V100). Every NVIDIA device in the Windows
+    supported list is Turing or later (GTX 1630, 1650, RTX). On Linux, Maxwell and Pascal GPUs report
+    it under NVK. Why the proprietary driver omits those generations: OPEN
+    (the NVIDIA Vulkan driver page gives only "September 27th, 2022 -
+    Windows 517.55, Linux 515.49.18 New: VK_EXT_mutable_descriptor_type").
+  - Intel: on Windows, Gen9 to Gen11 HD/UHD/Iris devices on 101.1692 to
+    101.2141 drivers and Broadwell on 6400.x lack it; Arc, Xe and UHD 7xx
+    on 101.4314 and later have it. On Linux, Ivy Bridge and Broadwell lack
+    it; Skylake and later under anv have it.
+  - AMD: on Windows, Radeon Pro V620 and Radeon Pro WX 8200 on driver
+    2.0.233 lack it; on Linux no AMD device lacks it.
+  - Android: Adreno 650, 710, 725, 730, 740, 750 and 8xx report it,
+    mostly on 512.80 to 512.89 drivers; Adreno 611, 613, 619, 642L, 720,
+    722, 732, 735 lack it, mostly on 512.67 and 512.76. Mali devices with
+    driver major 53 to 56 have it and 38 to 51 lack it (most reports; three
+    supported reports show 26.x and three lacking ones 15, 24 and 25); the
+    lists split by driver, not GPU name (Mali-G68 is in both). No PowerVR (Rogue GE8300/GE8322, B, C, D series),
+    Samsung Xclipse (530 to 960) or Huawei Maleoon device reports it.
+    Mesa turnip on Adreno 6xx and 7xx reports it.
+- SETTLED, Mesa drivers: radv (`src/amd/vulkan/radv_physical_device.c:902`, feature
+  :1255), anv (`src/intel/vulkan/anv_physical_device.c:593`, :937), nvk
+  (`src/nouveau/vulkan/nvk_physical_device.c:279`, :745), turnip (`src/freedreno/vulkan/tu_device.cc:371`, :825),
+  honeykrisp (`src/asahi/vulkan/hk_physical_device.c:187`, :592) and panvk on arch 9 and
+  later (`src/panfrost/vulkan/panvk_vX_physical_device.c:193`, :743) expose
+  `VK_EXT_mutable_descriptor_type`; hasvk exposes only the VALVE name
+  (`src/intel/vulkan_hasvk/anv_device.c:335`). `docs/features.txt:679`:
+  "DONE (anv, hk, kk, lvp, nvk, panvk/v9+, radv, tu, vn)"; pvr (PowerVR),
+  v3dv (Broadcom) and dzn are absent. `VK_EXT_descriptor_heap`: "DONE (anv,
+  lvp, radv, vn)" (:636).
+
+**d. DXC: the default emulated heap on Vulkan.**
+
+- SETTLED: default lowering and its requirement: "By default, the SPIR-V
+  backend supports SM6.6 resource heaps by emulating the heaps with
+  descriptor-indexing runtime arrays, using 2 extensions:
+  `SPV_EXT_descriptor_indexing`, `VK_EXT_mutable_descriptor_type`. This is
+  also the behavior selected by `-fspv-use-emulated-heap`" (`SPIR-V.rst:1995-2004`).
+- SETTLED, layout: "Each type loaded from a heap is considered to be an
+  unbounded RuntimeArray bound to the descriptor set 0. Each heap uses at
+  most 1 binding in that set. Meaning if 2 types are loaded from the same
+  heap, DXC will generate 2 RuntimeArray, one for each type, and will bind
+  them to the same binding/set. (This requires
+  `VK_EXT_mutable_descriptor_type`)." At most three bindings: resource
+  heap, sampler heap, UAV counters. "DXC takes the first 3 unused bindings
+  in the set 0, and distributes them in that order: 1. Resource heap.
+  2. Sampler heap. 3. Resouce heap counters. Bindings are lazily
+  allocated" (:2006-2036). So the default binding numbers depend on what
+  else the shader binds in set 0 (examples :2037-2072).
+- SETTLED, explicit placement: `-fvk-bind-resource-heap <binding> <set>`,
+  `-fvk-bind-sampler-heap`, `-fvk-bind-counter-heap` (:2074-2081;
+  `HLSLOptions.td:451-456`). With `-fvk-bind-register`, the resource and
+  sampler heap flags are required (`DeclResultIdMapper.cpp:2617-2632`).
+  The resource and sampler heaps may be given the same binding (test
+  `sm6_6.descriptorheap.aliasing.hlsl`: both at binding 4, set 7).
+- SETTLED, Vulkan descriptor type per HLSL type loaded from the resource
+  heap: `Texture*` sampled image; `RWTexture*` storage image; `Buffer<T>`
+  uniform texel buffer; `RWBuffer<T>` storage texel buffer (:893-910);
+  `ConstantBuffer` uniform buffer; `TextureBuffer`, `StructuredBuffer`,
+  `RWStructuredBuffer`, `Append`/`ConsumeStructuredBuffer`,
+  `ByteAddressBuffer`, `RWByteAddressBuffer` storage buffer (:1005-1018).
+  The sampler heap holds only samplers.
+- SETTLED, counters: a counter is a separate storage buffer of
+  `struct type_ACSBuffer_counter { int; }` decorated `BufferBlock`
+  (:1264-1283). Through the heap, "its associated counter is in its own
+  binding, but shares the same index in the binding as its associated
+  resource" (:1777-1790; "The index of a counter in the counters
+  RuntimeArray matches the index of the associated ResourceDescriptorHeap
+  RuntimeArray", :2023-2024). Not generated when unused (:2069-2072).
+- SETTLED, consequence of b and d: of DXC's three bindings, only the
+  resource heap holds more than one descriptor type; the sampler heap
+  holds `SAMPLER` only and the counter heap `STORAGE_BUFFER` only, when
+  each heap has its own binding. If the resource and sampler heaps share
+  a binding (as the aliasing test above does), that binding holds
+  `SAMPLER` too, which is outside the guaranteed mutable set
+  (`features.adoc:5950-5959`).
+- SETTLED, D3D12 has no separate counter array: a UAV's counter is given
+  when the UAV descriptor is created (`pCounterResource`: "The
+  ID3D12Resource for the counter (if any) associated with the UAV"; Learn,
+  `CreateUnorderedAccessView`).
+
+**e. DXC: other options for heaps on Vulkan.**
+
+- SETTLED: DXC has two heap modes and the three binding flags; no other
+  heap option (grepped `heap` in `HLSLOptions.td`: :432-442, 451-456).
+- SETTLED, native heap: "When `-fspv-use-descriptor-heap` is specified, DXC
+  lowers `ResourceDescriptorHeap` and `SamplerDescriptorHeap` through
+  `SPV_EXT_descriptor_heap`"; it "also requires `SPV_KHR_untyped_pointers`
+  and `-fspv-target-env=vulkan1.3`"; heaps are `OpUntypedVariableKHR`
+  decorated `BuiltIn ResourceHeapEXT` / `SamplerHeapEXT`, so no descriptor
+  set or binding (:2083-2100). Resource arrays share one stride,
+  `max(sizeof(image_descriptor), sizeof(buffer_descriptor))`, from
+  `OpConstantSizeOfEXT` (:2194-2203).
+- SETTLED, native heap limits: "Append/consume structured buffers and UAV
+  counter heap lowering are not supported by the native descriptor heap
+  path yet"; `IncrementCounter`/`DecrementCounter` on a heap-loaded
+  `RWStructuredBuffer` "emit a diagnostic"; a variable holding both a bound
+  and a heap resource is rejected; buffer-type aliases cannot be passed to
+  or returned from user functions (:2157-2192).
+- SETTLED: the native path needs `VK_EXT_descriptor_heap` on the device;
+  coverage in c (Windows 33.02, Linux 38.1, Android 2.54).
+
+**f. Slang.**
+
+- SETTLED: `DescriptorHandle<T>` (`T.Handle`) "translate[s] into a `uint2`"
+  on HLSL, GLSL and SPIR-V; "On targets where resource handles are not
+  opaque handles, `DescriptorHandle<T>` maps to `T`"
+  (`03-convenience-features.md:668-674`). `ResourceDescriptorHeap[i]` and
+  `SamplerDescriptorHeap[i]` are accepted as input on HLSL, SPIR-V, GLSL
+  and WGSL; "On targets where that representation is unavailable (Metal,
+  CUDA, CPU), using the syntax is diagnosed at compile time" (:706-740).
+- SETTLED, HLSL target: handles become `ResourceDescriptorHeap[x]` and
+  `SamplerDescriptorHeap[x]`; a combined sampler takes the texture from
+  `.x` and the sampler from `.y` (:751-776).
+- SETTLED, SPIR-V default: "Slang introduces a global array of descriptors
+  and fetches from it. The descriptor set ID of the global descriptor array
+  can be configured with the `-bindless-space-index`" option (:779-783;
+  slangc reference :659-663). The default preset `VkMutable` uses
+  binding 0 sampler, 1 combined image sampler, 2 sampled image, storage
+  image, uniform and storage texel buffer, uniform buffer and storage
+  buffer, 3 other (:791-806; `hlsl.meta.slang:29433-29446`, whose comment
+  links the mutable-descriptor proposal). Binding 2 holds six Vulkan
+  descriptor types (seven enum entries; `STORAGE_BUFFER` appears twice), so this preset needs `VK_EXT_mutable_descriptor_type`.
+- SETTLED, without mutable: preset `None` ("Bind assuming regular binding
+  model rules") uses one binding per type: 0 sampler, 1 combined, 2
+  sampled image, 3 storage image, 4 uniform texel, 5 storage texel,
+  6 uniform buffer, 7 storage buffer, 8 other (:908-931;
+  `hlsl.meta.slang:29419-29431`, 29479-29483). It is selected by a user
+  `getDescriptorFromHandle` that calls `defaultGetDescriptorFromHandle`
+  with the option (:852-908). Both presets index every binding with the
+  same `handle.x` (`hlsl.meta.slang:29521-29555`). No slangc option
+  selects the preset or the binding numbers (slangc reference headings
+  grepped; only `-bindless-space-index` and the three
+  `-spirv-*-heap-stride` options).
+- SETTLED, SPIR-V with `spvDescriptorHeapEXT`: handles map to
+  `SPV_EXT_descriptor_heap` "without declaring any explicit descriptor
+  sets"; stride options `-spirv-resource-heap-stride`,
+  `-spirv-sampler-heap-stride`, `-spirv-unified-descriptor-heap-stride`
+  (:810-850).
+- SETTLED, Metal: `ParameterBlock` becomes an argument buffer whose
+  resource fields are `T device*` or textures, bound as one `constant*`
+  argument (`a2-02-metal-target-specific.md:170-200`); the
+  `descriptor_handle` capability includes `metal`
+  (`slang-capabilities.capdef:1478`), with `DescriptorHandle<T>` mapping to
+  `T` there.
+- OPEN: how Slang places UAV counters for `RWStructuredBuffer` or
+  `AppendStructuredBuffer` handles on SPIR-V (searched
+  `03-convenience-features.md` and the bindless code in
+  `hlsl.meta.slang`).
+
+**g. Typed arrays without mutable descriptors.**
+
+- SETTLED, HLSL source: unbounded arrays are declared with an empty first
+  dimension, e.g. `Texture2D terrain[] : register(t8)`; "Ranges declared in
+  different register spaces never overlap"; indices that vary within a
+  wave need `NonUniformResourceIndex` (Learn, "Resource binding in HLSL",
+  `resource-binding-in-hlsl.md:44`, 65, 75-80, 292-294). Unbounded arrays
+  "require hardware tier 2+ of resource binding support"
+  (`example-root-signatures.md:74`).
+- SETTLED, D3D12: a root signature may point several ranges at the same
+  heap region: "the root signature mechanism makes it possible to alias
+  (overlap) heap ranges of compatible types ... If such aliasing is
+  desired, the shader must be compiled with D3D10_SHADER_RESOURCES_MAY_ALIAS"
+  (`/res_may_alias` in FXC) (`resource-binding-in-hlsl.md:136`). DXC has
+  `-res-may-alias`, "Assume that UAVs/SRVs may alias"
+  (`HLSLOptions.td:575-576`).
+- SETTLED, DXC to SPIR-V: `register(xX, spaceY)` becomes "descriptor set
+  `Y` and binding number `X`, regardless of the register type `x`", so
+  `t0` and `u0` in one space collide unless `-fvk-{b,s,t,u}-shift` is used
+  (`SPIR-V.rst:1793-1807`). `[[vk::binding(X, Y)]]` sets them directly;
+  "All C++11 attributes will only trigger warnings and be ignored if not
+  compiling towards SPIR-V" (:417-419); `__spirv__` is defined when
+  generating SPIR-V (:438-447).
+- SETTLED: an unbounded `RWStructuredBuffer<uint> g_rwbuffer[] :
+  register(u0, space2)` gets its data at set 2 binding 0 and a counter
+  array at set 2 binding 1 (test
+  `type.rwstructured-buffer.array.unbounded.counter.hlsl`).
+- SETTLED: one HLSL source serves both backends this way. O3DE's
+  `Bindless` group declares five typed unbounded arrays
+  (`Gems/Atom/Feature/Common/Assets/ShaderLib/Atom/Features/Bindless.azsli:26-36`)
+  compiled for D3D12, Vulkan and Metal. NVRHI's `Immutable` bindless
+  layout is the same model (h).
+- SETTLED, index space: on D3D12 the typed arrays overlap one heap region,
+  so one index addresses any type ("All such ranges have the _same base
+  offset_ and are completely overlapping", O3DE `Gems/Atom/RHI/Bindless.md:86-87`;
+  NVRHI ranges at `OffsetInDescriptorsFromTableStart = 0`,
+  `src/d3d12/d3d12-resource-bindings.cpp:647-651`). On Vulkan each type is
+  its own binding. O3DE overlaps its D3D12 ranges without passing
+  `-res-may-alias` (its DXC arguments are `-Zpr` and
+  `-enable-16bit-types`, `Gems/Atom/Asset/Shader/Assets/Config/Shader/shader_build_options.settings`
+  and `Platform/Windows/dx12/*.settings`; no `res_may_alias` in the
+  checkout). O3DE gives Vulkan a separate allocator per type, so a
+  view's index differs by backend ("the indices assigned to each static
+  descriptor is given a distinct offset based on descriptor type",
+  `Bindless.md:91-92`); NVRHI writes element `binding.slot` into the
+  binding whose type matches, so the index is shared across backends
+  (`src/vulkan/vulkan-resource-bindings.cpp:750`, 902-909).
+
+**h. Engines.**
+
+- SETTLED: only NVRHI uses `VK_DESCRIPTOR_TYPE_MUTABLE_EXT` (grepped
+  `MUTABLE` in all nine engines). SynapseEngine enables the
+  `mutableDescriptorType` feature (`Engine/Vk/Core/Device.cpp:57-58`) but
+  no `MUTABLE_EXT` binding was found; its shaders are GLSL.
+- SETTLED, NVRHI: `BindlessLayoutDesc::LayoutType` has `Immutable` and
+  three mutable types, documented as matching DXC: "MutableSrvUavCbv,
+  Corresponds to SPIR-V binding -fvk-bind-resource-heap",
+  "MutableCounters ... -fvk-bind-counter-heap", "MutableSampler ...
+  -fvk-bind-sampler-heap"; on D3D12 they set the `*_HEAP_DIRECTLY_INDEXED`
+  flags (`include/nvrhi/nvrhi.h:2019-2049`;
+  `src/d3d12/d3d12-resource-bindings.cpp:746`, 750). On Vulkan a mutable
+  layout is one `eMutableEXT` binding at binding 0 and errors without the
+  extension (`src/vulkan/vulkan-resource-bindings.cpp:122-140`); its type
+  lists are the six CBV/SRV/UAV types, `eStorageBuffer` for counters and
+  `eSampler` for samplers (:190-224); every bindless binding is
+  `ePartiallyBound` (:184). `Immutable` makes one typed binding per
+  register space (:141-160).
+- SETTLED, O3DE: typed arrays (g). Vulkan: one set with bindings
+  `SAMPLED_IMAGE`, `STORAGE_IMAGE`, `STORAGE_BUFFER` (read),
+  `STORAGE_BUFFER` (read-write), `SAMPLED_IMAGE` (cube), each
+  `UnboundedArraySize` = 100000, `PARTIALLY_BOUND | UPDATE_AFTER_BIND`
+  (`Gems/Atom/RHI/Vulkan/Code/Source/RHI/BindlessDescriptorPool.cpp:48-89`;
+  `Gems/Atom/RHI/Code/Include/Atom/RHI.Reflect/Limits.h:37`). Metal: one
+  argument buffer with a region per type, 100000 each, because SPIRV-Cross
+  lacked unbounded arrays for its second approach (`Bindless.md:104-113`;
+  `UNBOUNDED_SIZE 100000` in the Mac and iOS
+  `AzslcPlatformHeader.azsli:17`). O3DE runs SPIRV-Cross with no
+  argument-buffer tier option, so it gets Tier 1, under which unsized
+  arrays throw (SPIRV-Cross `spirv_msl.cpp:1569-1574`).
+- SETTLED, Diligent: typed runtime arrays through
+  `PIPELINE_RESOURCE_FLAG_RUNTIME_ARRAY` ("a run-time sized shader array",
+  `Graphics/GraphicsEngine/interface/PipelineResourceSignature.h:141-142`).
+- SETTLED, Granite (GLSL, Vulkan only): a bindless set has exactly one
+  unsized binding (`vulkan/descriptor_set.cpp:190-192`).
+- SETTLED: Godot (`drivers/`), Hazel, Doriax and The Forge's Vulkan
+  backend have no partially bound, variable-count or update-after-bind
+  bindings (grepped `PARTIALLY_BOUND`, `VARIABLE_DESCRIPTOR_COUNT`,
+  `UPDATE_AFTER_BIND`, `runtimeDescriptorArray`).
+
+**i. Metal: argument buffer tier and limits.**
+
+- SETTLED: "Argument buffers tier 2 ... Metal 3 & 4 ... Apple6"; "Argument
+  tables ... Metal 4 ... Apple7"; A14 and M1-series are Apple7 (Metal
+  Feature Set Tables, 2026-10-23, pages 2, 4 and 5). So every Apple7 device has
+  Tier 2 by this table. BFR's floor checks Apple7 and Metal 4
+  (`src/backends/metal/metal_caps.cpp:86-91`) and does not read
+  `argumentBuffersSupport` (grepped `src/`); metal-cpp declares it
+  (`Metal/MTLDevice.hpp:328`, tiers :209-211).
+- SETTLED, limits per stage from argument buffers (Feature Set Tables,
+  page 8): buffers no limit from Apple6; textures 1M from Apple6;
+  samplers 128 Apple6, 996 Apple7 and Apple8, 500K Apple9 to Apple11.
+  Sampler argument-table entries per function: 16 on every family
+  (page 7).
+- SETTLED, unique samplers: "On iOS and tvOS, the maximum number of unique
+  samplers per app is `96`, and for macOS, `1024` or greater"; query
+  `maxArgumentBufferSamplerCount`; the limit applies to samplers with
+  `supportArgumentBuffers` set (Apple, "Improving CPU performance by using
+  argument buffers"). D3D12's shader-visible sampler heap holds 2048
+  (Resource binding, b).
+- SETTLED, MSL rules: "argument buffers cannot contain unions"; "The same
+  index may not be assigned to more than one member of an argument
+  buffer"; with Tier 2, "You can access argument buffers through pointer
+  indexing", referring to "an array of consecutive, independently encoded
+  argument buffers" (MSL Specification 4.1, sections 2.13 and 2.13.1,
+  pages 54-56).
+
+**j. Metal: mapping a heap or a bindless array.**
+
+- SETTLED, Metal shader converter (public page): converts DXIL to
+  metallib; supports SM 6.6 "Dynamic resources"; "Metal libraries built
+  using Metal shader converter tools require a device that supports
+  Argument Buffers Tier 2, running macOS 14 Sonoma, iOS 17 or later"
+  (developer.apple.com/metal/shader-converter). WWDC23 session 10124: one
+  "top level" argument buffer is bound per pipeline, with "two layout
+  modes": automatic, or "explicitly defining a layout that matches your
+  root signature. Use this mode ... if your game uses bindless resources."
+- OPEN: the converter's descriptor heap layout (entry format, bind points,
+  how SM 6.6 heap indices address it) and whether it emits for Metal 4
+  argument tables. The manual (`Metal shader converter 4.0.pdf`) and
+  packages are behind the developer download page, which redirects to
+  Apple Account sign-in.
+- SETTLED, SPIRV-Cross: `--msl-argument-buffers` and
+  `--msl-argument-buffer-tier` (1 = Tier 2, matching
+  `MTLArgumentBuffersTier`) (`spirv_msl.hpp:350-365`; `main.cpp:882-887`).
+  Each descriptor set becomes a struct bound at `[[buffer(set)]]`, each
+  binding a member `[[id(binding)]]`, and a runtime array a trailing
+  `spvDescriptor<T> Ts [[id(2)]][1] /* unsized array hack */` read
+  through `spvDescriptorArray<T>` (reference output of
+  `argument-buffers-runtime-array.argument.device-argument-buffer.argument-tier-1.msl2.comp`).
+  An unsized descriptor array throws "Unsized array of descriptors
+  requires argument buffer tier 2" unless the tier option is Tier 2
+  (`spirv_msl.cpp:1569-1574`).
+- SETTLED, SPIRV-Cross with the DXC emulated-heap shape (several types at
+  one binding): one member is declared and the others are listed as
+  "Overlapping binding" comments; each type is read through a
+  `reinterpret_cast` of the same storage (reference output of
+  `overlapping-bindings.msl31.argument.argument-tier-1...comp:78-84`,
+  160-165). The emitting function's comment: "To deal with buffer <->
+  image aliasing, we need to perform an unholy UB ritual"
+  (`spirv_msl.cpp:20357-20359`). `pad_argument_buffer_resources` and
+  `force_active_argument_buffer_resources` keep one struct layout across
+  shaders (`spirv_msl.hpp:396-411`).
+- SETTLED: `runtime_array_rich_descriptor` makes a buffer entry
+  `{ device T* value; int length; int padding; }` (`spirv_msl.cpp:8262-8272`).
+  OPEN: its stride when buffers overlap 8-byte texture entries at one
+  binding (no reference test combines the two; searched
+  `reference/shaders-msl*` for `rich-descriptor` with overlapping
+  bindings).
+- SETTLED, what a hand-written MSL shader reads: Tier 2 argument buffers
+  "match the memory layout of an equivalent C structure" (iOS 16, macOS
+  13 and later), filled by writing `gpuAddress` for buffers and
+  `gpuResourceID` for textures and samplers (Apple, "Improving CPU
+  performance by using argument buffers"). Both are 64-bit: `MTL::ResourceID
+  { uint64_t _impl; }` (`Metal/MTLTypes.hpp:92-95`), `GPUAddress =
+  uint64_t` (`Metal/MTLGPUAddress.hpp:35`). Apple's MSL example reaches a
+  Tier 2 array through a pointer to a struct of textures,
+  `material.textures[4]->diffuse`. A Metal 4 argument table binds such a
+  buffer by GPU address at a buffer index (`setAddress`, Resource binding,
+  c).
+- OPEN: whether MSL defines reading one array of 8-byte entries as
+  different texture types or as buffer pointers. The MSL 4.1 specification
+  forbids unions in argument buffers (i) and says nothing on reinterpreting
+  resource handles (searched sections 2.13 and 2.23); SPIRV-Cross calls
+  its own cast undefined behaviour.
+
 ## Sources
 
 - Godot: `servers/rendering/rendering_device.h` in
@@ -2593,3 +3087,52 @@ not read.
   [Improving CPU performance by using argument buffers](https://developer.apple.com/documentation/metal/improving-cpu-performance-by-using-argument-buffers)
 - Engines (shaders and pipelines): [Themaister/Granite](https://github.com/Themaister/Granite);
   Hazel, SynapseEngine and Doriax at the commits named in the section intro
+- Bindless layout across shader compilers:
+  [VK_EXT_mutable_descriptor_type proposal](https://github.com/KhronosGroup/Vulkan-Docs/blob/main/proposals/VK_EXT_mutable_descriptor_type.adoc),
+  [VK_EXT_mutable_descriptor_type](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_EXT_mutable_descriptor_type.html),
+  [mutableDescriptorType feature](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#features-mutableDescriptorType),
+  [descriptor set layouts](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#descriptorsets-setlayout),
+  [shader resource interface](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#interfaces-resources),
+  [Roadmap 2022](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#roadmap-2022),
+  [Roadmap 2024](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#roadmap-2024),
+  [Roadmap 2026](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#roadmap-2026),
+  [extension special use](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#extendingvulkan-specialuse-table);
+  `profiles/` in [KhronosGroup/Vulkan-Profiles](https://github.com/KhronosGroup/Vulkan-Profiles)
+- DXC heaps on Vulkan: `docs/SPIR-V.rst`
+  ([ResourceDescriptorHeaps & SamplerDescriptorHeaps](https://github.com/microsoft/DirectXShaderCompiler/blob/main/docs/SPIR-V.rst#resourcedescriptorheaps-samplerdescriptorheaps)),
+  `include/dxc/Support/HLSLOptions.td`,
+  `tools/clang/lib/SPIRV/DeclResultIdMapper.cpp` and
+  `tools/clang/test/CodeGenSPIRV/` in
+  [microsoft/DirectXShaderCompiler](https://github.com/microsoft/DirectXShaderCompiler)
+- Slang bindless: `docs/user-guide/03-convenience-features.md`
+  ([DescriptorHandle](https://github.com/shader-slang/slang/blob/master/docs/user-guide/03-convenience-features.md)),
+  `docs/user-guide/a2-02-metal-target-specific.md`,
+  `docs/command-line-slangc-reference.md`, `source/slang/hlsl.meta.slang`,
+  `source/slang/slang-capabilities.capdef` in
+  [shader-slang/slang](https://github.com/shader-slang/slang)
+- SPIRV-Cross argument buffers: `spirv_msl.hpp`, `spirv_msl.cpp`,
+  `main.cpp`, `shaders-msl/comp/` and `reference/shaders-msl/comp/` in
+  [KhronosGroup/SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)
+- Device coverage: gpuinfo.org
+  [extension coverage](https://vulkan.gpuinfo.org/listextensions.php?platform=windows&age=recent&apiversion=1.3)
+  (and `platform=all`, `linux`, `android`),
+  [devices without VK_EXT_mutable_descriptor_type](https://vulkan.gpuinfo.org/listdevicescoverage.php?extension=VK_EXT_mutable_descriptor_type&age=recent&platform=windows&apiversion=1.3&option=not),
+  [Vulkan 1.2 feature coverage](https://vulkan.gpuinfo.org/listfeaturescore12.php?platform=windows&age=recent&apiversion=1.3),
+  [maxPerStageDescriptorUpdateAfterBindUniformBuffers](https://vulkan.gpuinfo.org/displaycoreproperty.php?core=1.2&name=maxPerStageDescriptorUpdateAfterBindUniformBuffers&platform=windows);
+  [NVIDIA Vulkan driver support](https://developer.nvidia.com/vulkan-driver);
+  `docs/features.txt` and `src/{amd,intel,nouveau,freedreno,asahi,panfrost}/vulkan*/`
+  in [mesa/mesa](https://gitlab.freedesktop.org/mesa/mesa);
+  `Docs/MoltenVK_Runtime_UserGuide.md` in
+  [KhronosGroup/MoltenVK](https://github.com/KhronosGroup/MoltenVK)
+- D3D12 typed arrays and counters:
+  [Resource binding in HLSL](https://learn.microsoft.com/en-us/windows/win32/direct3d12/resource-binding-in-hlsl),
+  [Example root signatures](https://learn.microsoft.com/en-us/windows/win32/direct3d12/example-root-signatures),
+  [CreateUnorderedAccessView](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-createunorderedaccessview)
+- Metal bindless:
+  [Metal Feature Set Tables](https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf),
+  [Metal Shading Language Specification](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf),
+  [Metal shader converter](https://developer.apple.com/metal/shader-converter/),
+  [WWDC23: Bring your game to Mac, Part 2: Compile your shaders](https://developer.apple.com/videos/play/wwdc2023/10124/)
+- Engines (bindless): O3DE `Gems/Atom/RHI/Bindless.md` in
+  [o3de/o3de](https://github.com/o3de/o3de); the other engines at the
+  commits named in the Shaders and pipelines intro
