@@ -1431,8 +1431,9 @@ Forge at a00d6d3, O3DE at 94790ad, Granite at 7c59ad8.
 Facts behind shader modules, the binding model, compute and graphics
 pipelines, reflection, pipeline caches and pipeline lifetime: what roadmap
 step 4 (draws and dispatches) needs from step 3. Findings only, except
-"Options for the shader input". Each item is SETTLED (primary source named) or OPEN (no
-primary source found; what was searched is named). Read on 2026-11-02:
+"Options for the shader input". Each item is SETTLED (primary source
+named), OPEN (no primary source found; what was searched is named) or a
+consequence drawn from the SETTLED items it names. Read on 2026-11-02:
 Vulkan-Docs `chapters/shaders.adoc`, `pipelines.adoc`, `drawing.adoc`,
 `commonvalidity/draw_common.adoc`, `commonvalidity/draw_vertex_binding.adoc`,
 `fundamentals.adoc`, `features.adoc`, `limits.adoc`, `devsandqueues.adoc`
@@ -2444,8 +2445,10 @@ b94f8bd (`xml/vk.xml`, `chapters/features.adoc`, `descriptorsets.adoc`,
 1.4.357; Vulkan-Profiles main 96b1622 (`profiles/`); DXC main b9cd7c6
 (`docs/SPIR-V.rst`, `include/dxc/Support/HLSLOptions.td`,
 `tools/clang/lib/SPIRV/DeclResultIdMapper.cpp`,
-`tools/clang/test/CodeGenSPIRV/`); Slang master 9b46bca
-(`docs/user-guide/03-convenience-features.md`,
+`tools/clang/test/CodeGenSPIRV/`); Slang master 9b46bca, two commits
+after the 48802eb in the section intro the same day; of the files named
+in either place only `hlsl.meta.slang` changed between them, and it is
+cited here at 9b46bca (`docs/user-guide/03-convenience-features.md`,
 `a2-02-metal-target-specific.md`, `docs/command-line-slangc-reference.md`,
 `source/slang/hlsl.meta.slang`, `slang-capabilities.capdef`); SPIRV-Cross
 main 57e4efc (`spirv_msl.hpp`, `spirv_msl.cpp`, `main.cpp`,
@@ -2487,7 +2490,8 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
   (`Roadmap-2026.adoc:89-110`).
 - SETTLED: MoltenVK's supported-extension list does not include it
   (`MoltenVK_Runtime_UserGuide.md:232` onward; it lists
-  `VK_EXT_descriptor_indexing`, :339). MoltenVK is not a BFR target.
+  `VK_EXT_descriptor_indexing`, :339). `README.md:13` lists MoltenVK for
+  Vulkan on macOS.
 
 **b. `VK_EXT_mutable_descriptor_type`: what it requires, and its limits.**
 
@@ -2528,8 +2532,9 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
 - SETTLED: gpuinfo coverage of the update-after-bind features BFR's floor
   lacks (`listfeaturescore12.php`, Recent (1y), Vulkan 1.3 and up, % of
   devices): `descriptorBindingUniformBufferUpdateAfterBind` Windows 81.86,
-  Linux 88.47, Android 93.7; uniform and storage texel buffer
-  update-after-bind Windows 99.07, Linux 97.74, Android 93.7. Of the 78
+  Linux 88.47, Android 93.69; uniform and storage texel buffer
+  update-after-bind Windows 99.07, Linux 97.74, Android 93.69 (the same
+  figure as sampled-image update-after-bind on Android). Of the 78
   Windows devices listed without uniform-buffer update-after-bind, 69 are
   NVIDIA (`listdevicescoverage.php?core=1.2&feature=descriptorBindingUniformBufferUpdateAfterBind&platform=windows&option=not`,
   same filters).
@@ -2541,15 +2546,15 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
   `maxDescriptorSetUpdateAfterBindUniformBuffers` 72 (n × 12, n the number
   of supported shader stages, footnote 8, `limits.adoc:7627-7632`; an
   update-after-bind limit may be 0 when its feature is unsupported,
-  footnote 9, `:7635-7639`); the sampled-image,
-  storage-image, storage-buffer and sampler update-after-bind limits are
-  500000 (`limits.adoc:7135-7160`). gpuinfo value distribution of
+  footnote 9, `:7635-7639`); the other update-after-bind limits have
+  required minimums of 500000 (Resource binding, a). gpuinfo value
+  distribution of
   `maxPerStageDescriptorUpdateAfterBindUniformBuffers` on Windows
   (`displaycoreproperty.php?core=1.2&name=maxPerStageDescriptorUpdateAfterBindUniformBuffers&platform=windows`,
   Recent (1y), reports, no Vulkan 1.3 filter on this page): 1048576 in
   1782, 15 in 391, 4294967295 in 281, 33554432 in 232, 16777216 in 91,
-  1000000 in 62, 12 in 3, 0 in 2, among others. OPEN: which vendors report 15 (the report list behind that
-  bucket was not read in full).
+  1000000 in 62, 12 in 3, 0 in 2, among others. OPEN: which vendors
+  report 15 (the report list behind that bucket was not read in full).
 - SETTLED: a mutable descriptor's size "is equal to the maximum size of any
   descriptor type included in the pDescriptorTypes list"
   (`limits.adoc:4600-4606`). A layout that exceeds any of the physical
@@ -2565,9 +2570,10 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
   two dynamic buffer types or inline uniform blocks
   (VUID-VkMutableDescriptorTypeListEXT-pDescriptorTypes-04600 to -04603);
   push-descriptor layouts cannot hold it (-flags-04591,
-  `descriptorsets.adoc:162`) (`descriptorsets.adoc:166-205`, 320-345). The proposal: "For this to be
-  well defined, `VK_DESCRIPTOR_BINDING_FLAG_PARTIALLY_BOUND_BIT` must be
-  used on the mutable binding" (:269).
+  `descriptorsets.adoc:162`) (`descriptorsets.adoc:166-205`, 320-345).
+  The proposal: "For this to be well defined,
+  `VK_DESCRIPTOR_BINDING_FLAG_PARTIALLY_BOUND_BIT` must be used on the
+  mutable binding" (:269).
 - SETTLED: when it is needed. "If multiple shader variables are declared
   with the same set and binding values, and with the same underlying
   descriptor type, they can all be statically used within the same
@@ -2577,13 +2583,15 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
   shader. For a layout shared by every pipeline: the layout binding "must
   be of a corresponding descriptor type" (`interfaces.adoc:1708`), and a
   write to a binding that is not `MUTABLE_EXT` must use that binding's
-  type (`descriptorsets.adoc:3168-3171`). So a binding needs `MUTABLE_EXT`
-  as soon as it holds more than one descriptor type across all shaders.
+  type (`descriptorsets.adoc:3168-3171`).
+- Consequence of the two rules above: a binding needs `MUTABLE_EXT` as
+  soon as it holds more than one descriptor type across all shaders.
 
 **c. `VK_EXT_mutable_descriptor_type`: device coverage.**
 
-- SETTLED, gpuinfo coverage (`listextensions.php?platform=<p>&age=recent&apiversion=1.3`,
-  "Device coverage", % of devices, Recent (1y), Vulkan 1.3 and up):
+- SETTLED, gpuinfo coverage
+  (`listextensions.php?platform=<p>&age=recent&apiversion=1.3`, "Device
+  coverage", % of devices, Recent (1y), Vulkan 1.3 and up):
 
   | Extension | All | Windows | Linux | Android |
   |---|---|---|---|---|
@@ -2594,7 +2602,10 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
 
   The same page with the default filter (Recent (1y), all Vulkan
   versions): `VK_EXT_mutable_descriptor_type` All 37.73, Windows 59.25,
-  Linux 81.74, Android 19.76, macOS 42.11.
+  Linux 81.74, Android 19.76, macOS 42.11. OPEN: which macOS driver
+  supplies those reports; MoltenVK's list lacks the extension (a), Mesa
+  lists `kk` among the drivers that have it (below), and the gpuinfo
+  macOS device lists are rendered by script and were not read.
 - SETTLED, which devices lack it (device lists
   `listdevicescoverage.php?extension=VK_EXT_mutable_descriptor_type&platform=<p>&age=recent&apiversion=1.3`,
   with and without `&option=not`; used for names and drivers, not for the
@@ -2603,8 +2614,9 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
     it on Windows or Linux, including reports on 580-582 drivers (GeForce
     840M to GTX 1080 Ti, MX110 to MX350, TITAN X, Xp and V, Quadro K, M
     and P, Tesla M40, P4, V100). Every NVIDIA device in the Windows
-    supported list is Turing or later (GTX 1630, 1650, RTX). On Linux, Maxwell and Pascal GPUs report
-    it under NVK. Why the proprietary driver omits those generations: OPEN
+    supported list is Turing or later (GTX 1630, 1650, RTX). On Linux,
+    Maxwell and Pascal GPUs report it under NVK. Why the proprietary
+    driver omits those generations: OPEN
     (the NVIDIA Vulkan driver page gives only "September 27th, 2022 -
     Windows 517.55, Linux 515.49.18 New: VK_EXT_mutable_descriptor_type").
   - Intel: on Windows, Gen9 to Gen11 HD/UHD/Iris devices on 101.1692 to
@@ -2618,14 +2630,16 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
     722, 732, 735 lack it, mostly on 512.67 and 512.76. Mali devices with
     driver major 53 to 56 have it and 38 to 51 lack it (most reports; three
     supported reports show 26.x and three lacking ones 15, 24 and 25); the
-    lists split by driver, not GPU name (Mali-G68 is in both). No PowerVR (Rogue GE8300/GE8322, B, C, D series),
-    Samsung Xclipse (530 to 960) or Huawei Maleoon device reports it.
+    lists split by driver, not GPU name (Mali-G68 is in both). No
+    PowerVR (Rogue GE8300/GE8322, B, C, D series), Samsung Xclipse (530
+    to 960) or Huawei Maleoon device reports it.
     Mesa turnip on Adreno 6xx and 7xx reports it.
-- SETTLED, Mesa drivers: radv (`src/amd/vulkan/radv_physical_device.c:902`, feature
-  :1255), anv (`src/intel/vulkan/anv_physical_device.c:593`, :937), nvk
-  (`src/nouveau/vulkan/nvk_physical_device.c:279`, :745), turnip (`src/freedreno/vulkan/tu_device.cc:371`, :825),
-  honeykrisp (`src/asahi/vulkan/hk_physical_device.c:187`, :592) and panvk on arch 9 and
-  later (`src/panfrost/vulkan/panvk_vX_physical_device.c:193`, :743) expose
+- SETTLED, Mesa drivers: radv (`src/amd/vulkan/radv_physical_device.c:902`,
+  feature :1255), anv (`src/intel/vulkan/anv_physical_device.c:593`,
+  :937), nvk (`src/nouveau/vulkan/nvk_physical_device.c:279`, :745),
+  turnip (`src/freedreno/vulkan/tu_device.cc:371`, :825), honeykrisp
+  (`src/asahi/vulkan/hk_physical_device.c:187`, :592) and panvk on arch 9
+  and later (`src/panfrost/vulkan/panvk_vX_physical_device.c:193`, :743) expose
   `VK_EXT_mutable_descriptor_type`; hasvk exposes only the VALVE name
   (`src/intel/vulkan_hasvk/anv_device.c:335`). `docs/features.txt:679`:
   "DONE (anv, hk, kk, lvp, nvk, panvk/v9+, radv, tu, vn)"; pvr (PowerVR),
@@ -2638,7 +2652,8 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
   backend supports SM6.6 resource heaps by emulating the heaps with
   descriptor-indexing runtime arrays, using 2 extensions:
   `SPV_EXT_descriptor_indexing`, `VK_EXT_mutable_descriptor_type`. This is
-  also the behavior selected by `-fspv-use-emulated-heap`" (`SPIR-V.rst:1995-2004`).
+  also the behavior selected by `-fspv-use-emulated-heap`"
+  (`SPIR-V.rst:1995-2004`).
 - SETTLED, layout: "Each type loaded from a heap is considered to be an
   unbounded RuntimeArray bound to the descriptor set 0. Each heap uses at
   most 1 binding in that set. Meaning if 2 types are loaded from the same
@@ -2670,13 +2685,23 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
   resource" (:1777-1790; "The index of a counter in the counters
   RuntimeArray matches the index of the associated ResourceDescriptorHeap
   RuntimeArray", :2023-2024). Not generated when unused (:2069-2072).
-- SETTLED, consequence of b and d: of DXC's three bindings, only the
-  resource heap holds more than one descriptor type; the sampler heap
-  holds `SAMPLER` only and the counter heap `STORAGE_BUFFER` only, when
-  each heap has its own binding. If the resource and sampler heaps share
-  a binding (as the aliasing test above does), that binding holds
-  `SAMPLER` too, which is outside the guaranteed mutable set
-  (`features.adoc:5950-5959`).
+- Consequence of b and d: of DXC's three bindings, only the resource
+  heap holds more than one descriptor type, so only it needs
+  `MUTABLE_EXT`; the sampler heap holds `SAMPLER` only and the counter
+  heap `STORAGE_BUFFER` only, when each heap has its own binding. The
+  resource heap's six types are exactly the guaranteed mutable set, but
+  only without `UPDATE_AFTER_BIND`: with that flag the guarantee shrinks
+  to the types whose update-after-bind feature is enabled, and
+  non-uniform indexing is supported only when every listed type's
+  non-uniform indexing feature is enabled (b). BFR's floor enables
+  neither feature for uniform buffers or texel buffers (b), so on the
+  floor a resource-heap binding with `UPDATE_AFTER_BIND` is outside the
+  guarantee and depends on `vkGetDescriptorSetLayoutSupport`, and
+  non-uniform indexing into it is not supported; the devices without
+  uniform-buffer update-after-bind are counted in b. If the resource and
+  sampler heaps share a binding (as the aliasing test above does), that
+  binding holds `SAMPLER` too, which is outside the guaranteed set in
+  every case.
 - SETTLED, D3D12 has no separate counter array: a UAV's counter is given
   when the UAV descriptor is created (`pCounterResource`: "The
   ID3D12Resource for the counter (if any) associated with the UAV"; Learn,
@@ -2701,7 +2726,7 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
   and a heap resource is rejected; buffer-type aliases cannot be passed to
   or returned from user functions (:2157-2192).
 - SETTLED: the native path needs `VK_EXT_descriptor_heap` on the device;
-  coverage in c (Windows 33.02, Linux 38.1, Android 2.54).
+  coverage in c.
 
 **f. Slang.**
 
@@ -2723,7 +2748,8 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
   image, uniform and storage texel buffer, uniform buffer and storage
   buffer, 3 other (:791-806; `hlsl.meta.slang:29433-29446`, whose comment
   links the mutable-descriptor proposal). Binding 2 holds six Vulkan
-  descriptor types (seven enum entries; `STORAGE_BUFFER` appears twice), so this preset needs `VK_EXT_mutable_descriptor_type`.
+  descriptor types (seven enum entries; `STORAGE_BUFFER` appears twice),
+  so this preset needs `VK_EXT_mutable_descriptor_type`.
 - SETTLED, without mutable: preset `None` ("Bind assuming regular binding
   model rules") uses one binding per type: 0 sampler, 1 combined, 2
   sampled image, 3 storage image, 4 uniform texel, 5 storage texel,
@@ -2785,12 +2811,14 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
   layout is the same model (h).
 - SETTLED, index space: on D3D12 the typed arrays overlap one heap region,
   so one index addresses any type ("All such ranges have the _same base
-  offset_ and are completely overlapping", O3DE `Gems/Atom/RHI/Bindless.md:86-87`;
+  offset_ and are completely overlapping", O3DE
+  `Gems/Atom/RHI/Bindless.md:86-87`;
   NVRHI ranges at `OffsetInDescriptorsFromTableStart = 0`,
   `src/d3d12/d3d12-resource-bindings.cpp:647-651`). On Vulkan each type is
   its own binding. O3DE overlaps its D3D12 ranges without passing
   `-res-may-alias` (its DXC arguments are `-Zpr` and
-  `-enable-16bit-types`, `Gems/Atom/Asset/Shader/Assets/Config/Shader/shader_build_options.settings`
+  `-enable-16bit-types`,
+  `Gems/Atom/Asset/Shader/Assets/Config/Shader/shader_build_options.settings`
   and `Platform/Windows/dx12/*.settings`; no `res_may_alias` in the
   checkout). O3DE gives Vulkan a separate allocator per type, so a
   view's index differs by backend ("the indices assigned to each static
@@ -2844,11 +2872,11 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
 
 - SETTLED: "Argument buffers tier 2 ... Metal 3 & 4 ... Apple6"; "Argument
   tables ... Metal 4 ... Apple7"; A14 and M1-series are Apple7 (Metal
-  Feature Set Tables, 2026-10-23, pages 2, 4 and 5). So every Apple7 device has
-  Tier 2 by this table. BFR's floor checks Apple7 and Metal 4
-  (`src/backends/metal/metal_caps.cpp:86-91`) and does not read
-  `argumentBuffersSupport` (grepped `src/`); metal-cpp declares it
-  (`Metal/MTLDevice.hpp:328`, tiers :209-211).
+  Feature Set Tables, 2026-10-23, pages 2, 4 and 5). BFR's floor checks
+  Apple7 and Metal 4 (`src/backends/metal/metal_caps.cpp:86-91`) and does
+  not read `argumentBuffersSupport` (grepped `src/`); metal-cpp declares
+  it (`Metal/MTLDevice.hpp:328`, tiers :209-211).
+- Consequence: every Apple7 device has Tier 2 by this table.
 - SETTLED, limits per stage from argument buffers (Feature Set Tables,
   page 8): buffers no limit from Apple6; textures 1M from Apple6;
   samplers 128 Apple6, 996 Apple7 and Apple8, 500K Apple9 to Apple11.
@@ -2869,11 +2897,8 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
 
 **j. Metal: mapping a heap or a bindless array.**
 
-- SETTLED, Metal shader converter (public page): converts DXIL to
-  metallib; supports SM 6.6 "Dynamic resources"; "Metal libraries built
-  using Metal shader converter tools require a device that supports
-  Argument Buffers Tier 2, running macOS 14 Sonoma, iOS 17 or later"
-  (developer.apple.com/metal/shader-converter). WWDC23 session 10124: one
+- SETTLED, Metal shader converter: its input, supported shader models
+  and Tier 2 requirement are in Shader input, f. WWDC23 session 10124: one
   "top level" argument buffer is bound per pipeline, with "two layout
   modes": automatic, or "explicitly defining a layout that matches your
   root signature. Use this mode ... if your game uses bindless resources."
@@ -2882,14 +2907,16 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
   argument tables. The manual (`Metal shader converter 4.0.pdf`) and
   packages are behind the developer download page, which redirects to
   Apple Account sign-in.
-- SETTLED, SPIRV-Cross: `--msl-argument-buffers` and
-  `--msl-argument-buffer-tier` (1 = Tier 2, matching
-  `MTLArgumentBuffersTier`) (`spirv_msl.hpp:350-365`; `main.cpp:882-887`).
+- SETTLED, SPIRV-Cross: the `argument_buffers` and `argument_buffers_tier`
+  options (Shader input, e) are `--msl-argument-buffers` and
+  `--msl-argument-buffer-tier` on the CLI; the tier value is the
+  `MTLArgumentBuffersTier` enum, so 1 means Tier 2 (`main.cpp:882-887`).
   Each descriptor set becomes a struct bound at `[[buffer(set)]]`, each
   binding a member `[[id(binding)]]`, and a runtime array a trailing
   `spvDescriptor<T> Ts [[id(2)]][1] /* unsized array hack */` read
   through `spvDescriptorArray<T>` (reference output of
-  `argument-buffers-runtime-array.argument.device-argument-buffer.argument-tier-1.msl2.comp`).
+  `argument-buffers-runtime-array.argument.device-argument-buffer.argument-tier-1.msl2.comp`;
+  the `argument-tier-1` in test names is that option value, Tier 2).
   An unsized descriptor array throws "Unsized array of descriptors
   requires argument buffer tier 2" unless the tier option is Tier 2
   (`spirv_msl.cpp:1569-1574`).
@@ -2911,9 +2938,9 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
   bindings).
 - SETTLED, what a hand-written MSL shader reads: Tier 2 argument buffers
   "match the memory layout of an equivalent C structure" (iOS 16, macOS
-  13 and later), filled by writing `gpuAddress` for buffers and
-  `gpuResourceID` for textures and samplers (Apple, "Improving CPU
-  performance by using argument buffers"). Both are 64-bit: `MTL::ResourceID
+  13 and later; Apple, "Improving CPU performance by using argument
+  buffers"), filled with `gpuAddress` and `gpuResourceID` (Resource
+  binding, c). Both are 64-bit: `MTL::ResourceID
   { uint64_t _impl; }` (`Metal/MTLTypes.hpp:92-95`), `GPUAddress =
   uint64_t` (`Metal/MTLGPUAddress.hpp:35`). Apple's MSL example reaches a
   Tier 2 array through a pointer to a struct of textures,
@@ -3131,7 +3158,6 @@ Microsoft Learn sources from MicrosoftDocs `win32` (docs ca8274d) and
 - Metal bindless:
   [Metal Feature Set Tables](https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf),
   [Metal Shading Language Specification](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf),
-  [Metal shader converter](https://developer.apple.com/metal/shader-converter/),
   [WWDC23: Bring your game to Mac, Part 2: Compile your shaders](https://developer.apple.com/videos/play/wwdc2023/10124/)
 - Engines (bindless): O3DE `Gems/Atom/RHI/Bindless.md` in
   [o3de/o3de](https://github.com/o3de/o3de); the other engines at the
