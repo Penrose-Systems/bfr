@@ -110,6 +110,9 @@ core::Result<std::unique_ptr<Device>> MetalInstance::createDevice(std::size_t ad
             return std::unexpected(std::move(checked.error()));
         }
     }
+    if (auto checked = checkBindlessLimits(desc, adapters_[adapter].caps.bindless); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     return MetalDevice::create(*this, devices_[adapter], desc);
 }
 

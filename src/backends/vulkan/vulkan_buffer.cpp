@@ -147,6 +147,7 @@ void VulkanDevice::collectBuffers() {
     });
     buffers_.collect(completed);
     textures_.collect(completed);
+    pipelines_.collect(completed);
 }
 
 core::Result<BufferHandle> VulkanDevice::createBuffer(const BufferDesc& desc) {

@@ -12,6 +12,7 @@
 #include "core/slot_chains.h"
 #include "core/submissions.h"
 #include "d3d12/d3d12_buffer.h"
+#include "d3d12/d3d12_pipeline.h"
 #include "d3d12/d3d12_swapchain.h"
 #include "d3d12/d3d12_texture.h"
 
@@ -109,7 +110,8 @@ class D3D12Device final : public Device {
 public:
     /// A device on device, which rhi listed from adapter, with heapCount memory
     /// heaps, a graphics queue and the queues asked for. Fails with
-    /// RhiDeviceFailed when D3D12 gives no queue or fence.
+    /// RhiDeviceFailed when D3D12 gives no queue, fence, root signature or
+    /// descriptor heap.
     [[nodiscard]] static core::Result<std::unique_ptr<D3D12Device>> create(
         D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device, Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter,
         std::size_t heapCount, const DeviceDesc& desc);
@@ -159,6 +161,9 @@ public:
     [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyTexture(TextureHandle texture) override;
+    [[nodiscard]] core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) override;
+    [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroyPipeline(PipelineHandle pipeline) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
@@ -175,8 +180,8 @@ private:
     // Ends a list that was submitted or discarded; its slot waits for the
     // pool's reset.
     void end(CommandListHandle commandList);
-    // Destroys the buffers and textures retired under submission IDs every
-    // queue has passed.
+    // Destroys the buffers, textures and pipelines retired under submission
+    // IDs every queue has passed.
     void collectBuffers();
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
@@ -186,6 +191,7 @@ private:
     [[nodiscard]] core::Result<D3D12CommandList*> commandListFor(CommandListHandle commandList);
     [[nodiscard]] core::Result<D3D12Buffer*> bufferFor(BufferHandle buffer);
     [[nodiscard]] core::Result<D3D12Texture*> textureFor(TextureHandle texture);
+    [[nodiscard]] core::Result<D3D12Pipeline*> pipelineFor(PipelineHandle pipeline);
     // The barrier barrier() records, ordering every resource on the list's queue.
     [[nodiscard]] core::Result<D3D12_GLOBAL_BARRIER> fullBarrierFor(const D3D12CommandList& list);
 
@@ -218,6 +224,9 @@ private:
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<D3D12Buffer, Buffer> buffers_;
     core::Pool<D3D12Texture, Texture> textures_;
+    // Declared before pipelines_, which are made on it, so it outlives them.
+    D3D12BindlessLayout layout_;
+    core::Pool<D3D12Pipeline, Pipeline> pipelines_;
 };
 
 } // namespace bfr::rhi::d3d12

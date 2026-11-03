@@ -5,6 +5,7 @@
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
+#include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/swapchain.h"
 #include "bfr/rhi/texture.h"
 
@@ -187,6 +188,29 @@ public:
     /// null handle does nothing. Fails with RhiInvalidHandle when the texture
     /// is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroyTexture(TextureHandle texture) = 0;
+
+    /// A compute pipeline as desc says, made before returning. Cold: it
+    /// compiles, and frees pipelines the GPU is done with. Fails with
+    /// RhiInvalidCall for a desc with no code or a workgroup dimension of 0,
+    /// RhiLimitReached at the device's maximum, and RhiDeviceFailed when the
+    /// API refuses the code or the desc, with what it said.
+    [[nodiscard]] virtual core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) = 0;
+
+    /// A graphics pipeline as desc says, made before returning. Cold, as
+    /// createComputePipeline is. Fails with RhiInvalidCall for a desc with no
+    /// vertex code, more than kMaxColorTargets targets, a target of format
+    /// Undefined, a depth or stencil test without a depth-stencil format, or
+    /// samples of 0, RhiUnsupported when the desc uses raster or blend state
+    /// the adapter lacks, such as wireframe fill, RhiLimitReached at the
+    /// device's maximum, and RhiDeviceFailed when the API refuses the code or
+    /// the desc, with what it said.
+    [[nodiscard]] virtual core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) = 0;
+
+    /// Destroys the pipeline once the GPU has passed every submit made before
+    /// the call; the handle is invalid at once. Cold, as destroyBuffer is. A
+    /// null handle does nothing. Fails with RhiInvalidHandle when the pipeline
+    /// is already destroyed.
+    [[nodiscard]] virtual core::Result<void> destroyPipeline(PipelineHandle pipeline) = 0;
 
     /// How much of each heap the process may use and uses now. Fails with
     /// RhiUnsupported when the driver can't say.

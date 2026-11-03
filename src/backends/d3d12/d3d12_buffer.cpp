@@ -111,6 +111,7 @@ void D3D12Device::collectBuffers() {
         [this](std::uint32_t queue) { return queues_[queue]->fence->GetCompletedValue(); });
     buffers_.collect(completed);
     textures_.collect(completed);
+    pipelines_.collect(completed);
 }
 
 core::Result<BufferHandle> D3D12Device::createBuffer(const BufferDesc& desc) {

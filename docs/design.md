@@ -191,7 +191,11 @@ encoder switching needs lookahead.
 
 - One global layout for every pipeline: a bindless table of texture and
   buffer views, a sampler table, and a small push-constant block. No
-  per-pipeline layouts or descriptor sets.
+  per-pipeline layouts or descriptor sets. The exact layout the shaders
+  declare, per backend, is published in `api/bfr.yaml` under `pipeline`;
+  the table sizes are the `DeviceDesc`'s `max_bindless_*` members, made
+  with the device and refused when the adapter holds fewer. No uniform
+  buffer table: its update-after-bind feature is outside the Vulkan floor.
 - Shaders reach buffers and textures by descriptor index. Reason: HLSL on
   D3D12 has no pointer dereference; indices work on all three backends. GPU
   addresses appear only where the native APIs require them (ray tracing
@@ -212,12 +216,15 @@ encoder switching needs lookahead.
 
 - Graphics, mesh and compute pipelines take per-backend shader bytecode plus
   fixed state and attachment formats. No render pass objects (dynamic
-  rendering).
+  rendering). The pipeline fixes the topology class; the exact topology,
+  viewport, scissor, blend constants and stencil reference are set when
+  recording, as every backend allows.
 - With one global layout, BFR needs almost no reflection: push-constant size
   and workgroup size.
 - Creation is asynchronous. A pipeline is pending, ready or failed; recording
   with a pipeline that is not ready is a usage error. Fallback choice belongs
-  to the renderer.
+  to the renderer. Not yet: today `createComputePipeline` and
+  `createGraphicsPipeline` return the made pipeline, or its failure.
 - Pipeline cache: load and store as blobs through a host hook.
 - Vertex input: vertex pulling only; shaders fetch vertices by index.
   Reason: simplest core, fits GPU-driven work. Revisit if measurements on

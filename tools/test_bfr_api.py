@@ -83,6 +83,20 @@ class CheckTests(unittest.TestCase):
         with self.assertRaisesRegex(SpecError, message):
             Api(broken(change))
 
+    def test_a_fixed_length_must_be_a_number_or_a_constant(self) -> None:
+        def change(spec: dict) -> None:
+            spec["structs"]["list"]["members"].append({"name": "tags", "type": "u32", "fixed": "nothing"})
+
+        self.assert_rejected(change, "fixed must be a positive length or a constant")
+
+    def test_a_fixed_length_may_name_a_constant(self) -> None:
+        spec = with_default(copy.deepcopy(MINIMAL))
+        member = {"name": "tags", "type": "u32", "fixed": "default_alignment"}
+        spec["structs"]["list"]["members"].append(member)
+        api = Api(spec)
+        self.assertEqual(api.fixed_length(member), 16)
+        self.assertEqual(api.fixed_text(member), "BFR_DEFAULT_ALIGNMENT")
+
     def test_a_default_must_name_a_constant(self) -> None:
         def change(spec: dict) -> None:
             with_default(spec)

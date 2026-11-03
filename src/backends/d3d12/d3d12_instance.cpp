@@ -244,6 +244,9 @@ core::Result<std::unique_ptr<Device>> D3D12Instance::createDevice(std::size_t ad
     }
     const D3D12Adapter& native = native_[adapter];
     const Caps& caps = adapters_[adapter].caps;
+    if (auto checked = checkBindlessLimits(desc, caps.bindless); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     return D3D12Device::create(*this, native.device, native.adapter, caps.memory.heaps.size(), desc);
 }
 

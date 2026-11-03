@@ -81,6 +81,7 @@ void MetalDevice::collectBuffers() {
         [this](std::uint32_t queue) { return queues_[queue]->event->signaledValue(); });
     buffers_.collect(completed);
     textures_.collect(completed);
+    pipelines_.collect(completed);
     residency_->commit();
 }
 

@@ -6,11 +6,13 @@
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
+#include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/swapchain.h"
 #include "bfr/rhi/texture.h"
 #include "core/slot_chains.h"
 #include "null/null_instance.h"
 #include "rhi/buffer_check.h"
+#include "rhi/pipeline_check.h"
 
 #include <algorithm>
 #include <atomic>
@@ -34,7 +36,8 @@ NullDevice::NullDevice(NullInstance& rhi, const DeviceDesc& desc)
       slots_(desc.maxCommandLists),
       live_(desc.maxCommandLists),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
-      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()) {
+      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {
     queues_.push_back(QueueType::Graphics);
     queues_.insert(queues_.end(), desc.compute, QueueType::Compute);
     queues_.insert(queues_.end(), desc.copy, QueueType::Copy);
@@ -52,6 +55,9 @@ NullDevice::~NullDevice() {
     }
     if (textures_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} textures were left when the device went", textures_.size());
+    }
+    if (pipelines_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} pipelines were left when the device went", pipelines_.size());
     }
 }
 
@@ -458,6 +464,42 @@ core::Result<void> NullDevice::destroyTexture(TextureHandle texture) {
     // The GPU runs nothing, so nothing can still be using it.
     if (!textures_.erase(texture)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the texture handle is stale");
+    }
+    return {};
+}
+
+// No code runs without a GPU, so a pipeline keeps none; the calls check the
+// desc as every backend does and name what they are given.
+core::Result<PipelineHandle> NullDevice::createComputePipeline(const ComputePipelineDesc& desc) {
+    if (auto checked = checkComputePipelineDesc(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    const PipelineHandle pipeline = pipelines_.emplace(
+        NullPipeline{.compute = true, .workgroupSize = desc.workgroupSize});
+    if (pipeline.isNull()) {
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines", kBufferLimit);
+    }
+    return pipeline;
+}
+
+core::Result<PipelineHandle> NullDevice::createGraphicsPipeline(const GraphicsPipelineDesc& desc) {
+    if (auto checked = checkGraphicsPipelineDesc(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    const PipelineHandle pipeline = pipelines_.emplace(NullPipeline{.compute = false});
+    if (pipeline.isNull()) {
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines", kBufferLimit);
+    }
+    return pipeline;
+}
+
+core::Result<void> NullDevice::destroyPipeline(PipelineHandle pipeline) {
+    if (pipeline.isNull()) {
+        return {};
+    }
+    // The GPU runs nothing, so nothing can still be using it.
+    if (!pipelines_.erase(pipeline)) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline handle is stale");
     }
     return {};
 }

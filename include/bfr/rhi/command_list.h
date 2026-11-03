@@ -29,20 +29,26 @@ enum class QueueType : std::uint8_t {
     Copy,
 };
 
-/// How to open a device: the queues it opens beside its graphics queue, and
-/// how many command lists, command pools and swapchains it holds at once. The
-/// device's queues are numbered: graphics is 0, then the compute queues, then
-/// the copy queues. Room for every list, pool and swapchain is made with the
-/// device, so nothing on the frame path allocates; past a maximum, calls fail
-/// with RhiLimitReached, except a submit of more than maxCommandLists lists,
-/// which fails with RhiInvalidCall. The maximums start at bfr.h's defaults,
-/// which api/bfr.yaml owns.
+/// How to open a device: the queues it opens beside its graphics queue, how
+/// many command lists, command pools and swapchains it holds at once, and how
+/// many slots each bindless table has. The device's queues are numbered:
+/// graphics is 0, then the compute queues, then the copy queues. Room for
+/// every list, pool, swapchain and slot is made with the device, so nothing on
+/// the frame path allocates; past a maximum, calls fail with RhiLimitReached,
+/// except a submit of more than maxCommandLists lists, which fails with
+/// RhiInvalidCall. A table larger than the adapter holds fails the device
+/// with RhiLimitReached; BindlessLimits says what it holds. The maximums start
+/// at bfr.h's defaults, which api/bfr.yaml owns.
 struct DeviceDesc {
     std::uint32_t compute = 0;
     std::uint32_t copy = 0;
     std::uint32_t maxCommandLists = BFR_DEFAULT_MAX_COMMAND_LISTS;
     std::uint32_t maxCommandPools = BFR_DEFAULT_MAX_COMMAND_POOLS;
     std::uint32_t maxSwapchains = BFR_DEFAULT_MAX_SWAPCHAINS;
+    std::uint32_t maxBindlessTextures = BFR_DEFAULT_MAX_BINDLESS_TEXTURES;
+    std::uint32_t maxBindlessStorageTextures = BFR_DEFAULT_MAX_BINDLESS_STORAGE_TEXTURES;
+    std::uint32_t maxBindlessStorageBuffers = BFR_DEFAULT_MAX_BINDLESS_STORAGE_BUFFERS;
+    std::uint32_t maxBindlessSamplers = BFR_DEFAULT_MAX_BINDLESS_SAMPLERS;
 };
 
 /// How to create a command pool: the queue its lists record for, and how many

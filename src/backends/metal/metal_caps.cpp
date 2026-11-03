@@ -56,6 +56,23 @@ ComputeLimits computeOf(MTL::Device* device) {
     return compute;
 }
 
+// Metal says how many samplers an argument buffer holds. For textures and
+// buffers it has no call; the Metal Feature Set Tables give 500,000 each for
+// the Apple7 and later families the floor asks for, with tier 2 argument
+// buffers.
+constexpr std::uint32_t kArgumentBufferResources = 500000;
+
+BindlessLimits bindlessOf(MTL::Device* device) {
+    BindlessLimits bindless;
+    bindless.maxTextures = kArgumentBufferResources;
+    bindless.maxStorageTextures = kArgumentBufferResources;
+    bindless.maxStorageBuffers = kArgumentBufferResources;
+    bindless.maxUniformBuffers = kArgumentBufferResources;
+    bindless.maxSamplers = clampTo32(device->maxArgumentBufferSamplerCount());
+    bindless.maxPerStage = kArgumentBufferResources;
+    return bindless;
+}
+
 Features featuresOf(MTL::Device* device) {
     Features features;
     features.rayQuery = device->supportsRaytracing();
@@ -97,6 +114,7 @@ Caps readCaps(MTL::Device* device) {
     caps.info = infoOf(device);
     caps.limits = limitsOf(device);
     caps.compute = computeOf(device);
+    caps.bindless = bindlessOf(device);
     caps.features = featuresOf(device);
     caps.memory = memoryOf(device);
     return caps;

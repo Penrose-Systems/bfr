@@ -12,6 +12,7 @@
 #include "core/slot_chains.h"
 #include "core/submissions.h"
 #include "metal/metal_buffer.h"
+#include "metal/metal_pipeline.h"
 #include "metal/metal_swapchain.h"
 #include "metal/metal_texture.h"
 #include "metal/metal_util.h"
@@ -112,8 +113,8 @@ struct MetalCommandList {
 class MetalDevice final : public Device {
 public:
     /// A device on device, which rhi listed, with a graphics queue and the
-    /// queues asked for. Fails with RhiDeviceFailed when Metal gives no queue
-    /// or event.
+    /// queues asked for. Fails with RhiDeviceFailed when Metal gives no queue,
+    /// event, compiler or bindless tables.
     [[nodiscard]] static core::Result<std::unique_ptr<MetalDevice>> create(MetalInstance& rhi, Ref<MTL::Device> device,
                                                                            const DeviceDesc& desc);
 
@@ -161,6 +162,9 @@ public:
     [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyTexture(TextureHandle texture) override;
+    [[nodiscard]] core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) override;
+    [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroyPipeline(PipelineHandle pipeline) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
 private:
@@ -176,8 +180,8 @@ private:
     // Ends a list that was submitted or discarded; its slot waits for the
     // pool's reset.
     void end(CommandListHandle commandList);
-    // Destroys the buffers and textures retired under submission IDs every
-    // queue has passed.
+    // Destroys the buffers, textures and pipelines retired under submission
+    // IDs every queue has passed.
     void collectBuffers();
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
@@ -187,6 +191,7 @@ private:
     [[nodiscard]] core::Result<MetalCommandList*> commandListFor(CommandListHandle commandList);
     [[nodiscard]] core::Result<MetalBuffer*> bufferFor(BufferHandle buffer);
     [[nodiscard]] core::Result<MetalTexture*> textureFor(TextureHandle texture);
+    [[nodiscard]] core::Result<MetalPipeline*> pipelineFor(PipelineHandle pipeline);
 
     MetalInstance* instance_;
     Ref<MTL::Device> device_;
@@ -221,6 +226,12 @@ private:
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<MetalBuffer, Buffer> buffers_;
     core::Pool<MetalTexture, Texture> textures_;
+    // The tables leave the residency set as the buffers do, under its lock.
+    // Optional only because they are made after the device, in open.
+    std::optional<MetalBindlessTables> tables_;
+    // Compiles every pipeline; Metal 4 makes pipelines through one.
+    Ref<MTL4::Compiler> compiler_;
+    core::Pool<MetalPipeline, Pipeline> pipelines_;
 };
 
 } // namespace bfr::rhi::metal

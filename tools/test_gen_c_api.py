@@ -49,12 +49,15 @@ class RenderTests(unittest.TestCase):
 
     def test_fixed_members_are_c_arrays_and_f32_is_float(self) -> None:
         spec = copy.deepcopy(MINIMAL)
+        spec["constants"] = {"max_tags": {"value": 4, "doc": "The most tags."}}
         spec["structs"]["list"]["members"] += [
             {"name": "uuid", "type": "u8", "fixed": 16},
+            {"name": "tags", "type": "u32", "fixed": "max_tags"},
             {"name": "period", "type": "f32"},
         ]
         header = render(Api(spec))
         self.assertIn("    uint8_t uuid[16];\n", header)
+        self.assertIn("    uint32_t tags[BFR_MAX_TAGS];\n", header)
         self.assertIn("    float period;\n", header)
 
     def test_the_header_compiles_as_c_and_cpp_and_is_exempt_from_lint_and_format(self) -> None:
@@ -78,7 +81,8 @@ class RepositoryTests(unittest.TestCase):
             for name, value in load(SOURCE).enums["format"]["values"].items()
         ]
         self.assertEqual([(name, int(value)) for name, value in declared], expected)
-        self.assertEqual(listed, [name for name, _ in expected])
+        # kFormats lists the formats a texture may have: every one but undefined.
+        self.assertEqual(listed, [name for name, value in expected if value != 0])
 
 
 if __name__ == "__main__":

@@ -17,5 +17,7 @@ find_package(Catch2 3 CONFIG REQUIRED)
 include(Catch)
 add_executable(bfr_cpp_tests test_bfr_hpp.cpp)
 bfr_apply_compiler_flags(bfr_cpp_tests)
+# The test shaders, which the library tests share.
+target_include_directories(bfr_cpp_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/library)
 target_link_libraries(bfr_cpp_tests PRIVATE bfr_cpp bfr_shared bfr_test_main bfr_sanitizer_options Catch2::Catch2)
 bfr_discover_tests(bfr_cpp_tests)

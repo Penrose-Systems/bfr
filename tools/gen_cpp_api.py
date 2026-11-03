@@ -184,8 +184,8 @@ class Plan:
         for param in method.inputs:
             if param.get("array") and param.get("pointer") == "in":
                 if not self.is_mirror(param["type"]):
-                    raise SpecError(f"{name}.{param['name']}: an array param must be of a plain handle or a "
-                                    "struct of numbers, which pass to C without a copy")
+                    raise SpecError(f"{name}.{param['name']}: an array param must be of a number, a plain handle "
+                                    "or a struct of numbers, which pass to C without a copy")
                 continue
             if param.get("pointer") not in (None, "in") or param.get("array"):
                 raise SpecError(f"{name}.{param['name']}: the C++ generator does not yet handle this param")
@@ -234,8 +234,8 @@ class Plan:
                 if member.get("pointer") != "in" or name in self.out_structs:
                     raise SpecError(f"{where}: the C++ generator handles an array member only passed in")
                 if not self.is_mirror(kind):
-                    raise SpecError(f"{where}: an array member must be of a plain handle or a struct of numbers, "
-                                    "which pass to C without a copy")
+                    raise SpecError(f"{where}: an array member must be of a number, a plain handle or a struct of "
+                                    "numbers, which pass to C without a copy")
                 continue
             if member.get("pointer"):
                 raise SpecError(f"{where}: the C++ generator does not yet handle pointer members")
@@ -249,8 +249,7 @@ class Plan:
                 if len(opaque) != 1:
                     raise SpecError(f"{kind}: a callback takes exactly one opaque param, its user data")
             elif kind in api.structs:
-                if member.get("fixed") and name not in self.out_structs:
-                    raise SpecError(f"{where}: the C++ generator handles a fixed array of structs only in a struct passed out")
+                pass
             elif member.get("fixed") and kind in ("bool", "string", "opaque"):
                 raise SpecError(f"{where}: the C++ generator does not yet handle a fixed array of {kind}")
             elif kind not in BUILTINS and kind not in api.enums:
@@ -269,9 +268,11 @@ class Plan:
 
     def is_mirror(self, kind: str) -> bool:
         """Whether kind's C++ type is laid out exactly as its C type, so an
-        array of it passes to C as it is: a plain handle, or a struct of only
-        numbers. The header asserts the layout."""
+        array of it passes to C as it is: a number, a plain handle, or a struct
+        of only numbers. The header asserts the layout."""
         api = self.api
+        if kind in MIRRORED:
+            return True
         if kind in api.handles:
             return api.is_plain(kind)
         struct = api.structs.get(kind)
@@ -299,7 +300,7 @@ def cpp_type(api: Api, kind: str, out: bool = False) -> str:
 def member_type(api: Api, member: dict[str, Any], out: bool) -> str:
     """A struct member's C++ type: a std::array for a fixed one."""
     kind = cpp_type(api, member["type"], out)
-    return f"std::array<{kind}, {member['fixed']}>" if member.get("fixed") else kind
+    return f"std::array<{kind}, {api.fixed_text(member)}>" if member.get("fixed") else kind
 
 
 def member_from_c(api: Api, member: dict[str, Any], value: str) -> str:
@@ -575,7 +576,8 @@ class Renderer:
                                or c["name"] == member["user_data"])
                 fields.append(f".{member['name']} = {camel(partner['name'])}")
             elif member.get("fixed"):
-                elements = ", ".join(f"value.{camel(member['name'])}[{i}]" for i in range(member["fixed"]))
+                elements = ", ".join(to_c(api, member["type"], f"value.{camel(member['name'])}[{i}]")
+                                     for i in range(api.fixed_length(member)))
                 fields.append(f".{member['name']} = {{{elements}}}")
             else:
                 fields.append(f".{member['name']} = {to_c(api, member['type'], 'value.' + camel(member['name']))}")

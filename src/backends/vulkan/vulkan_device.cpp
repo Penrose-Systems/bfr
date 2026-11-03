@@ -13,6 +13,7 @@
 #include "vulkan/vulkan_buffer.h"
 #include "vulkan/vulkan_caps.h"
 #include "vulkan/vulkan_instance.h"
+#include "vulkan/vulkan_pipeline.h"
 #include "vulkan/vulkan_result.h"
 #include "vulkan/vulkan_swapchain.h"
 
@@ -114,8 +115,9 @@ void recordBarrier(const VolkDeviceTable& table, VkCommandBuffer buffer, const V
 
 core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance& rhi, VkPhysicalDevice adapter,
                                                                  VkDevice device, const QueueFamilies& families,
-                                                                 const DeviceDesc& desc, bool hasBudget) {
-    auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, families, desc, hasBudget);
+                                                                 const DeviceDesc& desc, bool hasBudget,
+                                                                 const RasterFeatures& features) {
+    auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, families, desc, hasBudget, features);
     if (auto opened = made->openQueues(families, desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
@@ -124,17 +126,24 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
         return std::unexpected(std::move(allocator.error()));
     }
     made->allocator_ = *allocator;
+    auto layout = VulkanBindlessLayout::create(made->table_, device, desc);
+    if (!layout) {
+        return std::unexpected(std::move(layout.error()));
+    }
+    made->layout_ = std::move(*layout);
     return made;
 }
 
 VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device,
-                           const QueueFamilies& families, const DeviceDesc& desc, bool hasBudget)
+                           const QueueFamilies& families, const DeviceDesc& desc, bool hasBudget,
+                           const RasterFeatures& features)
     : instance_(&rhi),
       adapter_(adapter),
       device_(device),
       graphicsFamily_(families.graphics),
       presentFamily_(families.present.value_or(families.graphics)),
       hasBudget_(hasBudget),
+      rasterFeatures_(features),
       desc_(desc),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
       commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
@@ -145,7 +154,8 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       renders_(desc.maxCommandLists),
       submissions_(1 + desc.compute + desc.copy),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
-      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()) {
+      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
     table_.vkGetDeviceQueue(device_, presentFamily_, 0, &presentQueue_);
 }
@@ -851,6 +861,9 @@ void VulkanDevice::warnLeftovers() const {
     if (textures_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} textures were left when the device went", textures_.size());
     }
+    if (pipelines_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} pipelines were left when the device went", pipelines_.size());
+    }
 }
 
 VulkanDevice::~VulkanDevice() {
@@ -867,9 +880,12 @@ VulkanDevice::~VulkanDevice() {
         [this](const VulkanCommandPool& pool) { table_.vkDestroyCommandPool(device_, pool.pool, nullptr); });
     commandPools_.clear();
     swapchains_.clear();
-    // Every buffer and texture gives its memory back before the allocator goes.
+    // Every buffer and texture gives its memory back before the allocator goes,
+    // and every pipeline goes before the layout it was made on.
     buffers_.clear();
     textures_.clear();
+    pipelines_.clear();
+    layout_ = {};
     vmaDestroyAllocator(allocator_);
     for (const auto& queue : queues_) {
         for (const VulkanRetiredPool& retired : queue->retired) {

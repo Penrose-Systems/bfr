@@ -10,6 +10,7 @@
 #include "core/fixed_vector.h"
 #include "core/slot_chains.h"
 #include "d3d12/d3d12_instance.h"
+#include "d3d12/d3d12_pipeline.h"
 #include "d3d12/d3d12_result.h"
 #include "d3d12/d3d12_swapchain.h"
 
@@ -70,6 +71,11 @@ core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rh
         return std::unexpected(std::move(allocator.error()));
     }
     made->allocator_ = std::move(*allocator);
+    auto layout = createD3D12BindlessLayout(*made->device_.Get(), desc);
+    if (!layout) {
+        return std::unexpected(std::move(layout.error()));
+    }
+    made->layout_ = std::move(*layout);
     return made;
 }
 
@@ -89,7 +95,8 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       renders_(desc.maxCommandLists),
       submissions_(1 + desc.compute + desc.copy),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
-      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()) {}
+      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
 core::Result<void> D3D12Device::open(const DeviceDesc& desc) {
     const auto open = [this, &desc](QueueType type, D3D12_COMMAND_LIST_TYPE listType) -> core::Result<void> {
@@ -161,9 +168,15 @@ D3D12Device::~D3D12Device() {
     if (textures_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} textures were left when the device went", textures_.size());
     }
-    // Every buffer and texture gives its memory back before the allocator goes.
+    if (pipelines_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} pipelines were left when the device went", pipelines_.size());
+    }
+    // Every buffer and texture gives its memory back before the allocator goes,
+    // and every pipeline goes before the layout it was made on.
     buffers_.clear();
     textures_.clear();
+    pipelines_.clear();
+    layout_ = {};
     allocator_.Reset();
     // The slots' vector releases every command allocator and list as it goes.
     for (const auto& queue : queues_) {

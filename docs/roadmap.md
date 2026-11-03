@@ -11,4 +11,4 @@ lists, clear, submit and wait, buffers (create, map, destroy).
 3. Shaders and pipelines.
 4. Draws and dispatches.
 
-Next: 3.
+Next: 4.

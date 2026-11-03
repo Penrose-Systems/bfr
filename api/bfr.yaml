@@ -10,7 +10,8 @@
 # Members and params may have:
 #   pointer: in | out | inout   passed by pointer; in is const
 #   array: <name>               a pointer to elements, counted by <name>
-#   fixed: <length>             a struct member that is an array of length elements
+#   fixed: <length>             a struct member that is an array of length elements; a
+#                               number or the name of a constant
 #   optional: true              may be null
 #   lifetime: <object>          returned data stays valid while <object> lives
 #   user_data: <callback>       an opaque member passed to the <callback> beside it
@@ -34,6 +35,13 @@ constants:
   default_max_command_lists: {value: 8192, doc: What bfr_device_desc.max_command_lists of 0 means.}
   default_max_command_pools: {value: 512, doc: What bfr_device_desc.max_command_pools of 0 means.}
   default_max_swapchains: {value: 512, doc: What bfr_device_desc.max_swapchains of 0 means.}
+  default_max_bindless_textures: {value: 65536, doc: What bfr_device_desc.max_bindless_textures of 0 means.}
+  default_max_bindless_storage_textures: {value: 16384, doc: What bfr_device_desc.max_bindless_storage_textures of 0 means.}
+  default_max_bindless_storage_buffers: {value: 65536, doc: What bfr_device_desc.max_bindless_storage_buffers of 0 means.}
+  default_max_bindless_samplers: {value: 2048, doc: What bfr_device_desc.max_bindless_samplers of 0 means.}
+  max_color_targets: {value: 8, doc: The most color targets a graphics pipeline renders to.}
+  push_constants_size: {value: 128, doc: Bytes of push constants every pipeline's shaders read; the layout bfr_pipeline states.}
+  mask_all: {value: 4294967295, doc: What a mask member of 0 means; every bit of the mask set.}
   max_message_length: {value: 1024, doc: The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".}
 
 enums:
@@ -94,8 +102,12 @@ enums:
       How a texel is stored. Channels are named in memory order, so rgba8
       holds red in its first byte; a packed format names its channels from
       the low bits up. unorm and snorm read as 0 to 1 and -1 to 1, srgb
-      decodes to linear, float is floating point.
+      decodes to linear, float is floating point. undefined is no format,
+      for where one is optional, such as a pipeline without a depth-stencil
+      target; no texture or swapchain has it, and bfr_get_formats lists it
+      nowhere.
     values:
+      undefined: {value: 0}
       r8_unorm: {value: 1}
       r8_snorm: {value: 2}
       r8_uint: {value: 3}
@@ -319,6 +331,88 @@ enums:
       depth: {value: 1, doc: The depth of a depth format.}
       stencil: {value: 2, doc: The stencil of a stencil format.}
 
+  topology_class:
+    doc: What a graphics pipeline's draws assemble vertices into.
+    values:
+      triangle: {value: 0, doc: Three vertices a triangle.}
+      line: {value: 1, doc: Two vertices a line.}
+      point: {value: 2, doc: Each vertex a point.}
+
+  cull_mode:
+    doc: Which triangles a graphics pipeline discards by the way they face.
+    values:
+      none: {value: 0, doc: Neither.}
+      front: {value: 1, doc: Those facing the viewer.}
+      back: {value: 2, doc: Those facing away.}
+
+  front_face:
+    doc: Which winding of a triangle's vertices on screen faces the viewer.
+    values:
+      counter_clockwise: {value: 0}
+      clockwise: {value: 1}
+
+  fill_mode:
+    doc: How a graphics pipeline fills triangles.
+    values:
+      solid: {value: 0, doc: Every pixel inside.}
+      wireframe: {value: 1, doc: Their edges as lines.}
+
+  compare_op:
+    doc: >-
+      How a depth or stencil test compares the new value against the one
+      stored; the test passes when the comparison holds.
+    values:
+      always: {value: 0, doc: Passes every time.}
+      never: {value: 1, doc: Fails every time.}
+      less: {value: 2}
+      equal: {value: 3}
+      less_equal: {value: 4}
+      greater: {value: 5}
+      not_equal: {value: 6}
+      greater_equal: {value: 7}
+
+  stencil_op:
+    doc: What a stencil test does to the stored stencil value.
+    values:
+      keep: {value: 0, doc: Leaves it.}
+      zero: {value: 1, doc: Sets it to 0.}
+      replace: {value: 2, doc: Sets it to the reference value.}
+      increment_clamp: {value: 3, doc: Adds 1 and stops at the largest value.}
+      decrement_clamp: {value: 4, doc: Subtracts 1 and stops at 0.}
+      invert: {value: 5, doc: Flips every bit.}
+      increment_wrap: {value: 6, doc: Adds 1 and wraps to 0.}
+      decrement_wrap: {value: 7, doc: Subtracts 1 and wraps to the largest value.}
+
+  blend_factor:
+    doc: >-
+      What a blend multiplies a color or alpha by. src is the fragment's,
+      dst the target's, constant the blend constants set when recording.
+    values:
+      zero: {value: 0}
+      one: {value: 1}
+      src_color: {value: 2}
+      one_minus_src_color: {value: 3}
+      dst_color: {value: 4}
+      one_minus_dst_color: {value: 5}
+      src_alpha: {value: 6}
+      one_minus_src_alpha: {value: 7}
+      dst_alpha: {value: 8}
+      one_minus_dst_alpha: {value: 9}
+      constant_color: {value: 10}
+      one_minus_constant_color: {value: 11}
+      constant_alpha: {value: 12}
+      one_minus_constant_alpha: {value: 13}
+      src_alpha_saturate: {value: 14, doc: The lesser of the source alpha and one minus the destination alpha.}
+
+  blend_op:
+    doc: How a blend combines the source and destination once each is multiplied by its factor.
+    values:
+      add: {value: 0}
+      subtract: {value: 1, doc: Source minus destination.}
+      reverse_subtract: {value: 2, doc: Destination minus source.}
+      min: {value: 3, doc: The lesser; the factors are ignored.}
+      max: {value: 4, doc: The greater; the factors are ignored.}
+
   window_system:
     doc: >-
       Which window system a bfr_window comes from, for the platforms that have
@@ -378,6 +472,31 @@ handles:
     parent: device
     destroy: destroy_texture
     doc: Texels the GPU reads and writes, as its bfr_texture_usage says.
+
+  pipeline:
+    parent: device
+    destroy: destroy_pipeline
+    doc: >-
+      A compute or graphics pipeline: shaders with the fixed state they run
+      under. Every pipeline shares one resource layout, which its shaders
+      declare as follows. Four unbounded tables, each indexed by the slot a
+      resource is given, and one block of bfr_push_constants_size bytes of
+      push constants that every stage reads. On Vulkan the tables are the
+      bindings of descriptor set 0, in order: 0 sampled images, 1 storage
+      images, 2 storage buffers, 3 samplers, each an update-after-bind and
+      partially-bound runtime array; the push constants are a push constant
+      range over all stages. On D3D12 the tables are unbounded descriptor
+      ranges, each starting at register 0 of its own space: SRV space 0
+      sampled textures, UAV space 1 storage textures, UAV space 2 storage
+      buffers, sampler space 3 samplers; the push constants are
+      bfr_push_constants_size / 4 root constants at b0 of space 0. On Metal
+      the tables are one argument buffer at buffer(0), holding the sampled
+      textures, storage textures, storage buffers and samplers in that order,
+      each a region of as many 8-byte entries as the bfr_device_desc's
+      max_bindless member for its kind, so a shader declares them with the
+      sizes the device was opened with; the push constants are at buffer(1).
+      Uniform buffers have no table: they are not in every backend's floor. A
+      pipeline's shaders are bytecode for the backend the device runs on.
 
 callbacks:
   message_callback:
@@ -463,6 +582,24 @@ structs:
         type: u32
         default: default_max_swapchains
         doc: Swapchains the device holds at once; past it, bfr_create_swapchain fails with error_limit_reached.
+      - name: max_bindless_textures
+        type: u32
+        default: default_max_bindless_textures
+        doc: >-
+          Slots in the sampled texture table bfr_pipeline describes. Made with the device. Fails with
+          error_limit_reached when the adapter holds fewer; bfr_caps_bindless.max_textures says how many.
+      - name: max_bindless_storage_textures
+        type: u32
+        default: default_max_bindless_storage_textures
+        doc: Slots in the storage texture table; fails as max_bindless_textures does, against max_storage_textures.
+      - name: max_bindless_storage_buffers
+        type: u32
+        default: default_max_bindless_storage_buffers
+        doc: Slots in the storage buffer table; fails as max_bindless_textures does, against max_storage_buffers.
+      - name: max_bindless_samplers
+        type: u32
+        default: default_max_bindless_samplers
+        doc: Slots in the sampler table; fails as max_bindless_textures does, against max_samplers.
 
   swapchain_desc:
     doc: How to create a swapchain.
@@ -621,6 +758,99 @@ structs:
       - {name: width, type: u32, doc: Texels.}
       - {name: height, type: u32, doc: Texels.}
       - {name: depth, type: u32, doc: Texels.}
+
+  shader_code:
+    doc: >-
+      One shader stage: bytecode for the backend the device runs on, and the
+      name of the function in it to run.
+    members:
+      - {name: code, type: u8, array: code_size, pointer: in, doc: Read during the call only.}
+      - {name: code_size, type: size, doc: Bytes.}
+      - {name: entry_point, type: string}
+
+  raster_state:
+    doc: How a graphics pipeline turns primitives into fragments.
+    members:
+      - {name: cull, type: cull_mode}
+      - {name: front_face, type: front_face}
+      - {name: fill, type: fill_mode}
+      - {name: depth_clamp, type: bool, doc: "Clamps depth to the viewport's range instead of clipping to it."}
+      - {name: depth_bias, type: f32, doc: "Added to each fragment's depth, in units of the depth format's smallest step."}
+      - {name: depth_bias_slope, type: f32, doc: "Added to each fragment's depth, times its depth slope."}
+      - {name: depth_bias_clamp, type: f32, doc: The most the bias may add; 0 is no limit.}
+
+  stencil_face:
+    doc: The stencil test for triangles facing one way.
+    members:
+      - {name: fail, type: stencil_op, doc: When the stencil test fails.}
+      - {name: pass, type: stencil_op, doc: When the stencil and depth tests pass.}
+      - {name: depth_fail, type: stencil_op, doc: When the stencil test passes and the depth test fails.}
+      - {name: compare, type: compare_op, doc: Reference value against stored.}
+      - {name: read_mask, type: u32, default: mask_all, doc: The bits compared. The low 8 bits count.}
+      - {name: write_mask, type: u32, default: mask_all, doc: The bits written. The low 8 bits count.}
+
+  depth_stencil_state:
+    doc: >-
+      How a graphics pipeline tests depth and stencil. Off by default; the
+      pipeline then needs no depth-stencil target.
+    members:
+      - {name: depth_test, type: bool}
+      - {name: depth_write, type: bool, doc: Fragments that pass write their depth.}
+      - {name: depth_compare, type: compare_op, doc: New depth against stored.}
+      - {name: stencil_test, type: bool}
+      - {name: front, type: stencil_face}
+      - {name: back, type: stencil_face}
+
+  blend_state:
+    doc: >-
+      How a graphics pipeline blends a fragment into one color target. Off by
+      default: the fragment's color replaces the target's.
+    members:
+      - {name: enable, type: bool}
+      - {name: src_color, type: blend_factor}
+      - {name: dst_color, type: blend_factor}
+      - {name: color_op, type: blend_op}
+      - {name: src_alpha, type: blend_factor}
+      - {name: dst_alpha, type: blend_factor}
+      - {name: alpha_op, type: blend_op}
+      - name: write_mask
+        type: u32
+        default: mask_all
+        doc: "Which channels are written: bit 0 red, 1 green, 2 blue, 3 alpha."
+
+  color_target:
+    doc: One color target a graphics pipeline renders to.
+    members:
+      - {name: format, type: format}
+      - {name: blend, type: blend_state}
+
+  compute_pipeline_desc:
+    doc: How to create a compute pipeline.
+    extensible: true
+    members:
+      - {name: compute, type: shader_code}
+      - name: workgroup_size
+        type: u32
+        fixed: 3
+        doc: Threads in each workgroup, as the shader declares them; a dispatch counts workgroups.
+
+  graphics_pipeline_desc:
+    doc: >-
+      How to create a graphics pipeline. Vertices are pulled: the vertex
+      shader reads them by index from buffers; the pipeline takes no vertex
+      layout.
+    extensible: true
+    members:
+      - {name: vertex, type: shader_code}
+      - {name: fragment, type: shader_code, doc: A code_size of 0 is no fragment shader; the pipeline writes depth alone.}
+      - {name: topology, type: topology_class}
+      - {name: raster, type: raster_state}
+      - {name: depth_stencil, type: depth_stencil_state}
+      - {name: color_target_count, type: u32, doc: "How many of color_targets are used, at most max_color_targets."}
+      - {name: color_targets, type: color_target, fixed: max_color_targets, doc: "The targets the pipeline renders to, in attachment order."}
+      - {name: depth_stencil_format, type: format, doc: undefined is no depth-stencil target.}
+      - {name: samples, type: u32, doc: Samples per pixel of every target; 1 is no multisampling.}
+      - {name: alpha_to_coverage, type: bool, doc: The fragment's alpha sets how many samples it covers.}
 
   token:
     doc: >-
@@ -1331,3 +1561,44 @@ functions:
     params:
       - {name: device, type: device}
       - {name: texture, type: texture}
+
+  create_compute_pipeline:
+    doc: >-
+      Creates a compute pipeline, as desc says, before returning. Not for the
+      frame path: it compiles, and frees pipelines the GPU is done with. Fails
+      with error_invalid_argument for a desc with no code or a workgroup
+      dimension of 0, error_limit_reached at the device's maximum of
+      pipelines, and error_device_failed when the backend refuses the code or
+      the desc; the message carries what it said.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: compute_pipeline_desc, pointer: in}
+      - {name: pipeline, type: pipeline, pointer: out}
+
+  create_graphics_pipeline:
+    doc: >-
+      Creates a graphics pipeline, as desc says, before returning. Not for the
+      frame path, as bfr_create_compute_pipeline is not. Fails with
+      error_invalid_argument for a desc with no vertex code, more than
+      max_color_targets targets, a target of format undefined, a
+      depth-stencil test without a depth-stencil format, or samples of 0,
+      error_unsupported when the desc uses raster or blend state the adapter
+      lacks, such as wireframe fill, error_limit_reached at the device's
+      maximum of pipelines, and error_device_failed when the backend refuses
+      the code or the desc; the message carries what it said.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: graphics_pipeline_desc, pointer: in}
+      - {name: pipeline, type: pipeline, pointer: out}
+
+  destroy_pipeline:
+    doc: >-
+      Destroys a pipeline once the GPU has finished with it; the handle is
+      invalid at once. Not for the frame path: it records the point the
+      pipeline waits for and frees what the GPU is done with. A handle that is
+      already destroyed does nothing.
+    params:
+      - {name: device, type: device}
+      - {name: pipeline, type: pipeline}

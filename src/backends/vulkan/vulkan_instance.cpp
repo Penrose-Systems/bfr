@@ -17,6 +17,7 @@
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_list.h"
 #include "vulkan/vulkan_loader.h"
+#include "vulkan/vulkan_pipeline.h"
 #include "vulkan/vulkan_result.h"
 #include "vulkan/vulkan_surface.h"
 
@@ -423,6 +424,9 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
         return std::unexpected(std::move(checked.error()));
     }
     const Adapter& listed = adapters_[adapter];
+    if (auto checked = checkBindlessLimits(wanted, listed.caps.bindless); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
     const auto properties = queueFamilies(vk_, physicalDevice);
     const auto presenting = presentingFamilies(adapter, properties.size(), presentTo);
@@ -465,9 +469,24 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
 
     const auto queues = queueCreateInfos(*families, *families->present, wanted);
     const FloorFeatures features;
+    // The optional 1.0 features a pipeline's state may need, each turned on
+    // when the adapter has it; the device refuses state that needs one it lacks.
+    VkPhysicalDeviceFeatures2 has{};
+    has.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    vk_.vkGetPhysicalDeviceFeatures2(physicalDevice, &has);
+    VkPhysicalDeviceFeatures enabled{};
+    enabled.fillModeNonSolid = has.features.fillModeNonSolid;
+    enabled.depthClamp = has.features.depthClamp;
+    enabled.depthBiasClamp = has.features.depthBiasClamp;
+    enabled.independentBlend = has.features.independentBlend;
+    const RasterFeatures raster{.fillModeNonSolid = enabled.fillModeNonSolid == VK_TRUE,
+                                .depthClamp = enabled.depthClamp == VK_TRUE,
+                                .depthBiasClamp = enabled.depthBiasClamp == VK_TRUE,
+                                .independentBlend = enabled.independentBlend == VK_TRUE};
     VkDeviceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     info.pNext = &features.head();
+    info.pEnabledFeatures = &enabled;
     info.queueCreateInfoCount = static_cast<std::uint32_t>(queues.infos.size());
     info.pQueueCreateInfos = queues.infos.data();
     info.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
@@ -481,7 +500,7 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     }
     BFR_LOG_INFO(logger(), "device on {}, queue families {}, extensions: {}", listed.name, familyList(queues.infos),
                  core::text::join(extensions, ", "));
-    auto made = VulkanDevice::create(*this, physicalDevice, device, *families, wanted, hasBudget_[adapter]);
+    auto made = VulkanDevice::create(*this, physicalDevice, device, *families, wanted, hasBudget_[adapter], raster);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }

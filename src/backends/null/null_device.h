@@ -6,9 +6,11 @@
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
+#include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/swapchain.h"
 #include "core/slot_chains.h"
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -60,6 +62,13 @@ struct NullTexture {
     TextureDesc desc;
 };
 
+/// A pipeline, which runs nothing: no code has a use without a GPU, so none is
+/// kept, only the fixed state and how the shaders are named.
+struct NullPipeline {
+    bool compute = false;
+    std::array<std::uint32_t, kWorkgroupDimensions> workgroupSize{};
+};
+
 class NullDevice final : public Device {
 public:
     /// rhi outlives this. The device has a graphics queue and then the queues
@@ -107,6 +116,9 @@ public:
     [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyTexture(TextureHandle texture) override;
+    [[nodiscard]] core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) override;
+    [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroyPipeline(PipelineHandle pipeline) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
 
     /// The queue refuses the next submit, as a driver's may: the lists named
@@ -143,6 +155,7 @@ private:
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<NullBuffer, Buffer> buffers_;
     core::Pool<NullTexture, Texture> textures_;
+    core::Pool<NullPipeline, Pipeline> pipelines_;
     std::vector<QueueType> queues_;
     // The value last submitted on each queue, made once; submits on one queue
     // may come from several threads.

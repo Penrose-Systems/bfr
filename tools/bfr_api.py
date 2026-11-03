@@ -159,9 +159,13 @@ class Api:
                 raise SpecError(f"{where}: its count {count} is not in {owner}")
             fixed = field.get("fixed")
             if fixed is not None and (
-                not isinstance(fixed, int) or isinstance(fixed, bool) or fixed < 1 or pointer or count
+                (not isinstance(fixed, int) and fixed not in self.constants)
+                or isinstance(fixed, bool)
+                or (isinstance(fixed, int) and fixed < 1)
+                or pointer
+                or count
             ):
-                raise SpecError(f"{where}: fixed must be a positive length, without pointer or array")
+                raise SpecError(f"{where}: fixed must be a positive length or a constant, without pointer or array")
             default = field.get("default")
             if default is not None and (default not in self.constants or field["type"] not in {"u32", "u64"}):
                 raise SpecError(f"{where}: default must name a constant, on a u32 or u64")
@@ -189,6 +193,17 @@ class Api:
         declared = {**self.enums, **self.objects, **self.handles, **self.callbacks, **self.structs}
         if name not in BUILTINS and name not in declared:
             raise SpecError(f"{where}: unknown type {name}")
+
+    def fixed_length(self, field: dict[str, Any]) -> int:
+        """The length of a fixed member: its number, or its constant's value."""
+        fixed = field["fixed"]
+        return fixed if isinstance(fixed, int) else int(self.constants[fixed]["value"])
+
+    def fixed_text(self, field: dict[str, Any]) -> str:
+        """The length of a fixed member as a header writes it: the number, or
+        the constant's macro."""
+        fixed = field["fixed"]
+        return str(fixed) if isinstance(fixed, int) else macro(fixed)
 
     def is_plain(self, name: str) -> bool:
         """A handle whose parent's pool owns what it names, so a wrapper keeps

@@ -49,8 +49,9 @@ add_executable(bfr_tests
     rhi/test_buffer.cpp
     rhi/test_caps.cpp
     rhi/test_frame_allocations.cpp
-    rhi/test_present.cpp
     rhi/test_instance.cpp
+    rhi/test_pipeline.cpp
+    rhi/test_present.cpp
     rhi/test_swapchain.cpp
     rhi/test_texture.cpp
     ${PROJECT_SOURCE_DIR}/src/backends/null/null_device.cpp

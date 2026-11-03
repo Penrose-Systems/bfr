@@ -1,4 +1,5 @@
 #include "bfr.hpp"
+#include "shaders/spirv.h"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -410,6 +411,41 @@ TEST_CASE("C++ API gives an adapter's caps, formats and surface caps", "[cpp_api
         CHECK(surface->fifo);
         REQUIRE(swapchainFormats.has_value());
         CHECK_FALSE(swapchainFormats->empty());
+    }
+    CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C++ API creates and destroys pipelines", "[cpp_api][gpu]") {
+    const bfr::Backend backend = GENERATE(eachBackend());
+    // The shaders checked in are SPIR-V, which only Vulkan takes.
+    if (backend != bfr::Backend::Vulkan) {
+        SKIP("no bytecode is checked in for this backend");
+    }
+    constexpr std::uint32_t kWorkgroup = 64;
+    Messages messages;
+    {
+        const bfr::Instance instance = validatedInstance(backend, messages);
+        const bfr::Device device = headlessDevice(instance);
+        const auto code = [](const auto& bytes) {
+            return bfr::ShaderCode{.code = bytes, .entryPoint = "main"};
+        };
+        auto compute = device.createComputePipeline(
+            {.compute = code(bfr::test::spirv::kBindlessComp), .workgroupSize = {kWorkgroup, 1, 1}});
+        INFO(failureOf(compute));
+        REQUIRE(compute.has_value());
+        bfr::GraphicsPipelineDesc desc{.vertex = code(bfr::test::spirv::kBindlessVert),
+                                       .fragment = code(bfr::test::spirv::kBindlessFrag),
+                                       .colorTargetCount = 1,
+                                       .samples = 1};
+        desc.colorTargets[0] = {.format = bfr::Format::Rgba8Unorm,
+                                .blend = {.enable = true,
+                                          .srcColor = bfr::BlendFactor::SrcAlpha,
+                                          .dstColor = bfr::BlendFactor::OneMinusSrcAlpha}};
+        auto graphics = device.createGraphicsPipeline(desc);
+        INFO(failureOf(graphics));
+        REQUIRE(graphics.has_value());
+        desc.colorTargets[0].format = bfr::Format::Undefined;
+        CHECK(device.createGraphicsPipeline(desc).error().code == bfr::Result::ErrorInvalidArgument);
     }
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }

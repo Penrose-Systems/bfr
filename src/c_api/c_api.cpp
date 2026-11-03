@@ -11,6 +11,7 @@
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/instance.h"
+#include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/rhi_config.h"
 #include "bfr/rhi/swapchain.h"
 #include "bfr/rhi/texture.h"
@@ -329,6 +330,158 @@ std::optional<bfr::rhi::TextureDesc> textureIn(const bfr_texture_desc& desc, bfr
                                  .storage = desc.usage.storage != BFR_FALSE,
                                  .colorAttachment = desc.usage.color_attachment != BFR_FALSE,
                                  .depthStencil = desc.usage.depth_stencil != BFR_FALSE}};
+}
+
+bfr_pipeline toC(bfr::rhi::PipelineHandle handle) {
+    return {.bits = handle.bits};
+}
+
+bfr::rhi::PipelineHandle fromC(bfr_pipeline handle) {
+    return bfr::rhi::PipelineHandle::fromBits(handle.bits);
+}
+
+// The C and C++ pipeline enums are the same numbers, so they cross as they
+// are, once checked to be a value BFR has.
+static_assert(static_cast<int>(bfr::rhi::TopologyClass::Point) == BFR_TOPOLOGY_CLASS_POINT);
+static_assert(static_cast<int>(bfr::rhi::CullMode::Back) == BFR_CULL_MODE_BACK);
+static_assert(static_cast<int>(bfr::rhi::FrontFace::Clockwise) == BFR_FRONT_FACE_CLOCKWISE);
+static_assert(static_cast<int>(bfr::rhi::FillMode::Wireframe) == BFR_FILL_MODE_WIREFRAME);
+static_assert(static_cast<int>(bfr::rhi::CompareOp::GreaterEqual) == BFR_COMPARE_OP_GREATER_EQUAL);
+static_assert(static_cast<int>(bfr::rhi::StencilOp::DecrementWrap) == BFR_STENCIL_OP_DECREMENT_WRAP);
+static_assert(static_cast<int>(bfr::rhi::BlendFactor::SrcAlphaSaturate) == BFR_BLEND_FACTOR_SRC_ALPHA_SATURATE);
+static_assert(static_cast<int>(bfr::rhi::BlendOp::Max) == BFR_BLEND_OP_MAX);
+
+// value as the C++ enum E, whose values run from 0 to last; nothing when it is
+// not one of them, and error says which.
+template <class E, class C>
+std::optional<E> enumIn(C value, E last, const char* what, bfr::core::Message& error) {
+    const auto number = static_cast<std::int64_t>(value);
+    if (number < 0 || number > static_cast<std::int64_t>(last)) {
+        error.format("{} {} is not one BFR has", what, number);
+        return std::nullopt;
+    }
+    return static_cast<E>(number);
+}
+
+// value as a Format, Undefined included; nothing when it is not one BFR has.
+std::optional<bfr::rhi::Format> formatIn(bfr_format value, const char* what, bfr::core::Message& error) {
+    using namespace bfr::rhi;
+    const auto number = static_cast<std::int64_t>(value);
+    if (number == static_cast<std::int64_t>(Format::Undefined)) {
+        return Format::Undefined;
+    }
+    const auto* found = std::ranges::find_if(kFormats, [number](Format known) {
+        return static_cast<std::int64_t>(known) == number;
+    });
+    if (found == kFormats.end()) {
+        error.format("{} {} is not one BFR has", what, number);
+        return std::nullopt;
+    }
+    return *found;
+}
+
+// A mask member, whose 0 asks for every bit.
+std::uint32_t maskIn(std::uint32_t mask) {
+    return mask == 0 ? BFR_MASK_ALL : mask;
+}
+
+bfr::rhi::ShaderCode shaderIn(const bfr_shader_code& code) {
+    return {.code = {reinterpret_cast<const std::byte*>(code.code), code.code_size},
+            .entryPoint = {code.entry_point.data, code.entry_point.length}};
+}
+
+// The compute pipeline desc asks for.
+bfr::rhi::ComputePipelineDesc computePipelineIn(const bfr_compute_pipeline_desc& desc) {
+    return {.compute = shaderIn(desc.compute), .workgroupSize = std::to_array(desc.workgroup_size)};
+}
+
+std::optional<bfr::rhi::StencilFace> stencilFaceIn(const bfr_stencil_face& face, bfr::core::Message& error) {
+    using namespace bfr::rhi;
+    const auto fail = enumIn(face.fail, StencilOp::DecrementWrap, "stencil op", error);
+    const auto pass = enumIn(face.pass, StencilOp::DecrementWrap, "stencil op", error);
+    const auto depthFail = enumIn(face.depth_fail, StencilOp::DecrementWrap, "stencil op", error);
+    const auto compare = enumIn(face.compare, CompareOp::GreaterEqual, "compare op", error);
+    if (!fail || !pass || !depthFail || !compare) {
+        return std::nullopt;
+    }
+    return StencilFace{.fail = *fail,
+                       .pass = *pass,
+                       .depthFail = *depthFail,
+                       .compare = *compare,
+                       .readMask = maskIn(face.read_mask),
+                       .writeMask = maskIn(face.write_mask)};
+}
+
+std::optional<bfr::rhi::BlendState> blendIn(const bfr_blend_state& blend, bfr::core::Message& error) {
+    using namespace bfr::rhi;
+    const auto srcColor = enumIn(blend.src_color, BlendFactor::SrcAlphaSaturate, "blend factor", error);
+    const auto dstColor = enumIn(blend.dst_color, BlendFactor::SrcAlphaSaturate, "blend factor", error);
+    const auto colorOp = enumIn(blend.color_op, BlendOp::Max, "blend op", error);
+    const auto srcAlpha = enumIn(blend.src_alpha, BlendFactor::SrcAlphaSaturate, "blend factor", error);
+    const auto dstAlpha = enumIn(blend.dst_alpha, BlendFactor::SrcAlphaSaturate, "blend factor", error);
+    const auto alphaOp = enumIn(blend.alpha_op, BlendOp::Max, "blend op", error);
+    if (!srcColor || !dstColor || !colorOp || !srcAlpha || !dstAlpha || !alphaOp) {
+        return std::nullopt;
+    }
+    return BlendState{.enable = blend.enable != BFR_FALSE,
+                      .srcColor = *srcColor,
+                      .dstColor = *dstColor,
+                      .colorOp = *colorOp,
+                      .srcAlpha = *srcAlpha,
+                      .dstAlpha = *dstAlpha,
+                      .alphaOp = *alphaOp,
+                      .writeMask = maskIn(blend.write_mask)};
+}
+
+// The graphics pipeline desc asks for. Nothing when a value is not one BFR
+// has; error says which. The targets past color_target_count are not read.
+std::optional<bfr::rhi::GraphicsPipelineDesc> graphicsPipelineIn(const bfr_graphics_pipeline_desc& desc,
+                                                                 bfr::core::Message& error) {
+    using namespace bfr::rhi;
+    const auto topology = enumIn(desc.topology, TopologyClass::Point, "topology class", error);
+    const auto cull = enumIn(desc.raster.cull, CullMode::Back, "cull mode", error);
+    const auto frontFace = enumIn(desc.raster.front_face, FrontFace::Clockwise, "front face", error);
+    const auto fill = enumIn(desc.raster.fill, FillMode::Wireframe, "fill mode", error);
+    const auto depthCompare = enumIn(desc.depth_stencil.depth_compare, CompareOp::GreaterEqual, "compare op", error);
+    const auto front = stencilFaceIn(desc.depth_stencil.front, error);
+    const auto back = stencilFaceIn(desc.depth_stencil.back, error);
+    const auto depthStencilFormat = formatIn(desc.depth_stencil_format, "depth-stencil format", error);
+    if (!topology || !cull || !frontFace || !fill || !depthCompare || !front || !back || !depthStencilFormat) {
+        return std::nullopt;
+    }
+    GraphicsPipelineDesc pipeline{
+        .vertex = shaderIn(desc.vertex),
+        .fragment = shaderIn(desc.fragment),
+        .topology = *topology,
+        .raster = {.cull = *cull,
+                   .frontFace = *frontFace,
+                   .fill = *fill,
+                   .depthClamp = desc.raster.depth_clamp != BFR_FALSE,
+                   .depthBias = desc.raster.depth_bias,
+                   .depthBiasSlope = desc.raster.depth_bias_slope,
+                   .depthBiasClamp = desc.raster.depth_bias_clamp},
+        .depthStencil = {.depthTest = desc.depth_stencil.depth_test != BFR_FALSE,
+                         .depthWrite = desc.depth_stencil.depth_write != BFR_FALSE,
+                         .depthCompare = *depthCompare,
+                         .stencilTest = desc.depth_stencil.stencil_test != BFR_FALSE,
+                         .front = *front,
+                         .back = *back},
+        .colorTargetCount = desc.color_target_count,
+        .colorTargets = {},
+        .depthStencilFormat = *depthStencilFormat,
+        .samples = desc.samples,
+        .alphaToCoverage = desc.alpha_to_coverage != BFR_FALSE,
+    };
+    const std::span targets{desc.color_targets};
+    for (std::uint32_t i = 0; i < std::min<std::uint32_t>(desc.color_target_count, kMaxColorTargets); ++i) {
+        const auto format = formatIn(targets[i].format, "color target format", error);
+        const auto blend = blendIn(targets[i].blend, error);
+        if (!format || !blend) {
+            return std::nullopt;
+        }
+        pipeline.colorTargets.at(i) = {.format = *format, .blend = *blend};
+    }
+    return pipeline;
 }
 
 bfr_command_list toC(bfr::rhi::CommandListHandle handle) {
@@ -986,7 +1139,13 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
              .copy = desc->copy_queues,
              .maxCommandLists = orDefault(desc->max_command_lists, BFR_DEFAULT_MAX_COMMAND_LISTS),
              .maxCommandPools = orDefault(desc->max_command_pools, BFR_DEFAULT_MAX_COMMAND_POOLS),
-             .maxSwapchains = orDefault(desc->max_swapchains, BFR_DEFAULT_MAX_SWAPCHAINS)});
+             .maxSwapchains = orDefault(desc->max_swapchains, BFR_DEFAULT_MAX_SWAPCHAINS),
+             .maxBindlessTextures = orDefault(desc->max_bindless_textures, BFR_DEFAULT_MAX_BINDLESS_TEXTURES),
+             .maxBindlessStorageTextures = orDefault(desc->max_bindless_storage_textures,
+                                                     BFR_DEFAULT_MAX_BINDLESS_STORAGE_TEXTURES),
+             .maxBindlessStorageBuffers = orDefault(desc->max_bindless_storage_buffers,
+                                                    BFR_DEFAULT_MAX_BINDLESS_STORAGE_BUFFERS),
+             .maxBindlessSamplers = orDefault(desc->max_bindless_samplers, BFR_DEFAULT_MAX_BINDLESS_SAMPLERS)});
         if (!created) {
             return fail(created.error());
         }
@@ -1533,6 +1692,74 @@ void bfr_destroy_texture(bfr_device* device, bfr_texture texture) {
             return;
         }
         if (const auto destroyed = device->device->destroyTexture(fromC(texture)); !destroyed) {
+            lastError() = destroyed.error().message;
+        }
+    });
+}
+
+bfr_result bfr_create_compute_pipeline(bfr_device* device, const bfr_compute_pipeline_desc* desc,
+                                       bfr_pipeline* pipeline) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr || pipeline == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and pipeline must not be null");
+        }
+        *pipeline = {};
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_compute_pipeline_desc takes no chained structs");
+        }
+        if (desc->compute.code == nullptr && desc->compute.code_size != 0) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "compute.code is null but compute.code_size is not 0");
+        }
+        if (desc->compute.entry_point.data == nullptr && desc->compute.entry_point.length != 0) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "compute.entry_point is null but its length is not 0");
+        }
+        const auto created = device->device->createComputePipeline(computePipelineIn(*desc));
+        if (!created) {
+            return fail(created.error());
+        }
+        *pipeline = toC(*created);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_create_graphics_pipeline(bfr_device* device, const bfr_graphics_pipeline_desc* desc,
+                                        bfr_pipeline* pipeline) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr || pipeline == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and pipeline must not be null");
+        }
+        *pipeline = {};
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_graphics_pipeline_desc takes no chained structs");
+        }
+        for (const auto& [name, code] : {std::pair{"vertex", &desc->vertex}, std::pair{"fragment", &desc->fragment}}) {
+            if (code->code == nullptr && code->code_size != 0) {
+                return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "{}.code is null but {}.code_size is not 0", name, name);
+            }
+            if (code->entry_point.data == nullptr && code->entry_point.length != 0) {
+                return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "{}.entry_point is null but its length is not 0", name);
+            }
+        }
+        bfr::core::Message error;
+        const auto wanted = graphicsPipelineIn(*desc, error);
+        if (!wanted) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto created = device->device->createGraphicsPipeline(*wanted);
+        if (!created) {
+            return fail(created.error());
+        }
+        *pipeline = toC(*created);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+void bfr_destroy_pipeline(bfr_device* device, bfr_pipeline pipeline) {
+    quietly([&] {
+        if (device == nullptr) {
+            return;
+        }
+        if (const auto destroyed = device->device->destroyPipeline(fromC(pipeline)); !destroyed) {
             lastError() = destroyed.error().message;
         }
     });

@@ -1,6 +1,7 @@
 #include "allocation/allocation_counter.h"
 #include "bfr/bfr.h"
 #include "bfr/core/log.h"
+#include "shaders/spirv.h"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -103,7 +104,11 @@ struct HeadlessDevice {
                                        .copy_queues = 0,
                                        .max_command_lists = 0,
                                        .max_command_pools = 0,
-                                       .max_swapchains = 0};
+                                       .max_swapchains = 0,
+                                       .max_bindless_textures = 0,
+                                       .max_bindless_storage_textures = 0,
+                                       .max_bindless_storage_buffers = 0,
+                                       .max_bindless_samplers = 0};
             const bfr_result result = bfr_create_device(instance, &desc, &device);
             INFO(lastError());
             REQUIRE((result == BFR_RESULT_SUCCESS || result == BFR_RESULT_ERROR_PRESENT_UNSUPPORTED));
@@ -280,7 +285,7 @@ namespace {
 
 struct Mode {
     bfr_present_mode mode;
-    bfr_bool bfr_swapchain_caps::* allowed;
+    bfr_bool bfr_swapchain_caps::*allowed;
     const char* name;
 };
 
@@ -465,6 +470,64 @@ TEST_CASE("C API creates, maps and destroys a buffer, and refuses what it can't 
     bfr_destroy_buffer(device.device, local);
     CHECK(bfr_map_buffer(device.device, upload, &data) == BFR_RESULT_ERROR_INVALID_HANDLE);
     bfr_destroy_buffer(device.device, upload);
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C API creates and destroys pipelines, and refuses a state value it does not have", "[c_api][gpu]") {
+    const bfr_backend backend = GENERATE(eachBackend());
+    // The shaders checked in are SPIR-V, which only Vulkan takes.
+    if (backend != BFR_BACKEND_VULKAN) {
+        SKIP("no bytecode is checked in for this backend");
+    }
+    constexpr std::uint32_t kWorkgroup = 64;
+    std::vector<std::string> messages;
+    const Instance instance{backend, messages};
+    const HeadlessDevice device{instance.instance};
+    const auto code = [](const auto& bytes) {
+        return bfr_shader_code{.code = bytes.data(),
+                               .code_size = bytes.size(),
+                               .entry_point = {.data = "main", .length = 4}};
+    };
+    const bfr_compute_pipeline_desc computeDesc{.next = nullptr,
+                                                .compute = code(bfr::test::spirv::kBindlessComp),
+                                                .workgroup_size = {kWorkgroup, 1, 1}};
+    bfr_pipeline compute{};
+    REQUIRE(bfr_create_compute_pipeline(device.device, &computeDesc, &compute) == BFR_RESULT_SUCCESS);
+
+    // Every state 0, which is every test off and every target written whole.
+    bfr_graphics_pipeline_desc graphicsDesc{};
+    graphicsDesc.vertex = code(bfr::test::spirv::kBindlessVert);
+    graphicsDesc.fragment = code(bfr::test::spirv::kBindlessFrag);
+    graphicsDesc.color_target_count = 1;
+    graphicsDesc.color_targets[0].format = BFR_FORMAT_RGBA8_UNORM;
+    graphicsDesc.samples = 1;
+    bfr_pipeline graphics{};
+    REQUIRE(bfr_create_graphics_pipeline(device.device, &graphicsDesc, &graphics) == BFR_RESULT_SUCCESS);
+    CHECK(graphics.bits != compute.bits);
+
+    bfr_graphics_pipeline_desc stray = graphicsDesc;
+    stray.raster.cull = static_cast<bfr_cull_mode>(kNotAValue);
+    bfr_pipeline none{};
+    CHECK(bfr_create_graphics_pipeline(device.device, &stray, &none) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(none.bits == 0);
+    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("cull mode"));
+    stray = graphicsDesc;
+    stray.color_targets[0].blend.src_color = static_cast<bfr_blend_factor>(kNotAValue);
+    CHECK(bfr_create_graphics_pipeline(device.device, &stray, &none) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    stray = graphicsDesc;
+    stray.depth_stencil_format = static_cast<bfr_format>(kNotAValue);
+    CHECK(bfr_create_graphics_pipeline(device.device, &stray, &none) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    stray = graphicsDesc;
+    stray.vertex.code = nullptr;
+    CHECK(bfr_create_graphics_pipeline(device.device, &stray, &none) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    stray = graphicsDesc;
+    stray.vertex.code_size = 0;
+    CHECK(bfr_create_graphics_pipeline(device.device, &stray, &none) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+
+    bfr_destroy_pipeline(device.device, compute);
+    bfr_destroy_pipeline(device.device, graphics);
+    bfr_destroy_pipeline(device.device, compute);
+    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("stale"));
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 

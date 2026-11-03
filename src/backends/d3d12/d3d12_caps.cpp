@@ -112,9 +112,16 @@ Limits limitsOf(ID3D12Device* device, const D3D12_FEATURE_DATA_D3D12_OPTIONS6& o
     return limits;
 }
 
+// Resource binding tier 3, which the floor asks for, reads any descriptor in
+// a full shader-visible heap from any stage; the sampler heap is smaller.
 BindlessLimits bindlessOf() {
     BindlessLimits bindless;
+    bindless.maxTextures = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_2;
+    bindless.maxStorageTextures = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_2;
+    bindless.maxStorageBuffers = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_2;
+    bindless.maxUniformBuffers = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_2;
     bindless.maxSamplers = D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE;
+    bindless.maxPerStage = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_2;
     return bindless;
 }
 

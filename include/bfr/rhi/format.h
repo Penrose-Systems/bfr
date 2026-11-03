@@ -6,7 +6,9 @@
 namespace bfr::rhi {
 
 /// How a texel is stored. The values are the C API's; bfr.yaml documents each.
+/// Undefined is no format, for where one is optional; kFormats leaves it out.
 enum class Format : std::uint16_t {
+    Undefined = 0,
     R8Unorm = 1,
     R8Snorm = 2,
     R8Uint = 3,
@@ -130,7 +132,7 @@ enum class Format : std::uint16_t {
     Astc12x12Float = 441,
 };
 
-/// Every format, in the order Format declares them.
+/// Every format but Undefined, in the order Format declares them.
 inline constexpr std::array kFormats{
     Format::R8Unorm,        Format::R8Snorm,        Format::R8Uint,         Format::R8Sint,
     Format::Rg8Unorm,       Format::Rg8Snorm,       Format::Rg8Uint,        Format::Rg8Sint,

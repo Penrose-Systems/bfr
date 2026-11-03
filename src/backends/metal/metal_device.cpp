@@ -9,12 +9,14 @@
 #include "core/fixed_vector.h"
 #include "core/slot_chains.h"
 #include "metal/metal_instance.h"
+#include "metal/metal_pipeline.h"
 #include "metal/metal_swapchain.h"
 #include "metal/metal_util.h"
 
 #include <Foundation/NSError.hpp>
 #include <Metal/MTL4CommandAllocator.hpp>
 #include <Metal/MTL4CommandEncoder.hpp>
+#include <Metal/MTL4Compiler.hpp>
 #include <Metal/MTL4ComputeCommandEncoder.hpp>
 #include <Metal/MTLCommandBuffer.hpp>
 #include <Metal/MTLCommandEncoder.hpp>
@@ -95,7 +97,8 @@ MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Devi
       renders_(desc.maxCommandLists),
       submissions_(1 + desc.compute + desc.copy),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
-      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()) {}
+      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
 core::Result<void> MetalDevice::open(const DeviceDesc& desc) {
     const AutoreleasePool pool;
@@ -142,6 +145,22 @@ core::Result<void> MetalDevice::open(const DeviceDesc& desc) {
             return opened;
         }
     }
+    const Ref<MTL4::CompilerDescriptor> compilerDesc = adopt(MTL4::CompilerDescriptor::alloc()->init());
+    MTL4::Compiler* compiler = device_->newCompiler(compilerDesc.get(), &error);
+    if (compiler == nullptr) {
+        return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no compiler: {}",
+                             error != nullptr ? error->localizedDescription()->utf8String() : "no reason given");
+    }
+    compiler_ = adopt(compiler);
+    {
+        const std::scoped_lock lock{residencyLock_};
+        auto tables = createMetalBindlessTables(*device_.get(), desc, residency_);
+        if (!tables) {
+            return std::unexpected(std::move(tables.error()));
+        }
+        tables_.emplace(std::move(*tables));
+        residency_->commit();
+    }
     return {};
 }
 
@@ -173,6 +192,10 @@ MetalDevice::~MetalDevice() {
         BFR_LOG_WARN(instance_->logger(), "{} textures were left when the device went", textures_.size());
     }
     textures_.clear();
+    if (pipelines_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} pipelines were left when the device went", pipelines_.size());
+    }
+    pipelines_.clear();
     // The slots' vector releases every allocator and buffer as it goes.
 }
 

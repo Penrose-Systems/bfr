@@ -1,0 +1,19 @@
+// A compute shader that declares BFR's bindless layout (api/bfr.yaml,
+// bfr_pipeline) and writes through its storage buffer table. For the pipeline
+// tests; spirv.h holds it compiled, see compile.sh.
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 2) buffer Buffers {
+    uint values[];
+} buffers[];
+
+layout(push_constant) uniform Push {
+    uint target;
+} push;
+
+void main() {
+    buffers[nonuniformEXT(push.target)].values[gl_GlobalInvocationID.x] = gl_GlobalInvocationID.x;
+}

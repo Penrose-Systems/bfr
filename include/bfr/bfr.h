@@ -42,6 +42,27 @@ typedef uint32_t bfr_bool;
 // What bfr_device_desc.max_swapchains of 0 means.
 #define BFR_DEFAULT_MAX_SWAPCHAINS 512u
 
+// What bfr_device_desc.max_bindless_textures of 0 means.
+#define BFR_DEFAULT_MAX_BINDLESS_TEXTURES 65536u
+
+// What bfr_device_desc.max_bindless_storage_textures of 0 means.
+#define BFR_DEFAULT_MAX_BINDLESS_STORAGE_TEXTURES 16384u
+
+// What bfr_device_desc.max_bindless_storage_buffers of 0 means.
+#define BFR_DEFAULT_MAX_BINDLESS_STORAGE_BUFFERS 65536u
+
+// What bfr_device_desc.max_bindless_samplers of 0 means.
+#define BFR_DEFAULT_MAX_BINDLESS_SAMPLERS 2048u
+
+// The most color targets a graphics pipeline renders to.
+#define BFR_MAX_COLOR_TARGETS 8u
+
+// Bytes of push constants every pipeline's shaders read; the layout bfr_pipeline states.
+#define BFR_PUSH_CONSTANTS_SIZE 128u
+
+// What a mask member of 0 means; every bit of the mask set.
+#define BFR_MASK_ALL 4294967295u
+
 // The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".
 #define BFR_MAX_MESSAGE_LENGTH 1024u
 
@@ -142,8 +163,11 @@ typedef enum bfr_message_severity {
 
 // How a texel is stored. Channels are named in memory order, so rgba8 holds red in its first byte;
 // a packed format names its channels from the low bits up. unorm and snorm read as 0 to 1 and -1 to
-// 1, srgb decodes to linear, float is floating point.
+// 1, srgb decodes to linear, float is floating point. undefined is no format, for where one is
+// optional, such as a pipeline without a depth-stencil target; no texture or swapchain has it, and
+// bfr_get_formats lists it nowhere.
 typedef enum bfr_format {
+    BFR_FORMAT_UNDEFINED = 0,
     BFR_FORMAT_R8_UNORM = 1,
     BFR_FORMAT_R8_SNORM = 2,
     BFR_FORMAT_R8_UINT = 3,
@@ -432,6 +456,117 @@ typedef enum bfr_texture_aspect {
     BFR_TEXTURE_ASPECT_FORCE32 = 0x7FFFFFFF
 } bfr_texture_aspect;
 
+// What a graphics pipeline's draws assemble vertices into.
+typedef enum bfr_topology_class {
+    // Three vertices a triangle.
+    BFR_TOPOLOGY_CLASS_TRIANGLE = 0,
+    // Two vertices a line.
+    BFR_TOPOLOGY_CLASS_LINE = 1,
+    // Each vertex a point.
+    BFR_TOPOLOGY_CLASS_POINT = 2,
+    BFR_TOPOLOGY_CLASS_FORCE32 = 0x7FFFFFFF
+} bfr_topology_class;
+
+// Which triangles a graphics pipeline discards by the way they face.
+typedef enum bfr_cull_mode {
+    // Neither.
+    BFR_CULL_MODE_NONE = 0,
+    // Those facing the viewer.
+    BFR_CULL_MODE_FRONT = 1,
+    // Those facing away.
+    BFR_CULL_MODE_BACK = 2,
+    BFR_CULL_MODE_FORCE32 = 0x7FFFFFFF
+} bfr_cull_mode;
+
+// Which winding of a triangle's vertices on screen faces the viewer.
+typedef enum bfr_front_face {
+    BFR_FRONT_FACE_COUNTER_CLOCKWISE = 0,
+    BFR_FRONT_FACE_CLOCKWISE = 1,
+    BFR_FRONT_FACE_FORCE32 = 0x7FFFFFFF
+} bfr_front_face;
+
+// How a graphics pipeline fills triangles.
+typedef enum bfr_fill_mode {
+    // Every pixel inside.
+    BFR_FILL_MODE_SOLID = 0,
+    // Their edges as lines.
+    BFR_FILL_MODE_WIREFRAME = 1,
+    BFR_FILL_MODE_FORCE32 = 0x7FFFFFFF
+} bfr_fill_mode;
+
+// How a depth or stencil test compares the new value against the one stored; the test passes when
+// the comparison holds.
+typedef enum bfr_compare_op {
+    // Passes every time.
+    BFR_COMPARE_OP_ALWAYS = 0,
+    // Fails every time.
+    BFR_COMPARE_OP_NEVER = 1,
+    BFR_COMPARE_OP_LESS = 2,
+    BFR_COMPARE_OP_EQUAL = 3,
+    BFR_COMPARE_OP_LESS_EQUAL = 4,
+    BFR_COMPARE_OP_GREATER = 5,
+    BFR_COMPARE_OP_NOT_EQUAL = 6,
+    BFR_COMPARE_OP_GREATER_EQUAL = 7,
+    BFR_COMPARE_OP_FORCE32 = 0x7FFFFFFF
+} bfr_compare_op;
+
+// What a stencil test does to the stored stencil value.
+typedef enum bfr_stencil_op {
+    // Leaves it.
+    BFR_STENCIL_OP_KEEP = 0,
+    // Sets it to 0.
+    BFR_STENCIL_OP_ZERO = 1,
+    // Sets it to the reference value.
+    BFR_STENCIL_OP_REPLACE = 2,
+    // Adds 1 and stops at the largest value.
+    BFR_STENCIL_OP_INCREMENT_CLAMP = 3,
+    // Subtracts 1 and stops at 0.
+    BFR_STENCIL_OP_DECREMENT_CLAMP = 4,
+    // Flips every bit.
+    BFR_STENCIL_OP_INVERT = 5,
+    // Adds 1 and wraps to 0.
+    BFR_STENCIL_OP_INCREMENT_WRAP = 6,
+    // Subtracts 1 and wraps to the largest value.
+    BFR_STENCIL_OP_DECREMENT_WRAP = 7,
+    BFR_STENCIL_OP_FORCE32 = 0x7FFFFFFF
+} bfr_stencil_op;
+
+// What a blend multiplies a color or alpha by. src is the fragment's, dst the target's, constant
+// the blend constants set when recording.
+typedef enum bfr_blend_factor {
+    BFR_BLEND_FACTOR_ZERO = 0,
+    BFR_BLEND_FACTOR_ONE = 1,
+    BFR_BLEND_FACTOR_SRC_COLOR = 2,
+    BFR_BLEND_FACTOR_ONE_MINUS_SRC_COLOR = 3,
+    BFR_BLEND_FACTOR_DST_COLOR = 4,
+    BFR_BLEND_FACTOR_ONE_MINUS_DST_COLOR = 5,
+    BFR_BLEND_FACTOR_SRC_ALPHA = 6,
+    BFR_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA = 7,
+    BFR_BLEND_FACTOR_DST_ALPHA = 8,
+    BFR_BLEND_FACTOR_ONE_MINUS_DST_ALPHA = 9,
+    BFR_BLEND_FACTOR_CONSTANT_COLOR = 10,
+    BFR_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR = 11,
+    BFR_BLEND_FACTOR_CONSTANT_ALPHA = 12,
+    BFR_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA = 13,
+    // The lesser of the source alpha and one minus the destination alpha.
+    BFR_BLEND_FACTOR_SRC_ALPHA_SATURATE = 14,
+    BFR_BLEND_FACTOR_FORCE32 = 0x7FFFFFFF
+} bfr_blend_factor;
+
+// How a blend combines the source and destination once each is multiplied by its factor.
+typedef enum bfr_blend_op {
+    BFR_BLEND_OP_ADD = 0,
+    // Source minus destination.
+    BFR_BLEND_OP_SUBTRACT = 1,
+    // Destination minus source.
+    BFR_BLEND_OP_REVERSE_SUBTRACT = 2,
+    // The lesser; the factors are ignored.
+    BFR_BLEND_OP_MIN = 3,
+    // The greater; the factors are ignored.
+    BFR_BLEND_OP_MAX = 4,
+    BFR_BLEND_OP_FORCE32 = 0x7FFFFFFF
+} bfr_blend_op;
+
 // Which window system a bfr_window comes from, for the platforms that have more than one.
 typedef enum bfr_window_system {
     // The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -497,6 +632,25 @@ typedef struct bfr_buffer {
 typedef struct bfr_texture {
     uint64_t bits;
 } bfr_texture;
+
+// A compute or graphics pipeline: shaders with the fixed state they run under. Every pipeline
+// shares one resource layout, which its shaders declare as follows. Four unbounded tables, each
+// indexed by the slot a resource is given, and one block of bfr_push_constants_size bytes of push
+// constants that every stage reads. On Vulkan the tables are the bindings of descriptor set 0, in
+// order: 0 sampled images, 1 storage images, 2 storage buffers, 3 samplers, each an update-after-
+// bind and partially-bound runtime array; the push constants are a push constant range over all
+// stages. On D3D12 the tables are unbounded descriptor ranges, each starting at register 0 of its
+// own space: SRV space 0 sampled textures, UAV space 1 storage textures, UAV space 2 storage
+// buffers, sampler space 3 samplers; the push constants are bfr_push_constants_size / 4 root
+// constants at b0 of space 0. On Metal the tables are one argument buffer at buffer(0), holding the
+// sampled textures, storage textures, storage buffers and samplers in that order, each a region of
+// as many 8-byte entries as the bfr_device_desc's max_bindless member for its kind, so a shader
+// declares them with the sizes the device was opened with; the push constants are at buffer(1).
+// Uniform buffers have no table: they are not in every backend's floor. A pipeline's shaders are
+// bytecode for the backend the device runs on. A generational handle; 0 is never valid.
+typedef struct bfr_pipeline {
+    uint64_t bits;
+} bfr_pipeline;
 
 // Receives BFR's messages and validation's. Without one, BFR prints nothing. Called on any thread,
 // including threads BFR or the driver owns, until the instance and every device made from it are
@@ -565,6 +719,19 @@ typedef struct bfr_device_desc {
     // Swapchains the device holds at once; past it, bfr_create_swapchain fails with
     // error_limit_reached. 0 is BFR_DEFAULT_MAX_SWAPCHAINS.
     uint32_t max_swapchains;
+    // Slots in the sampled texture table bfr_pipeline describes. Made with the device. Fails with
+    // error_limit_reached when the adapter holds fewer; bfr_caps_bindless.max_textures says how
+    // many. 0 is BFR_DEFAULT_MAX_BINDLESS_TEXTURES.
+    uint32_t max_bindless_textures;
+    // Slots in the storage texture table; fails as max_bindless_textures does, against
+    // max_storage_textures. 0 is BFR_DEFAULT_MAX_BINDLESS_STORAGE_TEXTURES.
+    uint32_t max_bindless_storage_textures;
+    // Slots in the storage buffer table; fails as max_bindless_textures does, against
+    // max_storage_buffers. 0 is BFR_DEFAULT_MAX_BINDLESS_STORAGE_BUFFERS.
+    uint32_t max_bindless_storage_buffers;
+    // Slots in the sampler table; fails as max_bindless_textures does, against max_samplers. 0 is
+    // BFR_DEFAULT_MAX_BINDLESS_SAMPLERS.
+    uint32_t max_bindless_samplers;
 } bfr_device_desc;
 
 // How to create a swapchain.
@@ -738,6 +905,110 @@ typedef struct bfr_texture_copy {
     // Texels.
     uint32_t depth;
 } bfr_texture_copy;
+
+// One shader stage: bytecode for the backend the device runs on, and the name of the function in it
+// to run.
+typedef struct bfr_shader_code {
+    // Read during the call only. An array of code_size elements.
+    const uint8_t* code;
+    // Bytes.
+    size_t code_size;
+    bfr_string entry_point;
+} bfr_shader_code;
+
+// How a graphics pipeline turns primitives into fragments.
+typedef struct bfr_raster_state {
+    bfr_cull_mode cull;
+    bfr_front_face front_face;
+    bfr_fill_mode fill;
+    // Clamps depth to the viewport's range instead of clipping to it.
+    bfr_bool depth_clamp;
+    // Added to each fragment's depth, in units of the depth format's smallest step.
+    float depth_bias;
+    // Added to each fragment's depth, times its depth slope.
+    float depth_bias_slope;
+    // The most the bias may add; 0 is no limit.
+    float depth_bias_clamp;
+} bfr_raster_state;
+
+// The stencil test for triangles facing one way.
+typedef struct bfr_stencil_face {
+    // When the stencil test fails.
+    bfr_stencil_op fail;
+    // When the stencil and depth tests pass.
+    bfr_stencil_op pass;
+    // When the stencil test passes and the depth test fails.
+    bfr_stencil_op depth_fail;
+    // Reference value against stored.
+    bfr_compare_op compare;
+    // The bits compared. The low 8 bits count. 0 is BFR_MASK_ALL.
+    uint32_t read_mask;
+    // The bits written. The low 8 bits count. 0 is BFR_MASK_ALL.
+    uint32_t write_mask;
+} bfr_stencil_face;
+
+// How a graphics pipeline tests depth and stencil. Off by default; the pipeline then needs no
+// depth-stencil target.
+typedef struct bfr_depth_stencil_state {
+    bfr_bool depth_test;
+    // Fragments that pass write their depth.
+    bfr_bool depth_write;
+    // New depth against stored.
+    bfr_compare_op depth_compare;
+    bfr_bool stencil_test;
+    bfr_stencil_face front;
+    bfr_stencil_face back;
+} bfr_depth_stencil_state;
+
+// How a graphics pipeline blends a fragment into one color target. Off by default: the fragment's
+// color replaces the target's.
+typedef struct bfr_blend_state {
+    bfr_bool enable;
+    bfr_blend_factor src_color;
+    bfr_blend_factor dst_color;
+    bfr_blend_op color_op;
+    bfr_blend_factor src_alpha;
+    bfr_blend_factor dst_alpha;
+    bfr_blend_op alpha_op;
+    // Which channels are written: bit 0 red, 1 green, 2 blue, 3 alpha. 0 is BFR_MASK_ALL.
+    uint32_t write_mask;
+} bfr_blend_state;
+
+// One color target a graphics pipeline renders to.
+typedef struct bfr_color_target {
+    bfr_format format;
+    bfr_blend_state blend;
+} bfr_color_target;
+
+// How to create a compute pipeline.
+typedef struct bfr_compute_pipeline_desc {
+    const bfr_chain* next;
+    bfr_shader_code compute;
+    // Threads in each workgroup, as the shader declares them; a dispatch counts workgroups.
+    uint32_t workgroup_size[3];
+} bfr_compute_pipeline_desc;
+
+// How to create a graphics pipeline. Vertices are pulled: the vertex shader reads them by index
+// from buffers; the pipeline takes no vertex layout.
+typedef struct bfr_graphics_pipeline_desc {
+    const bfr_chain* next;
+    bfr_shader_code vertex;
+    // A code_size of 0 is no fragment shader; the pipeline writes depth alone.
+    bfr_shader_code fragment;
+    bfr_topology_class topology;
+    bfr_raster_state raster;
+    bfr_depth_stencil_state depth_stencil;
+    // How many of color_targets are used, at most max_color_targets.
+    uint32_t color_target_count;
+    // The targets the pipeline renders to, in attachment order.
+    bfr_color_target color_targets[BFR_MAX_COLOR_TARGETS];
+    // undefined is no depth-stencil target.
+    bfr_format depth_stencil_format;
+    // Samples per pixel of every target; 1 is no multisampling.
+    uint32_t samples;
+    // The fragment's alpha sets how many samples it covers.
+    bfr_bool alpha_to_coverage;
+} bfr_graphics_pipeline_desc;
 
 // A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was submitted
 // has run. An all-zero token has already completed.
@@ -1398,6 +1669,33 @@ BFR_API bfr_result bfr_create_texture(
 // frame path: it records the point the texture waits for and frees what the GPU is done with. A
 // handle that is already destroyed does nothing.
 BFR_API void bfr_destroy_texture(bfr_device* device, bfr_texture texture);
+
+// Creates a compute pipeline, as desc says, before returning. Not for the frame path: it compiles,
+// and frees pipelines the GPU is done with. Fails with error_invalid_argument for a desc with no
+// code or a workgroup dimension of 0, error_limit_reached at the device's maximum of pipelines, and
+// error_device_failed when the backend refuses the code or the desc; the message carries what it
+// said.
+BFR_API bfr_result bfr_create_compute_pipeline(
+    bfr_device* device,
+    const bfr_compute_pipeline_desc* desc,
+    bfr_pipeline* pipeline);
+
+// Creates a graphics pipeline, as desc says, before returning. Not for the frame path, as
+// bfr_create_compute_pipeline is not. Fails with error_invalid_argument for a desc with no vertex
+// code, more than max_color_targets targets, a target of format undefined, a depth-stencil test
+// without a depth-stencil format, or samples of 0, error_unsupported when the desc uses raster or
+// blend state the adapter lacks, such as wireframe fill, error_limit_reached at the device's
+// maximum of pipelines, and error_device_failed when the backend refuses the code or the desc; the
+// message carries what it said.
+BFR_API bfr_result bfr_create_graphics_pipeline(
+    bfr_device* device,
+    const bfr_graphics_pipeline_desc* desc,
+    bfr_pipeline* pipeline);
+
+// Destroys a pipeline once the GPU has finished with it; the handle is invalid at once. Not for the
+// frame path: it records the point the pipeline waits for and frees what the GPU is done with. A
+// handle that is already destroyed does nothing.
+BFR_API void bfr_destroy_pipeline(bfr_device* device, bfr_pipeline pipeline);
 
 #ifdef __cplusplus
 }

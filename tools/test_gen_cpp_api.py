@@ -266,6 +266,42 @@ class PlacementTests(unittest.TestCase):
         self.assertIn("reinterpret_cast<const bfr_range*>(ranges.data())", rendered)
         self.assertIn("static_assert(offsetof(Range, kind) == offsetof(bfr_range, kind));", rendered)
 
+    def test_an_array_member_of_bytes_passes_to_c_as_it_is(self) -> None:
+        spec = with_more(MINIMAL)
+        spec["structs"]["code"] = {
+            "doc": "Bytes to send.",
+            "members": [
+                {"name": "bytes", "type": "u8", "array": "size", "pointer": "in"},
+                {"name": "size", "type": "size"},
+            ],
+        }
+        spec["functions"]["device_load"] = {
+            "doc": "Loads.",
+            "returns": "result",
+            "params": [{"name": "device", "type": "device"}, {"name": "code", "type": "code", "pointer": "in"}],
+        }
+        rendered = render(Api(spec))
+        self.assertIn("std::span<const std::uint8_t> bytes{};", rendered)
+        self.assertIn(".bytes = reinterpret_cast<const uint8_t*>(value.bytes.data())", rendered)
+        self.assertIn(".size = static_cast<size_t>(value.bytes.size())", rendered)
+
+    def test_a_fixed_array_of_structs_passed_in_converts_each_element(self) -> None:
+        spec = with_more(MINIMAL)
+        spec["constants"] = {"max_targets": {"value": 2, "doc": "The most targets."}}
+        spec["structs"]["target"] = {"doc": "A target.", "members": [{"name": "enable", "type": "bool"}]}
+        spec["structs"]["targets"] = {
+            "doc": "Targets to set.",
+            "members": [{"name": "targets", "type": "target", "fixed": "max_targets"}],
+        }
+        spec["functions"]["device_set"] = {
+            "doc": "Sets.",
+            "returns": "result",
+            "params": [{"name": "device", "type": "device"}, {"name": "targets", "type": "targets", "pointer": "in"}],
+        }
+        rendered = render(Api(spec))
+        self.assertIn("std::array<Target, BFR_MAX_TARGETS> targets{};", rendered)
+        self.assertIn(".targets = {toC(value.targets[0]), toC(value.targets[1])}", rendered)
+
     def test_an_array_param_that_would_need_a_copy_is_rejected(self) -> None:
         def change(spec: dict) -> None:
             spec["functions"]["device_send"] = {

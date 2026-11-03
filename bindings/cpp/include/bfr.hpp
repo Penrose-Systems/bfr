@@ -173,8 +173,11 @@ enum class MessageSeverity : std::int32_t {
 
 /// How a texel is stored. Channels are named in memory order, so rgba8 holds red in its first byte;
 /// a packed format names its channels from the low bits up. unorm and snorm read as 0 to 1 and -1
-/// to 1, srgb decodes to linear, float is floating point.
+/// to 1, srgb decodes to linear, float is floating point. undefined is no format, for where one is
+/// optional, such as a pipeline without a depth-stencil target; no texture or swapchain has it, and
+/// bfr_get_formats lists it nowhere.
 enum class Format : std::int32_t {
+    Undefined = BFR_FORMAT_UNDEFINED,
     R8Unorm = BFR_FORMAT_R8_UNORM,
     R8Snorm = BFR_FORMAT_R8_SNORM,
     R8Uint = BFR_FORMAT_R8_UINT,
@@ -309,6 +312,7 @@ enum class Format : std::int32_t {
 /// value's name in bfr.yaml; empty for a value Format doesn't have.
 [[nodiscard]] constexpr std::string_view name(Format value) {
     switch (value) {
+    case Format::Undefined: return "undefined";
     case Format::R8Unorm: return "r8_unorm";
     case Format::R8Snorm: return "r8_snorm";
     case Format::R8Uint: return "r8_uint";
@@ -706,6 +710,211 @@ enum class TextureAspect : std::int32_t {
     return {};
 }
 
+/// What a graphics pipeline's draws assemble vertices into.
+enum class TopologyClass : std::int32_t {
+    /// Three vertices a triangle.
+    Triangle = BFR_TOPOLOGY_CLASS_TRIANGLE,
+    /// Two vertices a line.
+    Line = BFR_TOPOLOGY_CLASS_LINE,
+    /// Each vertex a point.
+    Point = BFR_TOPOLOGY_CLASS_POINT,
+};
+
+/// value's name in bfr.yaml; empty for a value TopologyClass doesn't have.
+[[nodiscard]] constexpr std::string_view name(TopologyClass value) {
+    switch (value) {
+    case TopologyClass::Triangle: return "triangle";
+    case TopologyClass::Line: return "line";
+    case TopologyClass::Point: return "point";
+    }
+    return {};
+}
+
+/// Which triangles a graphics pipeline discards by the way they face.
+enum class CullMode : std::int32_t {
+    /// Neither.
+    None = BFR_CULL_MODE_NONE,
+    /// Those facing the viewer.
+    Front = BFR_CULL_MODE_FRONT,
+    /// Those facing away.
+    Back = BFR_CULL_MODE_BACK,
+};
+
+/// value's name in bfr.yaml; empty for a value CullMode doesn't have.
+[[nodiscard]] constexpr std::string_view name(CullMode value) {
+    switch (value) {
+    case CullMode::None: return "none";
+    case CullMode::Front: return "front";
+    case CullMode::Back: return "back";
+    }
+    return {};
+}
+
+/// Which winding of a triangle's vertices on screen faces the viewer.
+enum class FrontFace : std::int32_t {
+    CounterClockwise = BFR_FRONT_FACE_COUNTER_CLOCKWISE,
+    Clockwise = BFR_FRONT_FACE_CLOCKWISE,
+};
+
+/// value's name in bfr.yaml; empty for a value FrontFace doesn't have.
+[[nodiscard]] constexpr std::string_view name(FrontFace value) {
+    switch (value) {
+    case FrontFace::CounterClockwise: return "counter_clockwise";
+    case FrontFace::Clockwise: return "clockwise";
+    }
+    return {};
+}
+
+/// How a graphics pipeline fills triangles.
+enum class FillMode : std::int32_t {
+    /// Every pixel inside.
+    Solid = BFR_FILL_MODE_SOLID,
+    /// Their edges as lines.
+    Wireframe = BFR_FILL_MODE_WIREFRAME,
+};
+
+/// value's name in bfr.yaml; empty for a value FillMode doesn't have.
+[[nodiscard]] constexpr std::string_view name(FillMode value) {
+    switch (value) {
+    case FillMode::Solid: return "solid";
+    case FillMode::Wireframe: return "wireframe";
+    }
+    return {};
+}
+
+/// How a depth or stencil test compares the new value against the one stored; the test passes when
+/// the comparison holds.
+enum class CompareOp : std::int32_t {
+    /// Passes every time.
+    Always = BFR_COMPARE_OP_ALWAYS,
+    /// Fails every time.
+    Never = BFR_COMPARE_OP_NEVER,
+    Less = BFR_COMPARE_OP_LESS,
+    Equal = BFR_COMPARE_OP_EQUAL,
+    LessEqual = BFR_COMPARE_OP_LESS_EQUAL,
+    Greater = BFR_COMPARE_OP_GREATER,
+    NotEqual = BFR_COMPARE_OP_NOT_EQUAL,
+    GreaterEqual = BFR_COMPARE_OP_GREATER_EQUAL,
+};
+
+/// value's name in bfr.yaml; empty for a value CompareOp doesn't have.
+[[nodiscard]] constexpr std::string_view name(CompareOp value) {
+    switch (value) {
+    case CompareOp::Always: return "always";
+    case CompareOp::Never: return "never";
+    case CompareOp::Less: return "less";
+    case CompareOp::Equal: return "equal";
+    case CompareOp::LessEqual: return "less_equal";
+    case CompareOp::Greater: return "greater";
+    case CompareOp::NotEqual: return "not_equal";
+    case CompareOp::GreaterEqual: return "greater_equal";
+    }
+    return {};
+}
+
+/// What a stencil test does to the stored stencil value.
+enum class StencilOp : std::int32_t {
+    /// Leaves it.
+    Keep = BFR_STENCIL_OP_KEEP,
+    /// Sets it to 0.
+    Zero = BFR_STENCIL_OP_ZERO,
+    /// Sets it to the reference value.
+    Replace = BFR_STENCIL_OP_REPLACE,
+    /// Adds 1 and stops at the largest value.
+    IncrementClamp = BFR_STENCIL_OP_INCREMENT_CLAMP,
+    /// Subtracts 1 and stops at 0.
+    DecrementClamp = BFR_STENCIL_OP_DECREMENT_CLAMP,
+    /// Flips every bit.
+    Invert = BFR_STENCIL_OP_INVERT,
+    /// Adds 1 and wraps to 0.
+    IncrementWrap = BFR_STENCIL_OP_INCREMENT_WRAP,
+    /// Subtracts 1 and wraps to the largest value.
+    DecrementWrap = BFR_STENCIL_OP_DECREMENT_WRAP,
+};
+
+/// value's name in bfr.yaml; empty for a value StencilOp doesn't have.
+[[nodiscard]] constexpr std::string_view name(StencilOp value) {
+    switch (value) {
+    case StencilOp::Keep: return "keep";
+    case StencilOp::Zero: return "zero";
+    case StencilOp::Replace: return "replace";
+    case StencilOp::IncrementClamp: return "increment_clamp";
+    case StencilOp::DecrementClamp: return "decrement_clamp";
+    case StencilOp::Invert: return "invert";
+    case StencilOp::IncrementWrap: return "increment_wrap";
+    case StencilOp::DecrementWrap: return "decrement_wrap";
+    }
+    return {};
+}
+
+/// What a blend multiplies a color or alpha by. src is the fragment's, dst the target's, constant
+/// the blend constants set when recording.
+enum class BlendFactor : std::int32_t {
+    Zero = BFR_BLEND_FACTOR_ZERO,
+    One = BFR_BLEND_FACTOR_ONE,
+    SrcColor = BFR_BLEND_FACTOR_SRC_COLOR,
+    OneMinusSrcColor = BFR_BLEND_FACTOR_ONE_MINUS_SRC_COLOR,
+    DstColor = BFR_BLEND_FACTOR_DST_COLOR,
+    OneMinusDstColor = BFR_BLEND_FACTOR_ONE_MINUS_DST_COLOR,
+    SrcAlpha = BFR_BLEND_FACTOR_SRC_ALPHA,
+    OneMinusSrcAlpha = BFR_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+    DstAlpha = BFR_BLEND_FACTOR_DST_ALPHA,
+    OneMinusDstAlpha = BFR_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
+    ConstantColor = BFR_BLEND_FACTOR_CONSTANT_COLOR,
+    OneMinusConstantColor = BFR_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR,
+    ConstantAlpha = BFR_BLEND_FACTOR_CONSTANT_ALPHA,
+    OneMinusConstantAlpha = BFR_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA,
+    /// The lesser of the source alpha and one minus the destination alpha.
+    SrcAlphaSaturate = BFR_BLEND_FACTOR_SRC_ALPHA_SATURATE,
+};
+
+/// value's name in bfr.yaml; empty for a value BlendFactor doesn't have.
+[[nodiscard]] constexpr std::string_view name(BlendFactor value) {
+    switch (value) {
+    case BlendFactor::Zero: return "zero";
+    case BlendFactor::One: return "one";
+    case BlendFactor::SrcColor: return "src_color";
+    case BlendFactor::OneMinusSrcColor: return "one_minus_src_color";
+    case BlendFactor::DstColor: return "dst_color";
+    case BlendFactor::OneMinusDstColor: return "one_minus_dst_color";
+    case BlendFactor::SrcAlpha: return "src_alpha";
+    case BlendFactor::OneMinusSrcAlpha: return "one_minus_src_alpha";
+    case BlendFactor::DstAlpha: return "dst_alpha";
+    case BlendFactor::OneMinusDstAlpha: return "one_minus_dst_alpha";
+    case BlendFactor::ConstantColor: return "constant_color";
+    case BlendFactor::OneMinusConstantColor: return "one_minus_constant_color";
+    case BlendFactor::ConstantAlpha: return "constant_alpha";
+    case BlendFactor::OneMinusConstantAlpha: return "one_minus_constant_alpha";
+    case BlendFactor::SrcAlphaSaturate: return "src_alpha_saturate";
+    }
+    return {};
+}
+
+/// How a blend combines the source and destination once each is multiplied by its factor.
+enum class BlendOp : std::int32_t {
+    Add = BFR_BLEND_OP_ADD,
+    /// Source minus destination.
+    Subtract = BFR_BLEND_OP_SUBTRACT,
+    /// Destination minus source.
+    ReverseSubtract = BFR_BLEND_OP_REVERSE_SUBTRACT,
+    /// The lesser; the factors are ignored.
+    Min = BFR_BLEND_OP_MIN,
+    /// The greater; the factors are ignored.
+    Max = BFR_BLEND_OP_MAX,
+};
+
+/// value's name in bfr.yaml; empty for a value BlendOp doesn't have.
+[[nodiscard]] constexpr std::string_view name(BlendOp value) {
+    switch (value) {
+    case BlendOp::Add: return "add";
+    case BlendOp::Subtract: return "subtract";
+    case BlendOp::ReverseSubtract: return "reverse_subtract";
+    case BlendOp::Min: return "min";
+    case BlendOp::Max: return "max";
+    }
+    return {};
+}
+
 /// Which window system a bfr_window comes from, for the platforms that have more than one.
 enum class WindowSystem : std::int32_t {
     /// The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -756,6 +965,8 @@ class CommandList;
 class Buffer;
 
 class Texture;
+
+class Pipeline;
 
 /// How to create an instance.
 struct InstanceDesc {
@@ -808,6 +1019,18 @@ struct DeviceDesc {
     /// Swapchains the device holds at once; past it, bfr_create_swapchain fails with
     /// error_limit_reached.
     std::uint32_t maxSwapchains = BFR_DEFAULT_MAX_SWAPCHAINS;
+    /// Slots in the sampled texture table bfr_pipeline describes. Made with the device. Fails with
+    /// error_limit_reached when the adapter holds fewer; bfr_caps_bindless.max_textures says how
+    /// many.
+    std::uint32_t maxBindlessTextures = BFR_DEFAULT_MAX_BINDLESS_TEXTURES;
+    /// Slots in the storage texture table; fails as max_bindless_textures does, against
+    /// max_storage_textures.
+    std::uint32_t maxBindlessStorageTextures = BFR_DEFAULT_MAX_BINDLESS_STORAGE_TEXTURES;
+    /// Slots in the storage buffer table; fails as max_bindless_textures does, against
+    /// max_storage_buffers.
+    std::uint32_t maxBindlessStorageBuffers = BFR_DEFAULT_MAX_BINDLESS_STORAGE_BUFFERS;
+    /// Slots in the sampler table; fails as max_bindless_textures does, against max_samplers.
+    std::uint32_t maxBindlessSamplers = BFR_DEFAULT_MAX_BINDLESS_SAMPLERS;
 };
 
 /// How to create a swapchain.
@@ -1010,6 +1233,106 @@ static_assert(offsetof(TextureCopy, dstZ) == offsetof(bfr_texture_copy, dst_z));
 static_assert(offsetof(TextureCopy, width) == offsetof(bfr_texture_copy, width));
 static_assert(offsetof(TextureCopy, height) == offsetof(bfr_texture_copy, height));
 static_assert(offsetof(TextureCopy, depth) == offsetof(bfr_texture_copy, depth));
+
+/// One shader stage: bytecode for the backend the device runs on, and the name of the function in
+/// it to run.
+struct ShaderCode {
+    /// Read during the call only.
+    std::span<const std::uint8_t> code{};
+    std::string_view entryPoint{};
+};
+
+/// How a graphics pipeline turns primitives into fragments.
+struct RasterState {
+    CullMode cull{};
+    FrontFace frontFace{};
+    FillMode fill{};
+    /// Clamps depth to the viewport's range instead of clipping to it.
+    bool depthClamp{};
+    /// Added to each fragment's depth, in units of the depth format's smallest step.
+    float depthBias{};
+    /// Added to each fragment's depth, times its depth slope.
+    float depthBiasSlope{};
+    /// The most the bias may add; 0 is no limit.
+    float depthBiasClamp{};
+};
+
+/// The stencil test for triangles facing one way.
+struct StencilFace {
+    /// When the stencil test fails.
+    StencilOp fail{};
+    /// When the stencil and depth tests pass.
+    StencilOp pass{};
+    /// When the stencil test passes and the depth test fails.
+    StencilOp depthFail{};
+    /// Reference value against stored.
+    CompareOp compare{};
+    /// The bits compared. The low 8 bits count.
+    std::uint32_t readMask = BFR_MASK_ALL;
+    /// The bits written. The low 8 bits count.
+    std::uint32_t writeMask = BFR_MASK_ALL;
+};
+
+/// How a graphics pipeline tests depth and stencil. Off by default; the pipeline then needs no
+/// depth-stencil target.
+struct DepthStencilState {
+    bool depthTest{};
+    /// Fragments that pass write their depth.
+    bool depthWrite{};
+    /// New depth against stored.
+    CompareOp depthCompare{};
+    bool stencilTest{};
+    StencilFace front{};
+    StencilFace back{};
+};
+
+/// How a graphics pipeline blends a fragment into one color target. Off by default: the fragment's
+/// color replaces the target's.
+struct BlendState {
+    bool enable{};
+    BlendFactor srcColor{};
+    BlendFactor dstColor{};
+    BlendOp colorOp{};
+    BlendFactor srcAlpha{};
+    BlendFactor dstAlpha{};
+    BlendOp alphaOp{};
+    /// Which channels are written: bit 0 red, 1 green, 2 blue, 3 alpha.
+    std::uint32_t writeMask = BFR_MASK_ALL;
+};
+
+/// One color target a graphics pipeline renders to.
+struct ColorTarget {
+    Format format{};
+    BlendState blend{};
+};
+
+/// How to create a compute pipeline.
+struct ComputePipelineDesc {
+    ShaderCode compute{};
+    /// Threads in each workgroup, as the shader declares them; a dispatch counts workgroups.
+    std::array<std::uint32_t, 3> workgroupSize{};
+};
+
+/// How to create a graphics pipeline. Vertices are pulled: the vertex shader reads them by index
+/// from buffers; the pipeline takes no vertex layout.
+struct GraphicsPipelineDesc {
+    ShaderCode vertex{};
+    /// A code_size of 0 is no fragment shader; the pipeline writes depth alone.
+    ShaderCode fragment{};
+    TopologyClass topology{};
+    RasterState raster{};
+    DepthStencilState depthStencil{};
+    /// How many of color_targets are used, at most max_color_targets.
+    std::uint32_t colorTargetCount{};
+    /// The targets the pipeline renders to, in attachment order.
+    std::array<ColorTarget, BFR_MAX_COLOR_TARGETS> colorTargets{};
+    /// undefined is no depth-stencil target.
+    Format depthStencilFormat{};
+    /// Samples per pixel of every target; 1 is no multisampling.
+    std::uint32_t samples{};
+    /// The fragment's alpha sets how many samples it covers.
+    bool alphaToCoverage{};
+};
 
 /// A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was
 /// submitted has run. An all-zero token has already completed.
@@ -1455,6 +1778,10 @@ inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
         .max_command_lists = value.maxCommandLists,
         .max_command_pools = value.maxCommandPools,
         .max_swapchains = value.maxSwapchains,
+        .max_bindless_textures = value.maxBindlessTextures,
+        .max_bindless_storage_textures = value.maxBindlessStorageTextures,
+        .max_bindless_storage_buffers = value.maxBindlessStorageBuffers,
+        .max_bindless_samplers = value.maxBindlessSamplers,
     };
 }
 
@@ -1565,6 +1892,89 @@ inline bfr_texture_copy toC(const TextureCopy& value) {
         .width = value.width,
         .height = value.height,
         .depth = value.depth,
+    };
+}
+
+inline bfr_shader_code toC(const ShaderCode& value) {
+    return {
+        .code = reinterpret_cast<const uint8_t*>(value.code.data()),
+        .code_size = static_cast<size_t>(value.code.size()),
+        .entry_point = detail::toC(value.entryPoint),
+    };
+}
+
+inline bfr_raster_state toC(const RasterState& value) {
+    return {
+        .cull = static_cast<bfr_cull_mode>(value.cull),
+        .front_face = static_cast<bfr_front_face>(value.frontFace),
+        .fill = static_cast<bfr_fill_mode>(value.fill),
+        .depth_clamp = value.depthClamp ? BFR_TRUE : BFR_FALSE,
+        .depth_bias = value.depthBias,
+        .depth_bias_slope = value.depthBiasSlope,
+        .depth_bias_clamp = value.depthBiasClamp,
+    };
+}
+
+inline bfr_stencil_face toC(const StencilFace& value) {
+    return {
+        .fail = static_cast<bfr_stencil_op>(value.fail),
+        .pass = static_cast<bfr_stencil_op>(value.pass),
+        .depth_fail = static_cast<bfr_stencil_op>(value.depthFail),
+        .compare = static_cast<bfr_compare_op>(value.compare),
+        .read_mask = value.readMask,
+        .write_mask = value.writeMask,
+    };
+}
+
+inline bfr_depth_stencil_state toC(const DepthStencilState& value) {
+    return {
+        .depth_test = value.depthTest ? BFR_TRUE : BFR_FALSE,
+        .depth_write = value.depthWrite ? BFR_TRUE : BFR_FALSE,
+        .depth_compare = static_cast<bfr_compare_op>(value.depthCompare),
+        .stencil_test = value.stencilTest ? BFR_TRUE : BFR_FALSE,
+        .front = toC(value.front),
+        .back = toC(value.back),
+    };
+}
+
+inline bfr_blend_state toC(const BlendState& value) {
+    return {
+        .enable = value.enable ? BFR_TRUE : BFR_FALSE,
+        .src_color = static_cast<bfr_blend_factor>(value.srcColor),
+        .dst_color = static_cast<bfr_blend_factor>(value.dstColor),
+        .color_op = static_cast<bfr_blend_op>(value.colorOp),
+        .src_alpha = static_cast<bfr_blend_factor>(value.srcAlpha),
+        .dst_alpha = static_cast<bfr_blend_factor>(value.dstAlpha),
+        .alpha_op = static_cast<bfr_blend_op>(value.alphaOp),
+        .write_mask = value.writeMask,
+    };
+}
+
+inline bfr_color_target toC(const ColorTarget& value) {
+    return {.format = static_cast<bfr_format>(value.format), .blend = toC(value.blend)};
+}
+
+inline bfr_compute_pipeline_desc toC(const ComputePipelineDesc& value, const bfr_chain* next) {
+    return {
+        .next = next,
+        .compute = toC(value.compute),
+        .workgroup_size = {value.workgroupSize[0], value.workgroupSize[1], value.workgroupSize[2]},
+    };
+}
+
+inline bfr_graphics_pipeline_desc toC(const GraphicsPipelineDesc& value, const bfr_chain* next) {
+    return {
+        .next = next,
+        .vertex = toC(value.vertex),
+        .fragment = toC(value.fragment),
+        .topology = static_cast<bfr_topology_class>(value.topology),
+        .raster = toC(value.raster),
+        .depth_stencil = toC(value.depthStencil),
+        .color_target_count = value.colorTargetCount,
+        .color_targets = {toC(value.colorTargets[0]), toC(value.colorTargets[1]), toC(value.colorTargets[2]), toC(value.colorTargets[3]), toC(value.colorTargets[4]), toC(value.colorTargets[5]), toC(value.colorTargets[6]), toC(value.colorTargets[7])},
+        .depth_stencil_format = static_cast<bfr_format>(value.depthStencilFormat),
+        .samples = value.samples,
+        .alpha_to_coverage = value.alphaToCoverage ? BFR_TRUE : BFR_FALSE,
     };
 }
 
@@ -1949,9 +2359,9 @@ public:
     /// Owns nothing, as a moved-from Device does.
     Device() = default;
     /// Destroys a device once the GPU has finished with it, with every handle it still owns. Null
-    /// does nothing. A Device with Buffer or CommandList or CommandPool or Swapchain or Texture
-    /// objects left lives on until the last of them is destroyed, so they may be destroyed in any
-    /// order.
+    /// does nothing. A Device with Buffer or CommandList or CommandPool or Pipeline or Swapchain or
+    /// Texture objects left lives on until the last of them is destroyed, so they may be destroyed
+    /// in any order.
     ~Device() = default;
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
@@ -2045,6 +2455,22 @@ public:
     /// error_limit_reached at the device's maximum of textures, and error_device_failed when the
     /// backend refuses the desc or gives no texture.
     [[nodiscard]] Expected<Texture> createTexture(const TextureDesc& desc) const;
+
+    /// Creates a compute pipeline, as desc says, before returning. Not for the frame path: it
+    /// compiles, and frees pipelines the GPU is done with. Fails with error_invalid_argument for a
+    /// desc with no code or a workgroup dimension of 0, error_limit_reached at the device's maximum
+    /// of pipelines, and error_device_failed when the backend refuses the code or the desc; the
+    /// message carries what it said.
+    [[nodiscard]] Expected<Pipeline> createComputePipeline(const ComputePipelineDesc& desc) const;
+
+    /// Creates a graphics pipeline, as desc says, before returning. Not for the frame path, as
+    /// bfr_create_compute_pipeline is not. Fails with error_invalid_argument for a desc with no
+    /// vertex code, more than max_color_targets targets, a target of format undefined, a depth-
+    /// stencil test without a depth-stencil format, or samples of 0, error_unsupported when the
+    /// desc uses raster or blend state the adapter lacks, such as wireframe fill,
+    /// error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
+    /// backend refuses the code or the desc; the message carries what it said.
+    [[nodiscard]] Expected<Pipeline> createGraphicsPipeline(const GraphicsPipelineDesc& desc) const;
 
 private:
     Device(bfr_device* device, detail::KeepAlive keepAlive) : device_(device), keepAlive_(detail::share(device, &bfr_destroy_device, std::move(keepAlive))) {}
@@ -2253,6 +2679,56 @@ private:
 
     bfr_device* device_ = nullptr;
     bfr_texture texture_{};
+    // Keeps the Device that made this alive until this is destroyed.
+    detail::KeepAlive keepAlive_;
+};
+
+/// A compute or graphics pipeline: shaders with the fixed state they run under. Every pipeline
+/// shares one resource layout, which its shaders declare as follows. Four unbounded tables, each
+/// indexed by the slot a resource is given, and one block of bfr_push_constants_size bytes of push
+/// constants that every stage reads. On Vulkan the tables are the bindings of descriptor set 0, in
+/// order: 0 sampled images, 1 storage images, 2 storage buffers, 3 samplers, each an update-after-
+/// bind and partially-bound runtime array; the push constants are a push constant range over all
+/// stages. On D3D12 the tables are unbounded descriptor ranges, each starting at register 0 of its
+/// own space: SRV space 0 sampled textures, UAV space 1 storage textures, UAV space 2 storage
+/// buffers, sampler space 3 samplers; the push constants are bfr_push_constants_size / 4 root
+/// constants at b0 of space 0. On Metal the tables are one argument buffer at buffer(0), holding
+/// the sampled textures, storage textures, storage buffers and samplers in that order, each a
+/// region of as many 8-byte entries as the bfr_device_desc's max_bindless member for its kind, so a
+/// shader declares them with the sizes the device was opened with; the push constants are at
+/// buffer(1). Uniform buffers have no table: they are not in every backend's floor. A pipeline's
+/// shaders are bytecode for the backend the device runs on.
+class Pipeline {
+public:
+    /// Owns nothing, as a moved-from Pipeline does.
+    Pipeline() = default;
+    /// Destroys a pipeline once the GPU has finished with it; the handle is invalid at once. Not
+    /// for the frame path: it records the point the pipeline waits for and frees what the GPU is
+    /// done with. A handle that is already destroyed does nothing.
+    ~Pipeline() { bfr_destroy_pipeline(device_, pipeline_); }
+    Pipeline(const Pipeline&) = delete;
+    Pipeline& operator=(const Pipeline&) = delete;
+    Pipeline(Pipeline&& other) noexcept : device_(std::exchange(other.device_, nullptr)), pipeline_(std::exchange(other.pipeline_, {})), keepAlive_(std::move(other.keepAlive_)) {}
+    Pipeline& operator=(Pipeline&& other) noexcept {
+        if (this != &other) {
+            bfr_destroy_pipeline(device_, pipeline_);
+            device_ = std::exchange(other.device_, nullptr);
+            pipeline_ = std::exchange(other.pipeline_, {});
+            keepAlive_ = std::move(other.keepAlive_);
+        }
+        return *this;
+    }
+
+    /// The C value, for calls bfr.hpp does not wrap; this still owns it.
+    [[nodiscard]] bfr_pipeline get() const { return pipeline_; }
+    [[nodiscard]] explicit operator bool() const { return pipeline_.bits != 0; }
+
+private:
+    Pipeline(bfr_device* device, bfr_pipeline pipeline, detail::KeepAlive keepAlive) : device_(device), pipeline_(pipeline), keepAlive_(std::move(keepAlive)) {}
+    friend class Device;
+
+    bfr_device* device_ = nullptr;
+    bfr_pipeline pipeline_{};
     // Keeps the Device that made this alive until this is destroyed.
     detail::KeepAlive keepAlive_;
 };
@@ -2516,6 +2992,24 @@ inline Expected<Texture> Device::createTexture(const TextureDesc& desc) const {
         return std::unexpected(detail::failure(result));
     }
     return Texture{device_, texture, keepAlive_};
+}
+
+inline Expected<Pipeline> Device::createComputePipeline(const ComputePipelineDesc& desc) const {
+    const bfr_compute_pipeline_desc cDesc = detail::toC(desc, nullptr);
+    bfr_pipeline pipeline{};
+    if (const bfr_result result = bfr_create_compute_pipeline(device_, &cDesc, &pipeline); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return Pipeline{device_, pipeline, keepAlive_};
+}
+
+inline Expected<Pipeline> Device::createGraphicsPipeline(const GraphicsPipelineDesc& desc) const {
+    const bfr_graphics_pipeline_desc cDesc = detail::toC(desc, nullptr);
+    bfr_pipeline pipeline{};
+    if (const bfr_result result = bfr_create_graphics_pipeline(device_, &cDesc, &pipeline); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return Pipeline{device_, pipeline, keepAlive_};
 }
 
 inline Expected<SwapchainImages> Swapchain::resize(std::uint32_t width, std::uint32_t height) {
