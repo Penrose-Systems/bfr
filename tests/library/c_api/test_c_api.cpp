@@ -14,8 +14,10 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <format>
 #include <memory>
 #include <mutex>
@@ -531,6 +533,157 @@ TEST_CASE("C API creates and destroys pipelines, and refuses a state value it do
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, and refuses a value it does not have",
+          "[c_api][gpu]") {
+    const bfr_backend backend = GENERATE(eachBackend());
+    // The shaders checked in are SPIR-V, which only Vulkan takes.
+    if (backend != BFR_BACKEND_VULKAN) {
+        SKIP("no bytecode is checked in for this backend");
+    }
+    constexpr std::uint32_t kWorkgroup = 64;
+    constexpr std::uint64_t kBytes = std::uint64_t{kWorkgroup} * sizeof(std::uint32_t);
+    std::vector<std::string> messages;
+    const Instance instance{backend, messages};
+    const HeadlessDevice device{instance.instance};
+    const bfr_compute_pipeline_desc computeDesc{.next = nullptr,
+                                                .compute = {.code = bfr::test::spirv::kBindlessComp.data(),
+                                                            .code_size = bfr::test::spirv::kBindlessComp.size(),
+                                                            .entry_point = {.data = "main", .length = 4}},
+                                                .workgroup_size = {kWorkgroup, 1, 1}};
+    bfr_pipeline pipeline{};
+    REQUIRE(bfr_create_compute_pipeline(device.device, &computeDesc, &pipeline) == BFR_RESULT_SUCCESS);
+    bfr_buffer_desc bufferDesc{.next = nullptr,
+                               .size = kBytes,
+                               .memory = BFR_BUFFER_MEMORY_DEVICE,
+                               .usage = {.copy_src = BFR_TRUE,
+                                         .copy_dst = BFR_FALSE,
+                                         .uniform = BFR_FALSE,
+                                         .storage = BFR_TRUE,
+                                         .index = BFR_FALSE,
+                                         .indirect = BFR_FALSE}};
+    bfr_buffer target{};
+    REQUIRE(bfr_create_buffer(device.device, &bufferDesc, &target) == BFR_RESULT_SUCCESS);
+    bufferDesc.memory = BFR_BUFFER_MEMORY_READBACK;
+    bufferDesc.usage = {.copy_src = BFR_FALSE,
+                        .copy_dst = BFR_TRUE,
+                        .uniform = BFR_FALSE,
+                        .storage = BFR_FALSE,
+                        .index = BFR_FALSE,
+                        .indirect = BFR_FALSE};
+    bfr_buffer readback{};
+    REQUIRE(bfr_create_buffer(device.device, &bufferDesc, &readback) == BFR_RESULT_SUCCESS);
+    std::uint32_t slot = 0;
+    REQUIRE(bfr_get_buffer_slot(device.device, target, &slot) == BFR_RESULT_SUCCESS);
+    CHECK(bfr_get_buffer_slot(device.device, readback, &slot) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    REQUIRE(bfr_get_buffer_slot(device.device, target, &slot) == BFR_RESULT_SUCCESS);
+
+    const bfr_command_pool_desc poolDesc{.next = nullptr, .queue = 0, .list_count = 1, .push_constant_updates = 0};
+    bfr_command_pool pool{};
+    REQUIRE(bfr_create_command_pool(device.device, &poolDesc, &pool) == BFR_RESULT_SUCCESS);
+    bfr_command_list list{};
+    REQUIRE(bfr_begin_commands(device.device, pool, &list) == BFR_RESULT_SUCCESS);
+    CHECK(bfr_bind_pipeline(device.device, list, pipeline) == BFR_RESULT_SUCCESS);
+    // The shader reads the slot from the first push constant.
+    const auto slotBytes = std::bit_cast<std::array<std::uint8_t, sizeof(slot)>>(slot);
+    CHECK(bfr_push_constants(device.device, list, slotBytes.data(), sizeof(slot)) == BFR_RESULT_SUCCESS);
+    CHECK(bfr_push_constants(device.device, list, nullptr, sizeof(slot)) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_bind_index_buffer(device.device, list, target, 0, static_cast<bfr_index_type>(kNotAValue)) ==
+          BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("index type"));
+    CHECK(bfr_dispatch(device.device, list, 1, 1, 1) == BFR_RESULT_SUCCESS);
+    CHECK(bfr_barrier(device.device, list) == BFR_RESULT_SUCCESS);
+    const bfr_buffer_copy whole{.src_offset = 0, .dst_offset = 0, .size = kBytes};
+    CHECK(bfr_copy_buffer(device.device, list, target, readback, &whole, 1) == BFR_RESULT_SUCCESS);
+    const bfr_submit_desc submit{.next = nullptr,
+                                 .queue = 0,
+                                 .command_lists = &list,
+                                 .command_list_count = 1,
+                                 .waits = nullptr,
+                                 .wait_count = 0};
+    bfr_token token{};
+    REQUIRE(bfr_submit(device.device, &submit, &token) == BFR_RESULT_SUCCESS);
+    REQUIRE(bfr_wait(device.device, &token) == BFR_RESULT_SUCCESS);
+
+    void* data = nullptr;
+    REQUIRE(bfr_map_buffer(device.device, readback, &data) == BFR_RESULT_SUCCESS);
+    std::array<std::uint32_t, kWorkgroup> values{};
+    std::memcpy(values.data(), data, kBytes);
+    for (std::uint32_t i = 0; i < kWorkgroup; ++i) {
+        CHECK(values.at(i) == i);
+    }
+    bfr_destroy_command_pool(device.device, pool);
+    bfr_destroy_buffer(device.device, target);
+    bfr_destroy_buffer(device.device, readback);
+    bfr_destroy_pipeline(device.device, pipeline);
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C API renders to a texture with the viewport and scissor set, and refuses a load op it does not have",
+          "[c_api][gpu]") {
+    constexpr std::uint32_t kSide = 8;
+    const bfr_backend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    const Instance instance{backend, messages};
+    const HeadlessDevice device{instance.instance};
+    const bfr_texture_desc textureDesc{.next = nullptr,
+                                       .dimension = BFR_TEXTURE_DIMENSION_D2,
+                                       .format = BFR_FORMAT_RGBA8_UNORM,
+                                       .width = kSide,
+                                       .height = kSide,
+                                       .depth = 1,
+                                       .layers = 1,
+                                       .mip_levels = 1,
+                                       .samples = 1,
+                                       .usage = {.copy_src = BFR_FALSE,
+                                                 .copy_dst = BFR_FALSE,
+                                                 .sampled = BFR_FALSE,
+                                                 .storage = BFR_FALSE,
+                                                 .color_attachment = BFR_TRUE,
+                                                 .depth_stencil = BFR_FALSE}};
+    bfr_texture target{};
+    REQUIRE(bfr_create_texture(device.device, &textureDesc, &target) == BFR_RESULT_SUCCESS);
+    const bfr_command_pool_desc poolDesc{.next = nullptr, .queue = 0, .list_count = 1, .push_constant_updates = 0};
+    bfr_command_pool pool{};
+    REQUIRE(bfr_create_command_pool(device.device, &poolDesc, &pool) == BFR_RESULT_SUCCESS);
+    bfr_command_list list{};
+    REQUIRE(bfr_begin_commands(device.device, pool, &list) == BFR_RESULT_SUCCESS);
+    REQUIRE(bfr_texture_barrier(device.device, list, target, BFR_TEXTURE_LAYOUT_UNDEFINED,
+                                BFR_TEXTURE_LAYOUT_COLOR_TARGET) == BFR_RESULT_SUCCESS);
+
+    bfr_rendering_desc rendering{.next = nullptr,
+                                 .color_attachment_count = 1,
+                                 .color_attachments = {},
+                                 .depth_stencil = {}};
+    rendering.color_attachments[0] = {.texture = target,
+                                      .load_op = static_cast<bfr_load_op>(kNotAValue),
+                                      .store_op = BFR_STORE_OP_STORE,
+                                      .clear_color = {0, 0, 0, 1}};
+    const bfr_swapchain none{};
+    CHECK(bfr_begin_rendering(device.device, list, none, &rendering) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("load op"));
+    rendering.color_attachments[0].load_op = BFR_LOAD_OP_CLEAR;
+    REQUIRE(bfr_begin_rendering(device.device, list, none, &rendering) == BFR_RESULT_SUCCESS);
+    const bfr_viewport viewport{.x = 0, .y = 0, .width = kSide, .height = kSide, .min_depth = 0, .max_depth = 1};
+    CHECK(bfr_set_viewport(device.device, list, &viewport) == BFR_RESULT_SUCCESS);
+    const bfr_rect scissor{.x = 0, .y = 0, .width = kSide, .height = kSide};
+    CHECK(bfr_set_scissor(device.device, list, &scissor) == BFR_RESULT_SUCCESS);
+    // No pipeline is bound, so the draw is refused.
+    CHECK(bfr_draw(device.device, list, 1, 1, 0, 0) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_end_rendering(device.device, list) == BFR_RESULT_SUCCESS);
+    const bfr_submit_desc submit{.next = nullptr,
+                                 .queue = 0,
+                                 .command_lists = &list,
+                                 .command_list_count = 1,
+                                 .waits = nullptr,
+                                 .wait_count = 0};
+    bfr_token token{};
+    REQUIRE(bfr_submit(device.device, &submit, &token) == BFR_RESULT_SUCCESS);
+    REQUIRE(bfr_wait(device.device, &token) == BFR_RESULT_SUCCESS);
+    bfr_destroy_command_pool(device.device, pool);
+    bfr_destroy_texture(device.device, target);
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("C API keeps an instance alive until its last device is destroyed", "[c_api][gpu]") {
     const bfr_backend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
@@ -903,10 +1056,14 @@ TEST_CASE("C API allocates and frees nothing on the heap frame after frame", "[c
     constexpr std::uint32_t kLists = 20;
     constexpr std::uint32_t kRendering = 2;
     constexpr int kFrames = 8;
+    // The swapchain's image, cleared.
     constexpr bfr_rendering_desc kClear{.next = nullptr,
-                                        .load_op = BFR_LOAD_OP_CLEAR,
-                                        .store_op = BFR_STORE_OP_STORE,
-                                        .clear_color = {0, 0, 0, 1}};
+                                        .color_attachment_count = 1,
+                                        .color_attachments = {{.texture = {},
+                                                               .load_op = BFR_LOAD_OP_CLEAR,
+                                                               .store_op = BFR_STORE_OP_STORE,
+                                                               .clear_color = {0, 0, 0, 1}}},
+                                        .depth_stencil = {}};
     std::vector<std::string> messages;
     {
         const Instance instance{backend, messages, BFR_FALSE};
@@ -922,7 +1079,10 @@ TEST_CASE("C API allocates and frees nothing on the heap frame after frame", "[c
         REQUIRE(bfr_create_swapchain(device.device, &swapchainDesc, &swapchain) == BFR_RESULT_SUCCESS);
         bfr_swapchain_images images{};
         REQUIRE(bfr_resize_swapchain(device.device, swapchain, kWidth, kHeight, &images) == BFR_RESULT_SUCCESS);
-        const bfr_command_pool_desc poolDesc{.next = nullptr, .queue = 0, .list_count = kLists};
+        const bfr_command_pool_desc poolDesc{.next = nullptr,
+                                             .queue = 0,
+                                             .list_count = kLists,
+                                             .push_constant_updates = 0};
         bfr_command_pool pool{};
         REQUIRE(bfr_create_command_pool(device.device, &poolDesc, &pool) == BFR_RESULT_SUCCESS);
 

@@ -2,6 +2,8 @@
 
 #include "bfr/bfr.h"
 #include "bfr/core/handle.h"
+#include "bfr/rhi/pipeline.h"
+#include "bfr/rhi/texture.h"
 
 #include <array>
 #include <cstdint>
@@ -51,12 +53,15 @@ struct DeviceDesc {
     std::uint32_t maxBindlessSamplers = BFR_DEFAULT_MAX_BINDLESS_SAMPLERS;
 };
 
-/// How to create a command pool: the queue its lists record for, and how many
-/// lists it holds, all made with it. beginCommands hands them out in turn
-/// until resetCommandPool gives them back.
+/// How to create a command pool: the queue its lists record for, how many
+/// lists it holds, all made with it, and the most pushConstants calls its
+/// lists record between resets, which a backend that copies push constants
+/// into memory makes room for with the pool. beginCommands hands the lists out
+/// in turn until resetCommandPool gives them back.
 struct CommandPoolDesc {
     std::uint32_t queue = 0;
     std::uint32_t listCount = 0;
+    std::uint32_t pushConstantUpdates = BFR_DEFAULT_PUSH_CONSTANT_UPDATES;
 };
 
 /// A point on a queue's timeline: submit returns one, and the GPU passes it
@@ -94,12 +99,63 @@ enum class StoreOp : std::uint8_t {
     DontCare,
 };
 
-/// How to begin rendering to a swapchain's acquired image.
-struct RenderingDesc {
+/// One color target of a rendering: a texture with colorAttachment usage, in
+/// layout ColorTarget, or, as attachment 0 when beginRendering is given a
+/// swapchain, that swapchain's acquired image, with texture null.
+struct ColorAttachment {
+    TextureHandle texture;
     LoadOp loadOp = LoadOp::Load;
     StoreOp storeOp = StoreOp::Store;
     /// Red, green, blue and alpha, 0 to 1, when loadOp is Clear.
     std::array<float, 4> clearColor{};
+};
+
+/// The depth-stencil target of a rendering: a texture with depthStencil
+/// usage, in layout DepthStencilTarget, or none when texture is null. Its
+/// depth and stencil are loaded and stored alike.
+struct DepthStencilAttachment {
+    TextureHandle texture;
+    LoadOp loadOp = LoadOp::Load;
+    StoreOp storeOp = StoreOp::Store;
+    /// 0 to 1, when loadOp is Clear.
+    float clearDepth = 0;
+    std::uint32_t clearStencil = 0;
+};
+
+/// How to begin rendering: the attachments drawn to, all of one size and
+/// sample count, which the graphics pipelines drawn with were made for. The
+/// first colorAttachmentCount color attachments are drawn to, in the order
+/// the pipeline's targets are.
+struct RenderingDesc {
+    std::uint32_t colorAttachmentCount = 0;
+    std::array<ColorAttachment, kMaxColorTargets> colorAttachments{};
+    DepthStencilAttachment depthStencil;
+};
+
+/// Where on the attachments a rendering lands, in pixels from the top left,
+/// and the depth range it maps to. Clip space is the same on every backend: x
+/// right, y up, z 0 at the near plane and 1 at the far.
+struct Viewport {
+    float x = 0;
+    float y = 0;
+    float width = 0;
+    float height = 0;
+    float minDepth = 0;
+    float maxDepth = 0;
+};
+
+/// A rectangle of pixels from the top left of the attachments.
+struct Rect {
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
+/// How wide each index of an index buffer is. The values are the C API's.
+enum class IndexType : std::uint8_t {
+    Uint32 = 0,
+    Uint16 = 1,
 };
 
 } // namespace bfr::rhi

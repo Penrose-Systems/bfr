@@ -85,15 +85,77 @@ public:
     /// refuses.
     [[nodiscard]] virtual core::Result<CommandListHandle> beginCommands(CommandPoolHandle commandPool) = 0;
 
-    /// Begins rendering to the image acquire took from swapchain, as desc
-    /// says; ends with endRendering. Fails with RhiInvalidCall when no image is
-    /// acquired, when it was already submitted, or when rendering is open.
+    /// Begins rendering to desc's attachments, with the image acquire took
+    /// from swapchain as color attachment 0 when swapchain is not null, and
+    /// sets the viewport and scissor to the whole of them; ends with
+    /// endRendering. Only draw and drawIndexed, and the state they take, are
+    /// recorded in between. Fails with RhiInvalidCall when no attachment is
+    /// given, when a color attachment but the swapchain's names no texture,
+    /// when a swapchain is given with no color attachment or with attachment 0
+    /// naming a texture, when no image is acquired, when it was already
+    /// submitted, or when rendering is open, and RhiInvalidHandle when a
+    /// texture is gone.
     [[nodiscard]] virtual core::Result<void> beginRendering(CommandListHandle commandList, SwapchainHandle swapchain,
                                                             const RenderingDesc& desc) = 0;
 
-    /// Ends the rendering beginRendering began; the image is then ready to
-    /// present. Fails with RhiInvalidCall when none is open.
+    /// Ends the rendering beginRendering began; a swapchain image is then
+    /// ready to present, and a texture is in the layout it was given in.
+    /// Fails with RhiInvalidCall when none is open.
     [[nodiscard]] virtual core::Result<void> endRendering(CommandListHandle commandList) = 0;
+
+    /// Sets the viewport the draws after it use, inside rendering. Fails with
+    /// RhiInvalidCall outside rendering and RhiInvalidHandle when the list is
+    /// gone.
+    [[nodiscard]] virtual core::Result<void> setViewport(CommandListHandle commandList, const Viewport& viewport) = 0;
+
+    /// Sets the scissor the draws after it keep to, inside rendering. Fails
+    /// as setViewport does.
+    [[nodiscard]] virtual core::Result<void> setScissor(CommandListHandle commandList, const Rect& scissor) = 0;
+
+    /// Makes pipeline the one draws or dispatches after it run, a graphics
+    /// pipeline for draws and a compute one for dispatches, until another of
+    /// its kind is bound. Draws assemble the list topology of the pipeline's
+    /// class. Fails with RhiInvalidHandle when the list or pipeline is gone.
+    [[nodiscard]] virtual core::Result<void> bindPipeline(CommandListHandle commandList, PipelineHandle pipeline) = 0;
+
+    /// Sets the first data.size() bytes of the push constants every shader
+    /// reads, for the draws and dispatches after it. Fails with RhiInvalidCall
+    /// when the size is not a multiple of 4 or is more than kPushConstantsSize,
+    /// RhiLimitReached past the pool's pushConstantUpdates, and
+    /// RhiInvalidHandle when the list is gone.
+    [[nodiscard]] virtual core::Result<void> pushConstants(CommandListHandle commandList,
+                                                           std::span<const std::byte> data) = 0;
+
+    /// Makes buffer, which has index usage, the one drawIndexed reads indices
+    /// of type from, starting offset bytes in. Fails with RhiInvalidHandle when
+    /// the list or buffer is gone.
+    [[nodiscard]] virtual core::Result<void> bindIndexBuffer(CommandListHandle commandList, BufferHandle buffer,
+                                                             std::uint64_t offset, IndexType type) = 0;
+
+    /// Records a draw of vertexCount vertices, instanceCount times, with the
+    /// bound graphics pipeline, inside rendering. The vertex shader sees
+    /// vertex indices from firstVertex; whether it sees instance indices from
+    /// firstInstance or from 0 is the backend's, as api/bfr.yaml says under
+    /// bfr_draw. Fails with RhiInvalidCall outside rendering or with no
+    /// graphics pipeline bound, and RhiInvalidHandle when the list is gone.
+    [[nodiscard]] virtual core::Result<void> draw(CommandListHandle commandList, std::uint32_t vertexCount,
+                                                  std::uint32_t instanceCount, std::uint32_t firstVertex,
+                                                  std::uint32_t firstInstance) = 0;
+
+    /// Records a draw of indexCount indices read from the bound index buffer
+    /// from firstIndex, each plus vertexOffset giving the vertex index the
+    /// vertex shader sees, instanceCount times, inside rendering. Fails as
+    /// draw does, and with RhiInvalidCall when no index buffer is bound.
+    [[nodiscard]] virtual core::Result<void> drawIndexed(CommandListHandle commandList, std::uint32_t indexCount,
+                                                         std::uint32_t instanceCount, std::uint32_t firstIndex,
+                                                         std::int32_t vertexOffset, std::uint32_t firstInstance) = 0;
+
+    /// Records a dispatch of x by y by z workgroups of the bound compute
+    /// pipeline, outside rendering; commands after a barrier see what it
+    /// wrote. Fails with RhiInvalidCall inside rendering or with no compute
+    /// pipeline bound, and RhiInvalidHandle when the list is gone.
+    [[nodiscard]] virtual core::Result<void> dispatch(CommandListHandle commandList, std::uint32_t x, std::uint32_t y,
+                                                      std::uint32_t z) = 0;
 
     /// Records copies of regions from src to dst, outside rendering. src has
     /// copySrc usage and is device or upload memory; dst has copyDst usage and
@@ -156,12 +218,19 @@ public:
     /// gone.
     [[nodiscard]] virtual core::Result<void> destroyCommandList(CommandListHandle commandList) = 0;
 
-    /// A buffer as desc says. Cold: it frees buffers the GPU is done with,
-    /// so it is not for the frame path. Fails with RhiInvalidCall for a desc
-    /// of no bytes or no usage, RhiOutOfMemory when the API says the memory
-    /// ran out, RhiLimitReached at the device's maximum, and RhiDeviceFailed
-    /// when the API refuses the desc or gives no buffer.
+    /// A buffer as desc says, with a slot in the storage buffer table when
+    /// its usage is storage. Cold: it frees buffers the GPU is done with, so
+    /// it is not for the frame path. Fails with RhiInvalidCall for a desc of
+    /// no bytes or no usage, RhiOutOfMemory when the API says the memory ran
+    /// out, RhiLimitReached at the device's maximum of buffers or of storage
+    /// buffer slots, and RhiDeviceFailed when the API refuses the desc or
+    /// gives no buffer.
     [[nodiscard]] virtual core::Result<BufferHandle> createBuffer(const BufferDesc& desc) = 0;
+
+    /// The buffer's index in the storage buffer table, held from creation to
+    /// destruction. Fails with RhiInvalidCall when the buffer has no storage
+    /// usage and RhiInvalidHandle when it is destroyed.
+    [[nodiscard]] virtual core::Result<std::uint32_t> bufferSlot(BufferHandle buffer) = 0;
 
     /// Where the CPU reaches an upload or readback buffer, borrowed until the
     /// buffer is destroyed. CPU writes reach the GPU, and GPU writes reach the
@@ -177,11 +246,17 @@ public:
     /// RhiInvalidHandle when the buffer is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroyBuffer(BufferHandle buffer) = 0;
 
-    /// A texture as desc says, in device memory. Cold: it frees textures the
-    /// GPU is done with. Fails with RhiOutOfMemory when the API says memory
-    /// ran out, RhiLimitReached at the device's maximum, and RhiDeviceFailed
-    /// when the API refuses the desc or gives no texture.
+    /// A texture as desc says, in device memory, with a slot in each bindless
+    /// table its usage names. Cold: it frees textures the GPU is done with.
+    /// Fails with RhiOutOfMemory when the API says memory ran out,
+    /// RhiLimitReached at the device's maximum of textures or of a table's
+    /// slots, and RhiDeviceFailed when the API refuses the desc or gives no
+    /// texture.
     [[nodiscard]] virtual core::Result<TextureHandle> createTexture(const TextureDesc& desc) = 0;
+
+    /// Where the texture is in the bindless tables. Fails with
+    /// RhiInvalidHandle when it is destroyed.
+    [[nodiscard]] virtual core::Result<TextureSlots> textureSlots(TextureHandle texture) = 0;
 
     /// Destroys the texture once the GPU has passed every submit made before
     /// the call; the handle is invalid at once. Cold, as destroyBuffer is. A

@@ -1,15 +1,22 @@
 // What the windowing samples share once a window exists: pick an adapter that
-// presents to it, report what it can present, make a swapchain, and clear and
-// present it every frame, in a color that cycles, until the window closes.
+// presents to it, report what it can present, make a swapchain, and draw a
+// triangle into it every frame, in a color that cycles, until the window
+// closes. The triangle's vertices are pulled from a storage buffer through its
+// bindless slot, and its color comes through the push constants; both are what
+// api/bfr.yaml states under bfr_pipeline.
 #pragma once
 
 #include "bfr.hpp"
+#include "shaders/spirv.h"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <format>
 #include <functional>
 #include <iostream>
@@ -98,8 +105,39 @@ inline void printSurface(const bfr::SwapchainCaps& caps, const std::vector<bfr::
     row("Swap formats", names);
 }
 
-// The clear color at time t, in seconds: a hue that goes round once every
-// few seconds.
+// The shaders for backend, when the sample has bytecode for it: SPIR-V, which
+// Vulkan takes. Nothing for a backend whose bytecode is not compiled in yet;
+// the sample then clears without drawing.
+struct Shaders {
+    bfr::ShaderCode vertex;
+    bfr::ShaderCode fragment;
+};
+
+inline std::optional<Shaders> shadersFor(bfr::Backend backend) {
+    if (backend != bfr::Backend::Vulkan) {
+        return std::nullopt;
+    }
+    return Shaders{.vertex = {.code = spirv::kTriangleVert, .entryPoint = "main"},
+                   .fragment = {.code = spirv::kTriangleFrag, .entryPoint = "main"}};
+}
+
+// The push constants the shaders declare: the vertex buffer's slot, then the
+// color.
+struct Push {
+    std::uint32_t positions = 0;
+    std::uint32_t pad0 = 0;
+    std::uint32_t pad1 = 0;
+    std::uint32_t pad2 = 0;
+    std::array<float, 4> color{};
+};
+
+// One triangle in clip space, y up, as x, y, z, w.
+constexpr std::size_t kVertices = 3;
+constexpr std::array<float, kVertices * 4> kTriangle{-0.5F, -0.5F, 0, 1, 0.5F, -0.5F, 0, 1, 0, 0.5F, 0, 1};
+constexpr std::array<float, 4> kBackground{0.1F, 0.1F, 0.12F, 1};
+
+// The triangle's color at time t, in seconds: a hue that goes round once
+// every few seconds.
 inline std::array<float, 4> colorAt(double t) {
     constexpr double kPeriodSeconds = 6.0;
     constexpr double kTau = 6.283185307179586;
@@ -112,7 +150,7 @@ inline std::array<float, 4> colorAt(double t) {
 
 } // namespace detail
 
-// Runs on backend until poll returns false, clearing and presenting a frame
+// Runs on backend until poll returns false, drawing and presenting a frame
 // each time it returns true; poll handles the window's events. size is the
 // window's size in pixels.
 inline int show(bfr::Backend backend, const bfr::Window& window, const std::function<bool()>& poll,
@@ -150,6 +188,26 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     }
     detail::row("Adapter", {adapters->at(adapter).name});
 
+    // The triangle's vertices, in a buffer the shader reaches by its slot.
+    auto vertices = device.createBuffer(
+        {.size = sizeof(detail::kTriangle), .memory = bfr::BufferMemory::Upload, .usage = {.storage = true}});
+    if (!vertices) {
+        return detail::fail("can't create the vertex buffer", vertices.error());
+    }
+    const auto mapped = vertices->map();
+    if (!mapped) {
+        return detail::fail("can't map the vertex buffer", mapped.error());
+    }
+    std::memcpy(*mapped, detail::kTriangle.data(), sizeof(detail::kTriangle));
+    const auto vertexSlot = vertices->bufferSlot();
+    if (!vertexSlot) {
+        return detail::fail("can't get the vertex buffer's slot", vertexSlot.error());
+    }
+    const std::optional<detail::Shaders> shaders = detail::shadersFor(backend);
+    if (!shaders) {
+        detail::row("Shaders", {std::format("none compiled in for {}; clearing only", bfr::name(backend))});
+    }
+
     const auto caps = instance->swapchainCaps(adapter, {.window = window});
     if (!caps) {
         return detail::fail("can't ask what the window presents", caps.error());
@@ -184,6 +242,9 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
         }
         slots.push_back({.pool = std::move(*pool), .done = {}});
     }
+    // The pipeline renders to the swapchain's format, known once it is built.
+    bfr::Pipeline pipeline;
+    bfr::Format pipelineFormat = bfr::Format::Undefined;
     std::size_t frame = 0;
     const auto started = std::chrono::steady_clock::now();
     Size last;
@@ -212,6 +273,19 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
                 std::this_thread::sleep_for(kIdle);
                 continue;
             }
+            if (shaders && images->format != pipelineFormat) {
+                bfr::GraphicsPipelineDesc desc{.vertex = shaders->vertex,
+                                               .fragment = shaders->fragment,
+                                               .colorTargetCount = 1,
+                                               .samples = 1};
+                desc.colorTargets[0].format = images->format;
+                auto made = device.createGraphicsPipeline(desc);
+                if (!made) {
+                    return detail::fail("can't create the pipeline", made.error());
+                }
+                pipeline = std::move(*made);
+                pipelineFormat = images->format;
+            }
         }
         // The window changed under the swapchain: rebuild it next time round.
         Slot& slot = slots[frame % slots.size()];
@@ -234,11 +308,25 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
             return detail::fail("can't begin commands", commands.error());
         }
         const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - started;
-        if (const auto begun = device.beginRendering(*commands, *swapchain,
-                                                     {.loadOp = bfr::LoadOp::Clear,
-                                                      .clearColor = detail::colorAt(elapsed.count())});
-            !begun) {
+        // The swapchain's image is color attachment 0, cleared, then drawn to.
+        const bfr::RenderingDesc clear{.colorAttachmentCount = 1,
+                                       .colorAttachments = {
+                                           {{.loadOp = bfr::LoadOp::Clear, .clearColor = detail::kBackground}}}};
+        if (const auto begun = device.beginRendering(*commands, *swapchain, clear); !begun) {
             return detail::fail("can't begin rendering", begun.error());
+        }
+        if (pipeline) {
+            if (const auto bound = device.bindPipeline(*commands, pipeline); !bound) {
+                return detail::fail("can't bind the pipeline", bound.error());
+            }
+            const detail::Push push{.positions = *vertexSlot, .color = detail::colorAt(elapsed.count())};
+            const auto bytes = std::bit_cast<std::array<std::uint8_t, sizeof(push)>>(push);
+            if (const auto pushed = device.pushConstants(*commands, bytes); !pushed) {
+                return detail::fail("can't set the push constants", pushed.error());
+            }
+            if (const auto drawn = device.draw(*commands, detail::kVertices, 1, 0, 0); !drawn) {
+                return detail::fail("can't draw", drawn.error());
+            }
         }
         if (const auto ended = device.endRendering(*commands); !ended) {
             return detail::fail("can't end rendering", ended.error());

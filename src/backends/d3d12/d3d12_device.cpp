@@ -5,6 +5,7 @@
 #include "bfr/core/window.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
+#include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/swapchain.h"
 #include "bfr/rhi/texture.h"
 #include "core/fixed_vector.h"
@@ -13,6 +14,8 @@
 #include "d3d12/d3d12_pipeline.h"
 #include "d3d12/d3d12_result.h"
 #include "d3d12/d3d12_swapchain.h"
+#include "rhi/command_check.h"
+#include "rhi/format_blocks.h"
 
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -96,6 +99,7 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       submissions_(1 + desc.compute + desc.copy),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
 core::Result<void> D3D12Device::open(const DeviceDesc& desc) {
@@ -399,7 +403,13 @@ core::Result<CommandPoolHandle> D3D12Device::createCommandPool(const CommandPool
         }
     }
     const CommandPoolHandle commandPool = commandPools_.emplace(
-        D3D12CommandPool{.queue = desc.queue, .first = *first, .next = *first, .recording = 0, .lastSubmit = 0});
+        D3D12CommandPool{.queue = desc.queue,
+                         .pushConstantUpdates = desc.pushConstantUpdates,
+                         .pushed = 0,
+                         .first = *first,
+                         .next = *first,
+                         .recording = 0,
+                         .lastSubmit = 0});
     if (commandPool.isNull()) {
         release();
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
@@ -430,6 +440,7 @@ core::Result<void> D3D12Device::resetCommandPool(CommandPoolHandle commandPool) 
         }
     }
     (*pool)->next = (*pool)->first;
+    (*pool)->pushed = 0;
     return {};
 }
 
@@ -478,13 +489,34 @@ core::Result<CommandListHandle> D3D12Device::beginCommands(CommandPoolHandle com
     if (const HRESULT result = made.list->Reset(made.allocator.Get(), nullptr); FAILED(result)) {
         return std::unexpected(deviceFailed("ID3D12GraphicsCommandList::Reset", result).error());
     }
+    // The one layout, bound once per list where the queue takes it: the heaps
+    // first, as SM 6.6 asks, then the root signature and its tables for each
+    // kind of pipeline the queue runs.
+    const D3D12_COMMAND_LIST_TYPE type = queues_[(*pool)->queue]->listType;
+    if (type != D3D12_COMMAND_LIST_TYPE_COPY) {
+        const std::array<ID3D12DescriptorHeap*, 2> heaps{layout_.resources.Get(), layout_.samplers.Get()};
+        made.list->SetDescriptorHeaps(static_cast<UINT>(heaps.size()), heaps.data());
+        const D3D12_GPU_DESCRIPTOR_HANDLE resources = layout_.resources->GetGPUDescriptorHandleForHeapStart();
+        const D3D12_GPU_DESCRIPTOR_HANDLE samplers = layout_.samplers->GetGPUDescriptorHandleForHeapStart();
+        made.list->SetComputeRootSignature(layout_.rootSignature.Get());
+        made.list->SetComputeRootDescriptorTable(kResourceTableParameter, resources);
+        made.list->SetComputeRootDescriptorTable(kSamplerTableParameter, samplers);
+        if (type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
+            made.list->SetGraphicsRootSignature(layout_.rootSignature.Get());
+            made.list->SetGraphicsRootDescriptorTable(kResourceTableParameter, resources);
+            made.list->SetGraphicsRootDescriptorTable(kSamplerTableParameter, samplers);
+        }
+    }
     // A new handle for each recording, so last frame's handle never names
     // this one. The list pool was made at its maximum, so this never grows.
     const CommandListHandle commandList = commandLists_.emplace(D3D12CommandList{.list = made.list.Get(),
                                                                                  .pool = commandPool,
                                                                                  .slot = slot,
-                                                                                 .rendering = {},
-                                                                                 .storeOp = StoreOp::Store,
+                                                                                 .state = {},
+                                                                                 .presenting = {},
+                                                                                 .presentStoreOp = StoreOp::Store,
+                                                                                 .discards = {},
+                                                                                 .discardCount = 0,
                                                                                  .rendered = core::SlotChains::kEnd});
     if (commandList.isNull()) {
         discard(made.list.Get());
@@ -503,53 +535,129 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    auto chain = swapchainFor(swapchain);
-    if (!chain) {
-        return std::unexpected(std::move(chain.error()));
-    }
-    if ((*list)->rendering.has_value()) {
+    if ((*list)->state.rendering) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is already open");
+    }
+    if (auto checked = checkRenderingDesc(!swapchain.isNull(), desc); !checked) {
+        return checked;
     }
     if (const D3D12CommandPool* pool = commandPools_.find((*list)->pool);
         pool != nullptr && queues_[pool->queue]->type != QueueType::Graphics) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "the list records for queue {}, which does not render",
                              pool->queue);
     }
-    if ((*chain)->submitted()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "the acquired image was already submitted; present it first");
+    // Every handle is looked up before anything is recorded, so a bad one
+    // leaves the list as it was.
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMaxColorTargets> colors{};
+    std::array<ID3D12Resource*, kMaxColorTargets + 1> discards{};
+    std::uint32_t discardCount = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    D3D12Swapchain* chain = nullptr;
+    for (std::uint32_t i = 0; i < desc.colorAttachmentCount; ++i) {
+        const ColorAttachment& attachment = desc.colorAttachments.at(i);
+        ID3D12Resource* resource = nullptr;
+        if (i == 0 && !swapchain.isNull()) {
+            auto found = swapchainFor(swapchain);
+            if (!found) {
+                return std::unexpected(std::move(found.error()));
+            }
+            chain = *found;
+            if (chain->submitted()) {
+                return core::failure(core::ErrorCode::RhiInvalidCall,
+                                     "the acquired image was already submitted; present it first");
+            }
+            resource = chain->image();
+            if (resource == nullptr) {
+                return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
+            }
+            colors.at(i) = chain->view();
+            const D3D12_RESOURCE_DESC image = resource->GetDesc();
+            width = static_cast<std::uint32_t>(image.Width);
+            height = image.Height;
+        }
+        else {
+            auto texture = textureFor(attachment.texture);
+            if (!texture) {
+                return std::unexpected(std::move(texture.error()));
+            }
+            resource = (*texture)->resource.Get();
+            colors.at(i) = (*texture)->target;
+            width = (*texture)->desc.width;
+            height = (*texture)->desc.height;
+        }
+        if (attachment.storeOp == StoreOp::DontCare) {
+            discards.at(discardCount++) = resource;
+        }
     }
-    ID3D12Resource* image = (*chain)->image();
-    if (image == nullptr) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
+    const D3D12Texture* depth = nullptr;
+    if (!desc.depthStencil.texture.isNull()) {
+        auto texture = textureFor(desc.depthStencil.texture);
+        if (!texture) {
+            return std::unexpected(std::move(texture.error()));
+        }
+        depth = *texture;
+        width = depth->desc.width;
+        height = depth->desc.height;
+        if (desc.depthStencil.storeOp == StoreOp::DontCare) {
+            discards.at(discardCount++) = depth->resource.Get();
+        }
+    }
+    if (chain != nullptr) {
+        // Rendered to earlier in this list, the swapchain is already in its chain.
+        bool renderedBefore = false;
+        for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
+            renderedBefore = renderedBefore || renders_[slot] == swapchain;
+        }
+        if (!renderedBefore) {
+            const auto slot = renderSlots_.push((*list)->rendered);
+            if (!slot) {
+                return core::failure(core::ErrorCode::RhiLimitReached,
+                                     "the device's recording lists render to at most {} swapchains at once",
+                                     desc_.maxCommandLists);
+            }
+            renders_[*slot] = swapchain;
+        }
     }
 
-    // Rendered to earlier in this list, the swapchain is already in its chain.
-    bool renderedBefore = false;
-    for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
-        renderedBefore = renderedBefore || renders_[slot] == swapchain;
-    }
-    if (!renderedBefore) {
-        const auto slot = renderSlots_.push((*list)->rendered);
-        if (!slot) {
-            return core::failure(core::ErrorCode::RhiLimitReached,
-                                 "the device's recording lists render to at most {} swapchains at once",
-                                 desc_.maxCommandLists);
-        }
-        renders_[*slot] = swapchain;
-    }
     ID3D12GraphicsCommandList7* recording = (*list)->list;
-    const D3D12_RESOURCE_BARRIER toRender = transition(image, D3D12_RESOURCE_STATE_PRESENT,
-                                                       D3D12_RESOURCE_STATE_RENDER_TARGET);
-    recording->ResourceBarrier(1, &toRender);
-    const D3D12_CPU_DESCRIPTOR_HANDLE view = (*chain)->view();
-    recording->OMSetRenderTargets(1, &view, FALSE, nullptr);
-    if (desc.loadOp == LoadOp::Clear) {
-        recording->ClearRenderTargetView(view, desc.clearColor.data(), 0, nullptr);
+    if (chain != nullptr) {
+        const D3D12_RESOURCE_BARRIER toRender = transition(chain->image(), D3D12_RESOURCE_STATE_PRESENT,
+                                                           D3D12_RESOURCE_STATE_RENDER_TARGET);
+        recording->ResourceBarrier(1, &toRender);
     }
-    (*list)->rendering = swapchain;
-    (*list)->storeOp = desc.storeOp;
-    return {};
+    recording->OMSetRenderTargets(desc.colorAttachmentCount, colors.data(), FALSE,
+                                  depth != nullptr ? &depth->target : nullptr);
+    for (std::uint32_t i = 0; i < desc.colorAttachmentCount; ++i) {
+        if (desc.colorAttachments.at(i).loadOp == LoadOp::Clear) {
+            recording->ClearRenderTargetView(colors.at(i), desc.colorAttachments.at(i).clearColor.data(), 0, nullptr);
+        }
+    }
+    if (depth != nullptr && desc.depthStencil.loadOp == LoadOp::Clear) {
+        const FormatBlock& block = blockOf(depth->desc.format);
+        const D3D12_CLEAR_FLAGS flags = block.depthBytes != 0 && block.stencilBytes != 0
+                                            ? D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL
+                                        : block.depthBytes != 0 ? D3D12_CLEAR_FLAG_DEPTH
+                                                                : D3D12_CLEAR_FLAG_STENCIL;
+        recording->ClearDepthStencilView(depth->target, flags, desc.depthStencil.clearDepth,
+                                         static_cast<UINT8>(desc.depthStencil.clearStencil), 0, nullptr);
+    }
+    (*list)->state.rendering = true;
+    (*list)->presenting = chain != nullptr ? std::optional{swapchain} : std::nullopt;
+    (*list)->presentStoreOp = chain != nullptr ? desc.colorAttachments.at(0).storeOp : StoreOp::Store;
+    (*list)->discards = discards;
+    (*list)->discardCount = discardCount;
+    // The whole area, until the caller sets its own.
+    if (auto set = setViewport(commandList, {.x = 0,
+                                             .y = 0,
+                                             .width = static_cast<float>(width),
+                                             .height = static_cast<float>(height),
+                                             .minDepth = 0,
+                                             .maxDepth = 1});
+        !set) {
+        return set;
+    }
+    return setScissor(commandList, {.x = 0, .y = 0, .width = width, .height = height});
 }
 
 core::Result<void> D3D12Device::endRendering(CommandListHandle commandList) {
@@ -557,23 +665,27 @@ core::Result<void> D3D12Device::endRendering(CommandListHandle commandList) {
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    const std::optional<SwapchainHandle> open = (*list)->rendering;
-    if (!open.has_value()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "no rendering is open");
+    if (auto checked = checkRendering((*list)->state); !checked) {
+        return checked;
     }
-    auto chain = swapchainFor(*open);
-    if (!chain) {
-        return std::unexpected(std::move(chain.error()));
-    }
-    ID3D12Resource* image = (*chain)->image();
     ID3D12GraphicsCommandList7* recording = (*list)->list;
-    if ((*list)->storeOp == StoreOp::DontCare) {
-        recording->DiscardResource(image, nullptr);
+    // What the caller does not keep is discarded, the swapchain's image among
+    // it before it moves to present.
+    for (std::uint32_t i = 0; i < (*list)->discardCount; ++i) {
+        recording->DiscardResource((*list)->discards.at(i), nullptr);
     }
-    const D3D12_RESOURCE_BARRIER toPresent = transition(image, D3D12_RESOURCE_STATE_RENDER_TARGET,
-                                                        D3D12_RESOURCE_STATE_PRESENT);
-    recording->ResourceBarrier(1, &toPresent);
-    (*list)->rendering.reset();
+    if (const std::optional<SwapchainHandle> open = (*list)->presenting; open.has_value()) {
+        auto chain = swapchainFor(*open);
+        if (!chain) {
+            return std::unexpected(std::move(chain.error()));
+        }
+        const D3D12_RESOURCE_BARRIER toPresent = transition((*chain)->image(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                                            D3D12_RESOURCE_STATE_PRESENT);
+        recording->ResourceBarrier(1, &toPresent);
+    }
+    (*list)->state.rendering = false;
+    (*list)->presenting.reset();
+    (*list)->discardCount = 0;
     return {};
 }
 
@@ -603,7 +715,22 @@ D3D12_BARRIER_ACCESS writesOf(D3D12_COMMAND_LIST_TYPE type) {
 // layout every queue type takes them in, so a texture moves between queues
 // without a change of layout.
 D3D12_BARRIER_LAYOUT layoutFor(TextureLayout layout) {
-    return layout == TextureLayout::Undefined ? D3D12_BARRIER_LAYOUT_UNDEFINED : D3D12_BARRIER_LAYOUT_COMMON;
+    switch (layout) {
+        case TextureLayout::Sampled:
+            return D3D12_BARRIER_LAYOUT_SHADER_RESOURCE;
+        case TextureLayout::Storage:
+            return D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS;
+        case TextureLayout::ColorTarget:
+            return D3D12_BARRIER_LAYOUT_RENDER_TARGET;
+        case TextureLayout::DepthStencilTarget:
+            return D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE;
+        case TextureLayout::Undefined:
+            return D3D12_BARRIER_LAYOUT_UNDEFINED;
+        case TextureLayout::CopySrc:
+        case TextureLayout::CopyDst:
+        default:
+            return D3D12_BARRIER_LAYOUT_COMMON;
+    }
 }
 
 D3D12_BARRIER_ACCESS accessFor(TextureLayout layout) {
@@ -612,6 +739,14 @@ D3D12_BARRIER_ACCESS accessFor(TextureLayout layout) {
             return D3D12_BARRIER_ACCESS_COPY_SOURCE;
         case TextureLayout::CopyDst:
             return D3D12_BARRIER_ACCESS_COPY_DEST;
+        case TextureLayout::Sampled:
+            return D3D12_BARRIER_ACCESS_SHADER_RESOURCE;
+        case TextureLayout::Storage:
+            return D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
+        case TextureLayout::ColorTarget:
+            return D3D12_BARRIER_ACCESS_RENDER_TARGET;
+        case TextureLayout::DepthStencilTarget:
+            return D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE;
         case TextureLayout::Undefined:
         default:
             return D3D12_BARRIER_ACCESS_NO_ACCESS;
@@ -664,7 +799,10 @@ core::Result<void> D3D12Device::textureBarrier(CommandListHandle commandList, Te
     // UNDEFINED discards, which a placed render target or depth texture needs
     // before its first use.
     constexpr UINT kAllSubresources = 0xffffffff;
-    const D3D12_TEXTURE_BARRIER moved{.SyncBefore = D3D12_BARRIER_SYNC_ALL,
+    // From an undefined layout nothing was accessed, which D3D12 pairs with
+    // no sync before.
+    const D3D12_TEXTURE_BARRIER moved{.SyncBefore = before == TextureLayout::Undefined ? D3D12_BARRIER_SYNC_NONE
+                                                                                       : D3D12_BARRIER_SYNC_ALL,
                                       .SyncAfter = D3D12_BARRIER_SYNC_ALL,
                                       .AccessBefore = accessFor(before),
                                       .AccessAfter = accessFor(after),
@@ -711,7 +849,7 @@ core::Result<Token> D3D12Device::submit(const SubmitDesc& desc) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "the list is named twice in the submit");
         }
         (*list)->queued = serial;
-        if ((*list)->rendering.has_value()) {
+        if ((*list)->state.rendering) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is still open; end it first");
         }
         if (const D3D12CommandPool* pool = commandPools_.find((*list)->pool);

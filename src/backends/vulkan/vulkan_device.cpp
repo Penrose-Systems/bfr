@@ -5,9 +5,11 @@
 #include "bfr/core/window.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
+#include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/swapchain.h"
 #include "core/fixed_vector.h"
 #include "core/slot_chains.h"
+#include "rhi/command_check.h"
 #include "vulkan/queue_families.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_buffer.h"
@@ -22,6 +24,7 @@
 #include <vulkan/vulkan_core.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -155,6 +158,7 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       submissions_(1 + desc.compute + desc.copy),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
     table_.vkGetDeviceQueue(device_, presentFamily_, 0, &presentQueue_);
@@ -429,8 +433,15 @@ core::Result<CommandPoolHandle> VulkanDevice::createCommandPool(const CommandPoo
             return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkAllocateCommandBuffers", .result = result});
         }
     }
-    const CommandPoolHandle commandPool = commandPools_.emplace(VulkanCommandPool{
-        .pool = pool, .queue = desc.queue, .first = *first, .next = *first, .recording = 0, .lastSubmit = 0});
+    const CommandPoolHandle commandPool = commandPools_.emplace(
+        VulkanCommandPool{.pool = pool,
+                          .queue = desc.queue,
+                          .pushConstantUpdates = desc.pushConstantUpdates,
+                          .pushed = 0,
+                          .first = *first,
+                          .next = *first,
+                          .recording = 0,
+                          .lastSubmit = 0});
     if (commandPool.isNull()) {
         release(pool);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
@@ -461,6 +472,7 @@ core::Result<void> VulkanDevice::resetCommandPool(CommandPoolHandle commandPool)
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkResetCommandPool", .result = result});
     }
     (*pool)->next = (*pool)->first;
+    (*pool)->pushed = 0;
     return {};
 }
 
@@ -511,10 +523,26 @@ core::Result<CommandListHandle> VulkanDevice::beginCommands(CommandPoolHandle co
     if (const VkResult result = table_.vkBeginCommandBuffer(buffer, &begin); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkBeginCommandBuffer", .result = result});
     }
+    // The one descriptor set, bound once per list where the queue can take
+    // it, so every pipeline bound later finds its tables.
+    const QueueType type = queues_[(*pool)->queue]->type;
+    VkDescriptorSet set = layout_.set();
+    if (type == QueueType::Graphics) {
+        table_.vkCmdBindDescriptorSets(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_.pipelineLayout(), 0, 1, &set, 0,
+                                       nullptr);
+    }
+    if (type != QueueType::Copy) {
+        table_.vkCmdBindDescriptorSets(buffer, VK_PIPELINE_BIND_POINT_COMPUTE, layout_.pipelineLayout(), 0, 1, &set, 0,
+                                       nullptr);
+    }
     // A new handle for each recording, so last frame's handle never names
     // this one. The list pool was made at its maximum, so this never grows.
-    const CommandListHandle commandList = commandLists_.emplace(VulkanCommandList{
-        .buffer = buffer, .pool = commandPool, .slot = slot, .rendering = {}, .rendered = core::SlotChains::kEnd});
+    const CommandListHandle commandList = commandLists_.emplace(VulkanCommandList{.buffer = buffer,
+                                                                                  .pool = commandPool,
+                                                                                  .slot = slot,
+                                                                                  .state = {},
+                                                                                  .presenting = {},
+                                                                                  .rendered = core::SlotChains::kEnd});
     if (commandList.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command lists",
                              desc_.maxCommandLists);
@@ -531,60 +559,119 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    auto chain = swapchainFor(swapchain);
-    if (!chain) {
-        return std::unexpected(std::move(chain.error()));
-    }
-    if ((*list)->rendering.has_value()) {
+    if ((*list)->state.rendering) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is already open");
+    }
+    if (auto checked = checkRenderingDesc(!swapchain.isNull(), desc); !checked) {
+        return checked;
     }
     if (const VulkanCommandPool* pool = commandPools_.find((*list)->pool);
         pool != nullptr && queues_[pool->queue]->type != QueueType::Graphics) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "the list records for queue {}, which does not render",
                              pool->queue);
     }
-    if ((*chain)->submitted()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "the acquired image was already submitted; present it first");
-    }
-    const auto image = (*chain)->acquired();
-    if (!image) {
-        return std::unexpected(image.error());
-    }
-    // Rendered to earlier in this list, the swapchain is already in its chain.
-    bool renderedBefore = false;
-    for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
-        renderedBefore = renderedBefore || renders_[slot] == swapchain;
-    }
-    if (!renderedBefore) {
-        const auto slot = renderSlots_.push((*list)->rendered);
-        if (!slot) {
-            return core::failure(core::ErrorCode::RhiLimitReached,
-                                 "the device's recording lists render to at most {} swapchains at once",
-                                 desc_.maxCommandLists);
+    // Every handle is looked up before anything is recorded, so a bad one
+    // leaves the list as it was.
+    std::array<VkRenderingAttachmentInfo, kMaxColorTargets> colors{};
+    VkRenderingAttachmentInfo depth{};
+    VkRenderingAttachmentInfo stencil{};
+    VkExtent2D extent{};
+    std::optional<AcquiredImage> image;
+    for (std::uint32_t i = 0; i < desc.colorAttachmentCount; ++i) {
+        const ColorAttachment& attachment = desc.colorAttachments.at(i);
+        VkRenderingAttachmentInfo& color = colors.at(i);
+        color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = loadOpFor(attachment.loadOp);
+        color.storeOp = storeOpFor(attachment.storeOp);
+        std::ranges::copy(attachment.clearColor, color.clearValue.color.float32);
+        if (i == 0 && !swapchain.isNull()) {
+            auto chain = swapchainFor(swapchain);
+            if (!chain) {
+                return std::unexpected(std::move(chain.error()));
+            }
+            if ((*chain)->submitted()) {
+                return core::failure(core::ErrorCode::RhiInvalidCall,
+                                     "the acquired image was already submitted; present it first");
+            }
+            auto acquired = (*chain)->acquired();
+            if (!acquired) {
+                return std::unexpected(acquired.error());
+            }
+            image = *acquired;
+            color.imageView = image->view;
+            extent = image->extent;
+            continue;
         }
-        renders_[*slot] = swapchain;
+        auto texture = textureFor(attachment.texture);
+        if (!texture) {
+            return std::unexpected(std::move(texture.error()));
+        }
+        color.imageView = (*texture)->view();
+        extent = (*texture)->extent();
     }
-    VkCommandBuffer buffer = (*list)->buffer;
-    recordBarrier(table_, buffer, layoutBarrier(image->image, image->layout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL));
+    if (!desc.depthStencil.texture.isNull()) {
+        auto texture = textureFor(desc.depthStencil.texture);
+        if (!texture) {
+            return std::unexpected(std::move(texture.error()));
+        }
+        // Depth and stencil are loaded and stored alike; each aspect the
+        // format has gets its slot.
+        depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depth.imageView = (*texture)->view();
+        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depth.loadOp = loadOpFor(desc.depthStencil.loadOp);
+        depth.storeOp = storeOpFor(desc.depthStencil.storeOp);
+        depth.clearValue.depthStencil = {.depth = desc.depthStencil.clearDepth,
+                                         .stencil = desc.depthStencil.clearStencil};
+        stencil = depth;
+        extent = (*texture)->extent();
+    }
+    if (image.has_value()) {
+        // Rendered to earlier in this list, the swapchain is already in its chain.
+        bool renderedBefore = false;
+        for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
+            renderedBefore = renderedBefore || renders_[slot] == swapchain;
+        }
+        if (!renderedBefore) {
+            const auto slot = renderSlots_.push((*list)->rendered);
+            if (!slot) {
+                return core::failure(core::ErrorCode::RhiLimitReached,
+                                     "the device's recording lists render to at most {} swapchains at once",
+                                     desc_.maxCommandLists);
+            }
+            renders_[*slot] = swapchain;
+        }
+    }
 
-    VkRenderingAttachmentInfo color{};
-    color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    color.imageView = image->view;
-    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color.loadOp = loadOpFor(desc.loadOp);
-    color.storeOp = storeOpFor(desc.storeOp);
-    std::ranges::copy(desc.clearColor, color.clearValue.color.float32);
+    VkCommandBuffer buffer = (*list)->buffer;
+    if (image.has_value()) {
+        recordBarrier(table_, buffer,
+                      layoutBarrier(image->image, image->layout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL));
+    }
     VkRenderingInfo rendering{};
     rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    rendering.renderArea = {.offset = {.x = 0, .y = 0}, .extent = image->extent};
+    rendering.renderArea = {.offset = {.x = 0, .y = 0}, .extent = extent};
     rendering.layerCount = 1;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachments = &color;
+    rendering.colorAttachmentCount = desc.colorAttachmentCount;
+    rendering.pColorAttachments = colors.data();
+    if (depth.imageView != VK_NULL_HANDLE) {
+        const VkImageAspectFlags aspects = (*textureFor(desc.depthStencil.texture))->aspects();
+        rendering.pDepthAttachment = (aspects & VK_IMAGE_ASPECT_DEPTH_BIT) != 0 ? &depth : nullptr;
+        rendering.pStencilAttachment = (aspects & VK_IMAGE_ASPECT_STENCIL_BIT) != 0 ? &stencil : nullptr;
+    }
     table_.vkCmdBeginRendering(buffer, &rendering);
-
-    (*list)->rendering = swapchain;
-    return {};
+    (*list)->state.rendering = true;
+    (*list)->presenting = image.has_value() ? std::optional{swapchain} : std::nullopt;
+    // The whole area, until the caller sets its own.
+    const auto whole = static_cast<float>(extent.width);
+    const auto height = static_cast<float>(extent.height);
+    if (auto set = setViewport(commandList,
+                               {.x = 0, .y = 0, .width = whole, .height = height, .minDepth = 0, .maxDepth = 1});
+        !set) {
+        return set;
+    }
+    return setScissor(commandList, {.x = 0, .y = 0, .width = extent.width, .height = extent.height});
 }
 
 core::Result<void> VulkanDevice::endRendering(CommandListHandle commandList) {
@@ -592,27 +679,29 @@ core::Result<void> VulkanDevice::endRendering(CommandListHandle commandList) {
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    const std::optional<SwapchainHandle> open = (*list)->rendering;
-    if (!open.has_value()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "no rendering is open");
-    }
-    auto chain = swapchainFor(*open);
-    if (!chain) {
-        return std::unexpected(std::move(chain.error()));
-    }
-    const auto image = (*chain)->acquired();
-    if (!image) {
-        return std::unexpected(image.error());
+    if (auto checked = checkRendering((*list)->state); !checked) {
+        return checked;
     }
     VkCommandBuffer buffer = (*list)->buffer;
     table_.vkCmdEndRendering(buffer);
-    recordBarrier(table_, buffer,
-                  layoutBarrier(image->image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR));
-    // Recorded now, not at submit, so the next rendering recorded on this
-    // image, in this list or another, starts from where this one leaves it.
-    (*chain)->setLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-    (*list)->rendering.reset();
+    if (const std::optional<SwapchainHandle> open = (*list)->presenting; open.has_value()) {
+        auto chain = swapchainFor(*open);
+        if (!chain) {
+            return std::unexpected(std::move(chain.error()));
+        }
+        const auto image = (*chain)->acquired();
+        if (!image) {
+            return std::unexpected(image.error());
+        }
+        recordBarrier(table_, buffer,
+                      layoutBarrier(image->image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR));
+        // Recorded now, not at submit, so the next rendering recorded on this
+        // image, in this list or another, starts from where this one leaves it.
+        (*chain)->setLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    }
+    (*list)->state.rendering = false;
+    (*list)->presenting.reset();
     return {};
 }
 
@@ -656,7 +745,7 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "the list is named twice in the submit");
         }
         (*list)->queued = serial;
-        if ((*list)->rendering.has_value()) {
+        if ((*list)->state.rendering) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is still open; end it first");
         }
         if (const VulkanCommandPool* pool = commandPools_.find((*list)->pool);

@@ -250,6 +250,9 @@ class Plan:
                     raise SpecError(f"{kind}: a callback takes exactly one opaque param, its user data")
             elif kind in api.structs:
                 pass
+            elif kind in api.handles:
+                if name in self.out_structs:
+                    raise SpecError(f"{where}: the C++ generator handles a handle member only passed in")
             elif member.get("fixed") and kind in ("bool", "string", "opaque"):
                 raise SpecError(f"{where}: the C++ generator does not yet handle a fixed array of {kind}")
             elif kind not in BUILTINS and kind not in api.enums:
@@ -263,8 +266,10 @@ class Plan:
 
     def holds_handles(self, struct: str) -> bool:
         """Whether the struct's C form is built from handle classes, so its
-        conversion must follow their definitions."""
-        return any(m["type"] in self.api.handles for m in self.arrays_of(struct))
+        conversion must follow their definitions: it has a handle member, or a
+        struct member that has one."""
+        return any(m["type"] in self.api.handles or (m["type"] in self.api.structs and self.holds_handles(m["type"]))
+                   for m in self.api.structs[struct]["members"])
 
     def is_mirror(self, kind: str) -> bool:
         """Whether kind's C++ type is laid out exactly as its C type, so an
@@ -298,8 +303,11 @@ def cpp_type(api: Api, kind: str, out: bool = False) -> str:
 
 
 def member_type(api: Api, member: dict[str, Any], out: bool) -> str:
-    """A struct member's C++ type: a std::array for a fixed one."""
+    """A struct member's C++ type: a std::array for a fixed one, and a borrowed
+    pointer, null for none, for a handle the caller owns."""
     kind = cpp_type(api, member["type"], out)
+    if member["type"] in api.handles and not api.is_plain(member["type"]):
+        kind = f"const {kind}*"
     return f"std::array<{kind}, {api.fixed_text(member)}>" if member.get("fixed") else kind
 
 
@@ -324,6 +332,8 @@ def to_c(api: Api, kind: str, value: str) -> str:
         return f"static_cast<{c_name(kind)}>({value})"
     if kind in api.structs:
         return f"toC({value})"
+    if kind in api.handles:
+        return f"{value}.get()" if api.is_plain(kind) else f"{value} != nullptr ? {value}->get() : {c_name(kind)}{{}}"
     return value
 
 

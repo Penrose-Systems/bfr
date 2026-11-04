@@ -16,6 +16,8 @@
 #include "metal/metal_swapchain.h"
 #include "metal/metal_texture.h"
 #include "metal/metal_util.h"
+#include "rhi/bindless_slots.h"
+#include "rhi/command_check.h"
 
 #include <CoreGraphics/CGColorSpace.h>
 #include <CoreGraphics/CGGeometry.h>
@@ -47,6 +49,10 @@ class MetalInstance;
 /// the slots' objects once the GPU is done with them.
 struct MetalCommandPool {
     std::uint32_t queue = 0;
+    std::uint32_t pushConstantUpdates = 0;
+    /// pushConstants calls since the pool's reset: the next entry of the ring
+    /// its first slot holds.
+    std::uint32_t pushed = 0;
     std::uint32_t first = core::SlotChains::kEnd;
     std::uint32_t next = core::SlotChains::kEnd;
     std::uint32_t recording = 0;
@@ -54,13 +60,20 @@ struct MetalCommandPool {
 };
 
 /// A list slot: an allocator and a buffer for it, since a Metal 4 allocator
-/// serves one buffer at a time, and the list recording on it.
+/// serves one buffer at a time, the argument table its encoders bind the
+/// tables and push constants through, and the list recording on it. The
+/// pool's first slot also holds the pool's push constant ring: Metal 4 has no
+/// setBytes, so each pushConstants copies into the ring and binds the copy.
+/// All made with the pool and released with its slots, once the GPU is done.
 struct MetalListSlot {
     Ref<MTL4::CommandAllocator> allocator;
     Ref<MTL4::CommandBuffer> buffer;
     // Made with the slot and filled in by each beginRendering, so a pass
     // allocates no descriptor.
     Ref<MTL4::RenderPassDescriptor> pass;
+    Ref<MTL4::ArgumentTable> arguments;
+    Ref<MTL::Buffer> pushRing;
+    std::optional<Resident> pushResident;
     CommandListHandle live;
 };
 
@@ -95,15 +108,26 @@ struct MetalQueue {
 };
 
 /// Commands recorded on one buffer: the buffer, which its slot owns, the pool
-/// and slot it came from, the encoder rendering is open on, the swapchain
-/// rendering is open on, and the chain of render slots naming every swapchain
-/// rendered to, whose drawables the submit waits for and signals.
+/// and slot it came from, what it has bound, the encoder rendering is open on,
+/// the swapchain the open rendering draws to, if one, and the chain of render
+/// slots naming every swapchain rendered to, whose drawables the submit waits
+/// for and signals. Metal binds pipelines on the encoder, so the pipelines
+/// bound are kept by handle and set on the encoder at the draw or dispatch.
 struct MetalCommandList {
     MTL4::CommandBuffer* buffer = nullptr;
     CommandPoolHandle pool;
     std::uint32_t slot = 0;
+    RecordState state;
+    PipelineHandle graphics;
+    PipelineHandle compute;
+    // The graphics pipeline the open encoder has been given, so a draw sets
+    // the pipeline's state once.
+    PipelineHandle encoderGraphics;
+    MTL::IndexType indexType = MTL::IndexTypeUInt32;
+    MTL::GPUAddress indexBuffer = 0;
+    NS::UInteger indexBytes = 0;
     Ref<MTL4::RenderCommandEncoder> encoder;
-    std::optional<SwapchainHandle> rendering;
+    std::optional<SwapchainHandle> presenting;
     std::uint32_t rendered = core::SlotChains::kEnd;
     // The serial of the submit this list is gathered into, so a list named
     // twice in one submit is caught in a single pass.
@@ -140,6 +164,21 @@ public:
     [[nodiscard]] core::Result<void> beginRendering(CommandListHandle commandList, SwapchainHandle swapchain,
                                                     const RenderingDesc& desc) override;
     [[nodiscard]] core::Result<void> endRendering(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<void> setViewport(CommandListHandle commandList, const Viewport& viewport) override;
+    [[nodiscard]] core::Result<void> setScissor(CommandListHandle commandList, const Rect& scissor) override;
+    [[nodiscard]] core::Result<void> bindPipeline(CommandListHandle commandList, PipelineHandle pipeline) override;
+    [[nodiscard]] core::Result<void> pushConstants(CommandListHandle commandList,
+                                                   std::span<const std::byte> data) override;
+    [[nodiscard]] core::Result<void> bindIndexBuffer(CommandListHandle commandList, BufferHandle buffer,
+                                                     std::uint64_t offset, IndexType type) override;
+    [[nodiscard]] core::Result<void> draw(CommandListHandle commandList, std::uint32_t vertexCount,
+                                          std::uint32_t instanceCount, std::uint32_t firstVertex,
+                                          std::uint32_t firstInstance) override;
+    [[nodiscard]] core::Result<void> drawIndexed(CommandListHandle commandList, std::uint32_t indexCount,
+                                                 std::uint32_t instanceCount, std::uint32_t firstIndex,
+                                                 std::int32_t vertexOffset, std::uint32_t firstInstance) override;
+    [[nodiscard]] core::Result<void> dispatch(CommandListHandle commandList, std::uint32_t x, std::uint32_t y,
+                                              std::uint32_t z) override;
     [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
                                                 std::span<const BufferCopy> regions) override;
     [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
@@ -159,8 +198,10 @@ public:
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
     [[nodiscard]] core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<std::uint32_t> bufferSlot(BufferHandle buffer) override;
     [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
+    [[nodiscard]] core::Result<TextureSlots> textureSlots(TextureHandle texture) override;
     [[nodiscard]] core::Result<void> destroyTexture(TextureHandle texture) override;
     [[nodiscard]] core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) override;
     [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
@@ -191,6 +232,9 @@ private:
     [[nodiscard]] core::Result<MetalCommandList*> commandListFor(CommandListHandle commandList);
     [[nodiscard]] core::Result<MetalBuffer*> bufferFor(BufferHandle buffer);
     [[nodiscard]] core::Result<MetalTexture*> textureFor(TextureHandle texture);
+    // The bound graphics pipeline, its state set on the open encoder once per
+    // pipeline per rendering. Fails with RhiInvalidHandle when it is gone.
+    [[nodiscard]] core::Result<const MetalPipeline*> applyGraphics(MetalCommandList& list);
     [[nodiscard]] core::Result<MetalPipeline*> pipelineFor(PipelineHandle pipeline);
 
     MetalInstance* instance_;
@@ -226,9 +270,14 @@ private:
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<MetalBuffer, Buffer> buffers_;
     core::Pool<MetalTexture, Texture> textures_;
+    BindlessSlots bindless_;
     // The tables leave the residency set as the buffers do, under its lock.
     // Optional only because they are made after the device, in open.
+    // Made in open, before any call reaches a device, so always there.
     std::optional<MetalBindlessTables> tables_;
+    [[nodiscard]] const MetalBindlessTables& tables() const {
+        return tables_.value(); // NOLINT(bugprone-unchecked-optional-access)
+    }
     // Compiles every pipeline; Metal 4 makes pipelines through one.
     Ref<MTL4::Compiler> compiler_;
     core::Pool<MetalPipeline, Pipeline> pipelines_;

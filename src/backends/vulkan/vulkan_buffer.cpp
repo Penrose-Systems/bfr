@@ -3,10 +3,12 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
+#include "core/slot_chains.h"
 #include "rhi/buffer_check.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_result.h"
+#include "vulkan/vulkan_texture.h"
 
 #include <vulkan/vulkan_core.h>
 
@@ -78,15 +80,16 @@ core::Result<VmaAllocator> createAllocator(VkInstance instance, VkPhysicalDevice
 }
 
 VulkanBuffer::VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, VmaAllocation allocation, BufferMemory memory,
-                           std::span<std::byte> mapped)
-    : allocator_(allocator), buffer_(buffer), allocation_(allocation), memory_(memory), mapped_(mapped) {}
+                           std::span<std::byte> mapped, std::uint32_t slot)
+    : allocator_(allocator), buffer_(buffer), allocation_(allocation), memory_(memory), mapped_(mapped), slot_(slot) {}
 
 VulkanBuffer::VulkanBuffer(VulkanBuffer&& other) noexcept
     : allocator_(other.allocator_),
       buffer_(std::exchange(other.buffer_, VK_NULL_HANDLE)),
       allocation_(std::exchange(other.allocation_, VK_NULL_HANDLE)),
       memory_(other.memory_),
-      mapped_(std::exchange(other.mapped_, {})) {}
+      mapped_(std::exchange(other.mapped_, {})),
+      slot_(other.slot_) {}
 
 VulkanBuffer::~VulkanBuffer() {
     if (buffer_ != VK_NULL_HANDLE) {
@@ -95,7 +98,7 @@ VulkanBuffer::~VulkanBuffer() {
 }
 
 core::Result<VulkanBuffer> createVulkanBuffer(VmaAllocator allocator, const BufferDesc& desc,
-                                              std::span<const std::uint32_t> families) {
+                                              std::span<const std::uint32_t> families, std::uint32_t slot) {
     VkBufferCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     info.size = desc.size;
@@ -126,7 +129,7 @@ core::Result<VulkanBuffer> createVulkanBuffer(VmaAllocator allocator, const Buff
     if (placed.pMappedData != nullptr) {
         mapped = {static_cast<std::byte*>(placed.pMappedData), static_cast<std::size_t>(desc.size)};
     }
-    return VulkanBuffer{allocator, buffer, made, desc.memory, mapped};
+    return VulkanBuffer{allocator, buffer, made, desc.memory, mapped, slot};
 }
 
 // The device's buffer calls, beside the buffers they make.
@@ -145,8 +148,10 @@ void VulkanDevice::collectBuffers() {
         const auto passed = completedValue(*queues_[queue]);
         return passed ? *passed : 0;
     });
-    buffers_.collect(completed);
-    textures_.collect(completed);
+    // A collected resource's slots go back to their tables, so no pending work
+    // can see a slot reused.
+    buffers_.collect(completed, [this](const VulkanBuffer& buffer) { bindless_.giveBuffer(buffer.slot()); });
+    textures_.collect(completed, [this](const VulkanTexture& texture) { bindless_.giveTexture(texture.slots()); });
     pipelines_.collect(completed);
 }
 
@@ -157,15 +162,33 @@ core::Result<BufferHandle> VulkanDevice::createBuffer(const BufferDesc& desc) {
     // Cold, so buffers the GPU is done with are freed here, never on the
     // frame path: freeing one frees the allocator's memory.
     collectBuffers();
-    auto made = createVulkanBuffer(allocator_, desc, families_);
+    auto slot = bindless_.takeBuffer(desc);
+    if (!slot) {
+        return std::unexpected(std::move(slot.error()));
+    }
+    auto made = createVulkanBuffer(allocator_, desc, families_, *slot);
     if (!made) {
+        bindless_.giveBuffer(*slot);
         return std::unexpected(std::move(made.error()));
     }
+    VkBuffer handle = made->buffer();
     const BufferHandle buffer = buffers_.emplace(std::move(*made));
     if (buffer.isNull()) {
+        bindless_.giveBuffer(*slot);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} buffers", kBufferLimit);
     }
+    if (*slot != core::SlotChains::kEnd) {
+        layout_.writeStorageBuffer(*slot, handle);
+    }
     return buffer;
+}
+
+core::Result<std::uint32_t> VulkanDevice::bufferSlot(BufferHandle buffer) {
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    return BindlessSlots::reported((*found)->slot());
 }
 
 core::Result<std::span<std::byte>> VulkanDevice::mapBuffer(BufferHandle buffer) {

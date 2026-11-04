@@ -37,6 +37,9 @@ struct MetalBuffer {
     Ref<MTL::Buffer> buffer;
     BufferMemory memory = BufferMemory::Device;
     std::span<std::byte> mapped;
+    /// Its place in the storage buffer table, kEnd without storage usage; the
+    /// device gives it back when the buffer is collected.
+    std::uint32_t slot = 0;
     // Declared after buffer, so it leaves the set before it is released.
     Resident resident;
 };

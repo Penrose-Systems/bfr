@@ -5,6 +5,8 @@
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/texture.h"
+#include "core/slot_chains.h"
+#include "rhi/bindless_slots.h"
 #include "rhi/format_blocks.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_buffer.h"
@@ -54,9 +56,33 @@ VkImageLayout layoutFor(TextureLayout layout) {
             return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         case TextureLayout::CopyDst:
             return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        case TextureLayout::Sampled:
+            return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        case TextureLayout::Storage:
+            return VK_IMAGE_LAYOUT_GENERAL;
+        case TextureLayout::ColorTarget:
+            return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        case TextureLayout::DepthStencilTarget:
+            return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         case TextureLayout::Undefined:
         default:
             return VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+}
+
+// The view type of the whole texture: an array type when it has layers, so
+// the shader declares what the desc made.
+VkImageViewType viewTypeFor(const TextureDesc& desc) {
+    switch (desc.dimension) {
+        case TextureDimension::D1:
+            return desc.layers > 1 ? VK_IMAGE_VIEW_TYPE_1D_ARRAY : VK_IMAGE_VIEW_TYPE_1D;
+        case TextureDimension::D3:
+            return VK_IMAGE_VIEW_TYPE_3D;
+        case TextureDimension::Cube:
+            return desc.layers > kCubeFaces ? VK_IMAGE_VIEW_TYPE_CUBE_ARRAY : VK_IMAGE_VIEW_TYPE_CUBE;
+        case TextureDimension::D2:
+        default:
+            return desc.layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
     }
 }
 
@@ -104,25 +130,49 @@ VkBufferImageCopy copyFor(const BufferTextureCopy& region, Format format) {
 
 } // namespace
 
-VulkanTexture::VulkanTexture(VmaAllocator allocator, VkImage image, VmaAllocation allocation, Format format,
-                             VkImageAspectFlags aspects)
-    : allocator_(allocator), image_(image), allocation_(allocation), format_(format), aspects_(aspects) {}
+VulkanTexture::VulkanTexture(const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator, VkImage image,
+                             VmaAllocation allocation, VkImageView view, VkImageView shaderView,
+                             const TextureDesc& desc, VkImageAspectFlags aspects, TextureSlotsHeld slots)
+    : table_(&table),
+      device_(device),
+      allocator_(allocator),
+      image_(image),
+      allocation_(allocation),
+      view_(view),
+      shaderView_(shaderView),
+      format_(desc.format),
+      extent_{.width = desc.width, .height = desc.height},
+      aspects_(aspects),
+      slots_(slots) {}
 
 VulkanTexture::VulkanTexture(VulkanTexture&& other) noexcept
-    : allocator_(other.allocator_),
+    : table_(other.table_),
+      device_(other.device_),
+      allocator_(other.allocator_),
       image_(std::exchange(other.image_, VK_NULL_HANDLE)),
       allocation_(std::exchange(other.allocation_, VK_NULL_HANDLE)),
+      view_(std::exchange(other.view_, VK_NULL_HANDLE)),
+      shaderView_(std::exchange(other.shaderView_, VK_NULL_HANDLE)),
       format_(other.format_),
-      aspects_(other.aspects_) {}
+      extent_(other.extent_),
+      aspects_(other.aspects_),
+      slots_(other.slots_) {}
 
 VulkanTexture::~VulkanTexture() {
+    if (shaderView_ != VK_NULL_HANDLE && shaderView_ != view_) {
+        table_->vkDestroyImageView(device_, shaderView_, nullptr);
+    }
+    if (view_ != VK_NULL_HANDLE) {
+        table_->vkDestroyImageView(device_, view_, nullptr);
+    }
     if (image_ != VK_NULL_HANDLE) {
         vmaDestroyImage(allocator_, image_, allocation_);
     }
 }
 
-core::Result<VulkanTexture> createVulkanTexture(VmaAllocator allocator, const TextureDesc& desc,
-                                                std::span<const std::uint32_t> families) {
+core::Result<VulkanTexture> createVulkanTexture(const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator,
+                                                const TextureDesc& desc, std::span<const std::uint32_t> families,
+                                                const TextureSlotsHeld& slots) {
     VkImageCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     info.flags = desc.dimension == TextureDimension::Cube ? VkImageCreateFlags{VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT}
@@ -152,7 +202,46 @@ core::Result<VulkanTexture> createVulkanTexture(VmaAllocator allocator, const Te
         result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vmaCreateImage", .result = result});
     }
-    return VulkanTexture{allocator, image, made, desc.format, aspectsOf(desc.format)};
+    const VkImageAspectFlags aspects = aspectsOf(desc.format);
+    // A view only where a use reads through one: the tables and attachments.
+    // A texture only copied has none, as the API asks.
+    VkImageView view = VK_NULL_HANDLE;
+    VkImageView shaderView = VK_NULL_HANDLE;
+    if (!desc.usage.sampled && !desc.usage.storage && !desc.usage.colorAttachment && !desc.usage.depthStencil) {
+        return VulkanTexture{table, device, allocator, image, made, view, shaderView, desc, aspects, slots};
+    }
+    const auto createView = [&](VkImageAspectFlags viewAspects, VkImageView& out) -> core::Result<void> {
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = image;
+        viewInfo.viewType = viewTypeFor(desc);
+        viewInfo.format = info.format;
+        viewInfo.subresourceRange = {.aspectMask = viewAspects,
+                                     .baseMipLevel = 0,
+                                     .levelCount = VK_REMAINING_MIP_LEVELS,
+                                     .baseArrayLayer = 0,
+                                     .layerCount = VK_REMAINING_ARRAY_LAYERS};
+        if (const VkResult result = table.vkCreateImageView(device, &viewInfo, nullptr, &out); result != VK_SUCCESS) {
+            return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateImageView", .result = result});
+        }
+        return {};
+    };
+    if (auto created = createView(aspects, view); !created) {
+        vmaDestroyImage(allocator, image, made);
+        return std::unexpected(std::move(created.error()));
+    }
+    // A descriptor sees one aspect of a depth-stencil image: its depth.
+    shaderView = view;
+    const bool depthStencil = (aspects & VK_IMAGE_ASPECT_STENCIL_BIT) != 0 &&
+                              (aspects & VK_IMAGE_ASPECT_DEPTH_BIT) != 0;
+    if (depthStencil && (desc.usage.sampled || desc.usage.storage)) {
+        if (auto created = createView(VK_IMAGE_ASPECT_DEPTH_BIT, shaderView); !created) {
+            table.vkDestroyImageView(device, view, nullptr);
+            vmaDestroyImage(allocator, image, made);
+            return std::unexpected(std::move(created.error()));
+        }
+    }
+    return VulkanTexture{table, device, allocator, image, made, view, shaderView, desc, aspects, slots};
 }
 
 // The device's texture calls, beside the textures they make.
@@ -168,15 +257,36 @@ core::Result<VulkanTexture*> VulkanDevice::textureFor(TextureHandle texture) {
 core::Result<TextureHandle> VulkanDevice::createTexture(const TextureDesc& desc) {
     // Cold, as createBuffer is: what the GPU is done with is freed here.
     collectBuffers();
-    auto made = createVulkanTexture(allocator_, desc, families_);
+    auto slots = bindless_.takeTexture(desc);
+    if (!slots) {
+        return std::unexpected(std::move(slots.error()));
+    }
+    auto made = createVulkanTexture(table_, device_, allocator_, desc, families_, *slots);
     if (!made) {
+        bindless_.giveTexture(*slots);
         return std::unexpected(std::move(made.error()));
     }
+    VkImageView view = made->shaderView();
     const TextureHandle texture = textures_.emplace(std::move(*made));
     if (texture.isNull()) {
+        bindless_.giveTexture(*slots);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} textures", kBufferLimit);
     }
+    if (slots->sampled != core::SlotChains::kEnd) {
+        layout_.writeSampledImage(slots->sampled, view);
+    }
+    if (slots->storage != core::SlotChains::kEnd) {
+        layout_.writeStorageImage(slots->storage, view);
+    }
     return texture;
+}
+
+core::Result<TextureSlots> VulkanDevice::textureSlots(TextureHandle texture) {
+    auto found = textureFor(texture);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    return BindlessSlots::reported((*found)->slots());
 }
 
 core::Result<void> VulkanDevice::destroyTexture(TextureHandle texture) {

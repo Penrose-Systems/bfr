@@ -12,6 +12,9 @@ struct Texture;
 
 using TextureHandle = core::Handle<Texture>;
 
+/// Faces of a cube: the layers a Cube texture has per cube.
+inline constexpr std::uint32_t kCubeFaces = 6;
+
 /// The shape of a texture. The values are the C API's.
 enum class TextureDimension : std::uint8_t {
     D2 = 0,
@@ -29,6 +32,14 @@ enum class TextureLayout : std::uint8_t {
     Undefined = 0,
     CopySrc = 1,
     CopyDst = 2,
+    /// Shaders read it through the texture table.
+    Sampled = 3,
+    /// Shaders read and write it through the storage texture table.
+    Storage = 4,
+    /// Rendering writes color to it.
+    ColorTarget = 5,
+    /// Rendering tests and writes depth or stencil in it.
+    DepthStencilTarget = 6,
 };
 
 /// Which part of a texel a copy moves. The values are the C API's, and so is
@@ -47,6 +58,16 @@ struct TextureUsage {
     bool storage = false;
     bool colorAttachment = false;
     bool depthStencil = false;
+};
+
+/// Where a texture is in the bindless tables api/bfr.yaml states under
+/// bfr_pipeline, from creation to destruction: the index shaders use. A table
+/// the texture's usage does not set has no slot for it, and reads 0.
+struct TextureSlots {
+    /// Its index in the texture table; only with sampled usage.
+    std::uint32_t sampled = 0;
+    /// Its index in the storage texture table; only with storage usage.
+    std::uint32_t storage = 0;
 };
 
 /// How to create a texture, in device memory. Sizes are in texels; height is

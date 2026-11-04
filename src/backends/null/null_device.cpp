@@ -12,6 +12,7 @@
 #include "core/slot_chains.h"
 #include "null/null_instance.h"
 #include "rhi/buffer_check.h"
+#include "rhi/command_check.h"
 #include "rhi/pipeline_check.h"
 
 #include <algorithm>
@@ -37,7 +38,8 @@ NullDevice::NullDevice(NullInstance& rhi, const DeviceDesc& desc)
       live_(desc.maxCommandLists),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
-      pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {
+      pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()),
+      bindless_(desc) {
     queues_.push_back(QueueType::Graphics);
     queues_.insert(queues_.end(), desc.compute, QueueType::Compute);
     queues_.insert(queues_.end(), desc.copy, QueueType::Copy);
@@ -195,7 +197,12 @@ core::Result<CommandPoolHandle> NullDevice::createCommandPool(const CommandPoolD
                              slots_.available(), desc_.maxCommandLists);
     }
     const CommandPoolHandle commandPool = commandPools_.emplace(
-        NullCommandPool{.queue = desc.queue, .first = *first, .next = *first, .recording = 0});
+        NullCommandPool{.queue = desc.queue,
+                        .pushConstantUpdates = desc.pushConstantUpdates,
+                        .pushed = 0,
+                        .first = *first,
+                        .next = *first,
+                        .recording = 0});
     if (commandPool.isNull()) {
         slots_.give(*first);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
@@ -214,6 +221,7 @@ core::Result<void> NullDevice::resetCommandPool(CommandPoolHandle commandPool) {
                              "{} lists from the pool are still recording; submit or destroy them", (*pool)->recording);
     }
     (*pool)->next = (*pool)->first;
+    (*pool)->pushed = 0;
     return {};
 }
 
@@ -246,7 +254,7 @@ core::Result<CommandListHandle> NullDevice::beginCommands(CommandPoolHandle comm
     }
     // The pool's lists were made with it, so this only takes the next.
     const CommandListHandle commandList = commandLists_.emplace(
-        NullCommandList{.pool = commandPool, .slot = slot, .rendering = false});
+        NullCommandList{.pool = commandPool, .slot = slot, .state = {}});
     if (commandList.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command lists",
                              desc_.maxCommandLists);
@@ -258,22 +266,46 @@ core::Result<CommandListHandle> NullDevice::beginCommands(CommandPoolHandle comm
 }
 
 core::Result<void> NullDevice::beginRendering(CommandListHandle commandList, SwapchainHandle swapchain,
-                                              const RenderingDesc& /*desc*/) {
+                                              const RenderingDesc& desc) {
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    auto found = swapchainFor(swapchain);
-    if (!found) {
-        return std::unexpected(std::move(found.error()));
-    }
-    if ((*list)->rendering) {
+    if ((*list)->state.rendering) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is already open");
     }
-    if (!(*found)->acquired) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
+    if (auto checked = checkAttachments(swapchain, desc); !checked) {
+        return checked;
     }
-    (*list)->rendering = true;
+    (*list)->state.rendering = true;
+    return {};
+}
+
+// After the checks every backend makes, that every texture named is live and
+// the swapchain has an image.
+core::Result<void> NullDevice::checkAttachments(SwapchainHandle swapchain, const RenderingDesc& desc) {
+    if (auto checked = checkRenderingDesc(!swapchain.isNull(), desc); !checked) {
+        return checked;
+    }
+    if (!swapchain.isNull()) {
+        auto found = swapchainFor(swapchain);
+        if (!found) {
+            return std::unexpected(std::move(found.error()));
+        }
+        if (!(*found)->acquired) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
+        }
+    }
+    for (std::uint32_t i = swapchain.isNull() ? 0 : 1; i < desc.colorAttachmentCount; ++i) {
+        if (auto found = textureFor(desc.colorAttachments.at(i).texture); !found) {
+            return std::unexpected(std::move(found.error()));
+        }
+    }
+    if (!desc.depthStencil.texture.isNull()) {
+        if (auto found = textureFor(desc.depthStencil.texture); !found) {
+            return std::unexpected(std::move(found.error()));
+        }
+    }
     return {};
 }
 
@@ -282,11 +314,97 @@ core::Result<void> NullDevice::endRendering(CommandListHandle commandList) {
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (!(*list)->rendering) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "no rendering is open");
+    if (auto checked = checkRendering((*list)->state); !checked) {
+        return checked;
     }
-    (*list)->rendering = false;
+    (*list)->state.rendering = false;
     return {};
+}
+
+// The draw state goes nowhere, so each call only makes the checks every
+// backend makes.
+
+core::Result<void> NullDevice::setViewport(CommandListHandle commandList, const Viewport& /*viewport*/) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    return checkRendering((*list)->state);
+}
+
+core::Result<void> NullDevice::setScissor(CommandListHandle commandList, const Rect& /*scissor*/) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    return checkRendering((*list)->state);
+}
+
+core::Result<void> NullDevice::bindPipeline(CommandListHandle commandList, PipelineHandle pipeline) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    const NullPipeline* found = pipelines_.find(pipeline);
+    if (found == nullptr) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline handle is stale");
+    }
+    (found->compute ? (*list)->state.computeBound : (*list)->state.graphicsBound) = true;
+    return {};
+}
+
+core::Result<void> NullDevice::pushConstants(CommandListHandle commandList, std::span<const std::byte> data) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    if (auto checked = checkPushConstants(data); !checked) {
+        return checked;
+    }
+    NullCommandPool* pool = commandPools_.find((*list)->pool);
+    if (pool == nullptr) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the list's pool is gone");
+    }
+    return countPushConstants(pool->pushed, pool->pushConstantUpdates);
+}
+
+core::Result<void> NullDevice::bindIndexBuffer(CommandListHandle commandList, BufferHandle buffer,
+                                               std::uint64_t /*offset*/, IndexType /*type*/) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    if (auto found = bufferFor(buffer); !found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    (*list)->state.indexBound = true;
+    return {};
+}
+
+core::Result<void> NullDevice::draw(CommandListHandle commandList, std::uint32_t, std::uint32_t, std::uint32_t,
+                                    std::uint32_t) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    return checkDraw((*list)->state, false);
+}
+
+core::Result<void> NullDevice::drawIndexed(CommandListHandle commandList, std::uint32_t, std::uint32_t, std::uint32_t,
+                                           std::int32_t, std::uint32_t) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    return checkDraw((*list)->state, true);
+}
+
+core::Result<void> NullDevice::dispatch(CommandListHandle commandList, std::uint32_t, std::uint32_t, std::uint32_t) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    return checkDispatch((*list)->state);
 }
 
 // The null queues run nothing, so a copy is made as it is recorded: what the
@@ -339,7 +457,7 @@ core::Result<Token> NullDevice::submit(const SubmitDesc& desc) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "the list is named twice in the submit");
         }
         (*list)->queued = serial;
-        if ((*list)->rendering) {
+        if ((*list)->state.rendering) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is still open; end it first");
         }
         const NullCommandPool* pool = commandPools_.find((*list)->pool);
@@ -408,12 +526,25 @@ core::Result<BufferHandle> NullDevice::createBuffer(const BufferDesc& desc) {
         return std::unexpected(std::move(checked.error()));
     }
     // Device memory holds bytes too, so copies through it carry them.
-    NullBuffer made{.memory = desc.memory, .bytes = std::vector<std::byte>(desc.size)};
+    auto slot = bindless_.takeBuffer(desc);
+    if (!slot) {
+        return std::unexpected(std::move(slot.error()));
+    }
+    NullBuffer made{.memory = desc.memory, .bytes = std::vector<std::byte>(desc.size), .slot = *slot};
     const BufferHandle buffer = buffers_.emplace(std::move(made));
     if (buffer.isNull()) {
+        bindless_.giveBuffer(*slot);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} buffers", kBufferLimit);
     }
     return buffer;
+}
+
+core::Result<std::uint32_t> NullDevice::bufferSlot(BufferHandle buffer) {
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    return BindlessSlots::reported((*found)->slot);
 }
 
 core::Result<std::span<std::byte>> NullDevice::mapBuffer(BufferHandle buffer) {
@@ -432,10 +563,13 @@ core::Result<void> NullDevice::destroyBuffer(BufferHandle buffer) {
     if (buffer.isNull()) {
         return {};
     }
-    // The GPU runs nothing, so nothing can still be using it.
-    if (!buffers_.erase(buffer)) {
+    // The GPU runs nothing, so nothing can still be using it or its slot.
+    const NullBuffer* found = buffers_.find(buffer);
+    if (found == nullptr) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the buffer handle is stale");
     }
+    bindless_.giveBuffer(found->slot);
+    buffers_.erase(buffer);
     return {};
 }
 
@@ -450,21 +584,37 @@ core::Result<NullTexture*> NullDevice::textureFor(TextureHandle texture) {
 // No format has a use without a GPU, so a texture holds no texels and its
 // copies move none; the calls only name what they are given.
 core::Result<TextureHandle> NullDevice::createTexture(const TextureDesc& desc) {
-    const TextureHandle texture = textures_.emplace(NullTexture{.desc = desc});
+    auto slots = bindless_.takeTexture(desc);
+    if (!slots) {
+        return std::unexpected(std::move(slots.error()));
+    }
+    const TextureHandle texture = textures_.emplace(NullTexture{.desc = desc, .slots = *slots});
     if (texture.isNull()) {
+        bindless_.giveTexture(*slots);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} textures", kBufferLimit);
     }
     return texture;
+}
+
+core::Result<TextureSlots> NullDevice::textureSlots(TextureHandle texture) {
+    auto found = textureFor(texture);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    return BindlessSlots::reported((*found)->slots);
 }
 
 core::Result<void> NullDevice::destroyTexture(TextureHandle texture) {
     if (texture.isNull()) {
         return {};
     }
-    // The GPU runs nothing, so nothing can still be using it.
-    if (!textures_.erase(texture)) {
+    // The GPU runs nothing, so nothing can still be using it or its slots.
+    const NullTexture* found = textures_.find(texture);
+    if (found == nullptr) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the texture handle is stale");
     }
+    bindless_.giveTexture(found->slots);
+    textures_.erase(texture);
     return {};
 }
 

@@ -26,8 +26,9 @@ struct Entry {
     Format format;
     DxgiFormats formats;
 
-    constexpr Entry(Format format, DXGI_FORMAT texture, DXGI_FORMAT depth = DXGI_FORMAT_UNKNOWN)
-        : format(format), formats{.texture = texture, .depth = depth} {}
+    constexpr Entry(Format format, DXGI_FORMAT texture, DXGI_FORMAT depth = DXGI_FORMAT_UNKNOWN,
+                    DXGI_FORMAT typeless = DXGI_FORMAT_UNKNOWN)
+        : format(format), formats{.texture = texture, .depth = depth, .typeless = typeless} {}
 };
 
 constexpr std::array kEntries{
@@ -80,10 +81,12 @@ constexpr std::array kEntries{
     Entry{Format::B5g6r5Unorm, DXGI_FORMAT_B5G6R5_UNORM},
     Entry{Format::Bgr5a1Unorm, DXGI_FORMAT_B5G5R5A1_UNORM},
     Entry{Format::Bgra4Unorm, DXGI_FORMAT_B4G4R4A4_UNORM},
-    Entry{Format::D16Unorm, DXGI_FORMAT_R16_UNORM, DXGI_FORMAT_D16_UNORM},
-    Entry{Format::D24UnormS8Uint, DXGI_FORMAT_R24_UNORM_X8_TYPELESS, DXGI_FORMAT_D24_UNORM_S8_UINT},
-    Entry{Format::D32Float, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_D32_FLOAT},
-    Entry{Format::D32FloatS8Uint, DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS, DXGI_FORMAT_D32_FLOAT_S8X24_UINT},
+    Entry{Format::D16Unorm, DXGI_FORMAT_R16_UNORM, DXGI_FORMAT_D16_UNORM, DXGI_FORMAT_R16_TYPELESS},
+    Entry{Format::D24UnormS8Uint, DXGI_FORMAT_R24_UNORM_X8_TYPELESS, DXGI_FORMAT_D24_UNORM_S8_UINT,
+          DXGI_FORMAT_R24G8_TYPELESS},
+    Entry{Format::D32Float, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_D32_FLOAT, DXGI_FORMAT_R32_TYPELESS},
+    Entry{Format::D32FloatS8Uint, DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS, DXGI_FORMAT_D32_FLOAT_S8X24_UINT,
+          DXGI_FORMAT_R32G8X24_TYPELESS},
     Entry{Format::Bc1Unorm, DXGI_FORMAT_BC1_UNORM},
     Entry{Format::Bc1Srgb, DXGI_FORMAT_BC1_UNORM_SRGB},
     Entry{Format::Bc2Unorm, DXGI_FORMAT_BC2_UNORM},

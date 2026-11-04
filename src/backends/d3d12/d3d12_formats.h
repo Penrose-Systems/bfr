@@ -21,6 +21,9 @@ struct DxgiFormats {
     DXGI_FORMAT texture = DXGI_FORMAT_UNKNOWN;
     /// What a depth-stencil view is made as; unknown for a color format.
     DXGI_FORMAT depth = DXGI_FORMAT_UNKNOWN;
+    /// What a depth texture's resource is made as when shaders read it too:
+    /// typeless, so its depth view and its shader view may both be made of it.
+    DXGI_FORMAT typeless = DXGI_FORMAT_UNKNOWN;
 };
 
 [[nodiscard]] DxgiFormats dxgiFormatsFor(Format format);

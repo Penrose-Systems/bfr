@@ -12,6 +12,7 @@
 #include <dispatch/dispatch.h>
 #include <Foundation/NSError.hpp>
 #include <Foundation/NSString.hpp>
+#include <Metal/MTL4ArgumentTable.hpp>
 #include <Metal/MTL4Compiler.hpp>
 #include <Metal/MTL4ComputePipeline.hpp>
 #include <Metal/MTL4LibraryFunctionDescriptor.hpp>
@@ -20,10 +21,12 @@
 #include <Metal/MTLComputePipeline.hpp>
 #include <Metal/MTLDepthStencil.hpp>
 #include <Metal/MTLDevice.hpp>
+#include <Metal/MTLGPUAddress.hpp>
 #include <Metal/MTLLibrary.hpp>
 #include <Metal/MTLRenderPipeline.hpp>
 #include <Metal/MTLResidencySet.hpp>
 #include <Metal/MTLResource.hpp>
+#include <Metal/MTLTypes.hpp>
 
 #include <array>
 #include <atomic>
@@ -251,6 +254,40 @@ core::Result<MetalBindlessTables> createMetalBindlessTables(MTL::Device& device,
                                .storageBuffers = storageBuffers,
                                .samplers = samplers,
                                .resident = Resident{std::move(residency), buffer}};
+}
+
+namespace {
+
+// Where entry index of the tables is, in the shared buffer's memory.
+void writeEntry(const MetalBindlessTables& tables, std::uint32_t index, std::uint64_t value) {
+    auto* entries = static_cast<std::uint64_t*>(tables.buffer->contents());
+    std::span{entries, tables.samplers}[index] = value;
+}
+
+} // namespace
+
+void MetalBindlessTables::writeStorageBuffer(std::uint32_t slot, MTL::GPUAddress address) const {
+    writeEntry(*this, storageBuffers + slot, address);
+}
+
+void MetalBindlessTables::writeSampledTexture(std::uint32_t slot, MTL::ResourceID texture) const {
+    writeEntry(*this, slot, texture._impl);
+}
+
+void MetalBindlessTables::writeStorageTexture(std::uint32_t slot, MTL::ResourceID texture) const {
+    writeEntry(*this, storageTextures + slot, texture._impl);
+}
+
+core::Result<Ref<MTL4::ArgumentTable>> createArgumentTable(MTL::Device& device) {
+    const Ref<MTL4::ArgumentTableDescriptor> descriptor = adopt(MTL4::ArgumentTableDescriptor::alloc()->init());
+    descriptor->setMaxBufferBindCount(kArgumentBufferBindings);
+    NS::Error* error = nullptr;
+    MTL4::ArgumentTable* table = device.newArgumentTable(descriptor.get(), &error);
+    if (table == nullptr) {
+        return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no argument table: {}",
+                             error != nullptr ? error->localizedDescription()->utf8String() : "no reason given");
+    }
+    return adopt(table);
 }
 
 core::Result<MetalPipeline> createMetalComputePipeline(MTL::Device& device, MTL4::Compiler& compiler,

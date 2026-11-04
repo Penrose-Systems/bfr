@@ -54,6 +54,9 @@ typedef uint32_t bfr_bool;
 // What bfr_device_desc.max_bindless_samplers of 0 means.
 #define BFR_DEFAULT_MAX_BINDLESS_SAMPLERS 2048u
 
+// What bfr_command_pool_desc.push_constant_updates of 0 means.
+#define BFR_DEFAULT_PUSH_CONSTANT_UPDATES 4096u
+
 // The most color targets a graphics pipeline renders to.
 #define BFR_MAX_COLOR_TARGETS 8u
 
@@ -442,6 +445,14 @@ typedef enum bfr_texture_layout {
     BFR_TEXTURE_LAYOUT_COPY_SRC = 1,
     // Copies write it.
     BFR_TEXTURE_LAYOUT_COPY_DST = 2,
+    // Shaders read it through the texture table.
+    BFR_TEXTURE_LAYOUT_SAMPLED = 3,
+    // Shaders read and write it through the storage texture table.
+    BFR_TEXTURE_LAYOUT_STORAGE = 4,
+    // Rendering writes color to it.
+    BFR_TEXTURE_LAYOUT_COLOR_TARGET = 5,
+    // Rendering tests and writes depth or stencil in it.
+    BFR_TEXTURE_LAYOUT_DEPTH_STENCIL_TARGET = 6,
     BFR_TEXTURE_LAYOUT_FORCE32 = 0x7FFFFFFF
 } bfr_texture_layout;
 
@@ -567,6 +578,15 @@ typedef enum bfr_blend_op {
     BFR_BLEND_OP_FORCE32 = 0x7FFFFFFF
 } bfr_blend_op;
 
+// How wide each index of an index buffer is.
+typedef enum bfr_index_type {
+    // Four bytes an index.
+    BFR_INDEX_TYPE_UINT32 = 0,
+    // Two bytes an index.
+    BFR_INDEX_TYPE_UINT16 = 1,
+    BFR_INDEX_TYPE_FORCE32 = 0x7FFFFFFF
+} bfr_index_type;
+
 // Which window system a bfr_window comes from, for the platforms that have more than one.
 typedef enum bfr_window_system {
     // The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -635,13 +655,15 @@ typedef struct bfr_texture {
 
 // A compute or graphics pipeline: shaders with the fixed state they run under. Every pipeline
 // shares one resource layout, which its shaders declare as follows. Four unbounded tables, each
-// indexed by the slot a resource is given, and one block of bfr_push_constants_size bytes of push
-// constants that every stage reads. On Vulkan the tables are the bindings of descriptor set 0, in
-// order: 0 sampled images, 1 storage images, 2 storage buffers, 3 samplers, each an update-after-
-// bind and partially-bound runtime array; the push constants are a push constant range over all
-// stages. On D3D12 the tables are unbounded descriptor ranges, each starting at register 0 of its
-// own space: SRV space 0 sampled textures, UAV space 1 storage textures, UAV space 2 storage
-// buffers, sampler space 3 samplers; the push constants are bfr_push_constants_size / 4 root
+// indexed by the slot a resource is given when it is created, which bfr_get_buffer_slot and
+// bfr_get_texture_slots report and which is the same number on every backend, and one block of
+// bfr_push_constants_size bytes of push constants that every stage reads, set by
+// bfr_push_constants. On Vulkan the tables are the bindings of descriptor set 0, in order: 0
+// sampled images, 1 storage images, 2 storage buffers, 3 samplers, each an update-after-bind and
+// partially-bound runtime array; the push constants are a push constant range over all stages. On
+// D3D12 the tables are unbounded descriptor ranges, each starting at register 0 of its own space:
+// SRV space 0 sampled textures, UAV space 1 storage textures, UAV space 2 storage buffers as raw
+// buffer views, sampler space 3 samplers; the push constants are bfr_push_constants_size / 4 root
 // constants at b0 of space 0. On Metal the tables are one argument buffer at buffer(0), holding the
 // sampled textures, storage textures, storage buffers and samplers in that order, each a region of
 // as many 8-byte entries as the bfr_device_desc's max_bindless member for its kind, so a shader
@@ -768,16 +790,64 @@ typedef struct bfr_swapchain_images {
     bfr_alpha_mode alpha_mode;
 } bfr_swapchain_images;
 
-// How to begin rendering to a swapchain's acquired image.
-typedef struct bfr_rendering_desc {
-    const bfr_chain* next;
-    // What the image holds at the start; 0 is load.
+// One color target of a rendering: a texture with color_attachment usage, in layout color_target,
+// or the swapchain's acquired image when bfr_begin_rendering is given a swapchain and this is
+// attachment 0.
+typedef struct bfr_color_attachment {
+    // Null for the swapchain's image.
+    bfr_texture texture;
+    // What it holds at the start; 0 is load.
     bfr_load_op load_op;
     // What becomes of it at the end; 0 is store.
     bfr_store_op store_op;
     // Red, green, blue and alpha, 0 to 1, when load_op is clear.
     float clear_color[4];
+} bfr_color_attachment;
+
+// The depth-stencil target of a rendering: a texture with depth_stencil usage, in layout
+// depth_stencil_target. Its depth and stencil are loaded and stored alike.
+typedef struct bfr_depth_stencil_attachment {
+    // Null for no depth-stencil target.
+    bfr_texture texture;
+    // 0 is load.
+    bfr_load_op load_op;
+    // 0 is store.
+    bfr_store_op store_op;
+    // 0 to 1, when load_op is clear.
+    float clear_depth;
+    // When load_op is clear.
+    uint32_t clear_stencil;
+} bfr_depth_stencil_attachment;
+
+// How to begin rendering: the attachments drawn to, all of one size and sample count, which the
+// graphics pipelines drawn with were made for. The first color_attachment_count color attachments
+// are drawn to, in the order the pipeline's targets are.
+typedef struct bfr_rendering_desc {
+    const bfr_chain* next;
+    uint32_t color_attachment_count;
+    bfr_color_attachment color_attachments[BFR_MAX_COLOR_TARGETS];
+    bfr_depth_stencil_attachment depth_stencil;
 } bfr_rendering_desc;
+
+// Where on the attachments the rendering lands, in pixels from the top left, and the depth range it
+// maps to. Clip space is the same on every backend: x right, y up, z 0 at the near plane and 1 at
+// the far.
+typedef struct bfr_viewport {
+    float x;
+    float y;
+    float width;
+    float height;
+    float min_depth;
+    float max_depth;
+} bfr_viewport;
+
+// A rectangle of pixels from the top left of the attachments.
+typedef struct bfr_rect {
+    uint32_t x;
+    uint32_t y;
+    uint32_t width;
+    uint32_t height;
+} bfr_rect;
 
 // How to create a command pool.
 typedef struct bfr_command_pool_desc {
@@ -787,6 +857,10 @@ typedef struct bfr_command_pool_desc {
     // Lists the pool holds, made with it from the device's max_command_lists. bfr_begin_commands
     // hands them out in turn until bfr_reset_command_pool gives them back.
     uint32_t list_count;
+    // Most bfr_push_constants calls the pool's lists record between resets, which a backend that
+    // copies push constants into memory makes room for with the pool. 0 is
+    // BFR_DEFAULT_PUSH_CONSTANT_UPDATES.
+    uint32_t push_constant_updates;
 } bfr_command_pool_desc;
 
 // What the GPU does with a buffer. Set every use it will have.
@@ -856,6 +930,15 @@ typedef struct bfr_texture_desc {
     uint32_t samples;
     bfr_texture_usage usage;
 } bfr_texture_desc;
+
+// Where a texture is in the bindless tables bfr_pipeline states, from creation to destruction: the
+// index shaders use. A table the texture's usage does not set has no slot for it, and reads 0.
+typedef struct bfr_texture_slots {
+    // Its index in the texture table; only with sampled usage.
+    uint32_t sampled;
+    // Its index in the storage texture table; only with storage usage.
+    uint32_t storage;
+} bfr_texture_slots;
 
 // One region copied between a buffer and one layer and mip level of a single-sampled texture.
 // bytes_per_row is a multiple of the format's block bytes and, when it is not 0, of
@@ -1548,16 +1631,95 @@ BFR_API bfr_result bfr_begin_commands(
     bfr_command_pool command_pool,
     bfr_command_list* command_list);
 
-// Begins rendering to the image bfr_acquire took from swapchain, as desc says. Ends with
-// bfr_end_rendering.
+// Begins rendering to desc's attachments, with the image bfr_acquire took from swapchain as color
+// attachment 0 when swapchain is not null. Sets the viewport and scissor to the whole of the
+// attachments. Only bfr_draw and bfr_draw_indexed, and the state they take, are recorded until
+// bfr_end_rendering. Fails with error_invalid_argument when no attachment is given, when a color
+// attachment but the swapchain's names no texture, or, with a swapchain, when there is no color
+// attachment or attachment 0 names a texture.
 BFR_API bfr_result bfr_begin_rendering(
     bfr_device* device,
     bfr_command_list command_list,
     bfr_swapchain swapchain,
     const bfr_rendering_desc* desc);
 
-// Ends the rendering bfr_begin_rendering began; the image is then ready to present.
+// Ends the rendering bfr_begin_rendering began; a swapchain image is then ready to present, and a
+// texture is in the layout it was given in.
 BFR_API bfr_result bfr_end_rendering(bfr_device* device, bfr_command_list command_list);
+
+// Sets the viewport the draws after it use, inside rendering.
+BFR_API bfr_result bfr_set_viewport(
+    bfr_device* device,
+    bfr_command_list command_list,
+    const bfr_viewport* viewport);
+
+// Sets the scissor the draws after it keep to, inside rendering.
+BFR_API bfr_result bfr_set_scissor(
+    bfr_device* device,
+    bfr_command_list command_list,
+    const bfr_rect* scissor);
+
+// Makes pipeline the one draws or dispatches after it run, a graphics pipeline for draws and a
+// compute one for dispatches, until another of its kind is bound. Draws assemble the list topology
+// of the pipeline's class.
+BFR_API bfr_result bfr_bind_pipeline(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_pipeline pipeline);
+
+// Sets the first size bytes of the push constants every shader reads, as bfr_pipeline states, for
+// the draws and dispatches after it. size is a multiple of 4 and at most bfr_push_constants_size,
+// else error_invalid_argument. Fails with error_limit_reached past the pool's
+// push_constant_updates.
+// data: An array of size elements.
+BFR_API bfr_result bfr_push_constants(
+    bfr_device* device,
+    bfr_command_list command_list,
+    const uint8_t* data,
+    uint32_t size);
+
+// Makes buffer, which has index usage, the one bfr_draw_indexed reads indices of type from,
+// starting offset bytes in.
+// offset: Bytes into the buffer.
+BFR_API bfr_result bfr_bind_index_buffer(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_buffer buffer,
+    uint64_t offset,
+    bfr_index_type type);
+
+// Records a draw of vertex_count vertices, instance_count times, with the bound graphics pipeline,
+// inside rendering. The vertex shader sees vertex indices from first_vertex. Whether it sees
+// instance indices from first_instance or from 0 is the backend's: Vulkan and Metal count from
+// first_instance, D3D12's SV_InstanceID from 0.
+BFR_API bfr_result bfr_draw(
+    bfr_device* device,
+    bfr_command_list command_list,
+    uint32_t vertex_count,
+    uint32_t instance_count,
+    uint32_t first_vertex,
+    uint32_t first_instance);
+
+// Records a draw of index_count indices read from the bound index buffer from first_index, each
+// plus vertex_offset giving the vertex index the vertex shader sees, instance_count times, inside
+// rendering. Instance indices are seen as bfr_draw says.
+BFR_API bfr_result bfr_draw_indexed(
+    bfr_device* device,
+    bfr_command_list command_list,
+    uint32_t index_count,
+    uint32_t instance_count,
+    uint32_t first_index,
+    int32_t vertex_offset,
+    uint32_t first_instance);
+
+// Records a dispatch of x by y by z workgroups of the bound compute pipeline, outside rendering.
+// Commands after a bfr_barrier see what it wrote.
+BFR_API bfr_result bfr_dispatch(
+    bfr_device* device,
+    bfr_command_list command_list,
+    uint32_t x,
+    uint32_t y,
+    uint32_t z);
 
 // Records copies of regions from src to dst, outside rendering. src has copy_src usage and is
 // device or upload memory; dst has copy_dst usage and is device or readback memory. Commands after
@@ -1651,6 +1813,10 @@ BFR_API bfr_result bfr_create_buffer(
 // error_invalid_handle when the buffer is destroyed.
 BFR_API bfr_result bfr_map_buffer(bfr_device* device, bfr_buffer buffer, void** data);
 
+// Writes the buffer's index in the storage buffer table bfr_pipeline states, held from creation to
+// destruction. Fails with error_invalid_argument when the buffer has no storage usage.
+BFR_API bfr_result bfr_get_buffer_slot(bfr_device* device, bfr_buffer buffer, uint32_t* slot);
+
 // Destroys a buffer once the GPU has finished with it; the handle is invalid at once. Not for the
 // frame path: it records the point the buffer waits for and frees what the GPU is done with. A
 // handle that is already destroyed does nothing.
@@ -1664,6 +1830,12 @@ BFR_API bfr_result bfr_create_texture(
     bfr_device* device,
     const bfr_texture_desc* desc,
     bfr_texture* texture);
+
+// Writes where the texture is in the bindless tables bfr_pipeline states.
+BFR_API bfr_result bfr_get_texture_slots(
+    bfr_device* device,
+    bfr_texture texture,
+    bfr_texture_slots* slots);
 
 // Destroys a texture once the GPU has finished with it; the handle is invalid at once. Not for the
 // frame path: it records the point the texture waits for and frees what the GPU is done with. A

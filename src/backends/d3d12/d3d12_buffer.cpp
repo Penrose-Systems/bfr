@@ -3,13 +3,17 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
+#include "core/slot_chains.h"
 #include "d3d12/d3d12_device.h"
 #include "d3d12/d3d12_result.h"
+#include "d3d12/d3d12_texture.h"
+#include "rhi/bindless_slots.h"
 #include "rhi/buffer_check.h"
 
 #include <d3d12.h>
 #include <D3D12MemAlloc.h>
 #include <dxgi1_6.h>
+#include <dxgiformat.h>
 #include <windows.h>
 #include <wrl/client.h>
 
@@ -59,7 +63,7 @@ core::Result<ComPtr<D3D12MA::Allocator>> createAllocator(ID3D12Device* device, I
     return allocator;
 }
 
-core::Result<D3D12Buffer> createD3D12Buffer(D3D12MA::Allocator& allocator, const BufferDesc& desc) {
+core::Result<D3D12Buffer> createD3D12Buffer(D3D12MA::Allocator& allocator, const BufferDesc& desc, std::uint32_t slot) {
     const Placement placement = placementFor(desc.memory);
     const D3D12_RESOURCE_DESC resource{
         .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
@@ -75,7 +79,8 @@ core::Result<D3D12Buffer> createD3D12Buffer(D3D12MA::Allocator& allocator, const
     };
     D3D12MA::ALLOCATION_DESC allocation{};
     allocation.HeapType = placement.heap;
-    D3D12Buffer buffer{.allocation = {}, .resource = {}, .memory = desc.memory, .mapped = {}};
+    D3D12Buffer buffer{
+        .allocation = {}, .resource = {}, .memory = desc.memory, .size = desc.size, .mapped = {}, .slot = slot};
     if (const HRESULT result = allocator.CreateResource(&allocation, &resource, placement.state, nullptr,
                                                         &buffer.allocation, IID_PPV_ARGS(&buffer.resource));
         FAILED(result)) {
@@ -109,8 +114,10 @@ core::Result<D3D12Buffer*> D3D12Device::bufferFor(BufferHandle buffer) {
 void D3D12Device::collectBuffers() {
     const std::uint64_t completed = submissions_.completed(
         [this](std::uint32_t queue) { return queues_[queue]->fence->GetCompletedValue(); });
-    buffers_.collect(completed);
-    textures_.collect(completed);
+    // A collected resource's slots go back to their tables, so no pending work
+    // can see a slot reused.
+    buffers_.collect(completed, [this](const D3D12Buffer& buffer) { bindless_.giveBuffer(buffer.slot); });
+    textures_.collect(completed, [this](const D3D12Texture& texture) { bindless_.giveTexture(texture.slots); });
     pipelines_.collect(completed);
 }
 
@@ -121,36 +128,44 @@ core::Result<BufferHandle> D3D12Device::createBuffer(const BufferDesc& desc) {
     // Cold, so buffers the GPU is done with are freed here, never on the
     // frame path: freeing one frees the allocator's memory.
     collectBuffers();
-    auto made = createD3D12Buffer(*allocator_.Get(), desc);
+    auto slot = bindless_.takeBuffer(desc);
+    if (!slot) {
+        return std::unexpected(std::move(slot.error()));
+    }
+    auto made = createD3D12Buffer(*allocator_.Get(), desc, *slot);
     if (!made) {
+        bindless_.giveBuffer(*slot);
         return std::unexpected(std::move(made.error()));
     }
+    ID3D12Resource* resource = made->resource.Get();
     const BufferHandle buffer = buffers_.emplace(std::move(*made));
     if (buffer.isNull()) {
+        bindless_.giveBuffer(*slot);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} buffers", kBufferLimit);
+    }
+    if (*slot != core::SlotChains::kEnd) {
+        // A raw view of the whole buffer, as api/bfr.yaml states under
+        // bfr_pipeline: the shader declares a ByteAddressBuffer.
+        const D3D12_UNORDERED_ACCESS_VIEW_DESC view{.Format = DXGI_FORMAT_R32_TYPELESS,
+                                                    .ViewDimension = D3D12_UAV_DIMENSION_BUFFER,
+                                                    .Buffer = {.FirstElement = 0,
+                                                               .NumElements = static_cast<UINT>(desc.size /
+                                                                                                sizeof(std::uint32_t)),
+                                                               .StructureByteStride = 0,
+                                                               .CounterOffsetInBytes = 0,
+                                                               .Flags = D3D12_BUFFER_UAV_FLAG_RAW}};
+        device_->CreateUnorderedAccessView(resource, nullptr, &view,
+                                           layout_.resourceAt(layout_.storageBuffers + *slot));
     }
     return buffer;
 }
 
-core::Result<void> D3D12Device::copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
-                                           std::span<const BufferCopy> regions) {
-    auto list = commandListFor(commandList);
-    if (!list) {
-        return std::unexpected(std::move(list.error()));
+core::Result<std::uint32_t> D3D12Device::bufferSlot(BufferHandle buffer) {
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
     }
-    auto from = bufferFor(src);
-    if (!from) {
-        return std::unexpected(std::move(from.error()));
-    }
-    auto to = bufferFor(dst);
-    if (!to) {
-        return std::unexpected(std::move(to.error()));
-    }
-    for (const BufferCopy& region : regions) {
-        (*list)->list->CopyBufferRegion((*to)->resource.Get(), region.dstOffset, (*from)->resource.Get(),
-                                        region.srcOffset, region.size);
-    }
-    return {};
+    return BindlessSlots::reported((*found)->slot);
 }
 
 core::Result<std::span<std::byte>> D3D12Device::mapBuffer(BufferHandle buffer) {

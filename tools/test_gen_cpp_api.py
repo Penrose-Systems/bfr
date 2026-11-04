@@ -343,6 +343,39 @@ class PlacementTests(unittest.TestCase):
         self.assertIn("    void destroyBuffer(Buffer buffer) const;", rendered)
         self.assertIn("    bfr_destroy_buffer(device_, buffer.get());", rendered)
 
+    def test_a_handle_member_passed_in_is_a_borrowed_pointer(self) -> None:
+        spec = with_more(MINIMAL)
+        spec["structs"]["attachment"] = {
+            "doc": "A target.",
+            "members": [{"name": "buffer", "type": "buffer"}, {"name": "enable", "type": "bool"}],
+        }
+        spec["structs"]["pass_desc"] = {
+            "doc": "A pass.",
+            "members": [{"name": "attachments", "type": "attachment", "fixed": 2}],
+        }
+        spec["functions"]["device_begin"] = {
+            "doc": "Begins.",
+            "returns": "result",
+            "params": [{"name": "device", "type": "device"}, {"name": "desc", "type": "pass_desc", "pointer": "in"}],
+        }
+        rendered = render(Api(spec))
+        self.assertIn("    const Buffer* buffer{};", rendered)
+        self.assertIn(".buffer = value.buffer != nullptr ? value.buffer->get() : bfr_buffer{}", rendered)
+        # Converted after the handle classes, which the conversion calls.
+        self.assertLess(rendered.index("class Buffer {"), rendered.index("inline bfr_attachment toC("))
+        self.assertLess(rendered.index("inline bfr_attachment toC("), rendered.index("inline bfr_pass_desc toC("))
+
+    def test_a_handle_member_passed_out_is_rejected(self) -> None:
+        def change(spec: dict) -> None:
+            spec["structs"]["found"] = {"doc": "Found.", "members": [{"name": "buffer", "type": "buffer"}]}
+            spec["functions"]["device_find"] = {
+                "doc": "Finds.",
+                "returns": "result",
+                "params": [{"name": "device", "type": "device"}, {"name": "found", "type": "found", "pointer": "out"}],
+            }
+
+        self.assert_rejected(change, "handle member only passed in")
+
     def test_an_array_member_passed_out_is_rejected(self) -> None:
         def change(spec: dict) -> None:
             spec["structs"]["batch"] = {

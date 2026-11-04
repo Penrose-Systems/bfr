@@ -200,14 +200,23 @@ encoder switching needs lookahead.
   D3D12 has no pointer dereference; indices work on all three backends. GPU
   addresses appear only where the native APIs require them (ray tracing
   build inputs, indirect arguments).
+- A resource takes its slot in each table its usage names when it is
+  created, and `get_buffer_slot` and `get_texture_slots` report it; the slot
+  is the same number on every backend, so one shader index means one thing.
+  On D3D12 that takes each descriptor range's offset from the table's start
+  to be its region's, so an index in space 1 or 2 is table-local. The slot
+  goes back to its table when the resource is collected, after every submit
+  made before its destroy has run, never at the destroy itself, so pending
+  work never sees a slot reused.
 - Metal 4 has no push constants and no `setBytes` on its encoders; resources
   bind only through `MTL4ArgumentTable`, which Metal snapshots at each draw
-  or dispatch. The Metal backend copies push-constant data into a linear
-  upload ring owned by the command pool and binds that address with
-  `setAddress` before the draw. The ring is recycled with the pool and kept
-  resident.
-- Creating a view allocates its bindless slot; destroying it retires the
-  slot through deferred destruction.
+  or dispatch. The Metal backend copies push-constant data into a ring owned
+  by the command pool, sized by the pool's `push_constant_updates`, and
+  binds that address with `setAddress` before the draw. The ring is recycled
+  with the pool's reset and kept resident. Vulkan and D3D12 need no room, but
+  count against the member all the same, so the limit means one thing on
+  every backend; it is on the pool because a caller declares a capacity, not
+  a backend.
 - Limits set the sizes: push constants at most 128 bytes (Vulkan guarantee,
   within the D3D12 64-DWORD root signature); samplers at most 2048 (D3D12
   shader-visible sampler heap). Mobile descriptor limits still to check.
@@ -230,6 +239,18 @@ encoder switching needs lookahead.
   Reason: simplest core, fits GPU-driven work. Revisit if measurements on
   tile-based mobile GPUs show fixed-function fetch winning for position-only
   shading.
+- Clip space is one convention on every backend: x right, y up, z 0 at the
+  near plane and 1 at the far, which D3D12 and Metal have natively. The
+  Vulkan backend passes every viewport with negative height and its y
+  offset by the height, core since 1.1, which also makes winding read the
+  same. Reason: one vertex shader and one front face mean the same thing
+  everywhere. Hazel does the same; Godot instead flips in its shader
+  translation, treating Vulkan as canonical, which BFR cannot since the
+  caller compiles the shaders.
+- What a shader sees of `first_instance` is the backend's own: Vulkan's
+  `gl_InstanceIndex` and Metal's `instance_id` include it, D3D12's
+  `SV_InstanceID` counts from 0. BFR passes the value through and documents
+  the difference rather than patching bytecode it did not compile.
 
 ### Command recording
 
@@ -246,7 +267,14 @@ encoder switching needs lookahead.
 - Commands: barriers, copies, clears, draw (direct, indexed, indirect,
   indirect count), mesh dispatch, compute dispatch (direct, indirect),
   acceleration structure builds, push constants, pipeline bind, viewport and
-  scissor, timestamps and queries, debug markers.
+  scissor, timestamps and queries, debug markers. Today: barriers, copies,
+  rendering to swapchain images and textures with load and store actions,
+  viewport and scissor (set to the whole area when rendering begins),
+  pipeline bind, push constants, index buffer bind, direct and indexed
+  draws, direct dispatches.
+- Each backend keeps the same record of what a list has bound and makes the
+  same usage checks of a draw or dispatch (`src/rhi/command_check.h`), so a
+  misuse fails the same way on every backend, the null one included.
 
 ### Swapchain
 

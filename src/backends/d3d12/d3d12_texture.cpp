@@ -4,10 +4,12 @@
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/texture.h"
+#include "core/slot_chains.h"
 #include "d3d12/d3d12_buffer.h"
 #include "d3d12/d3d12_device.h"
 #include "d3d12/d3d12_formats.h"
 #include "d3d12/d3d12_result.h"
+#include "rhi/bindless_slots.h"
 #include "rhi/format_blocks.h"
 
 #include <d3d12.h>
@@ -20,12 +22,15 @@
 #include <cstdint>
 #include <expected>
 #include <format>
+#include <limits>
 #include <span>
 #include <utility>
 
 namespace bfr::rhi::d3d12 {
 
 namespace {
+
+using Microsoft::WRL::ComPtr;
 
 D3D12_RESOURCE_DIMENSION dimensionFor(TextureDimension dimension) {
     switch (dimension) {
@@ -70,7 +75,7 @@ UINT subresourceOf(const D3D12Texture& texture, std::uint32_t mip, std::uint32_t
 // What a buffer holds of aspect: the texture's own format, or the plane's
 // format for a planar depth-stencil one (the d3dx12 format table's planes).
 DXGI_FORMAT footprintFormat(const D3D12Texture& texture, TextureAspect aspect) {
-    if (!planar(blockOf(texture.format))) {
+    if (!planar(blockOf(texture.desc.format))) {
         return texture.dxgi;
     }
     return aspect == TextureAspect::Stencil ? DXGI_FORMAT_R8_TYPELESS : DXGI_FORMAT_R32_TYPELESS;
@@ -90,7 +95,7 @@ bool whole(const D3D12Texture& texture, TextureAspect aspect) {
 // whole copy's footprint is the mip level itself, whatever rows_per_image is.
 D3D12_TEXTURE_COPY_LOCATION bufferSide(ID3D12Resource* buffer, const D3D12Texture& texture,
                                        const BufferTextureCopy& region) {
-    const FormatBlock& block = blockOf(texture.format);
+    const FormatBlock& block = blockOf(texture.desc.format);
     D3D12_TEXTURE_COPY_LOCATION location{};
     location.pResource = buffer;
     location.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
@@ -125,16 +130,70 @@ D3D12_BOX boxOf(const FormatBlock& block, std::uint32_t x, std::uint32_t y, std:
 
 } // namespace
 
-core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, const TextureDesc& desc) {
+namespace {
+
+// The one-descriptor heap a texture's render target or depth-stencil view
+// lives in: made with the texture, so a rendering allocates nothing.
+core::Result<ComPtr<ID3D12DescriptorHeap>> createTargetHeap(ID3D12Device& device, D3D12_DESCRIPTOR_HEAP_TYPE type) {
+    const D3D12_DESCRIPTOR_HEAP_DESC heapDesc{.Type = type,
+                                              .NumDescriptors = 1,
+                                              .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+                                              .NodeMask = 0};
+    ComPtr<ID3D12DescriptorHeap> heap;
+    if (const HRESULT result = device.CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&heap)); FAILED(result)) {
+        return failure(core::ErrorCode::RhiDeviceFailed,
+                       {.call = "ID3D12Device::CreateDescriptorHeap", .result = result});
+    }
+    return heap;
+}
+
+// The whole first mip level of a depth texture as a depth-stencil view of
+// format, every layer; a resource made typeless needs the format named.
+D3D12_DEPTH_STENCIL_VIEW_DESC depthViewFor(const D3D12Texture& texture, DXGI_FORMAT format) {
+    D3D12_DEPTH_STENCIL_VIEW_DESC view{};
+    view.Format = format;
+    view.Flags = D3D12_DSV_FLAG_NONE;
+    const bool array = texture.layers > 1;
+    if (texture.samples > 1) {
+        if (array) {
+            view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY;
+            view.Texture2DMSArray = {.FirstArraySlice = 0, .ArraySize = texture.layers};
+        }
+        else {
+            view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DMS;
+        }
+    }
+    else if (array) {
+        view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+        view.Texture2DArray = {.MipSlice = 0, .FirstArraySlice = 0, .ArraySize = texture.layers};
+    }
+    else {
+        view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        view.Texture2D = {.MipSlice = 0};
+    }
+    return view;
+}
+
+} // namespace
+
+core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3D12Device& device,
+                                              const TextureDesc& desc, const TextureSlotsHeld& slots) {
     const DxgiFormats formats = dxgiFormatsFor(desc.format);
     const bool slices = desc.dimension == TextureDimension::D3;
+    // A depth texture shaders also read is made typeless, so its depth view
+    // and its shader view are both views of it; its views name their formats.
+    const bool depth = formats.depth != DXGI_FORMAT_UNKNOWN;
+    const bool readToo = desc.usage.sampled || desc.usage.storage;
     D3D12Texture texture{.allocation = {},
                          .resource = {},
-                         .format = desc.format,
-                         .dxgi = formats.depth != DXGI_FORMAT_UNKNOWN ? formats.depth : formats.texture,
+                         .targetHeap = {},
+                         .target = {},
+                         .desc = desc,
+                         .dxgi = depth ? (readToo ? formats.typeless : formats.depth) : formats.texture,
                          .mipLevels = desc.mipLevels,
                          .layers = slices ? 1 : desc.layers,
-                         .samples = desc.samples};
+                         .samples = desc.samples,
+                         .slots = slots};
     const D3D12_RESOURCE_DESC resource{
         .Dimension = dimensionFor(desc.dimension),
         .Alignment = 0,
@@ -155,8 +214,142 @@ core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, con
         return failure(core::ErrorCode::RhiDeviceFailed,
                        {.call = "D3D12MA::Allocator::CreateResource", .result = result});
     }
+    // The whole texture as a target, with the API's default view of it.
+    if (desc.usage.colorAttachment || desc.usage.depthStencil) {
+        auto heap = createTargetHeap(device, desc.usage.depthStencil ? D3D12_DESCRIPTOR_HEAP_TYPE_DSV
+                                                                     : D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        if (!heap) {
+            return std::unexpected(std::move(heap.error()));
+        }
+        texture.targetHeap = std::move(*heap);
+        texture.target = texture.targetHeap->GetCPUDescriptorHandleForHeapStart();
+        if (desc.usage.depthStencil) {
+            const D3D12_DEPTH_STENCIL_VIEW_DESC view = depthViewFor(texture, formats.depth);
+            device.CreateDepthStencilView(texture.resource.Get(), &view, texture.target);
+        }
+        else {
+            device.CreateRenderTargetView(texture.resource.Get(), nullptr, texture.target);
+        }
+    }
     return texture;
 }
+
+namespace {
+
+// Views of the whole texture, every mip level and layer, as the shader
+// declares it: an array type when it has layers, multisampled when it has
+// samples.
+D3D12_SHADER_RESOURCE_VIEW_DESC sampledViewFor(const D3D12Texture& texture) {
+    constexpr UINT kAllMips = std::numeric_limits<UINT>::max();
+    D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+    view.Format = dxgiFormatsFor(texture.desc.format).texture;
+    view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    const bool array = texture.layers > 1;
+    switch (texture.desc.dimension) {
+        case TextureDimension::D1:
+            if (array) {
+                view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE1DARRAY;
+                view.Texture1DArray = {.MostDetailedMip = 0,
+                                       .MipLevels = kAllMips,
+                                       .FirstArraySlice = 0,
+                                       .ArraySize = texture.layers,
+                                       .ResourceMinLODClamp = 0};
+            }
+            else {
+                view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE1D;
+                view.Texture1D = {.MostDetailedMip = 0, .MipLevels = kAllMips, .ResourceMinLODClamp = 0};
+            }
+            break;
+        case TextureDimension::D3:
+            view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+            view.Texture3D = {.MostDetailedMip = 0, .MipLevels = kAllMips, .ResourceMinLODClamp = 0};
+            break;
+        case TextureDimension::Cube:
+            if (texture.layers > kCubeFaces) {
+                view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
+                view.TextureCubeArray = {.MostDetailedMip = 0,
+                                         .MipLevels = kAllMips,
+                                         .First2DArrayFace = 0,
+                                         .NumCubes = texture.layers / kCubeFaces,
+                                         .ResourceMinLODClamp = 0};
+            }
+            else {
+                view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+                view.TextureCube = {.MostDetailedMip = 0, .MipLevels = kAllMips, .ResourceMinLODClamp = 0};
+            }
+            break;
+        case TextureDimension::D2:
+        default:
+            if (texture.samples > 1) {
+                if (array) {
+                    view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY;
+                    view.Texture2DMSArray = {.FirstArraySlice = 0, .ArraySize = texture.layers};
+                }
+                else {
+                    view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMS;
+                }
+            }
+            else if (array) {
+                view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+                view.Texture2DArray = {.MostDetailedMip = 0,
+                                       .MipLevels = kAllMips,
+                                       .FirstArraySlice = 0,
+                                       .ArraySize = texture.layers,
+                                       .PlaneSlice = 0,
+                                       .ResourceMinLODClamp = 0};
+            }
+            else {
+                view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                view.Texture2D = {.MostDetailedMip = 0,
+                                  .MipLevels = kAllMips,
+                                  .PlaneSlice = 0,
+                                  .ResourceMinLODClamp = 0};
+            }
+            break;
+    }
+    return view;
+}
+
+// The first mip level of the whole texture, every layer; a cube is its faces.
+D3D12_UNORDERED_ACCESS_VIEW_DESC storageViewFor(const D3D12Texture& texture) {
+    D3D12_UNORDERED_ACCESS_VIEW_DESC view{};
+    view.Format = dxgiFormatsFor(texture.desc.format).texture;
+    const bool array = texture.layers > 1;
+    switch (texture.desc.dimension) {
+        case TextureDimension::D1:
+            if (array) {
+                view.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE1DARRAY;
+                view.Texture1DArray = {.MipSlice = 0, .FirstArraySlice = 0, .ArraySize = texture.layers};
+            }
+            else {
+                view.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE1D;
+                view.Texture1D = {.MipSlice = 0};
+            }
+            break;
+        case TextureDimension::D3:
+            view.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
+            view.Texture3D = {.MipSlice = 0, .FirstWSlice = 0, .WSize = texture.desc.depth};
+            break;
+        case TextureDimension::Cube:
+        case TextureDimension::D2:
+        default:
+            if (array || texture.desc.dimension == TextureDimension::Cube) {
+                view.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+                view.Texture2DArray = {.MipSlice = 0,
+                                       .FirstArraySlice = 0,
+                                       .ArraySize = texture.layers,
+                                       .PlaneSlice = 0};
+            }
+            else {
+                view.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+                view.Texture2D = {.MipSlice = 0, .PlaneSlice = 0};
+            }
+            break;
+    }
+    return view;
+}
+
+} // namespace
 
 // The device's texture calls, beside the textures they make.
 
@@ -171,15 +364,38 @@ core::Result<D3D12Texture*> D3D12Device::textureFor(TextureHandle texture) {
 core::Result<TextureHandle> D3D12Device::createTexture(const TextureDesc& desc) {
     // Cold, as createBuffer is: what the GPU is done with is freed here.
     collectBuffers();
-    auto made = createD3D12Texture(*allocator_.Get(), desc);
+    auto slots = bindless_.takeTexture(desc);
+    if (!slots) {
+        return std::unexpected(std::move(slots.error()));
+    }
+    auto made = createD3D12Texture(*allocator_.Get(), *device_.Get(), desc, *slots);
     if (!made) {
+        bindless_.giveTexture(*slots);
         return std::unexpected(std::move(made.error()));
+    }
+    if (slots->sampled != core::SlotChains::kEnd) {
+        const D3D12_SHADER_RESOURCE_VIEW_DESC view = sampledViewFor(*made);
+        device_->CreateShaderResourceView(made->resource.Get(), &view, layout_.resourceAt(slots->sampled));
+    }
+    if (slots->storage != core::SlotChains::kEnd) {
+        const D3D12_UNORDERED_ACCESS_VIEW_DESC view = storageViewFor(*made);
+        device_->CreateUnorderedAccessView(made->resource.Get(), nullptr, &view,
+                                           layout_.resourceAt(layout_.storageTextures + slots->storage));
     }
     const TextureHandle texture = textures_.emplace(std::move(*made));
     if (texture.isNull()) {
+        bindless_.giveTexture(*slots);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} textures", kBufferLimit);
     }
     return texture;
+}
+
+core::Result<TextureSlots> D3D12Device::textureSlots(TextureHandle texture) {
+    auto found = textureFor(texture);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    return BindlessSlots::reported((*found)->slots);
 }
 
 core::Result<void> D3D12Device::destroyTexture(TextureHandle texture) {
@@ -213,7 +429,7 @@ core::Result<void> D3D12Device::copyBufferToTexture(CommandListHandle commandLis
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    const FormatBlock& block = blockOf((*to)->format);
+    const FormatBlock& block = blockOf((*to)->desc.format);
     for (const BufferTextureCopy& region : regions) {
         const D3D12_TEXTURE_COPY_LOCATION source = bufferSide((*from)->resource.Get(), **to, region);
         const D3D12_TEXTURE_COPY_LOCATION target = textureSide(**to, subresourceOf(**to, region.mipLevel, region.layer,
@@ -242,7 +458,7 @@ core::Result<void> D3D12Device::copyTextureToBuffer(CommandListHandle commandLis
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    const FormatBlock& block = blockOf((*from)->format);
+    const FormatBlock& block = blockOf((*from)->desc.format);
     for (const BufferTextureCopy& region : regions) {
         const D3D12_TEXTURE_COPY_LOCATION source = textureSide(**from,
                                                                subresourceOf(**from, region.mipLevel, region.layer,
@@ -272,7 +488,7 @@ core::Result<void> D3D12Device::copyTexture(CommandListHandle commandList, Textu
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    const FormatBlock& block = blockOf((*from)->format);
+    const FormatBlock& block = blockOf((*from)->desc.format);
     // Every aspect: a depth-stencil format's two planes, one at a time.
     const std::uint32_t planes = planar(block) ? 2 : 1;
     const bool depthStencil = block.bytes == 0;

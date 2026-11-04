@@ -12,16 +12,15 @@ cd "$(dirname "$0")"
     echo "#include <cstdint>"
     echo
     echo "namespace bfr::test::spirv {"
-    for stage in comp vert frag; do
-        glslangValidator -V --target-env vulkan1.3 -o "bindless.$stage.spv" "bindless.$stage" > /dev/null
+    for shader in bindless.comp bindless.vert bindless.frag color.frag; do
+        glslangValidator -V --target-env vulkan1.3 -o "$shader.spv" "$shader" > /dev/null
+        name="$(echo "$shader" | sed 's/\.\(.\)/\U\1/g; s/^./\U&/')"
         echo
-        echo "/// bindless.$stage, as SPIR-V bytes."
-        printf "inline constexpr std::array<std::uint8_t, %s> kBindless%s{\n" \
-            "$(stat -c %s "bindless.$stage.spv")" \
-            "$(echo "$stage" | sed 's/^./\U&/')"
-        od -An -v -t u1 -w24 "bindless.$stage.spv" | sed 's/^ *//; s/  */, /g; s/^/    /; s/$/,/'
+        echo "/// $shader, as SPIR-V bytes."
+        printf "inline constexpr std::array<std::uint8_t, %s> k%s{\n" "$(stat -c %s "$shader.spv")" "$name"
+        od -An -v -t u1 -w24 "$shader.spv" | sed 's/^ *//; s/  */, /g; s/^/    /; s/$/,/'
         echo "};"
-        rm "bindless.$stage.spv"
+        rm "$shader.spv"
     done
     echo
     echo "} // namespace bfr::test::spirv"

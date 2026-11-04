@@ -34,7 +34,23 @@ struct MetalBindlessTables {
     std::uint32_t samplers = 0;
     // Declared after buffer, so it leaves the set before it is released.
     Resident resident;
+
+    /// Points slot of the storage buffer table at address, the texture table
+    /// at texture, and the storage texture table at texture: the buffer is
+    /// shared, so the CPU writes the entry.
+    void writeStorageBuffer(std::uint32_t slot, MTL::GPUAddress address) const;
+    void writeSampledTexture(std::uint32_t slot, MTL::ResourceID texture) const;
+    void writeStorageTexture(std::uint32_t slot, MTL::ResourceID texture) const;
 };
+
+/// The buffer bindings an argument table holds: the tables and the push
+/// constants.
+inline constexpr std::uint32_t kArgumentBufferBindings = 2;
+
+/// An argument table of kArgumentBufferBindings buffers, which each list binds
+/// the tables and its push constants through; made with each list slot. Fails
+/// with RhiDeviceFailed when Metal gives none, with what it said.
+[[nodiscard]] core::Result<Ref<MTL4::ArgumentTable>> createArgumentTable(MTL::Device& device);
 
 /// The tables on device as desc sizes them, added to residency, which the
 /// caller commits under its lock. Fails with RhiDeviceFailed when Metal gives

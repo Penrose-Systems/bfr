@@ -11,6 +11,8 @@
 #include "core/fixed_vector.h"
 #include "core/slot_chains.h"
 #include "core/submissions.h"
+#include "rhi/bindless_slots.h"
+#include "rhi/command_check.h"
 #include "vulkan/queue_families.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_buffer.h"
@@ -42,6 +44,8 @@ class VulkanInstance;
 struct VulkanCommandPool {
     VkCommandPool pool = VK_NULL_HANDLE;
     std::uint32_t queue = 0;
+    std::uint32_t pushConstantUpdates = 0;
+    std::uint32_t pushed = 0;
     std::uint32_t first = core::SlotChains::kEnd;
     std::uint32_t next = core::SlotChains::kEnd;
     std::uint32_t recording = 0;
@@ -88,14 +92,16 @@ struct VulkanQueue {
     std::mutex lock;
 };
 
-/// Commands recorded on one buffer: the pool and slot it came from, the
-/// swapchain rendering is open on, and the chain of render slots naming every
-/// swapchain rendered to, whose images the submit waits for and signals.
+/// Commands recorded on one buffer: the pool and slot it came from, what it
+/// has bound, the swapchain the open rendering draws to, if one, and the
+/// chain of render slots naming every swapchain rendered to, whose images the
+/// submit waits for and signals.
 struct VulkanCommandList {
     VkCommandBuffer buffer = VK_NULL_HANDLE;
     CommandPoolHandle pool;
     std::uint32_t slot = 0;
-    std::optional<SwapchainHandle> rendering;
+    RecordState state;
+    std::optional<SwapchainHandle> presenting;
     std::uint32_t rendered = core::SlotChains::kEnd;
     // The serial of the submit this list is gathered into, so a list named
     // twice in one submit is caught in a single pass.
@@ -140,6 +146,21 @@ public:
     [[nodiscard]] core::Result<void> beginRendering(CommandListHandle commandList, SwapchainHandle swapchain,
                                                     const RenderingDesc& desc) override;
     [[nodiscard]] core::Result<void> endRendering(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<void> setViewport(CommandListHandle commandList, const Viewport& viewport) override;
+    [[nodiscard]] core::Result<void> setScissor(CommandListHandle commandList, const Rect& scissor) override;
+    [[nodiscard]] core::Result<void> bindPipeline(CommandListHandle commandList, PipelineHandle pipeline) override;
+    [[nodiscard]] core::Result<void> pushConstants(CommandListHandle commandList,
+                                                   std::span<const std::byte> data) override;
+    [[nodiscard]] core::Result<void> bindIndexBuffer(CommandListHandle commandList, BufferHandle buffer,
+                                                     std::uint64_t offset, IndexType type) override;
+    [[nodiscard]] core::Result<void> draw(CommandListHandle commandList, std::uint32_t vertexCount,
+                                          std::uint32_t instanceCount, std::uint32_t firstVertex,
+                                          std::uint32_t firstInstance) override;
+    [[nodiscard]] core::Result<void> drawIndexed(CommandListHandle commandList, std::uint32_t indexCount,
+                                                 std::uint32_t instanceCount, std::uint32_t firstIndex,
+                                                 std::int32_t vertexOffset, std::uint32_t firstInstance) override;
+    [[nodiscard]] core::Result<void> dispatch(CommandListHandle commandList, std::uint32_t x, std::uint32_t y,
+                                              std::uint32_t z) override;
     [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
                                                 std::span<const BufferCopy> regions) override;
     [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
@@ -159,8 +180,10 @@ public:
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
     [[nodiscard]] core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<std::uint32_t> bufferSlot(BufferHandle buffer) override;
     [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
+    [[nodiscard]] core::Result<TextureSlots> textureSlots(TextureHandle texture) override;
     [[nodiscard]] core::Result<void> destroyTexture(TextureHandle texture) override;
     [[nodiscard]] core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) override;
     [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
@@ -231,6 +254,7 @@ private:
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<VulkanBuffer, Buffer> buffers_;
     core::Pool<VulkanTexture, Texture> textures_;
+    BindlessSlots bindless_;
     // Declared before pipelines_, which are made on it, so it outlives them.
     VulkanBindlessLayout layout_;
     core::Pool<VulkanPipeline, Pipeline> pipelines_;

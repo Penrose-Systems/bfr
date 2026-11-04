@@ -12,7 +12,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -223,9 +225,12 @@ TEST_CASE("C++ API clears and presents a headless swapchain", "[cpp_api][gpu]") 
             auto commands = pool->beginCommands();
             INFO(failureOf(commands));
             REQUIRE(commands.has_value());
-            CHECK(
-                device.beginRendering(*commands, *swapchain, {.loadOp = bfr::LoadOp::Clear, .clearColor = {1, 0, 0, 1}})
-                    .has_value());
+            CHECK(device
+                      .beginRendering(*commands, *swapchain,
+                                      {.colorAttachmentCount = 1,
+                                       .colorAttachments = {{{.loadOp = bfr::LoadOp::Clear,
+                                                              .clearColor = {1, 0, 0, 1}}}}})
+                      .has_value());
             CHECK(device.endRendering(*commands).has_value());
             const auto submitted = device.submit({.queue = 0, .commandLists = std::span{&*commands, 1}});
             INFO(failureOf(submitted));
@@ -446,6 +451,98 @@ TEST_CASE("C++ API creates and destroys pipelines", "[cpp_api][gpu]") {
         REQUIRE(graphics.has_value());
         desc.colorTargets[0].format = bfr::Format::Undefined;
         CHECK(device.createGraphicsPipeline(desc).error().code == bfr::Result::ErrorInvalidArgument);
+    }
+    CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C++ API dispatches a compute pipeline through a buffer's slot", "[cpp_api][gpu]") {
+    const bfr::Backend backend = GENERATE(eachBackend());
+    // The shaders checked in are SPIR-V, which only Vulkan takes.
+    if (backend != bfr::Backend::Vulkan) {
+        SKIP("no bytecode is checked in for this backend");
+    }
+    constexpr std::uint32_t kWorkgroup = 64;
+    constexpr std::uint64_t kBytes = std::uint64_t{kWorkgroup} * sizeof(std::uint32_t);
+    Messages messages;
+    {
+        const bfr::Instance instance = validatedInstance(backend, messages);
+        const bfr::Device device = headlessDevice(instance);
+        auto pipeline = device.createComputePipeline(
+            {.compute = {.code = bfr::test::spirv::kBindlessComp, .entryPoint = "main"},
+             .workgroupSize = {kWorkgroup, 1, 1}});
+        INFO(failureOf(pipeline));
+        REQUIRE(pipeline.has_value());
+        auto target = device.createBuffer({.size = kBytes, .usage = {.copySrc = true, .storage = true}});
+        REQUIRE(target.has_value());
+        auto readback = device.createBuffer(
+            {.size = kBytes, .memory = bfr::BufferMemory::Readback, .usage = {.copyDst = true}});
+        REQUIRE(readback.has_value());
+        const auto slot = target->bufferSlot();
+        REQUIRE(slot.has_value());
+        CHECK(readback->bufferSlot().error().code == bfr::Result::ErrorInvalidArgument);
+
+        auto pool = device.createCommandPool({.queue = 0, .listCount = 1});
+        REQUIRE(pool.has_value());
+        auto commands = pool->beginCommands();
+        REQUIRE(commands.has_value());
+        CHECK(device.bindPipeline(*commands, *pipeline).has_value());
+        // The shader reads the slot from the first push constant.
+        const auto bytes = std::bit_cast<std::array<std::uint8_t, sizeof(std::uint32_t)>>(*slot);
+        CHECK(device.pushConstants(*commands, bytes).has_value());
+        CHECK(device.dispatch(*commands, 1, 1, 1).has_value());
+        CHECK(device.barrier(*commands).has_value());
+        const bfr::BufferCopy whole{.srcOffset = 0, .dstOffset = 0, .size = kBytes};
+        CHECK(device.copyBuffer(*commands, *target, *readback, std::span{&whole, 1}).has_value());
+        const auto submitted = device.submit({.queue = 0, .commandLists = std::span{&*commands, 1}});
+        INFO(failureOf(submitted));
+        REQUIRE(submitted.has_value());
+        REQUIRE(device.wait(*submitted).has_value());
+
+        const auto data = readback->map();
+        REQUIRE(data.has_value());
+        std::array<std::uint32_t, kWorkgroup> values{};
+        std::memcpy(values.data(), *data, kBytes);
+        for (std::uint32_t i = 0; i < kWorkgroup; ++i) {
+            CHECK(values.at(i) == i);
+        }
+    }
+    CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C++ API renders to a texture it names by a borrowed pointer", "[cpp_api][gpu]") {
+    constexpr std::uint32_t kSide = 8;
+    const bfr::Backend backend = GENERATE(eachBackend());
+    Messages messages;
+    {
+        const bfr::Instance instance = validatedInstance(backend, messages);
+        const bfr::Device device = headlessDevice(instance);
+        auto target = device.createTexture({.format = bfr::Format::Rgba8Unorm,
+                                            .width = kSide,
+                                            .height = kSide,
+                                            .depth = 1,
+                                            .layers = 1,
+                                            .mipLevels = 1,
+                                            .samples = 1,
+                                            .usage = {.colorAttachment = true}});
+        INFO(failureOf(target));
+        REQUIRE(target.has_value());
+        auto pool = device.createCommandPool({.queue = 0, .listCount = 1});
+        REQUIRE(pool.has_value());
+        auto commands = pool->beginCommands();
+        REQUIRE(commands.has_value());
+        REQUIRE(
+            device.textureBarrier(*commands, *target, bfr::TextureLayout::Undefined, bfr::TextureLayout::ColorTarget)
+                .has_value());
+        bfr::RenderingDesc rendering{.colorAttachmentCount = 1};
+        rendering.colorAttachments[0] = {.texture = &*target, .loadOp = bfr::LoadOp::Clear, .clearColor = {0, 0, 0, 1}};
+        const auto begun = device.beginRendering(*commands, bfr::Swapchain{}, rendering);
+        INFO(failureOf(begun));
+        REQUIRE(begun.has_value());
+        CHECK(device.endRendering(*commands).has_value());
+        const auto submitted = device.submit({.queue = 0, .commandLists = std::span{&*commands, 1}});
+        INFO(failureOf(submitted));
+        REQUIRE(submitted.has_value());
+        REQUIRE(device.wait(*submitted).has_value());
     }
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }

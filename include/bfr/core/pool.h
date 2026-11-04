@@ -144,6 +144,13 @@ public:
     /// Destroys the values retired with a submission ID at or before completed
     /// and frees their slots.
     void collect(std::uint64_t completed) {
+        collect(completed, [](const T&) {});
+    }
+
+    /// As collect, calling before on each value just before it is destroyed:
+    /// where the value's owner gives back what the value held, such as a slot.
+    template <class Before>
+    void collect(std::uint64_t completed, const Before& before) {
         // Values are destroyed outside the lock, since they may use the pool;
         // the slots being freed wait in collecting_, which has room for every
         // slot. It grows only after the pool has, which a pool made at its
@@ -161,6 +168,7 @@ public:
             retired_.erase(done.begin(), done.end());
         }
         for (const std::uint32_t index : collecting_) {
+            before(std::as_const(entryAt(index).value));
             std::destroy_at(&entryAt(index).value);
         }
         const std::scoped_lock lock{mutex_};

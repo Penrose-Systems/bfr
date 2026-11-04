@@ -39,7 +39,13 @@ constexpr int kFrames = 3;
 
 const bfr::core::window::NativeWindow kHeadless = bfr::core::window::Headless{};
 
-constexpr RenderingDesc kClear{.loadOp = LoadOp::Clear, .storeOp = StoreOp::Store, .clearColor = {0.2F, 0.4F, 0.6F, 1}};
+// The swapchain's image, cleared.
+constexpr RenderingDesc kClear{.colorAttachmentCount = 1,
+                               .colorAttachments = {{{.texture = {},
+                                                      .loadOp = LoadOp::Clear,
+                                                      .storeOp = StoreOp::Store,
+                                                      .clearColor = {0.2F, 0.4F, 0.6F, 1}}}},
+                               .depthStencil = {}};
 
 bfr::core::Result<Token> submitOne(Device& device, CommandListHandle commandList, std::uint32_t queue = 0,
                                    std::span<const Token> waits = {}) {

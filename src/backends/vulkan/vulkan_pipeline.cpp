@@ -362,6 +362,46 @@ VulkanBindlessLayout::~VulkanBindlessLayout() {
     destroy();
 }
 
+namespace {
+
+VkWriteDescriptorSet writeFor(VkDescriptorSet set, std::uint32_t binding, std::uint32_t slot, VkDescriptorType type) {
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = set;
+    write.dstBinding = binding;
+    write.dstArrayElement = slot;
+    write.descriptorCount = 1;
+    write.descriptorType = type;
+    return write;
+}
+
+} // namespace
+
+void VulkanBindlessLayout::writeStorageBuffer(std::uint32_t slot, VkBuffer buffer) const {
+    const VkDescriptorBufferInfo info{.buffer = buffer, .offset = 0, .range = VK_WHOLE_SIZE};
+    VkWriteDescriptorSet write = writeFor(set_, kStorageBufferBinding, slot, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    write.pBufferInfo = &info;
+    table_->vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+}
+
+void VulkanBindlessLayout::writeSampledImage(std::uint32_t slot, VkImageView view) const {
+    const VkDescriptorImageInfo info{.sampler = VK_NULL_HANDLE,
+                                     .imageView = view,
+                                     .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet write = writeFor(set_, kSampledTextureBinding, slot, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    write.pImageInfo = &info;
+    table_->vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+}
+
+void VulkanBindlessLayout::writeStorageImage(std::uint32_t slot, VkImageView view) const {
+    const VkDescriptorImageInfo info{.sampler = VK_NULL_HANDLE,
+                                     .imageView = view,
+                                     .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet write = writeFor(set_, kStorageTextureBinding, slot, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+    write.pImageInfo = &info;
+    table_->vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+}
+
 VulkanBindlessLayout::VulkanBindlessLayout(VulkanBindlessLayout&& other) noexcept
     : table_(other.table_),
       device_(other.device_),
@@ -404,15 +444,21 @@ void VulkanBindlessLayout::destroy() {
 }
 
 VulkanPipeline::VulkanPipeline(const VolkDeviceTable& table, VkDevice device, VkPipeline pipeline,
-                               VkPipelineBindPoint bindPoint,
+                               VkPipelineBindPoint bindPoint, VkPrimitiveTopology topology,
                                std::array<std::uint32_t, kWorkgroupDimensions> workgroupSize)
-    : table_(&table), device_(device), pipeline_(pipeline), bindPoint_(bindPoint), workgroupSize_(workgroupSize) {}
+    : table_(&table),
+      device_(device),
+      pipeline_(pipeline),
+      bindPoint_(bindPoint),
+      topology_(topology),
+      workgroupSize_(workgroupSize) {}
 
 VulkanPipeline::VulkanPipeline(VulkanPipeline&& other) noexcept
     : table_(other.table_),
       device_(other.device_),
       pipeline_(std::exchange(other.pipeline_, VK_NULL_HANDLE)),
       bindPoint_(other.bindPoint_),
+      topology_(other.topology_),
       workgroupSize_(other.workgroupSize_) {}
 
 VulkanPipeline::~VulkanPipeline() {
@@ -438,7 +484,8 @@ core::Result<VulkanPipeline> createVulkanComputePipeline(const VolkDeviceTable& 
     if (result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateComputePipelines", .result = result});
     }
-    return VulkanPipeline{table, device, pipeline, VK_PIPELINE_BIND_POINT_COMPUTE, desc.workgroupSize};
+    return VulkanPipeline{
+        table, device, pipeline, VK_PIPELINE_BIND_POINT_COMPUTE, VK_PRIMITIVE_TOPOLOGY_MAX_ENUM, desc.workgroupSize};
 }
 
 core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable& table, VkDevice device,
@@ -558,7 +605,7 @@ core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable&
     if (result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateGraphicsPipelines", .result = result});
     }
-    return VulkanPipeline{table, device, pipeline, VK_PIPELINE_BIND_POINT_GRAPHICS, {}};
+    return VulkanPipeline{table, device, pipeline, VK_PIPELINE_BIND_POINT_GRAPHICS, topologyFor(desc.topology), {}};
 }
 
 // The device's pipeline calls, beside the pipelines they make.

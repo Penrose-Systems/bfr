@@ -41,13 +41,15 @@ constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kTableFlags = D3D12_DESCRIPTOR_RANGE_FLAG
 constexpr UINT kAllSamples = std::numeric_limits<UINT>::max();
 constexpr UINT8 kStencilMaskBits = std::numeric_limits<UINT8>::max();
 
-D3D12_DESCRIPTOR_RANGE1 rangeFor(D3D12_DESCRIPTOR_RANGE_TYPE type, std::uint32_t space) {
+// A range at register 0 of space, whose index 0 is descriptor offset of the
+// table: its region's start.
+D3D12_DESCRIPTOR_RANGE1 rangeFor(D3D12_DESCRIPTOR_RANGE_TYPE type, std::uint32_t space, std::uint32_t offset) {
     return {.RangeType = type,
             .NumDescriptors = kUnbounded,
             .BaseShaderRegister = kBaseRegister,
             .RegisterSpace = space,
             .Flags = kTableFlags,
-            .OffsetInDescriptorsFromTableStart = kTableStart};
+            .OffsetInDescriptorsFromTableStart = offset};
 }
 
 core::Result<ComPtr<ID3D12DescriptorHeap>> createHeap(ID3D12Device& device, D3D12_DESCRIPTOR_HEAP_TYPE type,
@@ -215,12 +217,17 @@ D3D12_RENDER_TARGET_BLEND_DESC blendFor(const BlendState& blend) {
 } // namespace
 
 core::Result<D3D12BindlessLayout> createD3D12BindlessLayout(ID3D12Device& device, const DeviceDesc& desc) {
+    D3D12BindlessLayout layout;
+    layout.storageTextures = desc.maxBindlessTextures;
+    layout.storageBuffers = desc.maxBindlessTextures + desc.maxBindlessStorageTextures;
+    layout.descriptorBytes = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     const std::array<D3D12_DESCRIPTOR_RANGE1, kResourceRangeCount> resourceRanges{
-        rangeFor(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, kSampledTextureSpace),
-        rangeFor(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, kStorageTextureSpace),
-        rangeFor(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, kStorageBufferSpace),
+        rangeFor(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, kSampledTextureSpace, kTableStart),
+        rangeFor(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, kStorageTextureSpace, layout.storageTextures),
+        rangeFor(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, kStorageBufferSpace, layout.storageBuffers),
     };
-    const D3D12_DESCRIPTOR_RANGE1 samplerRange = rangeFor(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, kSamplerSpace);
+    const D3D12_DESCRIPTOR_RANGE1 samplerRange = rangeFor(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, kSamplerSpace,
+                                                          kTableStart);
     std::array<D3D12_ROOT_PARAMETER1, kRootParameterCount> parameters{};
     parameters.at(kPushConstantsParameter).ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     parameters.at(kPushConstantsParameter).Constants = {.ShaderRegister = kBaseRegister,
@@ -249,7 +256,6 @@ core::Result<D3D12BindlessLayout> createD3D12BindlessLayout(ID3D12Device& device
         return failure(core::ErrorCode::RhiDeviceFailed,
                        {.call = "D3D12SerializeVersionedRootSignature", .result = result});
     }
-    D3D12BindlessLayout layout;
     if (const HRESULT result = device.CreateRootSignature(0, serialized->GetBufferPointer(),
                                                           serialized->GetBufferSize(),
                                                           IID_PPV_ARGS(&layout.rootSignature));

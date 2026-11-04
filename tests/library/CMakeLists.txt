@@ -51,6 +51,7 @@ add_executable(bfr_tests
     rhi/test_frame_allocations.cpp
     rhi/test_instance.cpp
     rhi/test_pipeline.cpp
+    rhi/test_draw.cpp
     rhi/test_present.cpp
     rhi/test_swapchain.cpp
     rhi/test_texture.cpp

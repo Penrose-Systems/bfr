@@ -678,6 +678,14 @@ enum class TextureLayout : std::int32_t {
     CopySrc = BFR_TEXTURE_LAYOUT_COPY_SRC,
     /// Copies write it.
     CopyDst = BFR_TEXTURE_LAYOUT_COPY_DST,
+    /// Shaders read it through the texture table.
+    Sampled = BFR_TEXTURE_LAYOUT_SAMPLED,
+    /// Shaders read and write it through the storage texture table.
+    Storage = BFR_TEXTURE_LAYOUT_STORAGE,
+    /// Rendering writes color to it.
+    ColorTarget = BFR_TEXTURE_LAYOUT_COLOR_TARGET,
+    /// Rendering tests and writes depth or stencil in it.
+    DepthStencilTarget = BFR_TEXTURE_LAYOUT_DEPTH_STENCIL_TARGET,
 };
 
 /// value's name in bfr.yaml; empty for a value TextureLayout doesn't have.
@@ -686,6 +694,10 @@ enum class TextureLayout : std::int32_t {
     case TextureLayout::Undefined: return "undefined";
     case TextureLayout::CopySrc: return "copy_src";
     case TextureLayout::CopyDst: return "copy_dst";
+    case TextureLayout::Sampled: return "sampled";
+    case TextureLayout::Storage: return "storage";
+    case TextureLayout::ColorTarget: return "color_target";
+    case TextureLayout::DepthStencilTarget: return "depth_stencil_target";
     }
     return {};
 }
@@ -915,6 +927,23 @@ enum class BlendOp : std::int32_t {
     return {};
 }
 
+/// How wide each index of an index buffer is.
+enum class IndexType : std::int32_t {
+    /// Four bytes an index.
+    Uint32 = BFR_INDEX_TYPE_UINT32,
+    /// Two bytes an index.
+    Uint16 = BFR_INDEX_TYPE_UINT16,
+};
+
+/// value's name in bfr.yaml; empty for a value IndexType doesn't have.
+[[nodiscard]] constexpr std::string_view name(IndexType value) {
+    switch (value) {
+    case IndexType::Uint32: return "uint32";
+    case IndexType::Uint16: return "uint16";
+    }
+    return {};
+}
+
 /// Which window system a bfr_window comes from, for the platforms that have more than one.
 enum class WindowSystem : std::int32_t {
     /// The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -1066,14 +1095,62 @@ struct SwapchainImages {
     AlphaMode alphaMode{};
 };
 
-/// How to begin rendering to a swapchain's acquired image.
-struct RenderingDesc {
-    /// What the image holds at the start; 0 is load.
+/// One color target of a rendering: a texture with color_attachment usage, in layout color_target,
+/// or the swapchain's acquired image when bfr_begin_rendering is given a swapchain and this is
+/// attachment 0.
+struct ColorAttachment {
+    /// Null for the swapchain's image.
+    const Texture* texture{};
+    /// What it holds at the start; 0 is load.
     LoadOp loadOp{};
     /// What becomes of it at the end; 0 is store.
     StoreOp storeOp{};
     /// Red, green, blue and alpha, 0 to 1, when load_op is clear.
     std::array<float, 4> clearColor{};
+};
+
+/// The depth-stencil target of a rendering: a texture with depth_stencil usage, in layout
+/// depth_stencil_target. Its depth and stencil are loaded and stored alike.
+struct DepthStencilAttachment {
+    /// Null for no depth-stencil target.
+    const Texture* texture{};
+    /// 0 is load.
+    LoadOp loadOp{};
+    /// 0 is store.
+    StoreOp storeOp{};
+    /// 0 to 1, when load_op is clear.
+    float clearDepth{};
+    /// When load_op is clear.
+    std::uint32_t clearStencil{};
+};
+
+/// How to begin rendering: the attachments drawn to, all of one size and sample count, which the
+/// graphics pipelines drawn with were made for. The first color_attachment_count color attachments
+/// are drawn to, in the order the pipeline's targets are.
+struct RenderingDesc {
+    std::uint32_t colorAttachmentCount{};
+    std::array<ColorAttachment, BFR_MAX_COLOR_TARGETS> colorAttachments{};
+    DepthStencilAttachment depthStencil{};
+};
+
+/// Where on the attachments the rendering lands, in pixels from the top left, and the depth range
+/// it maps to. Clip space is the same on every backend: x right, y up, z 0 at the near plane and 1
+/// at the far.
+struct Viewport {
+    float x{};
+    float y{};
+    float width{};
+    float height{};
+    float minDepth{};
+    float maxDepth{};
+};
+
+/// A rectangle of pixels from the top left of the attachments.
+struct Rect {
+    std::uint32_t x{};
+    std::uint32_t y{};
+    std::uint32_t width{};
+    std::uint32_t height{};
 };
 
 /// How to create a command pool.
@@ -1083,6 +1160,9 @@ struct CommandPoolDesc {
     /// Lists the pool holds, made with it from the device's max_command_lists. bfr_begin_commands
     /// hands them out in turn until bfr_reset_command_pool gives them back.
     std::uint32_t listCount{};
+    /// Most bfr_push_constants calls the pool's lists record between resets, which a backend that
+    /// copies push constants into memory makes room for with the pool.
+    std::uint32_t pushConstantUpdates = BFR_DEFAULT_PUSH_CONSTANT_UPDATES;
 };
 
 /// What the GPU does with a buffer. Set every use it will have.
@@ -1154,6 +1234,15 @@ struct TextureDesc {
     /// Samples per texel; 1 unless rendering multisamples it.
     std::uint32_t samples{};
     TextureUsage usage{};
+};
+
+/// Where a texture is in the bindless tables bfr_pipeline states, from creation to destruction: the
+/// index shaders use. A table the texture's usage does not set has no slot for it, and reads 0.
+struct TextureSlots {
+    /// Its index in the texture table; only with sampled usage.
+    std::uint32_t sampled{};
+    /// Its index in the storage texture table; only with storage usage.
+    std::uint32_t storage{};
 };
 
 /// One region copied between a buffer and one layer and mip level of a single-sampled texture.
@@ -1797,17 +1886,28 @@ inline bfr_swapchain_desc toC(const SwapchainDesc& value, const bfr_chain* next)
     };
 }
 
-inline bfr_rendering_desc toC(const RenderingDesc& value, const bfr_chain* next) {
+inline bfr_viewport toC(const Viewport& value) {
     return {
-        .next = next,
-        .load_op = static_cast<bfr_load_op>(value.loadOp),
-        .store_op = static_cast<bfr_store_op>(value.storeOp),
-        .clear_color = {value.clearColor[0], value.clearColor[1], value.clearColor[2], value.clearColor[3]},
+        .x = value.x,
+        .y = value.y,
+        .width = value.width,
+        .height = value.height,
+        .min_depth = value.minDepth,
+        .max_depth = value.maxDepth,
     };
 }
 
+inline bfr_rect toC(const Rect& value) {
+    return {.x = value.x, .y = value.y, .width = value.width, .height = value.height};
+}
+
 inline bfr_command_pool_desc toC(const CommandPoolDesc& value, const bfr_chain* next) {
-    return {.next = next, .queue = value.queue, .list_count = value.listCount};
+    return {
+        .next = next,
+        .queue = value.queue,
+        .list_count = value.listCount,
+        .push_constant_updates = value.pushConstantUpdates,
+    };
 }
 
 inline bfr_buffer_usage toC(const BufferUsage& value) {
@@ -2003,6 +2103,10 @@ inline SwapchainImages fromC(const bfr_swapchain_images& value) {
         .presentMode = static_cast<PresentMode>(value.present_mode),
         .alphaMode = static_cast<AlphaMode>(value.alpha_mode),
     };
+}
+
+inline TextureSlots fromC(const bfr_texture_slots& value) {
+    return {.sampled = value.sampled, .storage = value.storage};
 }
 
 inline Token fromC(const bfr_token& value) {
@@ -2391,12 +2495,53 @@ public:
     /// are free.
     [[nodiscard]] Expected<CommandPool> createCommandPool(const CommandPoolDesc& desc) const;
 
-    /// Begins rendering to the image bfr_acquire took from swapchain, as desc says. Ends with
-    /// bfr_end_rendering.
+    /// Begins rendering to desc's attachments, with the image bfr_acquire took from swapchain as
+    /// color attachment 0 when swapchain is not null. Sets the viewport and scissor to the whole of
+    /// the attachments. Only bfr_draw and bfr_draw_indexed, and the state they take, are recorded
+    /// until bfr_end_rendering. Fails with error_invalid_argument when no attachment is given, when
+    /// a color attachment but the swapchain's names no texture, or, with a swapchain, when there is
+    /// no color attachment or attachment 0 names a texture.
     [[nodiscard]] Expected<void> beginRendering(CommandList commandList, const Swapchain& swapchain, const RenderingDesc& desc) const;
 
-    /// Ends the rendering bfr_begin_rendering began; the image is then ready to present.
+    /// Ends the rendering bfr_begin_rendering began; a swapchain image is then ready to present,
+    /// and a texture is in the layout it was given in.
     [[nodiscard]] Expected<void> endRendering(CommandList commandList) const;
+
+    /// Sets the viewport the draws after it use, inside rendering.
+    [[nodiscard]] Expected<void> setViewport(CommandList commandList, const Viewport& viewport) const;
+
+    /// Sets the scissor the draws after it keep to, inside rendering.
+    [[nodiscard]] Expected<void> setScissor(CommandList commandList, const Rect& scissor) const;
+
+    /// Makes pipeline the one draws or dispatches after it run, a graphics pipeline for draws and a
+    /// compute one for dispatches, until another of its kind is bound. Draws assemble the list
+    /// topology of the pipeline's class.
+    [[nodiscard]] Expected<void> bindPipeline(CommandList commandList, const Pipeline& pipeline) const;
+
+    /// Sets the first size bytes of the push constants every shader reads, as bfr_pipeline states,
+    /// for the draws and dispatches after it. size is a multiple of 4 and at most
+    /// bfr_push_constants_size, else error_invalid_argument. Fails with error_limit_reached past
+    /// the pool's push_constant_updates.
+    [[nodiscard]] Expected<void> pushConstants(CommandList commandList, std::span<const std::uint8_t> data) const;
+
+    /// Makes buffer, which has index usage, the one bfr_draw_indexed reads indices of type from,
+    /// starting offset bytes in.
+    [[nodiscard]] Expected<void> bindIndexBuffer(CommandList commandList, const Buffer& buffer, std::uint64_t offset, IndexType type) const;
+
+    /// Records a draw of vertex_count vertices, instance_count times, with the bound graphics
+    /// pipeline, inside rendering. The vertex shader sees vertex indices from first_vertex. Whether
+    /// it sees instance indices from first_instance or from 0 is the backend's: Vulkan and Metal
+    /// count from first_instance, D3D12's SV_InstanceID from 0.
+    [[nodiscard]] Expected<void> draw(CommandList commandList, std::uint32_t vertexCount, std::uint32_t instanceCount, std::uint32_t firstVertex, std::uint32_t firstInstance) const;
+
+    /// Records a draw of index_count indices read from the bound index buffer from first_index,
+    /// each plus vertex_offset giving the vertex index the vertex shader sees, instance_count
+    /// times, inside rendering. Instance indices are seen as bfr_draw says.
+    [[nodiscard]] Expected<void> drawIndexed(CommandList commandList, std::uint32_t indexCount, std::uint32_t instanceCount, std::uint32_t firstIndex, std::int32_t vertexOffset, std::uint32_t firstInstance) const;
+
+    /// Records a dispatch of x by y by z workgroups of the bound compute pipeline, outside
+    /// rendering. Commands after a bfr_barrier see what it wrote.
+    [[nodiscard]] Expected<void> dispatch(CommandList commandList, std::uint32_t x, std::uint32_t y, std::uint32_t z) const;
 
     /// Records copies of regions from src to dst, outside rendering. src has copy_src usage and is
     /// device or upload memory; dst has copy_dst usage and is device or readback memory. Commands
@@ -2637,6 +2782,11 @@ public:
     /// error_invalid_handle when the buffer is destroyed.
     [[nodiscard]] Expected<void*> map();
 
+    /// Writes the buffer's index in the storage buffer table bfr_pipeline states, held from
+    /// creation to destruction. Fails with error_invalid_argument when the buffer has no storage
+    /// usage.
+    [[nodiscard]] Expected<std::uint32_t> bufferSlot();
+
 private:
     Buffer(bfr_device* device, bfr_buffer buffer, detail::KeepAlive keepAlive) : device_(device), buffer_(buffer), keepAlive_(std::move(keepAlive)) {}
     friend class Device;
@@ -2673,6 +2823,9 @@ public:
     [[nodiscard]] bfr_texture get() const { return texture_; }
     [[nodiscard]] explicit operator bool() const { return texture_.bits != 0; }
 
+    /// Writes where the texture is in the bindless tables bfr_pipeline states.
+    [[nodiscard]] Expected<TextureSlots> textureSlots();
+
 private:
     Texture(bfr_device* device, bfr_texture texture, detail::KeepAlive keepAlive) : device_(device), texture_(texture), keepAlive_(std::move(keepAlive)) {}
     friend class Device;
@@ -2685,13 +2838,15 @@ private:
 
 /// A compute or graphics pipeline: shaders with the fixed state they run under. Every pipeline
 /// shares one resource layout, which its shaders declare as follows. Four unbounded tables, each
-/// indexed by the slot a resource is given, and one block of bfr_push_constants_size bytes of push
-/// constants that every stage reads. On Vulkan the tables are the bindings of descriptor set 0, in
-/// order: 0 sampled images, 1 storage images, 2 storage buffers, 3 samplers, each an update-after-
-/// bind and partially-bound runtime array; the push constants are a push constant range over all
-/// stages. On D3D12 the tables are unbounded descriptor ranges, each starting at register 0 of its
-/// own space: SRV space 0 sampled textures, UAV space 1 storage textures, UAV space 2 storage
-/// buffers, sampler space 3 samplers; the push constants are bfr_push_constants_size / 4 root
+/// indexed by the slot a resource is given when it is created, which bfr_get_buffer_slot and
+/// bfr_get_texture_slots report and which is the same number on every backend, and one block of
+/// bfr_push_constants_size bytes of push constants that every stage reads, set by
+/// bfr_push_constants. On Vulkan the tables are the bindings of descriptor set 0, in order: 0
+/// sampled images, 1 storage images, 2 storage buffers, 3 samplers, each an update-after-bind and
+/// partially-bound runtime array; the push constants are a push constant range over all stages. On
+/// D3D12 the tables are unbounded descriptor ranges, each starting at register 0 of its own space:
+/// SRV space 0 sampled textures, UAV space 1 storage textures, UAV space 2 storage buffers as raw
+/// buffer views, sampler space 3 samplers; the push constants are bfr_push_constants_size / 4 root
 /// constants at b0 of space 0. On Metal the tables are one argument buffer at buffer(0), holding
 /// the sampled textures, storage textures, storage buffers and samplers in that order, each a
 /// region of as many 8-byte entries as the bfr_device_desc's max_bindless member for its kind, so a
@@ -2734,6 +2889,34 @@ private:
 };
 
 namespace detail {
+
+inline bfr_color_attachment toC(const ColorAttachment& value) {
+    return {
+        .texture = value.texture != nullptr ? value.texture->get() : bfr_texture{},
+        .load_op = static_cast<bfr_load_op>(value.loadOp),
+        .store_op = static_cast<bfr_store_op>(value.storeOp),
+        .clear_color = {value.clearColor[0], value.clearColor[1], value.clearColor[2], value.clearColor[3]},
+    };
+}
+
+inline bfr_depth_stencil_attachment toC(const DepthStencilAttachment& value) {
+    return {
+        .texture = value.texture != nullptr ? value.texture->get() : bfr_texture{},
+        .load_op = static_cast<bfr_load_op>(value.loadOp),
+        .store_op = static_cast<bfr_store_op>(value.storeOp),
+        .clear_depth = value.clearDepth,
+        .clear_stencil = value.clearStencil,
+    };
+}
+
+inline bfr_rendering_desc toC(const RenderingDesc& value, const bfr_chain* next) {
+    return {
+        .next = next,
+        .color_attachment_count = value.colorAttachmentCount,
+        .color_attachments = {toC(value.colorAttachments[0]), toC(value.colorAttachments[1]), toC(value.colorAttachments[2]), toC(value.colorAttachments[3]), toC(value.colorAttachments[4]), toC(value.colorAttachments[5]), toC(value.colorAttachments[6]), toC(value.colorAttachments[7])},
+        .depth_stencil = toC(value.depthStencil),
+    };
+}
 
 inline bfr_submit_desc toC(const SubmitDesc& value, const bfr_chain* next) {
     return {
@@ -2904,6 +3087,64 @@ inline Expected<void> Device::endRendering(CommandList commandList) const {
     return {};
 }
 
+inline Expected<void> Device::setViewport(CommandList commandList, const Viewport& viewport) const {
+    const bfr_viewport cViewport = detail::toC(viewport);
+    if (const bfr_result result = bfr_set_viewport(device_, commandList.get(), &cViewport); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::setScissor(CommandList commandList, const Rect& scissor) const {
+    const bfr_rect cScissor = detail::toC(scissor);
+    if (const bfr_result result = bfr_set_scissor(device_, commandList.get(), &cScissor); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::bindPipeline(CommandList commandList, const Pipeline& pipeline) const {
+    if (const bfr_result result = bfr_bind_pipeline(device_, commandList.get(), pipeline.get()); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::pushConstants(CommandList commandList, std::span<const std::uint8_t> data) const {
+    if (const bfr_result result = bfr_push_constants(device_, commandList.get(), reinterpret_cast<const uint8_t*>(data.data()), static_cast<uint32_t>(data.size())); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::bindIndexBuffer(CommandList commandList, const Buffer& buffer, std::uint64_t offset, IndexType type) const {
+    if (const bfr_result result = bfr_bind_index_buffer(device_, commandList.get(), buffer.get(), offset, static_cast<bfr_index_type>(type)); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::draw(CommandList commandList, std::uint32_t vertexCount, std::uint32_t instanceCount, std::uint32_t firstVertex, std::uint32_t firstInstance) const {
+    if (const bfr_result result = bfr_draw(device_, commandList.get(), vertexCount, instanceCount, firstVertex, firstInstance); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::drawIndexed(CommandList commandList, std::uint32_t indexCount, std::uint32_t instanceCount, std::uint32_t firstIndex, std::int32_t vertexOffset, std::uint32_t firstInstance) const {
+    if (const bfr_result result = bfr_draw_indexed(device_, commandList.get(), indexCount, instanceCount, firstIndex, vertexOffset, firstInstance); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::dispatch(CommandList commandList, std::uint32_t x, std::uint32_t y, std::uint32_t z) const {
+    if (const bfr_result result = bfr_dispatch(device_, commandList.get(), x, y, z); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
 inline Expected<void> Device::copyBuffer(CommandList commandList, const Buffer& src, const Buffer& dst, std::span<const BufferCopy> regions) const {
     if (const bfr_result result = bfr_copy_buffer(device_, commandList.get(), src.get(), dst.get(), reinterpret_cast<const bfr_buffer_copy*>(regions.data()), static_cast<uint32_t>(regions.size())); result < 0) {
         return std::unexpected(detail::failure(result));
@@ -3055,6 +3296,22 @@ inline Expected<void*> Buffer::map() {
         return std::unexpected(detail::failure(result));
     }
     return data;
+}
+
+inline Expected<std::uint32_t> Buffer::bufferSlot() {
+    uint32_t slot{};
+    if (const bfr_result result = bfr_get_buffer_slot(device_, buffer_, &slot); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return slot;
+}
+
+inline Expected<TextureSlots> Texture::textureSlots() {
+    bfr_texture_slots slots{};
+    if (const bfr_result result = bfr_get_texture_slots(device_, texture_, &slots); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(slots);
 }
 
 /// Lists the backends this build has, in bfr_backend order.

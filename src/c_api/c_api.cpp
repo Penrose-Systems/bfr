@@ -297,7 +297,7 @@ bfr::rhi::TextureHandle fromC(bfr_texture handle) {
 
 // The C and C++ texture enums are the same numbers, so they cross as they are.
 static_assert(static_cast<int>(bfr::rhi::TextureDimension::Cube) == BFR_TEXTURE_DIMENSION_CUBE);
-static_assert(static_cast<int>(bfr::rhi::TextureLayout::CopyDst) == BFR_TEXTURE_LAYOUT_COPY_DST);
+static_assert(static_cast<int>(bfr::rhi::TextureLayout::DepthStencilTarget) == BFR_TEXTURE_LAYOUT_DEPTH_STENCIL_TARGET);
 static_assert(static_cast<int>(bfr::rhi::TextureAspect::Stencil) == BFR_TEXTURE_ASPECT_STENCIL);
 
 // The texture desc asks for. Nothing when its dimension or format is not one
@@ -350,6 +350,7 @@ static_assert(static_cast<int>(bfr::rhi::CompareOp::GreaterEqual) == BFR_COMPARE
 static_assert(static_cast<int>(bfr::rhi::StencilOp::DecrementWrap) == BFR_STENCIL_OP_DECREMENT_WRAP);
 static_assert(static_cast<int>(bfr::rhi::BlendFactor::SrcAlphaSaturate) == BFR_BLEND_FACTOR_SRC_ALPHA_SATURATE);
 static_assert(static_cast<int>(bfr::rhi::BlendOp::Max) == BFR_BLEND_OP_MAX);
+static_assert(static_cast<int>(bfr::rhi::IndexType::Uint16) == BFR_INDEX_TYPE_UINT16);
 
 // value as the C++ enum E, whose values run from 0 to last; nothing when it is
 // not one of them, and error says which.
@@ -568,38 +569,40 @@ bfr::rhi::CommandListHandle fromC(bfr_command_list handle) {
 }
 
 // The rendering desc asks for, each 0 as its documented default. Nothing when
-// a value is one BFR doesn't have; error says which.
+// a value is one BFR doesn't have, or more attachments are counted than
+// there is room for; error says which.
 std::optional<bfr::rhi::RenderingDesc> renderingIn(const bfr_rendering_desc& desc, bfr::core::Message& error) {
     using namespace bfr::rhi;
-    RenderingDesc rendering;
-    switch (desc.load_op) {
-        case BFR_LOAD_OP_LOAD:
-            rendering.loadOp = LoadOp::Load;
-            break;
-        case BFR_LOAD_OP_CLEAR:
-            rendering.loadOp = LoadOp::Clear;
-            break;
-        case BFR_LOAD_OP_DONT_CARE:
-            rendering.loadOp = LoadOp::DontCare;
-            break;
-        case BFR_LOAD_OP_FORCE32:
-        default:
-            error.format("load_op {} is not one BFR has", static_cast<std::int64_t>(desc.load_op));
-            return std::nullopt;
+    if (desc.color_attachment_count > kMaxColorTargets) {
+        error.format("color_attachment_count {} is more than the {} attachments there is room for",
+                     desc.color_attachment_count, kMaxColorTargets);
+        return std::nullopt;
     }
-    switch (desc.store_op) {
-        case BFR_STORE_OP_STORE:
-            rendering.storeOp = StoreOp::Store;
-            break;
-        case BFR_STORE_OP_DONT_CARE:
-            rendering.storeOp = StoreOp::DontCare;
-            break;
-        case BFR_STORE_OP_FORCE32:
-        default:
-            error.format("store_op {} is not one BFR has", static_cast<std::int64_t>(desc.store_op));
+    RenderingDesc rendering{.colorAttachmentCount = desc.color_attachment_count,
+                            .colorAttachments = {},
+                            .depthStencil = {}};
+    for (std::uint32_t i = 0; i < desc.color_attachment_count; ++i) {
+        const bfr_color_attachment& attachment = std::span{desc.color_attachments}[i];
+        const auto loadOp = enumIn(attachment.load_op, LoadOp::DontCare, "load op", error);
+        const auto storeOp = enumIn(attachment.store_op, StoreOp::DontCare, "store op", error);
+        if (!loadOp || !storeOp) {
             return std::nullopt;
+        }
+        rendering.colorAttachments.at(i) = {.texture = fromC(attachment.texture),
+                                            .loadOp = *loadOp,
+                                            .storeOp = *storeOp,
+                                            .clearColor = std::to_array(attachment.clear_color)};
     }
-    rendering.clearColor = std::to_array(desc.clear_color);
+    const auto depthLoad = enumIn(desc.depth_stencil.load_op, LoadOp::DontCare, "load op", error);
+    const auto depthStore = enumIn(desc.depth_stencil.store_op, StoreOp::DontCare, "store op", error);
+    if (!depthLoad || !depthStore) {
+        return std::nullopt;
+    }
+    rendering.depthStencil = {.texture = fromC(desc.depth_stencil.texture),
+                              .loadOp = *depthLoad,
+                              .storeOp = *depthStore,
+                              .clearDepth = desc.depth_stencil.clear_depth,
+                              .clearStencil = desc.depth_stencil.clear_stencil};
     return rendering;
 }
 
@@ -1246,7 +1249,11 @@ bfr_result bfr_create_command_pool(bfr_device* device, const bfr_command_pool_de
         if (desc->next != nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_command_pool_desc takes no chained structs");
         }
-        const auto created = device->device->createCommandPool({.queue = desc->queue, .listCount = desc->list_count});
+        const auto created = device->device->createCommandPool(
+            {.queue = desc->queue,
+             .listCount = desc->list_count,
+             .pushConstantUpdates = desc->push_constant_updates == 0 ? BFR_DEFAULT_PUSH_CONSTANT_UPDATES
+                                                                     : desc->push_constant_updates});
         if (!created) {
             return fail(created.error());
         }
@@ -1320,6 +1327,109 @@ bfr_result bfr_end_rendering(bfr_device* device, bfr_command_list command_list) 
     });
 }
 
+bfr_result bfr_set_viewport(bfr_device* device, bfr_command_list command_list, const bfr_viewport* viewport) {
+    return guarded([&] {
+        if (device == nullptr || viewport == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and viewport must not be null");
+        }
+        const auto set = device->device->setViewport(fromC(command_list), {.x = viewport->x,
+                                                                           .y = viewport->y,
+                                                                           .width = viewport->width,
+                                                                           .height = viewport->height,
+                                                                           .minDepth = viewport->min_depth,
+                                                                           .maxDepth = viewport->max_depth});
+        return set ? BFR_RESULT_SUCCESS : fail(set.error());
+    });
+}
+
+bfr_result bfr_set_scissor(bfr_device* device, bfr_command_list command_list, const bfr_rect* scissor) {
+    return guarded([&] {
+        if (device == nullptr || scissor == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and scissor must not be null");
+        }
+        const auto set = device->device->setScissor(fromC(command_list), {.x = scissor->x,
+                                                                          .y = scissor->y,
+                                                                          .width = scissor->width,
+                                                                          .height = scissor->height});
+        return set ? BFR_RESULT_SUCCESS : fail(set.error());
+    });
+}
+
+bfr_result bfr_bind_pipeline(bfr_device* device, bfr_command_list command_list, bfr_pipeline pipeline) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto bound = device->device->bindPipeline(fromC(command_list), fromC(pipeline));
+        return bound ? BFR_RESULT_SUCCESS : fail(bound.error());
+    });
+}
+
+bfr_result bfr_push_constants(bfr_device* device, bfr_command_list command_list, const uint8_t* data, uint32_t size) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        if (size != 0 && data == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "data must not be null when size is not 0");
+        }
+        const auto pushed = device->device->pushConstants(fromC(command_list),
+                                                          std::as_bytes(std::span<const std::uint8_t>{data, size}));
+        return pushed ? BFR_RESULT_SUCCESS : fail(pushed.error());
+    });
+}
+
+bfr_result bfr_bind_index_buffer(bfr_device* device, bfr_command_list command_list, bfr_buffer buffer, uint64_t offset,
+                                 bfr_index_type type) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        bfr::core::Message error;
+        const auto indexType = enumIn(type, bfr::rhi::IndexType::Uint16, "index type", error);
+        if (!indexType) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto bound = device->device->bindIndexBuffer(fromC(command_list), fromC(buffer), offset, *indexType);
+        return bound ? BFR_RESULT_SUCCESS : fail(bound.error());
+    });
+}
+
+bfr_result bfr_draw(bfr_device* device, bfr_command_list command_list, uint32_t vertex_count, uint32_t instance_count,
+                    uint32_t first_vertex, uint32_t first_instance) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto drawn = device->device->draw(fromC(command_list), vertex_count, instance_count, first_vertex,
+                                                first_instance);
+        return drawn ? BFR_RESULT_SUCCESS : fail(drawn.error());
+    });
+}
+
+bfr_result bfr_draw_indexed(bfr_device* device, bfr_command_list command_list, uint32_t index_count,
+                            uint32_t instance_count, uint32_t first_index, int32_t vertex_offset,
+                            uint32_t first_instance) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto drawn = device->device->drawIndexed(fromC(command_list), index_count, instance_count, first_index,
+                                                       vertex_offset, first_instance);
+        return drawn ? BFR_RESULT_SUCCESS : fail(drawn.error());
+    });
+}
+
+bfr_result bfr_dispatch(bfr_device* device, bfr_command_list command_list, uint32_t x, uint32_t y, uint32_t z) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto dispatched = device->device->dispatch(fromC(command_list), x, y, z);
+        return dispatched ? BFR_RESULT_SUCCESS : fail(dispatched.error());
+    });
+}
+
 bfr_result bfr_copy_buffer(bfr_device* device, bfr_command_list command_list, bfr_buffer src, bfr_buffer dst,
                            const bfr_buffer_copy* regions, uint32_t region_count) {
     return guarded([&] {
@@ -1353,7 +1463,7 @@ bfr_result bfr_texture_barrier(bfr_device* device, bfr_command_list command_list
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
         }
         for (const bfr_texture_layout layout : {before, after}) {
-            if (layout < BFR_TEXTURE_LAYOUT_UNDEFINED || layout > BFR_TEXTURE_LAYOUT_COPY_DST) {
+            if (layout < BFR_TEXTURE_LAYOUT_UNDEFINED || layout > BFR_TEXTURE_LAYOUT_DEPTH_STENCIL_TARGET) {
                 return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "texture layout {} is not one BFR has",
                             static_cast<std::int64_t>(layout));
             }
@@ -1652,6 +1762,21 @@ bfr_result bfr_map_buffer(bfr_device* device, bfr_buffer buffer, void** data) {
     });
 }
 
+bfr_result bfr_get_buffer_slot(bfr_device* device, bfr_buffer buffer, uint32_t* slot) {
+    return guarded([&] {
+        if (device == nullptr || slot == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and slot must not be null");
+        }
+        *slot = 0;
+        const auto found = device->device->bufferSlot(fromC(buffer));
+        if (!found) {
+            return fail(found.error());
+        }
+        *slot = *found;
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
 void bfr_destroy_buffer(bfr_device* device, bfr_buffer buffer) {
     quietly([&] {
         if (device == nullptr) {
@@ -1682,6 +1807,21 @@ bfr_result bfr_create_texture(bfr_device* device, const bfr_texture_desc* desc, 
             return fail(created.error());
         }
         *texture = toC(*created);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_get_texture_slots(bfr_device* device, bfr_texture texture, bfr_texture_slots* slots) {
+    return guarded([&] {
+        if (device == nullptr || slots == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and slots must not be null");
+        }
+        *slots = {};
+        const auto found = device->device->textureSlots(fromC(texture));
+        if (!found) {
+            return fail(found.error());
+        }
+        *slots = {.sampled = found->sampled, .storage = found->storage};
         return BFR_RESULT_SUCCESS;
     });
 }

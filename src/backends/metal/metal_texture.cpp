@@ -4,10 +4,12 @@
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/texture.h"
+#include "core/slot_chains.h"
 #include "metal/metal_buffer.h"
 #include "metal/metal_device.h"
 #include "metal/metal_formats.h"
 #include "metal/metal_util.h"
+#include "rhi/bindless_slots.h"
 #include "rhi/format_blocks.h"
 
 #include <Foundation/NSTypes.hpp>
@@ -32,8 +34,6 @@ namespace bfr::rhi::metal {
 namespace {
 
 // Six faces make one cube, which Metal counts in arrayLength.
-constexpr std::uint32_t kCubeFaces = 6;
-
 MTL::TextureType typeFor(const TextureDesc& desc) {
     switch (desc.dimension) {
         case TextureDimension::D1:
@@ -100,7 +100,12 @@ core::Result<MetalTexture> createMetalTexture(MTL::Device& device, const Texture
         return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no texture");
     }
     Resident resident{std::move(residency), texture.get()};
-    return MetalTexture{.texture = std::move(texture), .format = desc.format, .resident = std::move(resident)};
+    return MetalTexture{.texture = std::move(texture),
+                        .format = desc.format,
+                        .width = desc.width,
+                        .height = desc.height,
+                        .slots = {},
+                        .resident = std::move(resident)};
 }
 
 // The device's texture calls, beside the textures they make.
@@ -118,16 +123,38 @@ core::Result<TextureHandle> MetalDevice::createTexture(const TextureDesc& desc) 
     collectBuffers();
     // Held until made is gone, which takes it out of the set if it is not kept.
     const std::scoped_lock lock{residencyLock_};
+    auto slots = bindless_.takeTexture(desc);
+    if (!slots) {
+        return std::unexpected(std::move(slots.error()));
+    }
     auto made = createMetalTexture(*device_.get(), desc, residency_);
     if (!made) {
+        bindless_.giveTexture(*slots);
         return std::unexpected(std::move(made.error()));
     }
+    made->slots = *slots;
     residency_->commit();
+    const MTL::ResourceID id = made->texture->gpuResourceID();
     const TextureHandle texture = textures_.emplace(std::move(*made));
     if (texture.isNull()) {
+        bindless_.giveTexture(*slots);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} textures", kBufferLimit);
     }
+    if (slots->sampled != core::SlotChains::kEnd) {
+        tables().writeSampledTexture(slots->sampled, id);
+    }
+    if (slots->storage != core::SlotChains::kEnd) {
+        tables().writeStorageTexture(slots->storage, id);
+    }
     return texture;
+}
+
+core::Result<TextureSlots> MetalDevice::textureSlots(TextureHandle texture) {
+    auto found = textureFor(texture);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    return BindlessSlots::reported((*found)->slots);
 }
 
 core::Result<void> MetalDevice::destroyTexture(TextureHandle texture) {

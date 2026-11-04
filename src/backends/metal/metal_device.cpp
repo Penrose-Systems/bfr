@@ -5,6 +5,7 @@
 #include "bfr/core/window.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
+#include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/swapchain.h"
 #include "core/fixed_vector.h"
 #include "core/slot_chains.h"
@@ -12,19 +13,29 @@
 #include "metal/metal_pipeline.h"
 #include "metal/metal_swapchain.h"
 #include "metal/metal_util.h"
+#include "rhi/command_check.h"
+#include "rhi/format_blocks.h"
 
 #include <Foundation/NSError.hpp>
+#include <Metal/MTL4ArgumentTable.hpp>
 #include <Metal/MTL4CommandAllocator.hpp>
 #include <Metal/MTL4CommandEncoder.hpp>
 #include <Metal/MTL4Compiler.hpp>
 #include <Metal/MTL4ComputeCommandEncoder.hpp>
+#include <Metal/MTL4RenderCommandEncoder.hpp>
+#include <Metal/MTL4RenderPass.hpp>
+#include <Metal/MTLArgument.hpp>
+#include <Metal/MTLBuffer.hpp>
 #include <Metal/MTLCommandBuffer.hpp>
 #include <Metal/MTLCommandEncoder.hpp>
 #include <Metal/MTLCommandQueue.hpp>
 #include <Metal/MTLDevice.hpp>
 #include <Metal/MTLEvent.hpp>
+#include <Metal/MTLRenderCommandEncoder.hpp>
 #include <Metal/MTLRenderPass.hpp>
 #include <Metal/MTLResidencySet.hpp>
+#include <Metal/MTLResource.hpp>
+#include <Metal/MTLTexture.hpp>
 #include <QuartzCore/CAMetalDrawable.hpp>
 
 #include <algorithm>
@@ -36,7 +47,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
-#include <span>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -98,6 +109,7 @@ MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Devi
       submissions_(1 + desc.compute + desc.copy),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
 core::Result<void> MetalDevice::open(const DeviceDesc& desc) {
@@ -240,6 +252,11 @@ void MetalDevice::releaseSlots(std::uint32_t first) {
     for (std::uint32_t slot = first; slot != core::SlotChains::kEnd; slot = listSlots_.next(slot)) {
         lists_[slot].buffer.reset();
         lists_[slot].allocator.reset();
+        lists_[slot].arguments.reset();
+        // The ring leaves the residency set, which is not thread-safe.
+        const std::scoped_lock lock{residencyLock_};
+        lists_[slot].pushResident.reset();
+        lists_[slot].pushRing.reset();
     }
     listSlots_.give(first);
 }
@@ -408,11 +425,39 @@ core::Result<CommandPoolHandle> MetalDevice::createCommandPool(const CommandPool
             return std::unexpected(deviceFailed("render pass descriptor").error());
         }
         lists_[slot].pass = adopt(pass);
-        // Asked for once here, so the attachment exists before the first pass.
-        std::ignore = pass->colorAttachments()->object(0);
+        // Asked for once here, so every attachment exists before the first pass.
+        for (std::uint32_t i = 0; i < kMaxColorTargets; ++i) {
+            std::ignore = pass->colorAttachments()->object(i);
+        }
+        auto arguments = createArgumentTable(*device_.get());
+        if (!arguments) {
+            release();
+            return std::unexpected(std::move(arguments.error()));
+        }
+        lists_[slot].arguments = std::move(*arguments);
+    }
+    // The pool's push constant ring, in its first slot: shared, so the CPU
+    // copies into it, and resident, so the GPU reads it.
+    {
+        const std::uint64_t ringBytes = std::uint64_t{desc.pushConstantUpdates} * kPushConstantsSize;
+        MTL::Buffer* ring = device_->newBuffer(ringBytes, MTL::ResourceStorageModeShared);
+        if (ring == nullptr) {
+            release();
+            return std::unexpected(deviceFailed("push constant ring").error());
+        }
+        const std::scoped_lock lock{residencyLock_};
+        lists_[*first].pushRing = adopt(ring);
+        lists_[*first].pushResident.emplace(residency_, ring);
+        residency_->commit();
     }
     const CommandPoolHandle commandPool = commandPools_.emplace(
-        MetalCommandPool{.queue = desc.queue, .first = *first, .next = *first, .recording = 0, .lastSubmit = 0});
+        MetalCommandPool{.queue = desc.queue,
+                         .pushConstantUpdates = desc.pushConstantUpdates,
+                         .pushed = 0,
+                         .first = *first,
+                         .next = *first,
+                         .recording = 0,
+                         .lastSubmit = 0});
     if (commandPool.isNull()) {
         release();
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
@@ -441,6 +486,7 @@ core::Result<void> MetalDevice::resetCommandPool(CommandPoolHandle commandPool) 
         lists_[slot].allocator->reset();
     }
     (*pool)->next = (*pool)->first;
+    (*pool)->pushed = 0;
     return {};
 }
 
@@ -490,11 +536,21 @@ core::Result<CommandListHandle> MetalDevice::beginCommands(CommandPoolHandle com
     made.buffer->beginCommandBuffer(made.allocator.get());
     // A new handle for each recording, so last frame's handle never names
     // this one. The list pool was made at its maximum, so this never grows.
+    // The tables are bound through the slot's argument table for the whole
+    // list; the push constants join them as they are set.
+    made.arguments->setAddress(tables().buffer->gpuAddress(), kTablesBufferIndex);
     const CommandListHandle commandList = commandLists_.emplace(MetalCommandList{.buffer = made.buffer.get(),
                                                                                  .pool = commandPool,
                                                                                  .slot = slot,
+                                                                                 .state = {},
+                                                                                 .graphics = {},
+                                                                                 .compute = {},
+                                                                                 .encoderGraphics = {},
+                                                                                 .indexType = MTL::IndexTypeUInt32,
+                                                                                 .indexBuffer = 0,
+                                                                                 .indexBytes = 0,
                                                                                  .encoder = {},
-                                                                                 .rendering = {},
+                                                                                 .presenting = {},
                                                                                  .rendered = core::SlotChains::kEnd});
     if (commandList.isNull()) {
         made.buffer->endCommandBuffer();
@@ -513,60 +569,138 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    auto chain = swapchainFor(swapchain);
-    if (!chain) {
-        return std::unexpected(std::move(chain.error()));
-    }
-    if ((*list)->rendering.has_value()) {
+    if ((*list)->state.rendering) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is already open");
+    }
+    if (auto checked = checkRenderingDesc(!swapchain.isNull(), desc); !checked) {
+        return checked;
     }
     if (const MetalCommandPool* pool = commandPools_.find((*list)->pool);
         pool != nullptr && queues_[pool->queue]->type != QueueType::Graphics) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "the list records for queue {}, which does not render",
                              pool->queue);
     }
-    if ((*chain)->submitted()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "the acquired image was already submitted; present it first");
-    }
-    CA::MetalDrawable* drawable = (*chain)->drawable();
-    if (drawable == nullptr) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
-    }
-
-    // Rendered to earlier in this list, the swapchain is already in its chain.
-    bool renderedBefore = false;
-    for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
-        renderedBefore = renderedBefore || renders_[slot] == swapchain;
-    }
-    if (!renderedBefore) {
-        const auto slot = renderSlots_.push((*list)->rendered);
-        if (!slot) {
-            return core::failure(core::ErrorCode::RhiLimitReached,
-                                 "the device's recording lists render to at most {} swapchains at once",
-                                 desc_.maxCommandLists);
+    // Every handle is looked up before anything is recorded, so a bad one
+    // leaves the list as it was.
+    std::array<MTL::Texture*, kMaxColorTargets> colors{};
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    MetalSwapchain* chain = nullptr;
+    for (std::uint32_t i = 0; i < desc.colorAttachmentCount; ++i) {
+        if (i == 0 && !swapchain.isNull()) {
+            auto found = swapchainFor(swapchain);
+            if (!found) {
+                return std::unexpected(std::move(found.error()));
+            }
+            chain = *found;
+            if (chain->submitted()) {
+                return core::failure(core::ErrorCode::RhiInvalidCall,
+                                     "the acquired image was already submitted; present it first");
+            }
+            CA::MetalDrawable* drawable = chain->drawable();
+            if (drawable == nullptr) {
+                return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
+            }
+            colors.at(i) = drawable->texture();
+            width = static_cast<std::uint32_t>(colors.at(i)->width());
+            height = static_cast<std::uint32_t>(colors.at(i)->height());
+            continue;
         }
-        renders_[*slot] = swapchain;
+        auto texture = textureFor(desc.colorAttachments.at(i).texture);
+        if (!texture) {
+            return std::unexpected(std::move(texture.error()));
+        }
+        colors.at(i) = (*texture)->texture.get();
+        width = (*texture)->width;
+        height = (*texture)->height;
+    }
+    const MetalTexture* depth = nullptr;
+    if (!desc.depthStencil.texture.isNull()) {
+        auto texture = textureFor(desc.depthStencil.texture);
+        if (!texture) {
+            return std::unexpected(std::move(texture.error()));
+        }
+        depth = *texture;
+        width = depth->width;
+        height = depth->height;
+    }
+    if (chain != nullptr) {
+        // Rendered to earlier in this list, the swapchain is already in its chain.
+        bool renderedBefore = false;
+        for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
+            renderedBefore = renderedBefore || renders_[slot] == swapchain;
+        }
+        if (!renderedBefore) {
+            const auto slot = renderSlots_.push((*list)->rendered);
+            if (!slot) {
+                return core::failure(core::ErrorCode::RhiLimitReached,
+                                     "the device's recording lists render to at most {} swapchains at once",
+                                     desc_.maxCommandLists);
+            }
+            renders_[*slot] = swapchain;
+        }
     }
 
-    // The slot's descriptor is refilled; the pool drains the autoreleased
-    // encoder reference, and pushing one is a pointer onto the thread's page.
+    // The slot's descriptor is refilled, every attachment of it, so none of a
+    // past rendering's is left; the pool drains the autoreleased encoder
+    // reference, and pushing one is a pointer onto the thread's page.
     const AutoreleasePool pool;
     MTL4::RenderPassDescriptor* pass = lists_[(*list)->slot].pass.get();
-    MTL::RenderPassColorAttachmentDescriptor* color = pass->colorAttachments()->object(0);
-    color->setTexture(drawable->texture());
-    color->setLoadAction(loadActionFor(desc.loadOp));
-    color->setStoreAction(storeActionFor(desc.storeOp));
-    color->setClearColor(
-        MTL::ClearColor::Make(static_cast<double>(desc.clearColor[0]), static_cast<double>(desc.clearColor[1]),
-                              static_cast<double>(desc.clearColor[2]), static_cast<double>(desc.clearColor[3])));
+    for (std::uint32_t i = 0; i < kMaxColorTargets; ++i) {
+        MTL::RenderPassColorAttachmentDescriptor* color = pass->colorAttachments()->object(i);
+        if (i >= desc.colorAttachmentCount) {
+            color->setTexture(nullptr);
+            continue;
+        }
+        const ColorAttachment& attachment = desc.colorAttachments.at(i);
+        color->setTexture(colors.at(i));
+        color->setLoadAction(loadActionFor(attachment.loadOp));
+        color->setStoreAction(storeActionFor(attachment.storeOp));
+        color->setClearColor(MTL::ClearColor::Make(static_cast<double>(attachment.clearColor[0]),
+                                                   static_cast<double>(attachment.clearColor[1]),
+                                                   static_cast<double>(attachment.clearColor[2]),
+                                                   static_cast<double>(attachment.clearColor[3])));
+    }
+    MTL::RenderPassDepthAttachmentDescriptor* depthAttachment = pass->depthAttachment();
+    MTL::RenderPassStencilAttachmentDescriptor* stencilAttachment = pass->stencilAttachment();
+    depthAttachment->setTexture(nullptr);
+    stencilAttachment->setTexture(nullptr);
+    if (depth != nullptr) {
+        // Each aspect the format has gets its attachment, loaded and stored alike.
+        const FormatBlock& block = blockOf(depth->format);
+        if (block.depthBytes != 0) {
+            depthAttachment->setTexture(depth->texture.get());
+            depthAttachment->setLoadAction(loadActionFor(desc.depthStencil.loadOp));
+            depthAttachment->setStoreAction(storeActionFor(desc.depthStencil.storeOp));
+            depthAttachment->setClearDepth(static_cast<double>(desc.depthStencil.clearDepth));
+        }
+        if (block.stencilBytes != 0) {
+            stencilAttachment->setTexture(depth->texture.get());
+            stencilAttachment->setLoadAction(loadActionFor(desc.depthStencil.loadOp));
+            stencilAttachment->setStoreAction(storeActionFor(desc.depthStencil.storeOp));
+            stencilAttachment->setClearStencil(desc.depthStencil.clearStencil);
+        }
+    }
     MTL4::RenderCommandEncoder* encoder = (*list)->buffer->renderCommandEncoder(pass);
     if (encoder == nullptr) {
         return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no render command encoder");
     }
+    encoder->setArgumentTable(lists_[(*list)->slot].arguments.get(), MTL::RenderStageVertex | MTL::RenderStageFragment);
     (*list)->encoder = share(encoder);
-    (*list)->rendering = swapchain;
-    return {};
+    (*list)->encoderGraphics = {};
+    (*list)->state.rendering = true;
+    (*list)->presenting = chain != nullptr ? std::optional{swapchain} : std::nullopt;
+    // The whole area, until the caller sets its own.
+    if (auto set = setViewport(commandList, {.x = 0,
+                                             .y = 0,
+                                             .width = static_cast<float>(width),
+                                             .height = static_cast<float>(height),
+                                             .minDepth = 0,
+                                             .maxDepth = 1});
+        !set) {
+        return set;
+    }
+    return setScissor(commandList, {.x = 0, .y = 0, .width = width, .height = height});
 }
 
 core::Result<void> MetalDevice::endRendering(CommandListHandle commandList) {
@@ -574,12 +708,13 @@ core::Result<void> MetalDevice::endRendering(CommandListHandle commandList) {
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (!(*list)->rendering.has_value()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "no rendering is open");
+    if (auto checked = checkRendering((*list)->state); !checked) {
+        return checked;
     }
     (*list)->encoder->endEncoding();
     (*list)->encoder.reset();
-    (*list)->rendering.reset();
+    (*list)->state.rendering = false;
+    (*list)->presenting.reset();
     return {};
 }
 
@@ -627,7 +762,7 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "the list is named twice in the submit");
         }
         (*list)->queued = serial;
-        if ((*list)->rendering.has_value()) {
+        if ((*list)->state.rendering) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is still open; end it first");
         }
         if (const MetalCommandPool* pool = commandPools_.find((*list)->pool);

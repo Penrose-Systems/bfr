@@ -30,16 +30,29 @@ inline constexpr std::uint32_t kSamplerTableParameter = 2;
 
 /// The one resource layout every pipeline shares: the root signature, and the
 /// two shader-visible heaps holding the tables, sized as the DeviceDesc asked.
-/// The three resource ranges all start at the table's start, so an index of
-/// any kind names one descriptor of the resource heap; BFR gives each kind its
-/// own region of it, the sampled textures first, then the storage textures,
-/// then the storage buffers, so an index handed out for one kind never names
-/// another's descriptor. Made with the device and released with it, after
-/// every pipeline.
+/// The three resource tables are regions of the resource heap, the sampled
+/// textures first, then the storage textures, then the storage buffers; each
+/// range's offset from the table's start is its region's, so a shader's index
+/// in any table is the slot BFR handed out, as on every backend. Made with the
+/// device and released with it, after every pipeline.
 struct D3D12BindlessLayout {
     Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> resources;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> samplers;
+    /// Where each region starts in the resource heap, in descriptors; the
+    /// sampled textures start at 0.
+    std::uint32_t storageTextures = 0;
+    std::uint32_t storageBuffers = 0;
+    /// Bytes between two descriptors of the resource heap, as the device says.
+    std::uint32_t descriptorBytes = 0;
+
+    /// The CPU handle of descriptor index of the resource heap, which a view
+    /// is created at.
+    [[nodiscard]] D3D12_CPU_DESCRIPTOR_HANDLE resourceAt(std::uint32_t index) const {
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = resources->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += SIZE_T{index} * descriptorBytes;
+        return handle;
+    }
 };
 
 /// The layout on device as desc sizes it. Fails with RhiLimitReached when the

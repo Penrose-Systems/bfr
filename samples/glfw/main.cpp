@@ -1,4 +1,4 @@
-// Opens a GLFW window, makes a BFR swapchain for it and clears and presents it
+// Opens a GLFW window, makes a BFR swapchain for it and draws a triangle into it
 // every frame, resizing the swapchain as the window resizes. Close the window
 // to exit.
 #include "bfr.hpp"

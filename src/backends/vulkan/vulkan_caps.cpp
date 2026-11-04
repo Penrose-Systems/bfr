@@ -27,7 +27,7 @@ namespace {
 template <class Features>
 struct FloorFeature {
     const char* name;
-    VkBool32 Features::* member;
+    VkBool32 Features::*member;
 };
 
 using Vulkan12 = VkPhysicalDeviceVulkan12Features;

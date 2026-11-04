@@ -62,7 +62,13 @@ constexpr BufferTextureCopy kTextureCopy{.bufferOffset = 0,
                                          .height = 1,
                                          .depth = 1};
 
-constexpr RenderingDesc kClear{.loadOp = LoadOp::Clear, .storeOp = StoreOp::Store, .clearColor = {0, 0, 0, 1}};
+// The swapchain's image, cleared.
+constexpr RenderingDesc kClear{.colorAttachmentCount = 1,
+                               .colorAttachments = {{{.texture = {},
+                                                      .loadOp = LoadOp::Clear,
+                                                      .storeOp = StoreOp::Store,
+                                                      .clearColor = {0, 0, 0, 1}}}},
+                               .depthStencil = {}};
 
 // What one frame's calls failed with, or nothing; it holds no string, so
 // checking it allocates nothing.

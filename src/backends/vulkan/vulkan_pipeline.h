@@ -41,6 +41,14 @@ public:
     [[nodiscard]] VkPipelineLayout pipelineLayout() const { return pipelineLayout_; }
     [[nodiscard]] VkDescriptorSet set() const { return set_; }
 
+    /// Points slot of the storage buffer table at the whole of buffer.
+    void writeStorageBuffer(std::uint32_t slot, VkBuffer buffer) const;
+    /// Points slot of the texture table at view, read in layout
+    /// SHADER_READ_ONLY_OPTIMAL.
+    void writeSampledImage(std::uint32_t slot, VkImageView view) const;
+    /// Points slot of the storage texture table at view, in layout GENERAL.
+    void writeStorageImage(std::uint32_t slot, VkImageView view) const;
+
 private:
     void destroy();
 
@@ -62,12 +70,13 @@ struct RasterFeatures {
     bool independentBlend = false;
 };
 
-/// A VkPipeline, destroyed when this goes, with where it binds and, for
-/// compute, the workgroup size its desc gave.
+/// A VkPipeline, destroyed when this goes, with where it binds, the list
+/// topology of its class, which a draw sets, and, for compute, the workgroup
+/// size its desc gave.
 class VulkanPipeline {
 public:
     VulkanPipeline(const VolkDeviceTable& table, VkDevice device, VkPipeline pipeline, VkPipelineBindPoint bindPoint,
-                   std::array<std::uint32_t, kWorkgroupDimensions> workgroupSize);
+                   VkPrimitiveTopology topology, std::array<std::uint32_t, kWorkgroupDimensions> workgroupSize);
     ~VulkanPipeline();
     VulkanPipeline(const VulkanPipeline&) = delete;
     VulkanPipeline& operator=(const VulkanPipeline&) = delete;
@@ -76,6 +85,7 @@ public:
 
     [[nodiscard]] VkPipeline pipeline() const { return pipeline_; }
     [[nodiscard]] VkPipelineBindPoint bindPoint() const { return bindPoint_; }
+    [[nodiscard]] VkPrimitiveTopology topology() const { return topology_; }
     [[nodiscard]] const std::array<std::uint32_t, kWorkgroupDimensions>& workgroupSize() const {
         return workgroupSize_;
     }
@@ -85,6 +95,7 @@ private:
     VkDevice device_;
     VkPipeline pipeline_;
     VkPipelineBindPoint bindPoint_;
+    VkPrimitiveTopology topology_;
     std::array<std::uint32_t, kWorkgroupDimensions> workgroupSize_;
 };
 

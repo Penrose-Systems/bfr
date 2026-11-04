@@ -21,18 +21,23 @@ namespace bfr::rhi::d3d12 {
 
 /// A buffer resource and the memory D3D12MA placed it in, both released when
 /// it goes: before the allocator is. mapped is where the CPU reaches upload
-/// and readback memory, empty for device memory.
+/// and readback memory, empty for device memory. slot is its place in the
+/// storage buffer table, kEnd without storage usage; the device gives it back
+/// when the buffer is collected.
 struct D3D12Buffer {
     // The allocation is declared first so that the resource is released first.
     Microsoft::WRL::ComPtr<D3D12MA::Allocation> allocation;
     Microsoft::WRL::ComPtr<ID3D12Resource> resource;
     BufferMemory memory = BufferMemory::Device;
+    std::uint64_t size = 0;
     std::span<std::byte> mapped;
+    std::uint32_t slot = 0;
 };
 
 /// A buffer as desc says, mapped for good when it is upload or readback
-/// memory. Fails with RhiOutOfMemory when memory runs out and RhiDeviceFailed
-/// when D3D12MA or D3D12 refuses.
-[[nodiscard]] core::Result<D3D12Buffer> createD3D12Buffer(D3D12MA::Allocator& allocator, const BufferDesc& desc);
+/// memory, holding slot. Fails with RhiOutOfMemory when memory runs out and
+/// RhiDeviceFailed when D3D12MA or D3D12 refuses.
+[[nodiscard]] core::Result<D3D12Buffer> createD3D12Buffer(D3D12MA::Allocator& allocator, const BufferDesc& desc,
+                                                          std::uint32_t slot);
 
 } // namespace bfr::rhi::d3d12

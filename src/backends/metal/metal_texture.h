@@ -4,6 +4,7 @@
 #include "bfr/rhi/texture.h"
 #include "metal/metal_buffer.h"
 #include "metal/metal_util.h"
+#include "rhi/bindless_slots.h"
 
 #include <Metal/Metal.hpp>
 
@@ -14,6 +15,11 @@ namespace bfr::rhi::metal {
 struct MetalTexture {
     Ref<MTL::Texture> texture;
     Format format = Format::R8Unorm;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    /// Its places in the tables, which the device gives back when the texture
+    /// is collected.
+    TextureSlotsHeld slots;
     // Declared after texture, so it leaves the set before it is released.
     Resident resident;
 };

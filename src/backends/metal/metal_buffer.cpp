@@ -3,14 +3,18 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
+#include "core/slot_chains.h"
 #include "metal/metal_device.h"
+#include "metal/metal_texture.h"
 #include "metal/metal_util.h"
+#include "rhi/bindless_slots.h"
 #include "rhi/buffer_check.h"
 
 #include <Metal/Metal.hpp>
 #include <Metal/MTL4ComputeCommandEncoder.hpp>
 #include <Metal/MTLAllocation.hpp>
 #include <Metal/MTLBuffer.hpp>
+#include <Metal/MTLGPUAddress.hpp>
 #include <Metal/MTLResidencySet.hpp>
 
 #include <atomic>
@@ -61,6 +65,7 @@ core::Result<MetalBuffer> createMetalBuffer(MTL::Device& device, const BufferDes
     return MetalBuffer{.buffer = std::move(buffer),
                        .memory = desc.memory,
                        .mapped = mapped,
+                       .slot = core::SlotChains::kEnd,
                        .resident = std::move(resident)};
 }
 
@@ -79,8 +84,10 @@ void MetalDevice::collectBuffers() {
     const std::scoped_lock lock{residencyLock_};
     const std::uint64_t completed = submissions_.completed(
         [this](std::uint32_t queue) { return queues_[queue]->event->signaledValue(); });
-    buffers_.collect(completed);
-    textures_.collect(completed);
+    // A collected resource's slots go back to their tables, so no pending work
+    // can see a slot reused.
+    buffers_.collect(completed, [this](const MetalBuffer& buffer) { bindless_.giveBuffer(buffer.slot); });
+    textures_.collect(completed, [this](const MetalTexture& texture) { bindless_.giveTexture(texture.slots); });
     pipelines_.collect(completed);
     residency_->commit();
 }
@@ -94,16 +101,35 @@ core::Result<BufferHandle> MetalDevice::createBuffer(const BufferDesc& desc) {
     collectBuffers();
     // Held until made is gone, which takes it out of the set if it is not kept.
     const std::scoped_lock lock{residencyLock_};
+    auto slot = bindless_.takeBuffer(desc);
+    if (!slot) {
+        return std::unexpected(std::move(slot.error()));
+    }
     auto made = createMetalBuffer(*device_.get(), desc, residency_);
     if (!made) {
+        bindless_.giveBuffer(*slot);
         return std::unexpected(std::move(made.error()));
     }
+    made->slot = *slot;
     residency_->commit();
+    const MTL::GPUAddress address = made->buffer->gpuAddress();
     const BufferHandle buffer = buffers_.emplace(std::move(*made));
     if (buffer.isNull()) {
+        bindless_.giveBuffer(*slot);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} buffers", kBufferLimit);
     }
+    if (*slot != core::SlotChains::kEnd) {
+        tables().writeStorageBuffer(*slot, address);
+    }
     return buffer;
+}
+
+core::Result<std::uint32_t> MetalDevice::bufferSlot(BufferHandle buffer) {
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    return BindlessSlots::reported((*found)->slot);
 }
 
 core::Result<void> MetalDevice::copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
