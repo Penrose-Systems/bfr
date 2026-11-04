@@ -53,6 +53,7 @@ add_executable(bfr_tests
     rhi/test_pipeline.cpp
     rhi/test_draw.cpp
     rhi/test_present.cpp
+    rhi/test_sampler.cpp
     rhi/test_swapchain.cpp
     rhi/test_texture.cpp
     ${PROJECT_SOURCE_DIR}/src/backends/null/null_device.cpp

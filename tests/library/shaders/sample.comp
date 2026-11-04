@@ -1,0 +1,35 @@
+// A compute shader that declares BFR's bindless layout (api/bfr.yaml,
+// bfr_pipeline) and samples a texture through the sampler table, writing the
+// red channel at two coordinates: a quarter of the way from its first texel's
+// centre to its second's, off the boundary where nearest filtering could
+// round either way, and half a texture before it. For the sampler tests;
+// spirv.h holds it compiled, see compile.sh.
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+layout(local_size_x = 2) in;
+
+layout(set = 0, binding = 0) uniform texture2D textures[];
+
+layout(set = 0, binding = 2) buffer Buffers {
+    float values[];
+} buffers[];
+
+layout(set = 0, binding = 3) uniform sampler samplers[];
+
+layout(push_constant) uniform Push {
+    uint textureSlot;
+    uint samplerSlot;
+    uint target;
+} push;
+
+const float kCoordinates[2] = float[](0.375, -0.5);
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    const vec2 at = vec2(kCoordinates[i], 0.5);
+    buffers[nonuniformEXT(push.target)].values[i] =
+        textureLod(sampler2D(textures[nonuniformEXT(push.textureSlot)], samplers[nonuniformEXT(push.samplerSlot)]), at,
+                   0.0)
+            .r;
+}

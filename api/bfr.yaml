@@ -357,7 +357,8 @@ enums:
   compare_op:
     doc: >-
       How a depth or stencil test compares the new value against the one
-      stored; the test passes when the comparison holds.
+      stored, or a compare sampler a reference against each texel; the test
+      passes when the comparison holds.
     values:
       always: {value: 0, doc: Passes every time.}
       never: {value: 1, doc: Fails every time.}
@@ -415,6 +416,29 @@ enums:
     values:
       uint32: {value: 0, doc: Four bytes an index.}
       uint16: {value: 1, doc: Two bytes an index.}
+
+  filter:
+    doc: How a sampler picks texels, or mip levels, around a coordinate.
+    values:
+      nearest: {value: 0, doc: The nearest one.}
+      linear: {value: 1, doc: The nearest ones blended by distance.}
+
+  address_mode:
+    doc: What a sampler reads for a coordinate outside 0 to 1.
+    values:
+      repeat: {value: 0, doc: The texture tiled.}
+      mirror_repeat: {value: 1, doc: "The texture tiled, every other tile mirrored."}
+      clamp_to_edge: {value: 2, doc: The nearest edge texel.}
+      clamp_to_border: {value: 3, doc: The sampler's border colour.}
+      mirror_clamp_to_edge: {value: 4, doc: "Mirrored once, then the nearest edge texel; bfr_caps_features.sampler_mirror_clamp_to_edge."}
+
+  sampler_reduction:
+    doc: What a sample returns from the texels it reads.
+    values:
+      weighted_average: {value: 0, doc: "The texels filtered, as usual."}
+      compare: {value: 1, doc: "Each texel compared against a reference by compare_op, then the results filtered."}
+      minimum: {value: 2, doc: The least of each component; bfr_caps_features.sampler_minmax.}
+      maximum: {value: 3, doc: The greatest of each component; bfr_caps_features.sampler_minmax.}
 
   window_system:
     doc: >-
@@ -483,8 +507,8 @@ handles:
       A compute or graphics pipeline: shaders with the fixed state they run
       under. Every pipeline shares one resource layout, which its shaders
       declare as follows. Four unbounded tables, each indexed by the slot a
-      resource is given when it is created, which bfr_get_buffer_slot and
-      bfr_get_texture_slots report and which is the same number on every
+      resource is given when it is created, which bfr_get_buffer_slot,
+      bfr_get_texture_slots and bfr_get_sampler_slot report and which is the same number on every
       backend, and one block of bfr_push_constants_size bytes of push
       constants that every stage reads, set by bfr_push_constants. On Vulkan the tables are the
       bindings of descriptor set 0, in order: 0 sampled images, 1 storage
@@ -502,6 +526,11 @@ handles:
       sizes the device was opened with; the push constants are at buffer(1).
       Uniform buffers have no table: they are not in every backend's floor. A
       pipeline's shaders are bytecode for the backend the device runs on.
+
+  sampler:
+    parent: device
+    destroy: destroy_sampler
+    doc: How shaders read a texture through the sampler table, as its bfr_sampler_desc says.
 
 callbacks:
   message_callback:
@@ -820,6 +849,38 @@ structs:
       - {name: height, type: u32, doc: Texels.}
       - {name: depth, type: u32, doc: Texels.}
 
+  sampler_desc:
+    doc: >-
+      How to create a sampler. Every member reaches the backend as it is;
+      the backend's rules for them hold, such as Vulkan's for unnormalized
+      coordinates: min and mag filter equal, mip filter nearest, both LODs 0,
+      U and V clamp, no anisotropy and no compare.
+    extensible: true
+    members:
+      - {name: mag_filter, type: filter, doc: 0 is nearest.}
+      - {name: min_filter, type: filter}
+      - {name: mip_filter, type: filter}
+      - {name: address_u, type: address_mode, doc: 0 is repeat.}
+      - {name: address_v, type: address_mode}
+      - {name: address_w, type: address_mode}
+      - {name: lod_bias, type: f32, doc: "Added to the LOD; other than 0 needs bfr_caps_features.sampler_lod_bias."}
+      - {name: min_lod, type: f32}
+      - {name: max_lod, type: f32, doc: 0 samples mip 0 only.}
+      - {name: max_anisotropy, type: u32, doc: "0 is none; up to bfr_caps_limits.max_sampler_anisotropy."}
+      - {name: reduction, type: sampler_reduction}
+      - {name: compare_op, type: compare_op, doc: With reduction compare.}
+      - name: border_color
+        type: f32
+        fixed: 4
+        doc: >-
+          Red, green, blue and alpha a clamp_to_border read returns; all 0 is
+          transparent black. Other than (0,0,0,0), (0,0,0,1) and (1,1,1,1) needs
+          bfr_caps_features.sampler_custom_border_color.
+      - {name: border_integer, type: bool, doc: "The texture holds integers: border_color_integer applies instead; bfr_caps_features.sampler_integer_border_color."}
+      - {name: border_color_integer, type: u32, fixed: 4, doc: "Red, green, blue and alpha bits; a signed format reads them as int32."}
+      - {name: unnormalized_coordinates, type: bool, doc: "Coordinates in texels, not 0 to 1; bfr_caps_features.sampler_unnormalized_coordinates."}
+      - {name: lod_average, type: bool, doc: The LOD averaged across a quad; bfr_caps_features.sampler_lod_average.}
+
   shader_code:
     doc: >-
       One shader stage: bytecode for the backend the device runs on, and the
@@ -1000,6 +1061,7 @@ structs:
       - {name: max_cull_distances, type: u32}
       - {name: max_sampler_anisotropy, type: f32}
       - {name: max_sampler_lod_bias, type: f32}
+      - {name: max_custom_border_color_samplers, type: u32, doc: Samplers with a custom border colour alive at once.}
       - {name: min_shading_rate_tile, type: u32, doc: Smallest tile of a shading rate texture; 0 without one.}
       - {name: max_shading_rate_tile, type: u32, doc: Largest tile of a shading rate texture; 0 without one.}
       - {name: min_uniform_buffer_alignment, type: u64, doc: Alignment in bytes of a uniform buffer view's offset.}
@@ -1091,6 +1153,14 @@ structs:
       - {name: wide_lines, type: bool}
       - {name: sampler_anisotropy, type: bool}
       - {name: sampler_minmax, type: bool, doc: Samplers that return the minimum or maximum of the texels they read.}
+      - {name: sampler_mirror_clamp_to_edge, type: bool}
+      - {name: sampler_anisotropy_nearest_mip, type: bool, doc: Anisotropy with mip_filter nearest.}
+      - {name: sampler_anisotropy_nearest_filter, type: bool, doc: Anisotropy with min or mag filter nearest.}
+      - {name: sampler_custom_border_color, type: bool, doc: "A border colour other than (0,0,0,0), (0,0,0,1) and (1,1,1,1)."}
+      - {name: sampler_integer_border_color, type: bool, doc: A border colour for textures that hold integers.}
+      - {name: sampler_unnormalized_coordinates, type: bool}
+      - {name: sampler_lod_bias, type: bool, doc: A lod_bias other than 0.}
+      - {name: sampler_lod_average, type: bool}
       - {name: compression_bc, type: bool}
       - {name: compression_etc2, type: bool}
       - {name: compression_astc, type: bool}
@@ -1747,6 +1817,38 @@ functions:
     params:
       - {name: device, type: device}
       - {name: texture, type: texture}
+
+  create_sampler:
+    doc: >-
+      Creates a sampler, as desc says, with a slot in the sampler table. Not
+      for the frame path: it frees samplers the GPU is done with. Fails with
+      error_invalid_argument for a value BFR does not have, error_unsupported
+      when the backend has no setting for a member, or the device lacks the
+      feature it needs, error_limit_reached when the sampler table is full,
+      and error_device_failed when the backend refuses the desc.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: sampler_desc, pointer: in}
+      - {name: sampler, type: sampler, pointer: out}
+
+  get_sampler_slot:
+    doc: Writes the sampler's index in the sampler table bfr_pipeline states, held from creation to destruction.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: sampler, type: sampler}
+      - {name: slot, type: u32, pointer: out}
+
+  destroy_sampler:
+    doc: >-
+      Destroys a sampler once the GPU has finished with it; the handle is
+      invalid at once. Not for the frame path: it records the point the
+      sampler waits for and frees what the GPU is done with. A handle that is
+      already destroyed does nothing.
+    params:
+      - {name: device, type: device}
+      - {name: sampler, type: sampler}
 
   create_compute_pipeline:
     doc: >-

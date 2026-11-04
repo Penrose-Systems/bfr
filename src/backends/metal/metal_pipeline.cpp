@@ -90,6 +90,8 @@ MTL::PrimitiveTopologyClass topologyFor(TopologyClass topology) {
     }
 }
 
+} // namespace
+
 MTL::CompareFunction compareFor(CompareOp op) {
     switch (op) {
         case CompareOp::Never:
@@ -111,6 +113,8 @@ MTL::CompareFunction compareFor(CompareOp op) {
             return MTL::CompareFunctionAlways;
     }
 }
+
+namespace {
 
 MTL::StencilOperation stencilFor(StencilOp op) {
     switch (op) {
@@ -243,7 +247,9 @@ core::Result<MetalBindlessTables> createMetalBindlessTables(MTL::Device& device,
     const std::uint32_t storageTextures = desc.maxBindlessTextures;
     const std::uint32_t storageBuffers = storageTextures + desc.maxBindlessStorageTextures;
     const std::uint32_t samplers = storageBuffers + desc.maxBindlessStorageBuffers;
-    const std::uint64_t entries = std::uint64_t{samplers} + desc.maxBindlessSamplers;
+    // checkLimits holds each table to a handle's slots, so together they fit
+    // in 32 bits.
+    const std::uint32_t entries = samplers + desc.maxBindlessSamplers;
     // Tables of 0 slots are none, so an argument buffer with no entries is
     // not made.
     if (entries == 0) {
@@ -251,10 +257,11 @@ core::Result<MetalBindlessTables> createMetalBindlessTables(MTL::Device& device,
                                    .storageTextures = storageTextures,
                                    .storageBuffers = storageBuffers,
                                    .samplers = samplers,
+                                   .entries = 0,
                                    .resident = {}};
     }
     // Shared, so the CPU writes entries as views are made.
-    MTL::Buffer* buffer = device.newBuffer(entries * kTableEntryBytes, MTL::ResourceStorageModeShared);
+    MTL::Buffer* buffer = device.newBuffer(std::uint64_t{entries} * kTableEntryBytes, MTL::ResourceStorageModeShared);
     if (buffer == nullptr) {
         return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no buffer for the bindless tables");
     }
@@ -262,6 +269,7 @@ core::Result<MetalBindlessTables> createMetalBindlessTables(MTL::Device& device,
                                .storageTextures = storageTextures,
                                .storageBuffers = storageBuffers,
                                .samplers = samplers,
+                               .entries = entries,
                                .resident = Resident{std::move(residency), buffer}};
 }
 
@@ -270,7 +278,7 @@ namespace {
 // Where entry index of the tables is, in the shared buffer's memory.
 void writeEntry(const MetalBindlessTables& tables, std::uint32_t index, std::uint64_t value) {
     auto* entries = static_cast<std::uint64_t*>(tables.buffer->contents());
-    std::span{entries, tables.samplers}[index] = value;
+    std::span{entries, tables.entries}[index] = value;
 }
 
 } // namespace
@@ -285,6 +293,10 @@ void MetalBindlessTables::writeSampledTexture(std::uint32_t slot, MTL::ResourceI
 
 void MetalBindlessTables::writeStorageTexture(std::uint32_t slot, MTL::ResourceID texture) const {
     writeEntry(*this, storageTextures + slot, texture._impl);
+}
+
+void MetalBindlessTables::writeSampler(std::uint32_t slot, MTL::ResourceID sampler) const {
+    writeEntry(*this, samplers + slot, sampler._impl);
 }
 
 core::Result<Ref<MTL4::ArgumentTable>> createArgumentTable(MTL::Device& device) {

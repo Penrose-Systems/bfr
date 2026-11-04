@@ -6,6 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/pipeline.h"
+#include "bfr/rhi/sampler.h"
 #include "bfr/rhi/swapchain.h"
 #include "bfr/rhi/texture.h"
 
@@ -263,6 +264,23 @@ public:
     /// null handle does nothing. Fails with RhiInvalidHandle when the texture
     /// is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroyTexture(TextureHandle texture) = 0;
+
+    /// A sampler as desc says, with a slot in the sampler table. Cold: it
+    /// frees samplers the GPU is done with. Fails with RhiUnsupported when
+    /// the backend has no setting for a member or the device lacks the
+    /// feature it needs, RhiLimitReached when the sampler table is full, and
+    /// RhiDeviceFailed when the API refuses the desc.
+    [[nodiscard]] virtual core::Result<SamplerHandle> createSampler(const SamplerDesc& desc) = 0;
+
+    /// The sampler's index in the sampler table, held from creation to
+    /// destruction. Fails with RhiInvalidHandle when it is destroyed.
+    [[nodiscard]] virtual core::Result<std::uint32_t> samplerSlot(SamplerHandle sampler) = 0;
+
+    /// Destroys the sampler once the GPU has passed every submit made before
+    /// the call; the handle is invalid at once. Cold, as destroyBuffer is. A
+    /// null handle does nothing. Fails with RhiInvalidHandle when the sampler
+    /// is already destroyed.
+    [[nodiscard]] virtual core::Result<void> destroySampler(SamplerHandle sampler) = 0;
 
     /// A compute pipeline as desc says, made before returning. Cold: it
     /// compiles, and frees pipelines the GPU is done with. Fails with

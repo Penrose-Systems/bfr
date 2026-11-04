@@ -16,22 +16,39 @@ namespace bfr::rhi::vulkan {
 
 // Each query below goes through vk, the table of the instance adapter belongs to.
 
-/// The floor's features, which every listed adapter has and every device turns
-/// on. vulkan12.pNext points at vulkan13, so a create info chains vulkan12.
-class FloorFeatures {
+/// A portability driver, such as MoltenVK, lists it, and a device on that
+/// adapter must then enable it. It is provisional, so vulkan_core.h lacks its name.
+inline constexpr const char* kPortabilitySubset = "VK_KHR_portability_subset";
+
+/// The optional sampler features a device turns on, each when its adapter's
+/// caps report it; createSampler refuses a desc that needs one it lacks.
+struct SamplerFeatures {
+    bool anisotropy = false;
+    bool minmax = false;
+    bool mirrorClampToEdge = false;
+    /// VK_EXT_custom_border_color, with colours given without a format.
+    bool customBorderColor = false;
+};
+
+/// The features a device turns on in its create info's chain: the floor's,
+/// which every listed adapter has, and the 1.2 and extension features of
+/// sampler. vulkan12.pNext points at vulkan13, so a create info chains
+/// vulkan12; the custom border colour features follow when sampler has them.
+class DeviceFeatures {
 public:
-    FloorFeatures();
-    ~FloorFeatures() = default;
-    FloorFeatures(const FloorFeatures&) = delete;
-    FloorFeatures& operator=(const FloorFeatures&) = delete;
-    FloorFeatures(FloorFeatures&&) = delete;
-    FloorFeatures& operator=(FloorFeatures&&) = delete;
+    explicit DeviceFeatures(const SamplerFeatures& sampler);
+    ~DeviceFeatures() = default;
+    DeviceFeatures(const DeviceFeatures&) = delete;
+    DeviceFeatures& operator=(const DeviceFeatures&) = delete;
+    DeviceFeatures(DeviceFeatures&&) = delete;
+    DeviceFeatures& operator=(DeviceFeatures&&) = delete;
 
     [[nodiscard]] const VkPhysicalDeviceVulkan12Features& head() const { return vulkan12_; }
 
 private:
     VkPhysicalDeviceVulkan12Features vulkan12_{};
     VkPhysicalDeviceVulkan13Features vulkan13_{};
+    VkPhysicalDeviceCustomBorderColorFeaturesEXT customBorderColor_{};
 };
 
 /// The floor's features adapter lacks, by their Vulkan names.

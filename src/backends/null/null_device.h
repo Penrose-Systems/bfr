@@ -71,6 +71,11 @@ struct NullTexture {
     TextureSlotsHeld slots;
 };
 
+/// A sampler, which samples nothing without a GPU: only the slot it holds.
+struct NullSampler {
+    std::uint32_t slot = core::SlotChains::kEnd;
+};
+
 /// A pipeline, which runs nothing: no code has a use without a GPU, so none is
 /// kept, only the fixed state and how the shaders are named.
 struct NullPipeline {
@@ -142,6 +147,9 @@ public:
     [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
     [[nodiscard]] core::Result<TextureSlots> textureSlots(TextureHandle texture) override;
     [[nodiscard]] core::Result<void> destroyTexture(TextureHandle texture) override;
+    [[nodiscard]] core::Result<SamplerHandle> createSampler(const SamplerDesc& desc) override;
+    [[nodiscard]] core::Result<std::uint32_t> samplerSlot(SamplerHandle sampler) override;
+    [[nodiscard]] core::Result<void> destroySampler(SamplerHandle sampler) override;
     [[nodiscard]] core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) override;
     [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyPipeline(PipelineHandle pipeline) override;
@@ -182,6 +190,8 @@ private:
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<NullBuffer, Buffer> buffers_;
     core::Pool<NullTexture, Texture> textures_;
+    // Every sampler holds a slot, so the pool is made at the table's size.
+    core::Pool<NullSampler, Sampler> samplers_;
     core::Pool<NullPipeline, Pipeline> pipelines_;
     BindlessSlots bindless_;
     std::vector<QueueType> queues_;

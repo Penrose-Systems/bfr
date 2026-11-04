@@ -481,8 +481,8 @@ typedef enum bfr_fill_mode {
     BFR_FILL_MODE_FORCE32 = 0x7FFFFFFF
 } bfr_fill_mode;
 
-// How a depth or stencil test compares the new value against the one stored; the test passes when
-// the comparison holds.
+// How a depth or stencil test compares the new value against the one stored, or a compare sampler a
+// reference against each texel; the test passes when the comparison holds.
 typedef enum bfr_compare_op {
     // Passes every time.
     BFR_COMPARE_OP_ALWAYS = 0,
@@ -563,6 +563,43 @@ typedef enum bfr_index_type {
     BFR_INDEX_TYPE_FORCE32 = 0x7FFFFFFF
 } bfr_index_type;
 
+// How a sampler picks texels, or mip levels, around a coordinate.
+typedef enum bfr_filter {
+    // The nearest one.
+    BFR_FILTER_NEAREST = 0,
+    // The nearest ones blended by distance.
+    BFR_FILTER_LINEAR = 1,
+    BFR_FILTER_FORCE32 = 0x7FFFFFFF
+} bfr_filter;
+
+// What a sampler reads for a coordinate outside 0 to 1.
+typedef enum bfr_address_mode {
+    // The texture tiled.
+    BFR_ADDRESS_MODE_REPEAT = 0,
+    // The texture tiled, every other tile mirrored.
+    BFR_ADDRESS_MODE_MIRROR_REPEAT = 1,
+    // The nearest edge texel.
+    BFR_ADDRESS_MODE_CLAMP_TO_EDGE = 2,
+    // The sampler's border colour.
+    BFR_ADDRESS_MODE_CLAMP_TO_BORDER = 3,
+    // Mirrored once, then the nearest edge texel; bfr_caps_features.sampler_mirror_clamp_to_edge.
+    BFR_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE = 4,
+    BFR_ADDRESS_MODE_FORCE32 = 0x7FFFFFFF
+} bfr_address_mode;
+
+// What a sample returns from the texels it reads.
+typedef enum bfr_sampler_reduction {
+    // The texels filtered, as usual.
+    BFR_SAMPLER_REDUCTION_WEIGHTED_AVERAGE = 0,
+    // Each texel compared against a reference by compare_op, then the results filtered.
+    BFR_SAMPLER_REDUCTION_COMPARE = 1,
+    // The least of each component; bfr_caps_features.sampler_minmax.
+    BFR_SAMPLER_REDUCTION_MINIMUM = 2,
+    // The greatest of each component; bfr_caps_features.sampler_minmax.
+    BFR_SAMPLER_REDUCTION_MAXIMUM = 3,
+    BFR_SAMPLER_REDUCTION_FORCE32 = 0x7FFFFFFF
+} bfr_sampler_reduction;
+
 // Which window system a bfr_window comes from, for the platforms that have more than one.
 typedef enum bfr_window_system {
     // The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -631,10 +668,10 @@ typedef struct bfr_texture {
 
 // A compute or graphics pipeline: shaders with the fixed state they run under. Every pipeline
 // shares one resource layout, which its shaders declare as follows. Four unbounded tables, each
-// indexed by the slot a resource is given when it is created, which bfr_get_buffer_slot and
-// bfr_get_texture_slots report and which is the same number on every backend, and one block of
-// bfr_push_constants_size bytes of push constants that every stage reads, set by
-// bfr_push_constants. On Vulkan the tables are the bindings of descriptor set 0, in order: 0
+// indexed by the slot a resource is given when it is created, which bfr_get_buffer_slot,
+// bfr_get_texture_slots and bfr_get_sampler_slot report and which is the same number on every
+// backend, and one block of bfr_push_constants_size bytes of push constants that every stage reads,
+// set by bfr_push_constants. On Vulkan the tables are the bindings of descriptor set 0, in order: 0
 // sampled images, 1 storage images, 2 storage buffers, 3 samplers, each an update-after-bind and
 // partially-bound runtime array; the push constants are a push constant range over all stages. On
 // D3D12 the tables are unbounded descriptor ranges, each starting at register 0 of its own space:
@@ -649,6 +686,12 @@ typedef struct bfr_texture {
 typedef struct bfr_pipeline {
     uint64_t bits;
 } bfr_pipeline;
+
+// How shaders read a texture through the sampler table, as its bfr_sampler_desc says. A
+// generational handle; 0 is never valid.
+typedef struct bfr_sampler {
+    uint64_t bits;
+} bfr_sampler;
 
 // Receives BFR's messages and validation's. Without one, BFR prints nothing. Called on any thread,
 // including threads BFR or the driver owns, until the instance and every device made from it are
@@ -964,6 +1007,43 @@ typedef struct bfr_texture_copy {
     uint32_t depth;
 } bfr_texture_copy;
 
+// How to create a sampler. Every member reaches the backend as it is; the backend's rules for them
+// hold, such as Vulkan's for unnormalized coordinates: min and mag filter equal, mip filter
+// nearest, both LODs 0, U and V clamp, no anisotropy and no compare.
+typedef struct bfr_sampler_desc {
+    const bfr_chain* next;
+    // 0 is nearest.
+    bfr_filter mag_filter;
+    bfr_filter min_filter;
+    bfr_filter mip_filter;
+    // 0 is repeat.
+    bfr_address_mode address_u;
+    bfr_address_mode address_v;
+    bfr_address_mode address_w;
+    // Added to the LOD; other than 0 needs bfr_caps_features.sampler_lod_bias.
+    float lod_bias;
+    float min_lod;
+    // 0 samples mip 0 only.
+    float max_lod;
+    // 0 is none; up to bfr_caps_limits.max_sampler_anisotropy.
+    uint32_t max_anisotropy;
+    bfr_sampler_reduction reduction;
+    // With reduction compare.
+    bfr_compare_op compare_op;
+    // Red, green, blue and alpha a clamp_to_border read returns; all 0 is transparent black. Other
+    // than (0,0,0,0), (0,0,0,1) and (1,1,1,1) needs bfr_caps_features.sampler_custom_border_color.
+    float border_color[4];
+    // The texture holds integers: border_color_integer applies instead;
+    // bfr_caps_features.sampler_integer_border_color.
+    bfr_bool border_integer;
+    // Red, green, blue and alpha bits; a signed format reads them as int32.
+    uint32_t border_color_integer[4];
+    // Coordinates in texels, not 0 to 1; bfr_caps_features.sampler_unnormalized_coordinates.
+    bfr_bool unnormalized_coordinates;
+    // The LOD averaged across a quad; bfr_caps_features.sampler_lod_average.
+    bfr_bool lod_average;
+} bfr_sampler_desc;
+
 // One shader stage: bytecode for the backend the device runs on, and the name of the function in it
 // to run.
 typedef struct bfr_shader_code {
@@ -1185,6 +1265,8 @@ typedef struct bfr_caps_limits {
     uint32_t max_cull_distances;
     float max_sampler_anisotropy;
     float max_sampler_lod_bias;
+    // Samplers with a custom border colour alive at once.
+    uint32_t max_custom_border_color_samplers;
     // Smallest tile of a shading rate texture; 0 without one.
     uint32_t min_shading_rate_tile;
     // Largest tile of a shading rate texture; 0 without one.
@@ -1310,6 +1392,19 @@ typedef struct bfr_caps_features {
     bfr_bool sampler_anisotropy;
     // Samplers that return the minimum or maximum of the texels they read.
     bfr_bool sampler_minmax;
+    bfr_bool sampler_mirror_clamp_to_edge;
+    // Anisotropy with mip_filter nearest.
+    bfr_bool sampler_anisotropy_nearest_mip;
+    // Anisotropy with min or mag filter nearest.
+    bfr_bool sampler_anisotropy_nearest_filter;
+    // A border colour other than (0,0,0,0), (0,0,0,1) and (1,1,1,1).
+    bfr_bool sampler_custom_border_color;
+    // A border colour for textures that hold integers.
+    bfr_bool sampler_integer_border_color;
+    bfr_bool sampler_unnormalized_coordinates;
+    // A lod_bias other than 0.
+    bfr_bool sampler_lod_bias;
+    bfr_bool sampler_lod_average;
     bfr_bool compression_bc;
     bfr_bool compression_etc2;
     bfr_bool compression_astc;
@@ -1816,6 +1911,25 @@ BFR_API bfr_result bfr_get_texture_slots(
 // frame path: it records the point the texture waits for and frees what the GPU is done with. A
 // handle that is already destroyed does nothing.
 BFR_API void bfr_destroy_texture(bfr_device* device, bfr_texture texture);
+
+// Creates a sampler, as desc says, with a slot in the sampler table. Not for the frame path: it
+// frees samplers the GPU is done with. Fails with error_invalid_argument for a value BFR does not
+// have, error_unsupported when the backend has no setting for a member, or the device lacks the
+// feature it needs, error_limit_reached when the sampler table is full, and error_device_failed
+// when the backend refuses the desc.
+BFR_API bfr_result bfr_create_sampler(
+    bfr_device* device,
+    const bfr_sampler_desc* desc,
+    bfr_sampler* sampler);
+
+// Writes the sampler's index in the sampler table bfr_pipeline states, held from creation to
+// destruction.
+BFR_API bfr_result bfr_get_sampler_slot(bfr_device* device, bfr_sampler sampler, uint32_t* slot);
+
+// Destroys a sampler once the GPU has finished with it; the handle is invalid at once. Not for the
+// frame path: it records the point the sampler waits for and frees what the GPU is done with. A
+// handle that is already destroyed does nothing.
+BFR_API void bfr_destroy_sampler(bfr_device* device, bfr_sampler sampler);
 
 // Creates a compute pipeline, as desc says, before returning. Not for the frame path: it compiles,
 // and frees pipelines the GPU is done with. Fails with error_invalid_argument for a desc with no

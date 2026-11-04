@@ -73,10 +73,6 @@ core::Result<std::uint32_t> loaderVersion() {
 // The device extensions every listed adapter needs.
 constexpr std::array kFloorExtensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
-// A portability driver, such as MoltenVK, lists it, and a device on that
-// adapter must then enable it. It is provisional, so vulkan_core.h lacks its name.
-constexpr const char* kPortabilitySubset = "VK_KHR_portability_subset";
-
 // The device extensions adapter lists, or the call that failed.
 std::expected<std::vector<VkExtensionProperties>, VulkanFailure> deviceExtensions(const InstanceTable& vk,
                                                                                   VkPhysicalDevice adapter) {
@@ -467,8 +463,19 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
         extensions.push_back(kPortabilitySubset);
     }
 
+    // The optional sampler features, each turned on when the caps report it,
+    // so the caps say what the device has.
+    const Features& reported = listed.caps.features;
+    const SamplerFeatures sampler{.anisotropy = reported.samplerAnisotropy,
+                                  .minmax = reported.samplerMinmax,
+                                  .mirrorClampToEdge = reported.samplerMirrorClampToEdge,
+                                  .customBorderColor = reported.samplerCustomBorderColor};
+    if (sampler.customBorderColor) {
+        extensions.push_back(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
+    }
+
     const auto queues = queueCreateInfos(*families, *families->present, wanted);
-    const FloorFeatures features;
+    const DeviceFeatures features(sampler);
     // The optional 1.0 features a pipeline's state may need, each turned on
     // when the adapter has it; the device refuses state that needs one it lacks.
     VkPhysicalDeviceFeatures2 has{};
@@ -479,6 +486,7 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     enabled.depthClamp = has.features.depthClamp;
     enabled.depthBiasClamp = has.features.depthBiasClamp;
     enabled.independentBlend = has.features.independentBlend;
+    enabled.samplerAnisotropy = sampler.anisotropy ? VK_TRUE : VK_FALSE;
     const RasterFeatures raster{.fillModeNonSolid = enabled.fillModeNonSolid == VK_TRUE,
                                 .depthClamp = enabled.depthClamp == VK_TRUE,
                                 .depthBiasClamp = enabled.depthBiasClamp == VK_TRUE,
@@ -500,7 +508,8 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     }
     BFR_LOG_INFO(logger(), "device on {}, queue families {}, extensions: {}", listed.name, familyList(queues.infos),
                  core::text::join(extensions, ", "));
-    auto made = VulkanDevice::create(*this, physicalDevice, device, *families, wanted, hasBudget_[adapter], raster);
+    auto made = VulkanDevice::create(*this, physicalDevice, device, *families, wanted, hasBudget_[adapter], raster,
+                                     sampler);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }

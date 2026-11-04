@@ -119,8 +119,10 @@ void recordBarrier(const VolkDeviceTable& table, VkCommandBuffer buffer, const V
 core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance& rhi, VkPhysicalDevice adapter,
                                                                  VkDevice device, const QueueFamilies& families,
                                                                  const DeviceDesc& desc, bool hasBudget,
-                                                                 const RasterFeatures& features) {
-    auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, families, desc, hasBudget, features);
+                                                                 const RasterFeatures& features,
+                                                                 const SamplerFeatures& samplerFeatures) {
+    auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, families, desc, hasBudget, features,
+                                               samplerFeatures);
     if (auto opened = made->openQueues(families, desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
@@ -139,7 +141,7 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
 
 VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device,
                            const QueueFamilies& families, const DeviceDesc& desc, bool hasBudget,
-                           const RasterFeatures& features)
+                           const RasterFeatures& features, const SamplerFeatures& samplerFeatures)
     : instance_(&rhi),
       adapter_(adapter),
       device_(device),
@@ -147,6 +149,7 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       presentFamily_(families.present.value_or(families.graphics)),
       hasBudget_(hasBudget),
       rasterFeatures_(features),
+      samplerFeatures_(samplerFeatures),
       desc_(desc),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
       commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
@@ -158,6 +161,7 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       submissions_(1 + desc.compute + desc.copy),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
       bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
@@ -950,6 +954,9 @@ void VulkanDevice::warnLeftovers() const {
     if (textures_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} textures were left when the device went", textures_.size());
     }
+    if (samplers_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} samplers were left when the device went", samplers_.size());
+    }
     if (pipelines_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} pipelines were left when the device went", pipelines_.size());
     }
@@ -973,6 +980,7 @@ VulkanDevice::~VulkanDevice() {
     // and every pipeline goes before the layout it was made on.
     buffers_.clear();
     textures_.clear();
+    samplers_.clear();
     pipelines_.clear();
     layout_ = {};
     vmaDestroyAllocator(allocator_);

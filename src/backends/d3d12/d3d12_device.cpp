@@ -66,6 +66,8 @@ core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rh
                                                                ComPtr<IDXGIAdapter3> adapter, std::size_t heapCount,
                                                                const DeviceDesc& desc) {
     auto made = std::make_unique<D3D12Device>(rhi, std::move(device), std::move(adapter), heapCount, desc);
+    // A runtime without it answers E_NOINTERFACE and leaves device11_ null.
+    static_cast<void>(made->device_.As(&made->device11_));
     if (auto opened = made->open(desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
@@ -86,6 +88,7 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
                          std::size_t heapCount, const DeviceDesc& desc)
     : instance_(&rhi),
       device_(std::move(device)),
+      samplerFeatures_(samplerFeaturesOf(device_.Get())),
       adapter_(std::move(adapter)),
       heapCount_(heapCount),
       desc_(desc),
@@ -99,6 +102,7 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       submissions_(1 + desc.compute + desc.copy),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
       bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
@@ -172,6 +176,9 @@ D3D12Device::~D3D12Device() {
     if (textures_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} textures were left when the device went", textures_.size());
     }
+    if (samplers_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} samplers were left when the device went", samplers_.size());
+    }
     if (pipelines_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} pipelines were left when the device went", pipelines_.size());
     }
@@ -179,6 +186,7 @@ D3D12Device::~D3D12Device() {
     // and every pipeline goes before the layout it was made on.
     buffers_.clear();
     textures_.clear();
+    samplers_.clear();
     pipelines_.clear();
     layout_ = {};
     allocator_.Reset();

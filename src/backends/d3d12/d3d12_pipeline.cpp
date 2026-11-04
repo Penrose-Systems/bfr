@@ -94,6 +94,8 @@ D3D12_CULL_MODE cullFor(CullMode cull) {
     }
 }
 
+} // namespace
+
 D3D12_COMPARISON_FUNC compareFor(CompareOp op) {
     switch (op) {
         case CompareOp::Never:
@@ -115,6 +117,8 @@ D3D12_COMPARISON_FUNC compareFor(CompareOp op) {
             return D3D12_COMPARISON_FUNC_ALWAYS;
     }
 }
+
+namespace {
 
 D3D12_STENCIL_OP stencilFor(StencilOp op) {
     switch (op) {
@@ -221,6 +225,7 @@ core::Result<D3D12BindlessLayout> createD3D12BindlessLayout(ID3D12Device& device
     layout.storageTextures = desc.maxBindlessTextures;
     layout.storageBuffers = desc.maxBindlessTextures + desc.maxBindlessStorageTextures;
     layout.descriptorBytes = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    layout.samplerBytes = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
     const std::array<D3D12_DESCRIPTOR_RANGE1, kResourceRangeCount> resourceRanges{
         rangeFor(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, kSampledTextureSpace, kTableStart),
         rangeFor(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, kStorageTextureSpace, layout.storageTextures),

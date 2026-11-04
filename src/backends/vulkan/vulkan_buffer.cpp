@@ -8,6 +8,7 @@
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_result.h"
+#include "vulkan/vulkan_sampler.h"
 #include "vulkan/vulkan_texture.h"
 
 #include <vulkan/vulkan_core.h>
@@ -152,6 +153,7 @@ void VulkanDevice::collectBuffers() {
     // can see a slot reused.
     buffers_.collect(completed, [this](const VulkanBuffer& buffer) { bindless_.giveBuffer(buffer.slot()); });
     textures_.collect(completed, [this](const VulkanTexture& texture) { bindless_.giveTexture(texture.slots()); });
+    samplers_.collect(completed, [this](const VulkanSampler& sampler) { bindless_.giveSampler(sampler.slot()); });
     pipelines_.collect(completed);
 }
 

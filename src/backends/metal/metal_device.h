@@ -13,6 +13,7 @@
 #include "core/submissions.h"
 #include "metal/metal_buffer.h"
 #include "metal/metal_pipeline.h"
+#include "metal/metal_sampler.h"
 #include "metal/metal_swapchain.h"
 #include "metal/metal_texture.h"
 #include "metal/metal_util.h"
@@ -203,6 +204,9 @@ public:
     [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
     [[nodiscard]] core::Result<TextureSlots> textureSlots(TextureHandle texture) override;
     [[nodiscard]] core::Result<void> destroyTexture(TextureHandle texture) override;
+    [[nodiscard]] core::Result<SamplerHandle> createSampler(const SamplerDesc& desc) override;
+    [[nodiscard]] core::Result<std::uint32_t> samplerSlot(SamplerHandle sampler) override;
+    [[nodiscard]] core::Result<void> destroySampler(SamplerHandle sampler) override;
     [[nodiscard]] core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) override;
     [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyPipeline(PipelineHandle pipeline) override;
@@ -221,7 +225,7 @@ private:
     // Ends a list that was submitted or discarded; its slot waits for the
     // pool's reset.
     void end(CommandListHandle commandList);
-    // Destroys the buffers, textures and pipelines retired under submission
+    // Destroys the buffers, textures, samplers and pipelines retired under submission
     // IDs every queue has passed.
     void collectBuffers();
     // Waits for everything the device has submitted.
@@ -270,6 +274,8 @@ private:
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<MetalBuffer, Buffer> buffers_;
     core::Pool<MetalTexture, Texture> textures_;
+    // Every sampler holds a slot, so the pool is made at the table's size.
+    core::Pool<MetalSampler, Sampler> samplers_;
     BindlessSlots bindless_;
     // The tables leave the residency set as the buffers do, under its lock.
     // Optional only because they are made after the device, in open.

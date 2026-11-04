@@ -226,6 +226,7 @@ TEST_CASE("C API destroy calls take null and stale handles", "[c_api][unit]") {
     bfr_destroy_device(nullptr);
     bfr_destroy_swapchain(nullptr, bfr_swapchain{.bits = 0});
     bfr_destroy_buffer(nullptr, bfr_buffer{.bits = 0});
+    bfr_destroy_sampler(nullptr, bfr_sampler{.bits = 0});
 }
 
 TEST_CASE("C API lists adapters in two calls", "[c_api][gpu]") {
@@ -293,7 +294,7 @@ namespace {
 
 struct Mode {
     bfr_present_mode mode;
-    bfr_bool bfr_swapchain_caps::*allowed;
+    bfr_bool bfr_swapchain_caps::* allowed;
     const char* name;
 };
 
@@ -478,6 +479,48 @@ TEST_CASE("C API creates, maps and destroys a buffer, and refuses what it can't 
     bfr_destroy_buffer(device.device, local);
     CHECK(bfr_map_buffer(device.device, upload, &data) == BFR_RESULT_ERROR_INVALID_HANDLE);
     bfr_destroy_buffer(device.device, upload);
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C API creates a sampler with a slot, and refuses a value it does not have", "[c_api][gpu]") {
+    const bfr_backend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    const Instance instance{backend, messages};
+    const HeadlessDevice device{instance.instance};
+    bfr_sampler_desc desc{.next = nullptr,
+                          .mag_filter = BFR_FILTER_LINEAR,
+                          .min_filter = BFR_FILTER_LINEAR,
+                          .mip_filter = BFR_FILTER_NEAREST,
+                          .address_u = BFR_ADDRESS_MODE_CLAMP_TO_EDGE,
+                          .address_v = BFR_ADDRESS_MODE_CLAMP_TO_EDGE,
+                          .address_w = BFR_ADDRESS_MODE_CLAMP_TO_EDGE,
+                          .lod_bias = 0,
+                          .min_lod = 0,
+                          .max_lod = 0,
+                          .max_anisotropy = 0,
+                          .reduction = BFR_SAMPLER_REDUCTION_WEIGHTED_AVERAGE,
+                          .compare_op = BFR_COMPARE_OP_ALWAYS,
+                          .border_color = {},
+                          .border_integer = BFR_FALSE,
+                          .border_color_integer = {},
+                          .unnormalized_coordinates = BFR_FALSE,
+                          .lod_average = BFR_FALSE};
+    bfr_sampler sampler{};
+    REQUIRE(bfr_create_sampler(device.device, &desc, &sampler) == BFR_RESULT_SUCCESS);
+    // Past the table, so the call is seen to write it.
+    std::uint32_t slot = kDeviceSamplers;
+    CHECK(bfr_get_sampler_slot(device.device, sampler, &slot) == BFR_RESULT_SUCCESS);
+    CHECK(slot < kDeviceSamplers);
+
+    desc.address_v = static_cast<bfr_address_mode>(kNotAValue);
+    bfr_sampler stray{};
+    CHECK(bfr_create_sampler(device.device, &desc, &stray) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("address mode v"));
+    CHECK(stray.bits == 0);
+    bfr_destroy_sampler(device.device, sampler);
+    CHECK(bfr_get_sampler_slot(device.device, sampler, &slot) == BFR_RESULT_ERROR_INVALID_HANDLE);
+    CHECK(slot == 0);
+    bfr_destroy_sampler(device.device, sampler);
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 

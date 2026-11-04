@@ -473,6 +473,27 @@ TEST_CASE("C++ API creates and destroys pipelines", "[cpp_api][gpu]") {
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("C++ API creates a sampler with a slot, destroyed with its object", "[cpp_api][gpu]") {
+    const bfr::Backend backend = GENERATE(eachBackend());
+    Messages messages;
+    {
+        const bfr::Instance instance = validatedInstance(backend, messages);
+        const bfr::Device device = headlessDevice(instance);
+        auto sampler = device.createSampler({.magFilter = bfr::Filter::Linear,
+                                             .minFilter = bfr::Filter::Linear,
+                                             .addressU = bfr::AddressMode::ClampToEdge,
+                                             .addressV = bfr::AddressMode::ClampToEdge,
+                                             .addressW = bfr::AddressMode::ClampToEdge});
+        INFO(failureOf(sampler));
+        REQUIRE(sampler.has_value());
+        const auto slot = sampler->samplerSlot();
+        INFO(failureOf(slot));
+        REQUIRE(slot.has_value());
+        CHECK(*slot < kDeviceSamplers);
+    }
+    CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("C++ API dispatches a compute pipeline through a buffer's slot", "[cpp_api][gpu]") {
     const bfr::Backend backend = GENERATE(eachBackend());
     // The shaders checked in are SPIR-V, which only Vulkan takes.

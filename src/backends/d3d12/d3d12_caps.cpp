@@ -113,14 +113,16 @@ Limits limitsOf(ID3D12Device* device, const D3D12_FEATURE_DATA_D3D12_OPTIONS6& o
 }
 
 // Resource binding tier 3, which the floor asks for, reads any descriptor in
-// a full shader-visible heap from any stage; the sampler heap is smaller.
-BindlessLimits bindlessOf() {
+// a full shader-visible heap from any stage; the sampler heap is smaller, as
+// OPTIONS19 says when the device answers it, else as d3d12.h defines it.
+BindlessLimits bindlessOf(const SamplerFeatures& sampler) {
     BindlessLimits bindless;
     bindless.maxTextures = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_2;
     bindless.maxStorageTextures = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_2;
     bindless.maxStorageBuffers = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_2;
     bindless.maxUniformBuffers = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_2;
-    bindless.maxSamplers = D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE;
+    bindless.maxSamplers = sampler.maxSamplerHeapSize != 0 ? sampler.maxSamplerHeapSize
+                                                           : D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE;
     bindless.maxPerStage = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_2;
     return bindless;
 }
@@ -200,10 +202,19 @@ void addAdvancedFeatures(ID3D12Device* device, Features& features) {
     }
 }
 
-Features featuresOf(ID3D12Device* device) {
+// What samplers may be. D3D12 has no anisotropic filter with a nearest min or
+// mag filter (d3d12.h's D3D12_FILTER), and no LOD averaging.
+void addSamplerFeatures(const SamplerFeatures& sampler, Features& features) {
+    features.samplerAnisotropyNearestMip = sampler.anisotropyNearestMip;
+    features.samplerIntegerBorderColor = sampler.device11;
+    features.samplerUnnormalizedCoordinates = sampler.unnormalizedCoordinates;
+}
+
+Features featuresOf(ID3D12Device* device, const SamplerFeatures& sampler) {
     Features features;
     addBasicFeatures(device, features);
     addAdvancedFeatures(device, features);
+    addSamplerFeatures(sampler, features);
     return features;
 }
 
@@ -222,6 +233,21 @@ Memory memoryOf(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
 }
 
 } // namespace
+
+SamplerFeatures samplerFeaturesOf(ID3D12Device* device) {
+    SamplerFeatures sampler;
+    D3D12_FEATURE_DATA_D3D12_OPTIONS19 options19{};
+    if (query(device, D3D12_FEATURE_D3D12_OPTIONS19, options19)) {
+        sampler.anisotropyNearestMip = options19.AnisoFilterWithPointMipSupported != FALSE;
+        sampler.maxSamplerHeapSize = options19.MaxSamplerDescriptorHeapSize;
+    }
+    ComPtr<ID3D12Device11> device11;
+    sampler.device11 = SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device11)));
+    D3D12_FEATURE_DATA_D3D12_OPTIONS17 options17{};
+    sampler.unnormalizedCoordinates = sampler.device11 && query(device, D3D12_FEATURE_D3D12_OPTIONS17, options17) &&
+                                      options17.NonNormalizedCoordinateSamplersSupported != FALSE;
+    return sampler;
+}
 
 std::string belowFloor(ID3D12Device* device) {
     std::string reasons;
@@ -275,9 +301,10 @@ Caps readCaps(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
     static_cast<void>(query(device, D3D12_FEATURE_D3D12_OPTIONS6, options6));
     caps.info = infoOf(desc, device);
     caps.limits = limitsOf(device, options6);
-    caps.bindless = bindlessOf();
+    const SamplerFeatures sampler = samplerFeaturesOf(device);
+    caps.bindless = bindlessOf(sampler);
     caps.compute = computeOf(device);
-    caps.features = featuresOf(device);
+    caps.features = featuresOf(device, sampler);
     caps.memory = memoryOf(desc, device);
     return caps;
 }

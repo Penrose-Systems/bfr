@@ -7,6 +7,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/pipeline.h"
+#include "bfr/rhi/sampler.h"
 #include "bfr/rhi/swapchain.h"
 #include "bfr/rhi/texture.h"
 #include "core/slot_chains.h"
@@ -38,6 +39,7 @@ NullDevice::NullDevice(NullInstance& rhi, const DeviceDesc& desc)
       live_(desc.maxCommandLists),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()),
       bindless_(desc) {
     queues_.push_back(QueueType::Graphics);
@@ -57,6 +59,9 @@ NullDevice::~NullDevice() {
     }
     if (textures_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} textures were left when the device went", textures_.size());
+    }
+    if (samplers_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} samplers were left when the device went", samplers_.size());
     }
     if (pipelines_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} pipelines were left when the device went", pipelines_.size());
@@ -615,6 +620,42 @@ core::Result<void> NullDevice::destroyTexture(TextureHandle texture) {
     }
     bindless_.giveTexture(found->slots);
     textures_.erase(texture);
+    return {};
+}
+
+// Nothing samples without a GPU, so a sampler holds its slot and no more.
+core::Result<SamplerHandle> NullDevice::createSampler(const SamplerDesc&) {
+    auto slot = bindless_.takeSampler();
+    if (!slot) {
+        return std::unexpected(std::move(slot.error()));
+    }
+    const SamplerHandle sampler = samplers_.emplace(NullSampler{.slot = *slot});
+    if (sampler.isNull()) {
+        bindless_.giveSampler(*slot);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} samplers",
+                             desc_.maxBindlessSamplers);
+    }
+    return sampler;
+}
+
+core::Result<std::uint32_t> NullDevice::samplerSlot(SamplerHandle sampler) {
+    const NullSampler* found = samplers_.find(sampler);
+    if (found == nullptr) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the sampler handle is stale");
+    }
+    return found->slot;
+}
+
+core::Result<void> NullDevice::destroySampler(SamplerHandle sampler) {
+    if (sampler.isNull()) {
+        return {};
+    }
+    const NullSampler* found = samplers_.find(sampler);
+    if (found == nullptr) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the sampler handle is stale");
+    }
+    bindless_.giveSampler(found->slot);
+    samplers_.erase(sampler);
     return {};
 }
 

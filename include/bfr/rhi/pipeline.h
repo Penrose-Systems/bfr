@@ -73,7 +73,8 @@ enum class FillMode : std::uint8_t {
 };
 
 /// How a depth or stencil test compares the new value against the stored
-/// one; the test passes when the comparison holds. The values are the C API's.
+/// one, or a compare sampler a reference against each texel; the test passes
+/// when the comparison holds. The values are the C API's.
 enum class CompareOp : std::uint8_t {
     Always = 0,
     Never = 1,

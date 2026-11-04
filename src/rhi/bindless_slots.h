@@ -26,7 +26,8 @@ public:
         : desc_(desc),
           textures_(desc.maxBindlessTextures),
           storageTextures_(desc.maxBindlessStorageTextures),
-          storageBuffers_(desc.maxBindlessStorageBuffers) {}
+          storageBuffers_(desc.maxBindlessStorageBuffers),
+          samplers_(desc.maxBindlessSamplers) {}
 
     /// A storage buffer slot when desc's usage is storage, else kEnd. Fails
     /// with RhiLimitReached when the table is full.
@@ -74,6 +75,19 @@ public:
         storageTextures_.give(held.storage);
     }
 
+    /// A sampler table slot, which every sampler takes. Fails with
+    /// RhiLimitReached when the table is full.
+    [[nodiscard]] core::Result<std::uint32_t> takeSampler() {
+        const auto slot = samplers_.take(1);
+        if (!slot) {
+            return core::failure(core::ErrorCode::RhiLimitReached, "the sampler table holds at most {} samplers",
+                                 desc_.maxBindlessSamplers);
+        }
+        return *slot;
+    }
+
+    void giveSampler(std::uint32_t slot) { samplers_.give(slot); }
+
     /// held as the API reports it: 0 for a table the texture is not in.
     [[nodiscard]] static TextureSlots reported(const TextureSlotsHeld& held) {
         const auto slotOf = [](std::uint32_t slot) {
@@ -96,6 +110,7 @@ private:
     core::SlotChains textures_;
     core::SlotChains storageTextures_;
     core::SlotChains storageBuffers_;
+    core::SlotChains samplers_;
 };
 
 } // namespace bfr::rhi

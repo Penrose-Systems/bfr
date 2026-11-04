@@ -22,6 +22,9 @@ inline constexpr std::uint32_t kPushConstantsBufferIndex = 1;
 /// Bytes each table entry takes: a resource ID or a GPU address.
 inline constexpr std::uint64_t kTableEntryBytes = 8;
 
+/// op as Metal's, for depth and stencil tests and compare samplers.
+[[nodiscard]] MTL::CompareFunction compareFor(CompareOp op);
+
 /// The one resource layout every pipeline shares: one argument buffer holding
 /// the sampled textures, storage textures, storage buffers and samplers, in
 /// that order, each table sized as the DeviceDesc asked, resident while the
@@ -32,6 +35,8 @@ struct MetalBindlessTables {
     std::uint32_t storageTextures = 0;
     std::uint32_t storageBuffers = 0;
     std::uint32_t samplers = 0;
+    /// Entries in the buffer, every table's together.
+    std::uint32_t entries = 0;
     // Declared after buffer, so it leaves the set before it is released.
     Resident resident;
 
@@ -41,6 +46,8 @@ struct MetalBindlessTables {
     void writeStorageBuffer(std::uint32_t slot, MTL::GPUAddress address) const;
     void writeSampledTexture(std::uint32_t slot, MTL::ResourceID texture) const;
     void writeStorageTexture(std::uint32_t slot, MTL::ResourceID texture) const;
+    /// Points slot of the sampler table at sampler.
+    void writeSampler(std::uint32_t slot, MTL::ResourceID sampler) const;
 };
 
 /// The buffer bindings an argument table holds: the tables and the push

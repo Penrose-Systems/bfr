@@ -18,6 +18,9 @@ inline constexpr std::uint32_t kStorageTextureBinding = 1;
 inline constexpr std::uint32_t kStorageBufferBinding = 2;
 inline constexpr std::uint32_t kSamplerBinding = 3;
 
+/// op as Vulkan's, for depth and stencil tests and compare samplers.
+[[nodiscard]] VkCompareOp compareFor(CompareOp op);
+
 /// The one resource layout every pipeline shares: the descriptor set layout
 /// of the four tables, sized as the DeviceDesc asked, the set holding them,
 /// allocated from a pool of its own, and the pipeline layout over the set and
@@ -48,6 +51,8 @@ public:
     void writeSampledImage(std::uint32_t slot, VkImageView view) const;
     /// Points slot of the storage texture table at view, in layout GENERAL.
     void writeStorageImage(std::uint32_t slot, VkImageView view) const;
+    /// Points slot of the sampler table at sampler.
+    void writeSampler(std::uint32_t slot, VkSampler sampler) const;
 
 private:
     void destroy();

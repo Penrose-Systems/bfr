@@ -9,9 +9,9 @@ every backend.
 
 Done: instance and adapters, device, swapchain and present, command pools and
 lists, clear, submit and wait, buffers (create, map, destroy), buffer copies,
-textures and texture copies, shaders and pipelines, draws and dispatches.
+textures and texture copies, shaders and pipelines, draws and dispatches,
+samplers.
 
-5. Samplers.
 6. Timings: everything the backends can time, requestable by the client. GPU
    time per pass, draw, dispatch and copy; submit-to-complete, acquire and
    present waits; CPU time inside each BFR call.
@@ -25,4 +25,4 @@ textures and texture copies, shaders and pipelines, draws and dispatches.
     rate shading, HDR and present timing, and whatever each backend's caps
     turn up as we go.
 
-Next: 5.
+Next: 6.

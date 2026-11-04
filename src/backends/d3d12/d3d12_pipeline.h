@@ -28,6 +28,9 @@ inline constexpr std::uint32_t kPushConstantsParameter = 0;
 inline constexpr std::uint32_t kResourceTableParameter = 1;
 inline constexpr std::uint32_t kSamplerTableParameter = 2;
 
+/// op as D3D12's, for depth and stencil tests and compare samplers.
+[[nodiscard]] D3D12_COMPARISON_FUNC compareFor(CompareOp op);
+
 /// The one resource layout every pipeline shares: the root signature, and the
 /// two shader-visible heaps holding the tables, sized as the DeviceDesc asked.
 /// The three resource tables are regions of the resource heap, the sampled
@@ -43,14 +46,24 @@ struct D3D12BindlessLayout {
     /// sampled textures start at 0.
     std::uint32_t storageTextures = 0;
     std::uint32_t storageBuffers = 0;
-    /// Bytes between two descriptors of the resource heap, as the device says.
+    /// Bytes between two descriptors of the resource heap and of the sampler
+    /// heap, as the device says.
     std::uint32_t descriptorBytes = 0;
+    std::uint32_t samplerBytes = 0;
 
     /// The CPU handle of descriptor index of the resource heap, which a view
     /// is created at.
     [[nodiscard]] D3D12_CPU_DESCRIPTOR_HANDLE resourceAt(std::uint32_t index) const {
         D3D12_CPU_DESCRIPTOR_HANDLE handle = resources->GetCPUDescriptorHandleForHeapStart();
         handle.ptr += SIZE_T{index} * descriptorBytes;
+        return handle;
+    }
+
+    /// The CPU handle of descriptor index of the sampler heap, which a sampler
+    /// is created at.
+    [[nodiscard]] D3D12_CPU_DESCRIPTOR_HANDLE samplerAt(std::uint32_t index) const {
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = samplers->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += SIZE_T{index} * samplerBytes;
         return handle;
     }
 };

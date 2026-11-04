@@ -64,6 +64,7 @@ struct Limits {
     std::uint32_t maxCullDistances = 0;
     float maxSamplerAnisotropy = 0;
     float maxSamplerLodBias = 0;
+    std::uint32_t maxCustomBorderColorSamplers = 0;
     std::uint32_t minShadingRateTile = 0;
     std::uint32_t maxShadingRateTile = 0;
     std::uint64_t minUniformBufferAlignment = 0;
@@ -148,6 +149,14 @@ struct Features {
     bool wideLines = false;
     bool samplerAnisotropy = false;
     bool samplerMinmax = false;
+    bool samplerMirrorClampToEdge = false;
+    bool samplerAnisotropyNearestMip = false;
+    bool samplerAnisotropyNearestFilter = false;
+    bool samplerCustomBorderColor = false;
+    bool samplerIntegerBorderColor = false;
+    bool samplerUnnormalizedCoordinates = false;
+    bool samplerLodBias = false;
+    bool samplerLodAverage = false;
     bool compressionBc = false;
     bool compressionEtc2 = false;
     bool compressionAstc = false;

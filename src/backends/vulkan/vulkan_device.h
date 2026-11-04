@@ -17,6 +17,7 @@
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_buffer.h"
 #include "vulkan/vulkan_pipeline.h"
+#include "vulkan/vulkan_sampler.h"
 #include "vulkan/vulkan_swapchain.h"
 #include "vulkan/vulkan_texture.h"
 
@@ -117,15 +118,14 @@ public:
     /// maximums size everything the device holds. Fails with RhiDeviceFailed,
     /// destroying device, when the API refuses a queue's timeline or the
     /// bindless layout, and RhiLimitReached when it cannot hold the layout.
-    [[nodiscard]] static core::Result<std::unique_ptr<VulkanDevice>> create(VulkanInstance& rhi,
-                                                                            VkPhysicalDevice adapter, VkDevice device,
-                                                                            const QueueFamilies& families,
-                                                                            const DeviceDesc& desc, bool hasBudget,
-                                                                            const RasterFeatures& features);
+    [[nodiscard]] static core::Result<std::unique_ptr<VulkanDevice>> create(
+        VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const QueueFamilies& families,
+        const DeviceDesc& desc, bool hasBudget, const RasterFeatures& features, const SamplerFeatures& samplerFeatures);
 
     /// For create, with the number of queues create opens.
     VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const QueueFamilies& families,
-                 const DeviceDesc& desc, bool hasBudget, const RasterFeatures& features);
+                 const DeviceDesc& desc, bool hasBudget, const RasterFeatures& features,
+                 const SamplerFeatures& samplerFeatures);
     ~VulkanDevice() override;
     VulkanDevice(const VulkanDevice&) = delete;
     VulkanDevice& operator=(const VulkanDevice&) = delete;
@@ -185,6 +185,9 @@ public:
     [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
     [[nodiscard]] core::Result<TextureSlots> textureSlots(TextureHandle texture) override;
     [[nodiscard]] core::Result<void> destroyTexture(TextureHandle texture) override;
+    [[nodiscard]] core::Result<SamplerHandle> createSampler(const SamplerDesc& desc) override;
+    [[nodiscard]] core::Result<std::uint32_t> samplerSlot(SamplerHandle sampler) override;
+    [[nodiscard]] core::Result<void> destroySampler(SamplerHandle sampler) override;
     [[nodiscard]] core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) override;
     [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyPipeline(PipelineHandle pipeline) override;
@@ -201,7 +204,7 @@ private:
     // Ends a list that was submitted or discarded; its slot waits for the
     // pool's reset.
     void end(CommandListHandle commandList);
-    // Destroys the buffers, textures and pipelines retired under submission
+    // Destroys the buffers, textures, samplers and pipelines retired under submission
     // IDs every queue has passed.
     void collectBuffers();
     // Warns of each kind of object the caller left when the device goes.
@@ -225,6 +228,7 @@ private:
     std::uint32_t presentFamily_;
     bool hasBudget_;
     RasterFeatures rasterFeatures_;
+    SamplerFeatures samplerFeatures_;
     DeviceDesc desc_;
     std::vector<std::unique_ptr<VulkanQueue>> queues_;
     VkQueue presentQueue_ = VK_NULL_HANDLE;
@@ -254,6 +258,8 @@ private:
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<VulkanBuffer, Buffer> buffers_;
     core::Pool<VulkanTexture, Texture> textures_;
+    // Every sampler holds a slot, so the pool is made at the table's size.
+    core::Pool<VulkanSampler, Sampler> samplers_;
     BindlessSlots bindless_;
     // Declared before pipelines_, which are made on it, so it outlives them.
     VulkanBindlessLayout layout_;

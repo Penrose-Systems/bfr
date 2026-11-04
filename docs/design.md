@@ -200,13 +200,20 @@ encoder switching needs lookahead.
   addresses appear only where the native APIs require them (ray tracing
   build inputs, indirect arguments).
 - A resource takes its slot in each table its usage names when it is
-  created, and `get_buffer_slot` and `get_texture_slots` report it; the slot
-  is the same number on every backend, so one shader index means one thing.
+  created, and `get_buffer_slot`, `get_texture_slots` and `get_sampler_slot`
+  report it; the slot is the same number on every backend, so one shader
+  index means one thing.
   On D3D12 that takes each descriptor range's offset from the table's start
   to be its region's, so an index in space 1 or 2 is table-local. The slot
   goes back to its table when the resource is collected, after every submit
   made before its destroy has run, never at the destroy itself, so pending
   work never sees a slot reused.
+- A sampler is a handle that holds one slot in the sampler table. Every
+  member of its desc reaches the backend unchanged; a member the backend has
+  no setting for, or a feature the device lacks, fails with
+  `error_unsupported`. Identical samplers are not shared: each create reaches
+  the backend and holds its own slot. The Vulkan device turns on each
+  optional sampler feature its caps report, so the caps say what it has.
 - Metal 4 has no push constants and no `setBytes` on its encoders; resources
   bind only through `MTL4ArgumentTable`, which Metal snapshots at each draw
   or dispatch. The Metal backend copies push-constant data into a ring owned
@@ -218,8 +225,9 @@ encoder switching needs lookahead.
   every backend; it is on the pool because a caller declares a capacity, not
   a backend.
 - Limits set the sizes: push constants at most 128 bytes (Vulkan guarantee,
-  within the D3D12 64-DWORD root signature); samplers at most 2048 (D3D12
-  shader-visible sampler heap). Mobile descriptor limits still to check.
+  within the D3D12 64-DWORD root signature); samplers as
+  `bfr_caps_bindless.max_samplers` reports. Mobile descriptor limits still
+  to check.
 
 ### Pipelines
 

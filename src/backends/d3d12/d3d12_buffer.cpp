@@ -118,6 +118,7 @@ void D3D12Device::collectBuffers() {
     // can see a slot reused.
     buffers_.collect(completed, [this](const D3D12Buffer& buffer) { bindless_.giveBuffer(buffer.slot); });
     textures_.collect(completed, [this](const D3D12Texture& texture) { bindless_.giveTexture(texture.slots); });
+    samplers_.collect(completed, [this](const D3D12Sampler& sampler) { bindless_.giveSampler(sampler.slot); });
     pipelines_.collect(completed);
 }
 

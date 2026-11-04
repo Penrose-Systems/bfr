@@ -794,8 +794,8 @@ enum class FillMode : std::int32_t {
     return {};
 }
 
-/// How a depth or stencil test compares the new value against the one stored; the test passes when
-/// the comparison holds.
+/// How a depth or stencil test compares the new value against the one stored, or a compare sampler
+/// a reference against each texel; the test passes when the comparison holds.
 enum class CompareOp : std::int32_t {
     /// Passes every time.
     Always = BFR_COMPARE_OP_ALWAYS,
@@ -944,6 +944,72 @@ enum class IndexType : std::int32_t {
     return {};
 }
 
+/// How a sampler picks texels, or mip levels, around a coordinate.
+enum class Filter : std::int32_t {
+    /// The nearest one.
+    Nearest = BFR_FILTER_NEAREST,
+    /// The nearest ones blended by distance.
+    Linear = BFR_FILTER_LINEAR,
+};
+
+/// value's name in bfr.yaml; empty for a value Filter doesn't have.
+[[nodiscard]] constexpr std::string_view name(Filter value) {
+    switch (value) {
+    case Filter::Nearest: return "nearest";
+    case Filter::Linear: return "linear";
+    }
+    return {};
+}
+
+/// What a sampler reads for a coordinate outside 0 to 1.
+enum class AddressMode : std::int32_t {
+    /// The texture tiled.
+    Repeat = BFR_ADDRESS_MODE_REPEAT,
+    /// The texture tiled, every other tile mirrored.
+    MirrorRepeat = BFR_ADDRESS_MODE_MIRROR_REPEAT,
+    /// The nearest edge texel.
+    ClampToEdge = BFR_ADDRESS_MODE_CLAMP_TO_EDGE,
+    /// The sampler's border colour.
+    ClampToBorder = BFR_ADDRESS_MODE_CLAMP_TO_BORDER,
+    /// Mirrored once, then the nearest edge texel; bfr_caps_features.sampler_mirror_clamp_to_edge.
+    MirrorClampToEdge = BFR_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE,
+};
+
+/// value's name in bfr.yaml; empty for a value AddressMode doesn't have.
+[[nodiscard]] constexpr std::string_view name(AddressMode value) {
+    switch (value) {
+    case AddressMode::Repeat: return "repeat";
+    case AddressMode::MirrorRepeat: return "mirror_repeat";
+    case AddressMode::ClampToEdge: return "clamp_to_edge";
+    case AddressMode::ClampToBorder: return "clamp_to_border";
+    case AddressMode::MirrorClampToEdge: return "mirror_clamp_to_edge";
+    }
+    return {};
+}
+
+/// What a sample returns from the texels it reads.
+enum class SamplerReduction : std::int32_t {
+    /// The texels filtered, as usual.
+    WeightedAverage = BFR_SAMPLER_REDUCTION_WEIGHTED_AVERAGE,
+    /// Each texel compared against a reference by compare_op, then the results filtered.
+    Compare = BFR_SAMPLER_REDUCTION_COMPARE,
+    /// The least of each component; bfr_caps_features.sampler_minmax.
+    Minimum = BFR_SAMPLER_REDUCTION_MINIMUM,
+    /// The greatest of each component; bfr_caps_features.sampler_minmax.
+    Maximum = BFR_SAMPLER_REDUCTION_MAXIMUM,
+};
+
+/// value's name in bfr.yaml; empty for a value SamplerReduction doesn't have.
+[[nodiscard]] constexpr std::string_view name(SamplerReduction value) {
+    switch (value) {
+    case SamplerReduction::WeightedAverage: return "weighted_average";
+    case SamplerReduction::Compare: return "compare";
+    case SamplerReduction::Minimum: return "minimum";
+    case SamplerReduction::Maximum: return "maximum";
+    }
+    return {};
+}
+
 /// Which window system a bfr_window comes from, for the platforms that have more than one.
 enum class WindowSystem : std::int32_t {
     /// The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -996,6 +1062,8 @@ class Buffer;
 class Texture;
 
 class Pipeline;
+
+class Sampler;
 
 /// How to create an instance.
 struct InstanceDesc {
@@ -1324,6 +1392,42 @@ static_assert(offsetof(TextureCopy, width) == offsetof(bfr_texture_copy, width))
 static_assert(offsetof(TextureCopy, height) == offsetof(bfr_texture_copy, height));
 static_assert(offsetof(TextureCopy, depth) == offsetof(bfr_texture_copy, depth));
 
+/// How to create a sampler. Every member reaches the backend as it is; the backend's rules for them
+/// hold, such as Vulkan's for unnormalized coordinates: min and mag filter equal, mip filter
+/// nearest, both LODs 0, U and V clamp, no anisotropy and no compare.
+struct SamplerDesc {
+    /// 0 is nearest.
+    Filter magFilter{};
+    Filter minFilter{};
+    Filter mipFilter{};
+    /// 0 is repeat.
+    AddressMode addressU{};
+    AddressMode addressV{};
+    AddressMode addressW{};
+    /// Added to the LOD; other than 0 needs bfr_caps_features.sampler_lod_bias.
+    float lodBias{};
+    float minLod{};
+    /// 0 samples mip 0 only.
+    float maxLod{};
+    /// 0 is none; up to bfr_caps_limits.max_sampler_anisotropy.
+    std::uint32_t maxAnisotropy{};
+    SamplerReduction reduction{};
+    /// With reduction compare.
+    CompareOp compareOp{};
+    /// Red, green, blue and alpha a clamp_to_border read returns; all 0 is transparent black. Other
+    /// than (0,0,0,0), (0,0,0,1) and (1,1,1,1) needs bfr_caps_features.sampler_custom_border_color.
+    std::array<float, 4> borderColor{};
+    /// The texture holds integers: border_color_integer applies instead;
+    /// bfr_caps_features.sampler_integer_border_color.
+    bool borderInteger{};
+    /// Red, green, blue and alpha bits; a signed format reads them as int32.
+    std::array<std::uint32_t, 4> borderColorInteger{};
+    /// Coordinates in texels, not 0 to 1; bfr_caps_features.sampler_unnormalized_coordinates.
+    bool unnormalizedCoordinates{};
+    /// The LOD averaged across a quad; bfr_caps_features.sampler_lod_average.
+    bool lodAverage{};
+};
+
 /// One shader stage: bytecode for the backend the device runs on, and the name of the function in
 /// it to run.
 struct ShaderCode {
@@ -1538,6 +1642,8 @@ struct CapsLimits {
     std::uint32_t maxCullDistances{};
     float maxSamplerAnisotropy{};
     float maxSamplerLodBias{};
+    /// Samplers with a custom border colour alive at once.
+    std::uint32_t maxCustomBorderColorSamplers{};
     /// Smallest tile of a shading rate texture; 0 without one.
     std::uint32_t minShadingRateTile{};
     /// Largest tile of a shading rate texture; 0 without one.
@@ -1663,6 +1769,19 @@ struct CapsFeatures {
     bool samplerAnisotropy{};
     /// Samplers that return the minimum or maximum of the texels they read.
     bool samplerMinmax{};
+    bool samplerMirrorClampToEdge{};
+    /// Anisotropy with mip_filter nearest.
+    bool samplerAnisotropyNearestMip{};
+    /// Anisotropy with min or mag filter nearest.
+    bool samplerAnisotropyNearestFilter{};
+    /// A border colour other than (0,0,0,0), (0,0,0,1) and (1,1,1,1).
+    bool samplerCustomBorderColor{};
+    /// A border colour for textures that hold integers.
+    bool samplerIntegerBorderColor{};
+    bool samplerUnnormalizedCoordinates{};
+    /// A lod_bias other than 0.
+    bool samplerLodBias{};
+    bool samplerLodAverage{};
     bool compressionBc{};
     bool compressionEtc2{};
     bool compressionAstc{};
@@ -1996,6 +2115,29 @@ inline bfr_texture_copy toC(const TextureCopy& value) {
     };
 }
 
+inline bfr_sampler_desc toC(const SamplerDesc& value, const bfr_chain* next) {
+    return {
+        .next = next,
+        .mag_filter = static_cast<bfr_filter>(value.magFilter),
+        .min_filter = static_cast<bfr_filter>(value.minFilter),
+        .mip_filter = static_cast<bfr_filter>(value.mipFilter),
+        .address_u = static_cast<bfr_address_mode>(value.addressU),
+        .address_v = static_cast<bfr_address_mode>(value.addressV),
+        .address_w = static_cast<bfr_address_mode>(value.addressW),
+        .lod_bias = value.lodBias,
+        .min_lod = value.minLod,
+        .max_lod = value.maxLod,
+        .max_anisotropy = value.maxAnisotropy,
+        .reduction = static_cast<bfr_sampler_reduction>(value.reduction),
+        .compare_op = static_cast<bfr_compare_op>(value.compareOp),
+        .border_color = {value.borderColor[0], value.borderColor[1], value.borderColor[2], value.borderColor[3]},
+        .border_integer = value.borderInteger ? BFR_TRUE : BFR_FALSE,
+        .border_color_integer = {value.borderColorInteger[0], value.borderColorInteger[1], value.borderColorInteger[2], value.borderColorInteger[3]},
+        .unnormalized_coordinates = value.unnormalizedCoordinates ? BFR_TRUE : BFR_FALSE,
+        .lod_average = value.lodAverage ? BFR_TRUE : BFR_FALSE,
+    };
+}
+
 inline bfr_shader_code toC(const ShaderCode& value) {
     return {
         .code = reinterpret_cast<const uint8_t*>(value.code.data()),
@@ -2168,6 +2310,7 @@ inline CapsLimits fromC(const bfr_caps_limits& value) {
         .maxCullDistances = value.max_cull_distances,
         .maxSamplerAnisotropy = value.max_sampler_anisotropy,
         .maxSamplerLodBias = value.max_sampler_lod_bias,
+        .maxCustomBorderColorSamplers = value.max_custom_border_color_samplers,
         .minShadingRateTile = value.min_shading_rate_tile,
         .maxShadingRateTile = value.max_shading_rate_tile,
         .minUniformBufferAlignment = value.min_uniform_buffer_alignment,
@@ -2262,6 +2405,14 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .wideLines = value.wide_lines != BFR_FALSE,
         .samplerAnisotropy = value.sampler_anisotropy != BFR_FALSE,
         .samplerMinmax = value.sampler_minmax != BFR_FALSE,
+        .samplerMirrorClampToEdge = value.sampler_mirror_clamp_to_edge != BFR_FALSE,
+        .samplerAnisotropyNearestMip = value.sampler_anisotropy_nearest_mip != BFR_FALSE,
+        .samplerAnisotropyNearestFilter = value.sampler_anisotropy_nearest_filter != BFR_FALSE,
+        .samplerCustomBorderColor = value.sampler_custom_border_color != BFR_FALSE,
+        .samplerIntegerBorderColor = value.sampler_integer_border_color != BFR_FALSE,
+        .samplerUnnormalizedCoordinates = value.sampler_unnormalized_coordinates != BFR_FALSE,
+        .samplerLodBias = value.sampler_lod_bias != BFR_FALSE,
+        .samplerLodAverage = value.sampler_lod_average != BFR_FALSE,
         .compressionBc = value.compression_bc != BFR_FALSE,
         .compressionEtc2 = value.compression_etc2 != BFR_FALSE,
         .compressionAstc = value.compression_astc != BFR_FALSE,
@@ -2464,9 +2615,9 @@ public:
     /// Owns nothing, as a moved-from Device does.
     Device() = default;
     /// Destroys a device once the GPU has finished with it, with every handle it still owns. Null
-    /// does nothing. A Device with Buffer or CommandList or CommandPool or Pipeline or Swapchain or
-    /// Texture objects left lives on until the last of them is destroyed, so they may be destroyed
-    /// in any order.
+    /// does nothing. A Device with Buffer or CommandList or CommandPool or Pipeline or Sampler or
+    /// Swapchain or Texture objects left lives on until the last of them is destroyed, so they may
+    /// be destroyed in any order.
     ~Device() = default;
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
@@ -2601,6 +2752,13 @@ public:
     /// error_limit_reached at the device's maximum of textures, and error_device_failed when the
     /// backend refuses the desc or gives no texture.
     [[nodiscard]] Expected<Texture> createTexture(const TextureDesc& desc) const;
+
+    /// Creates a sampler, as desc says, with a slot in the sampler table. Not for the frame path:
+    /// it frees samplers the GPU is done with. Fails with error_invalid_argument for a value BFR
+    /// does not have, error_unsupported when the backend has no setting for a member, or the device
+    /// lacks the feature it needs, error_limit_reached when the sampler table is full, and
+    /// error_device_failed when the backend refuses the desc.
+    [[nodiscard]] Expected<Sampler> createSampler(const SamplerDesc& desc) const;
 
     /// Creates a compute pipeline, as desc says, before returning. Not for the frame path: it
     /// compiles, and frees pipelines the GPU is done with. Fails with error_invalid_argument for a
@@ -2839,21 +2997,21 @@ private:
 
 /// A compute or graphics pipeline: shaders with the fixed state they run under. Every pipeline
 /// shares one resource layout, which its shaders declare as follows. Four unbounded tables, each
-/// indexed by the slot a resource is given when it is created, which bfr_get_buffer_slot and
-/// bfr_get_texture_slots report and which is the same number on every backend, and one block of
-/// bfr_push_constants_size bytes of push constants that every stage reads, set by
-/// bfr_push_constants. On Vulkan the tables are the bindings of descriptor set 0, in order: 0
-/// sampled images, 1 storage images, 2 storage buffers, 3 samplers, each an update-after-bind and
-/// partially-bound runtime array; the push constants are a push constant range over all stages. On
-/// D3D12 the tables are unbounded descriptor ranges, each starting at register 0 of its own space:
-/// SRV space 0 sampled textures, UAV space 1 storage textures, UAV space 2 storage buffers as raw
-/// buffer views, sampler space 3 samplers; the push constants are bfr_push_constants_size / 4 root
-/// constants at b0 of space 0. On Metal the tables are one argument buffer at buffer(0), holding
-/// the sampled textures, storage textures, storage buffers and samplers in that order, each a
-/// region of as many 8-byte entries as the bfr_device_desc's max_bindless member for its kind, so a
-/// shader declares them with the sizes the device was opened with; the push constants are at
-/// buffer(1). Uniform buffers have no table: they are not in every backend's floor. A pipeline's
-/// shaders are bytecode for the backend the device runs on.
+/// indexed by the slot a resource is given when it is created, which bfr_get_buffer_slot,
+/// bfr_get_texture_slots and bfr_get_sampler_slot report and which is the same number on every
+/// backend, and one block of bfr_push_constants_size bytes of push constants that every stage
+/// reads, set by bfr_push_constants. On Vulkan the tables are the bindings of descriptor set 0, in
+/// order: 0 sampled images, 1 storage images, 2 storage buffers, 3 samplers, each an update-after-
+/// bind and partially-bound runtime array; the push constants are a push constant range over all
+/// stages. On D3D12 the tables are unbounded descriptor ranges, each starting at register 0 of its
+/// own space: SRV space 0 sampled textures, UAV space 1 storage textures, UAV space 2 storage
+/// buffers as raw buffer views, sampler space 3 samplers; the push constants are
+/// bfr_push_constants_size / 4 root constants at b0 of space 0. On Metal the tables are one
+/// argument buffer at buffer(0), holding the sampled textures, storage textures, storage buffers
+/// and samplers in that order, each a region of as many 8-byte entries as the bfr_device_desc's
+/// max_bindless member for its kind, so a shader declares them with the sizes the device was opened
+/// with; the push constants are at buffer(1). Uniform buffers have no table: they are not in every
+/// backend's floor. A pipeline's shaders are bytecode for the backend the device runs on.
 class Pipeline {
 public:
     /// Owns nothing, as a moved-from Pipeline does.
@@ -2885,6 +3043,46 @@ private:
 
     bfr_device* device_ = nullptr;
     bfr_pipeline pipeline_{};
+    // Keeps the Device that made this alive until this is destroyed.
+    detail::KeepAlive keepAlive_;
+};
+
+/// How shaders read a texture through the sampler table, as its bfr_sampler_desc says.
+class Sampler {
+public:
+    /// Owns nothing, as a moved-from Sampler does.
+    Sampler() = default;
+    /// Destroys a sampler once the GPU has finished with it; the handle is invalid at once. Not for
+    /// the frame path: it records the point the sampler waits for and frees what the GPU is done
+    /// with. A handle that is already destroyed does nothing.
+    ~Sampler() { bfr_destroy_sampler(device_, sampler_); }
+    Sampler(const Sampler&) = delete;
+    Sampler& operator=(const Sampler&) = delete;
+    Sampler(Sampler&& other) noexcept : device_(std::exchange(other.device_, nullptr)), sampler_(std::exchange(other.sampler_, {})), keepAlive_(std::move(other.keepAlive_)) {}
+    Sampler& operator=(Sampler&& other) noexcept {
+        if (this != &other) {
+            bfr_destroy_sampler(device_, sampler_);
+            device_ = std::exchange(other.device_, nullptr);
+            sampler_ = std::exchange(other.sampler_, {});
+            keepAlive_ = std::move(other.keepAlive_);
+        }
+        return *this;
+    }
+
+    /// The C value, for calls bfr.hpp does not wrap; this still owns it.
+    [[nodiscard]] bfr_sampler get() const { return sampler_; }
+    [[nodiscard]] explicit operator bool() const { return sampler_.bits != 0; }
+
+    /// Writes the sampler's index in the sampler table bfr_pipeline states, held from creation to
+    /// destruction.
+    [[nodiscard]] Expected<std::uint32_t> samplerSlot();
+
+private:
+    Sampler(bfr_device* device, bfr_sampler sampler, detail::KeepAlive keepAlive) : device_(device), sampler_(sampler), keepAlive_(std::move(keepAlive)) {}
+    friend class Device;
+
+    bfr_device* device_ = nullptr;
+    bfr_sampler sampler_{};
     // Keeps the Device that made this alive until this is destroyed.
     detail::KeepAlive keepAlive_;
 };
@@ -3236,6 +3434,15 @@ inline Expected<Texture> Device::createTexture(const TextureDesc& desc) const {
     return Texture{device_, texture, keepAlive_};
 }
 
+inline Expected<Sampler> Device::createSampler(const SamplerDesc& desc) const {
+    const bfr_sampler_desc cDesc = detail::toC(desc, nullptr);
+    bfr_sampler sampler{};
+    if (const bfr_result result = bfr_create_sampler(device_, &cDesc, &sampler); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return Sampler{device_, sampler, keepAlive_};
+}
+
 inline Expected<Pipeline> Device::createComputePipeline(const ComputePipelineDesc& desc) const {
     const bfr_compute_pipeline_desc cDesc = detail::toC(desc, nullptr);
     bfr_pipeline pipeline{};
@@ -3313,6 +3520,14 @@ inline Expected<TextureSlots> Texture::textureSlots() {
         return std::unexpected(detail::failure(result));
     }
     return detail::fromC(slots);
+}
+
+inline Expected<std::uint32_t> Sampler::samplerSlot() {
+    uint32_t slot{};
+    if (const bfr_result result = bfr_get_sampler_slot(device_, sampler_, &slot); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return slot;
 }
 
 /// Lists the backends this build has, in bfr_backend order.

@@ -13,6 +13,7 @@
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/rhi_config.h"
+#include "bfr/rhi/sampler.h"
 #include "bfr/rhi/swapchain.h"
 #include "bfr/rhi/texture.h"
 
@@ -362,6 +363,55 @@ std::optional<E> enumIn(C value, E last, const char* what, bfr::core::Message& e
         return std::nullopt;
     }
     return static_cast<E>(number);
+}
+
+bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
+    return {.bits = handle.bits};
+}
+
+bfr::rhi::SamplerHandle fromC(bfr_sampler handle) {
+    return bfr::rhi::SamplerHandle::fromBits(handle.bits);
+}
+
+static_assert(static_cast<int>(bfr::rhi::Filter::Linear) == BFR_FILTER_LINEAR);
+static_assert(static_cast<int>(bfr::rhi::AddressMode::MirrorClampToEdge) == BFR_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE);
+static_assert(static_cast<int>(bfr::rhi::SamplerReduction::Maximum) == BFR_SAMPLER_REDUCTION_MAXIMUM);
+
+// The sampler desc asks for. Nothing when one of its enums holds a value BFR
+// does not have; error says which.
+std::optional<bfr::rhi::SamplerDesc> samplerIn(const bfr_sampler_desc& desc, bfr::core::Message& error) {
+    using namespace bfr::rhi;
+    const auto magFilter = enumIn(desc.mag_filter, Filter::Linear, "mag filter", error);
+    const auto minFilter = enumIn(desc.min_filter, Filter::Linear, "min filter", error);
+    const auto mipFilter = enumIn(desc.mip_filter, Filter::Linear, "mip filter", error);
+    const auto addressU = enumIn(desc.address_u, AddressMode::MirrorClampToEdge, "address mode u", error);
+    const auto addressV = enumIn(desc.address_v, AddressMode::MirrorClampToEdge, "address mode v", error);
+    const auto addressW = enumIn(desc.address_w, AddressMode::MirrorClampToEdge, "address mode w", error);
+    const auto reduction = enumIn(desc.reduction, SamplerReduction::Maximum, "sampler reduction", error);
+    const auto compare = enumIn(desc.compare_op, CompareOp::GreaterEqual, "compare op", error);
+    if (!magFilter || !minFilter || !mipFilter || !addressU || !addressV || !addressW || !reduction || !compare) {
+        return std::nullopt;
+    }
+    SamplerDesc sampler{.magFilter = *magFilter,
+                        .minFilter = *minFilter,
+                        .mipFilter = *mipFilter,
+                        .addressU = *addressU,
+                        .addressV = *addressV,
+                        .addressW = *addressW,
+                        .lodBias = desc.lod_bias,
+                        .minLod = desc.min_lod,
+                        .maxLod = desc.max_lod,
+                        .maxAnisotropy = desc.max_anisotropy,
+                        .reduction = *reduction,
+                        .compareOp = *compare,
+                        .borderColor = {},
+                        .borderInteger = desc.border_integer != BFR_FALSE,
+                        .borderColorInteger = {},
+                        .unnormalizedCoordinates = desc.unnormalized_coordinates != BFR_FALSE,
+                        .lodAverage = desc.lod_average != BFR_FALSE};
+    std::ranges::copy(desc.border_color, sampler.borderColor.begin());
+    std::ranges::copy(desc.border_color_integer, sampler.borderColorInteger.begin());
+    return sampler;
 }
 
 // value as a Format, Undefined included; nothing when it is not one BFR has.
@@ -794,6 +844,7 @@ bfr_caps_limits toC(const bfr::rhi::Limits& limits) {
         .max_cull_distances = limits.maxCullDistances,
         .max_sampler_anisotropy = limits.maxSamplerAnisotropy,
         .max_sampler_lod_bias = limits.maxSamplerLodBias,
+        .max_custom_border_color_samplers = limits.maxCustomBorderColorSamplers,
         .min_shading_rate_tile = limits.minShadingRateTile,
         .max_shading_rate_tile = limits.maxShadingRateTile,
         .min_uniform_buffer_alignment = limits.minUniformBufferAlignment,
@@ -894,6 +945,14 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .wide_lines = toC(features.wideLines),
         .sampler_anisotropy = toC(features.samplerAnisotropy),
         .sampler_minmax = toC(features.samplerMinmax),
+        .sampler_mirror_clamp_to_edge = toC(features.samplerMirrorClampToEdge),
+        .sampler_anisotropy_nearest_mip = toC(features.samplerAnisotropyNearestMip),
+        .sampler_anisotropy_nearest_filter = toC(features.samplerAnisotropyNearestFilter),
+        .sampler_custom_border_color = toC(features.samplerCustomBorderColor),
+        .sampler_integer_border_color = toC(features.samplerIntegerBorderColor),
+        .sampler_unnormalized_coordinates = toC(features.samplerUnnormalizedCoordinates),
+        .sampler_lod_bias = toC(features.samplerLodBias),
+        .sampler_lod_average = toC(features.samplerLodAverage),
         .compression_bc = toC(features.compressionBc),
         .compression_etc2 = toC(features.compressionEtc2),
         .compression_astc = toC(features.compressionAstc),
@@ -1824,6 +1883,55 @@ void bfr_destroy_texture(bfr_device* device, bfr_texture texture) {
             return;
         }
         if (const auto destroyed = device->device->destroyTexture(fromC(texture)); !destroyed) {
+            lastError() = destroyed.error().message;
+        }
+    });
+}
+
+bfr_result bfr_create_sampler(bfr_device* device, const bfr_sampler_desc* desc, bfr_sampler* sampler) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr || sampler == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and sampler must not be null");
+        }
+        *sampler = {};
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_sampler_desc takes no chained structs");
+        }
+        bfr::core::Message error;
+        const auto wanted = samplerIn(*desc, error);
+        if (!wanted) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto created = device->device->createSampler(*wanted);
+        if (!created) {
+            return fail(created.error());
+        }
+        *sampler = toC(*created);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_get_sampler_slot(bfr_device* device, bfr_sampler sampler, uint32_t* slot) {
+    return guarded([&] {
+        if (device == nullptr || slot == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and slot must not be null");
+        }
+        *slot = 0;
+        const auto found = device->device->samplerSlot(fromC(sampler));
+        if (!found) {
+            return fail(found.error());
+        }
+        *slot = *found;
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+void bfr_destroy_sampler(bfr_device* device, bfr_sampler sampler) {
+    quietly([&] {
+        if (device == nullptr) {
+            return;
+        }
+        if (const auto destroyed = device->device->destroySampler(fromC(sampler)); !destroyed) {
             lastError() = destroyed.error().message;
         }
     });

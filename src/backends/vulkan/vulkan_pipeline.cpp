@@ -121,6 +121,8 @@ VkCullModeFlags cullFor(CullMode cull) {
     }
 }
 
+} // namespace
+
 VkCompareOp compareFor(CompareOp op) {
     switch (op) {
         case CompareOp::Never:
@@ -142,6 +144,8 @@ VkCompareOp compareFor(CompareOp op) {
             return VK_COMPARE_OP_ALWAYS;
     }
 }
+
+namespace {
 
 VkStencilOp stencilFor(StencilOp op) {
     switch (op) {
@@ -402,6 +406,15 @@ void VulkanBindlessLayout::writeStorageImage(std::uint32_t slot, VkImageView vie
                                      .imageView = view,
                                      .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet write = writeFor(set_, kStorageTextureBinding, slot, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+    write.pImageInfo = &info;
+    table_->vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+}
+
+void VulkanBindlessLayout::writeSampler(std::uint32_t slot, VkSampler sampler) const {
+    const VkDescriptorImageInfo info{.sampler = sampler,
+                                     .imageView = VK_NULL_HANDLE,
+                                     .imageLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+    VkWriteDescriptorSet write = writeFor(set_, kSamplerBinding, slot, VK_DESCRIPTOR_TYPE_SAMPLER);
     write.pImageInfo = &info;
     table_->vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
 }

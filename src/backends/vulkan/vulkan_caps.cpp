@@ -27,7 +27,7 @@ namespace {
 template <class Features>
 struct FloorFeature {
     const char* name;
-    VkBool32 Features::*member;
+    VkBool32 Features::* member;
 };
 
 using Vulkan12 = VkPhysicalDeviceVulkan12Features;
@@ -91,6 +91,7 @@ struct FeatureQuery {
         atomicFloat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
         imageAtomicInt64.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_IMAGE_ATOMIC_INT64_FEATURES_EXT;
         barycentric.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR;
+        customBorderColor.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT;
 
         void** tail = &core.pNext;
         link(tail, vulkan11);
@@ -109,6 +110,7 @@ struct FeatureQuery {
         linkIfListed(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME, atomicFloat);
         linkIfListed(VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME, imageAtomicInt64);
         linkIfListed(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME, barycentric);
+        linkIfListed(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, customBorderColor);
         vk.vkGetPhysicalDeviceFeatures2(adapter, &core);
     }
     ~FeatureQuery() = default;
@@ -129,6 +131,7 @@ struct FeatureQuery {
     VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFloat{};
     VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT imageAtomicInt64{};
     VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR barycentric{};
+    VkPhysicalDeviceCustomBorderColorFeaturesEXT customBorderColor{};
 };
 
 // The property structs one query fills, chained as FeatureQuery's are.
@@ -143,6 +146,7 @@ struct PropertyQuery {
         rayTracingPipeline.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
         mesh.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT;
         shadingRate.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR;
+        customBorderColor.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_PROPERTIES_EXT;
 
         void** tail = &core.pNext;
         link(tail, vulkan11);
@@ -157,6 +161,7 @@ struct PropertyQuery {
         linkIfListed(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, rayTracingPipeline);
         linkIfListed(VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh);
         linkIfListed(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, shadingRate);
+        linkIfListed(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, customBorderColor);
         vk.vkGetPhysicalDeviceProperties2(adapter, &core);
     }
     ~PropertyQuery() = default;
@@ -173,10 +178,18 @@ struct PropertyQuery {
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR rayTracingPipeline{};
     VkPhysicalDeviceMeshShaderPropertiesEXT mesh{};
     VkPhysicalDeviceFragmentShadingRatePropertiesKHR shadingRate{};
+    VkPhysicalDeviceCustomBorderColorPropertiesEXT customBorderColor{};
 };
 
 bool on(VkBool32 value) {
     return value == VK_TRUE;
+}
+
+// A custom border colour needs both features: BFR's sampler desc gives no
+// format to go with it (VUID-VkSamplerCustomBorderColorCreateInfoEXT-format-04014).
+bool customBorderColors(const FeatureQuery& features) {
+    return on(features.customBorderColor.customBorderColors) &&
+           on(features.customBorderColor.customBorderColorWithoutFormat);
 }
 
 AdapterInfo infoFrom(const PropertyQuery& properties) {
@@ -233,6 +246,9 @@ Limits limitsFrom(const PropertyQuery& properties, const FeatureQuery& features)
         .maxCullDistances = core.maxCullDistances,
         .maxSamplerAnisotropy = core.maxSamplerAnisotropy,
         .maxSamplerLodBias = core.maxSamplerLodBias,
+        .maxCustomBorderColorSamplers = customBorderColors(features)
+                                            ? properties.customBorderColor.maxCustomBorderColorSamplers
+                                            : 0,
         .minShadingRateTile = shadingRateTexture
                                   ? properties.shadingRate.minFragmentShadingRateAttachmentTexelSize.width
                                   : 0,
@@ -346,6 +362,12 @@ Features featuresFrom(const FeatureQuery& features, const PropertyQuery& propert
         .wideLines = on(core.wideLines),
         .samplerAnisotropy = on(core.samplerAnisotropy),
         .samplerMinmax = on(features.vulkan12.samplerFilterMinmax),
+        .samplerMirrorClampToEdge = on(features.vulkan12.samplerMirrorClampToEdge),
+        .samplerCustomBorderColor = customBorderColors(features),
+        // Core, but a portability driver may refuse it, and its feature struct
+        // is provisional, outside the headers BFR builds with
+        // (VUID-VkSamplerCreateInfo-samplerMipLodBias-04467).
+        .samplerLodBias = !lists(extensions, kPortabilitySubset),
         .compressionBc = on(core.textureCompressionBC),
         .compressionEtc2 = on(core.textureCompressionETC2),
         .compressionAstc = on(core.textureCompressionASTC_LDR),
@@ -607,7 +629,7 @@ bool has(VkFormatFeatureFlags2 features, VkFormatFeatureFlags2 feature) {
 
 } // namespace
 
-FloorFeatures::FloorFeatures() {
+DeviceFeatures::DeviceFeatures(const SamplerFeatures& sampler) {
     vulkan12_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     vulkan12_.pNext = &vulkan13_;
     vulkan13_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
@@ -616,6 +638,17 @@ FloorFeatures::FloorFeatures() {
     }
     for (const auto& feature : kFloor13) {
         vulkan13_.*feature.member = VK_TRUE;
+    }
+    const auto bit = [](bool set) {
+        return set ? VK_TRUE : VK_FALSE;
+    };
+    vulkan12_.samplerFilterMinmax = bit(sampler.minmax);
+    vulkan12_.samplerMirrorClampToEdge = bit(sampler.mirrorClampToEdge);
+    if (sampler.customBorderColor) {
+        customBorderColor_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT;
+        customBorderColor_.customBorderColors = VK_TRUE;
+        customBorderColor_.customBorderColorWithoutFormat = VK_TRUE;
+        vulkan13_.pNext = &customBorderColor_;
     }
 }
 

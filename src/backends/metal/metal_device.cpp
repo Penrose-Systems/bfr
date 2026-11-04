@@ -109,6 +109,7 @@ MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Devi
       submissions_(1 + desc.compute + desc.copy),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
       bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
@@ -204,6 +205,10 @@ MetalDevice::~MetalDevice() {
         BFR_LOG_WARN(instance_->logger(), "{} textures were left when the device went", textures_.size());
     }
     textures_.clear();
+    if (samplers_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} samplers were left when the device went", samplers_.size());
+    }
+    samplers_.clear();
     if (pipelines_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} pipelines were left when the device went", pipelines_.size());
     }

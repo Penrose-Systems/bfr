@@ -13,6 +13,7 @@
 #include "core/submissions.h"
 #include "d3d12/d3d12_buffer.h"
 #include "d3d12/d3d12_pipeline.h"
+#include "d3d12/d3d12_sampler.h"
 #include "d3d12/d3d12_swapchain.h"
 #include "d3d12/d3d12_texture.h"
 #include "rhi/bindless_slots.h"
@@ -188,6 +189,9 @@ public:
     [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
     [[nodiscard]] core::Result<TextureSlots> textureSlots(TextureHandle texture) override;
     [[nodiscard]] core::Result<void> destroyTexture(TextureHandle texture) override;
+    [[nodiscard]] core::Result<SamplerHandle> createSampler(const SamplerDesc& desc) override;
+    [[nodiscard]] core::Result<std::uint32_t> samplerSlot(SamplerHandle sampler) override;
+    [[nodiscard]] core::Result<void> destroySampler(SamplerHandle sampler) override;
     [[nodiscard]] core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) override;
     [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyPipeline(PipelineHandle pipeline) override;
@@ -207,7 +211,7 @@ private:
     // Ends a list that was submitted or discarded; its slot waits for the
     // pool's reset.
     void end(CommandListHandle commandList);
-    // Destroys the buffers, textures and pipelines retired under submission
+    // Destroys the buffers, textures, samplers and pipelines retired under submission
     // IDs every queue has passed.
     void collectBuffers();
     // Waits for everything the device has submitted.
@@ -224,6 +228,10 @@ private:
 
     D3D12Instance* instance_;
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
+    // Null when the runtime has no ID3D12Device11; samplers then go through
+    // CreateSampler.
+    Microsoft::WRL::ComPtr<ID3D12Device11> device11_;
+    SamplerFeatures samplerFeatures_;
     Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter_;
     std::size_t heapCount_;
     DeviceDesc desc_;
@@ -251,6 +259,8 @@ private:
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<D3D12Buffer, Buffer> buffers_;
     core::Pool<D3D12Texture, Texture> textures_;
+    // Every sampler holds a slot, so the pool is made at the table's size.
+    core::Pool<D3D12Sampler, Sampler> samplers_;
     BindlessSlots bindless_;
     // Declared before pipelines_, which are made on it, so it outlives them.
     D3D12BindlessLayout layout_;
