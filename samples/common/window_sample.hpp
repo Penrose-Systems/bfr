@@ -228,15 +228,18 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
         return detail::fail("can't create a swapchain", swapchain.error());
     }
     constexpr int kFramesInFlight = 2;
-    // A frame records one list, so each frame's pool holds one.
+    // A frame records one list, so each frame's pool holds one, which sets the
+    // push constants once.
     constexpr std::uint32_t kListsPerFrame = 1;
+    constexpr std::uint32_t kPushesPerFrame = 1;
     struct Slot {
         bfr::CommandPool pool;
         bfr::Token done;
     };
     std::vector<Slot> slots;
     for (int slot = 0; slot < kFramesInFlight; ++slot) {
-        auto pool = device.createCommandPool({.queue = 0, .listCount = kListsPerFrame});
+        auto pool = device.createCommandPool(
+            {.queue = 0, .listCount = kListsPerFrame, .pushConstantUpdates = kPushesPerFrame});
         if (!pool) {
             return detail::fail("can't create a command pool", pool.error());
         }

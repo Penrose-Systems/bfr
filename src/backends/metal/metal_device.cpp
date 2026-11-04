@@ -437,8 +437,9 @@ core::Result<CommandPoolHandle> MetalDevice::createCommandPool(const CommandPool
         lists_[slot].arguments = std::move(*arguments);
     }
     // The pool's push constant ring, in its first slot: shared, so the CPU
-    // copies into it, and resident, so the GPU reads it.
-    {
+    // copies into it, and resident, so the GPU reads it. None for a pool that
+    // records no push constants.
+    if (desc.pushConstantUpdates != 0) {
         const std::uint64_t ringBytes = std::uint64_t{desc.pushConstantUpdates} * kPushConstantsSize;
         MTL::Buffer* ring = device_->newBuffer(ringBytes, MTL::ResourceStorageModeShared);
         if (ring == nullptr) {

@@ -212,7 +212,8 @@ encoder switching needs lookahead.
   bind only through `MTL4ArgumentTable`, which Metal snapshots at each draw
   or dispatch. The Metal backend copies push-constant data into a ring owned
   by the command pool, sized by the pool's `push_constant_updates`, and
-  binds that address with `setAddress` before the draw. The ring is recycled
+  binds that address with `setAddress` before the draw. The member has no
+  default, since only the caller knows how many it records. The ring is recycled
   with the pool's reset and kept resident. Vulkan and D3D12 need no room, but
   count against the member all the same, so the limit means one thing on
   every backend; it is on the pool because a caller declares a capacity, not

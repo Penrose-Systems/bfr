@@ -54,9 +54,6 @@ typedef uint32_t bfr_bool;
 // What bfr_device_desc.max_bindless_samplers of 0 means.
 #define BFR_DEFAULT_MAX_BINDLESS_SAMPLERS 2048u
 
-// What bfr_command_pool_desc.push_constant_updates of 0 means.
-#define BFR_DEFAULT_PUSH_CONSTANT_UPDATES 4096u
-
 // The most color targets a graphics pipeline renders to.
 #define BFR_MAX_COLOR_TARGETS 8u
 
@@ -858,8 +855,8 @@ typedef struct bfr_command_pool_desc {
     // hands them out in turn until bfr_reset_command_pool gives them back.
     uint32_t list_count;
     // Most bfr_push_constants calls the pool's lists record between resets, which a backend that
-    // copies push constants into memory makes room for with the pool. 0 is
-    // BFR_DEFAULT_PUSH_CONSTANT_UPDATES.
+    // copies push constants into memory makes room for with the pool; 0 is none. Every backend
+    // counts them alike.
     uint32_t push_constant_updates;
 } bfr_command_pool_desc;
 

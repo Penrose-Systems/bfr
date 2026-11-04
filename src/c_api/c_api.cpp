@@ -1250,10 +1250,7 @@ bfr_result bfr_create_command_pool(bfr_device* device, const bfr_command_pool_de
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_command_pool_desc takes no chained structs");
         }
         const auto created = device->device->createCommandPool(
-            {.queue = desc->queue,
-             .listCount = desc->list_count,
-             .pushConstantUpdates = desc->push_constant_updates == 0 ? BFR_DEFAULT_PUSH_CONSTANT_UPDATES
-                                                                     : desc->push_constant_updates});
+            {.queue = desc->queue, .listCount = desc->list_count, .pushConstantUpdates = desc->push_constant_updates});
         if (!created) {
             return fail(created.error());
         }

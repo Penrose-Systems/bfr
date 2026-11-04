@@ -39,7 +39,6 @@ constants:
   default_max_bindless_storage_textures: {value: 16384, doc: What bfr_device_desc.max_bindless_storage_textures of 0 means.}
   default_max_bindless_storage_buffers: {value: 65536, doc: What bfr_device_desc.max_bindless_storage_buffers of 0 means.}
   default_max_bindless_samplers: {value: 2048, doc: What bfr_device_desc.max_bindless_samplers of 0 means.}
-  default_push_constant_updates: {value: 4096, doc: What bfr_command_pool_desc.push_constant_updates of 0 means.}
   max_color_targets: {value: 8, doc: The most color targets a graphics pipeline renders to.}
   push_constants_size: {value: 128, doc: Bytes of push constants every pipeline's shaders read; the layout bfr_pipeline states.}
   mask_all: {value: 4294967295, doc: What a mask member of 0 means; every bit of the mask set.}
@@ -725,10 +724,10 @@ structs:
           hands them out in turn until bfr_reset_command_pool gives them back.
       - name: push_constant_updates
         type: u32
-        default: default_push_constant_updates
         doc: >-
           Most bfr_push_constants calls the pool's lists record between resets, which a backend
-          that copies push constants into memory makes room for with the pool.
+          that copies push constants into memory makes room for with the pool; 0 is none.
+          Every backend counts them alike.
 
   buffer_usage:
     doc: What the GPU does with a buffer. Set every use it will have.

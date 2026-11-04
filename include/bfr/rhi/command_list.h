@@ -56,12 +56,12 @@ struct DeviceDesc {
 /// How to create a command pool: the queue its lists record for, how many
 /// lists it holds, all made with it, and the most pushConstants calls its
 /// lists record between resets, which a backend that copies push constants
-/// into memory makes room for with the pool. beginCommands hands the lists out
+/// into memory makes room for with the pool; 0 is none. beginCommands hands the lists out
 /// in turn until resetCommandPool gives them back.
 struct CommandPoolDesc {
     std::uint32_t queue = 0;
     std::uint32_t listCount = 0;
-    std::uint32_t pushConstantUpdates = BFR_DEFAULT_PUSH_CONSTANT_UPDATES;
+    std::uint32_t pushConstantUpdates = 0;
 };
 
 /// A point on a queue's timeline: submit returns one, and the GPU passes it

@@ -481,7 +481,7 @@ TEST_CASE("C++ API dispatches a compute pipeline through a buffer's slot", "[cpp
         REQUIRE(slot.has_value());
         CHECK(readback->bufferSlot().error().code == bfr::Result::ErrorInvalidArgument);
 
-        auto pool = device.createCommandPool({.queue = 0, .listCount = 1});
+        auto pool = device.createCommandPool({.queue = 0, .listCount = 1, .pushConstantUpdates = 1});
         REQUIRE(pool.has_value());
         auto commands = pool->beginCommands();
         REQUIRE(commands.has_value());

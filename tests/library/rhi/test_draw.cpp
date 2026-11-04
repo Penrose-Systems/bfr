@@ -267,7 +267,7 @@ TEST_CASE("Device dispatches a compute pipeline that writes a storage buffer thr
                                                                     .workgroupSize = {kWorkgroup, 1, 1}});
         const auto slot = device.bufferSlot(target);
         REQUIRE(slot.has_value());
-        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists, .pushConstantUpdates = 1});
         REQUIRE(pool.has_value());
         auto list = device.beginCommands(*pool);
         REQUIRE(list.has_value());
@@ -339,7 +339,7 @@ TEST_CASE("Device draws a triangle pulled from a storage buffer into a texture, 
         const BufferHandle readback =
             created(device, {.size = imageBytes, .memory = BufferMemory::Readback, .usage = {.copyDst = true}});
         const PipelineHandle pipeline = created(device, colorPipeline());
-        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists, .pushConstantUpdates = 1});
         REQUIRE(pool.has_value());
         auto list = device.beginCommands(*pool);
         REQUIRE(list.has_value());

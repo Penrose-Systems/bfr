@@ -577,7 +577,7 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, and refu
     CHECK(bfr_get_buffer_slot(device.device, readback, &slot) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     REQUIRE(bfr_get_buffer_slot(device.device, target, &slot) == BFR_RESULT_SUCCESS);
 
-    const bfr_command_pool_desc poolDesc{.next = nullptr, .queue = 0, .list_count = 1, .push_constant_updates = 0};
+    const bfr_command_pool_desc poolDesc{.next = nullptr, .queue = 0, .list_count = 1, .push_constant_updates = 1};
     bfr_command_pool pool{};
     REQUIRE(bfr_create_command_pool(device.device, &poolDesc, &pool) == BFR_RESULT_SUCCESS);
     bfr_command_list list{};

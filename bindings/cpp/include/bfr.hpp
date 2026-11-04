@@ -1161,8 +1161,9 @@ struct CommandPoolDesc {
     /// hands them out in turn until bfr_reset_command_pool gives them back.
     std::uint32_t listCount{};
     /// Most bfr_push_constants calls the pool's lists record between resets, which a backend that
-    /// copies push constants into memory makes room for with the pool.
-    std::uint32_t pushConstantUpdates = BFR_DEFAULT_PUSH_CONSTANT_UPDATES;
+    /// copies push constants into memory makes room for with the pool; 0 is none. Every backend
+    /// counts them alike.
+    std::uint32_t pushConstantUpdates{};
 };
 
 /// What the GPU does with a buffer. Set every use it will have.
