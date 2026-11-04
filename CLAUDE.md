@@ -1,4 +1,5 @@
 @docs/cpp_code_style.md
+@docs/contributing.md
 @docs/roadmap.md
 
 # BFR

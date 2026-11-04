@@ -11,23 +11,22 @@
 - Ranges only to replace a loop. [review]
 - Strings through `std::string`, `std::string_view` and their functions.
 - No C string functions such as `strlen`, `strcmp` or `atoi` etc. [review]
-- No hard-coded (magic) numbers in code; a named `const` or `constexpr` is required. Markup values and field defaults count as named. [tool, review]
+- No hard-coded (magic) numbers in code; a named `const` or `constexpr` is required. Field defaults count as named. [tool, review]
 - Create interfaces by using abstract classes: no prefix or suffix, virtual destructor, protected constructor, no data.
 
 ## Files
 - snake_case `.h` and `.cpp`; one primary abstraction per file. [script, review]
-- Public headers in `modules/<module>/public/`, included by file name; sources and private headers in `modules/<module>/private/`. Public header names are unique across modules. [review]
+- Public headers in `include/bfr/`, included by path from there (`"bfr/rhi/device.h"`); sources and private headers in `src/`, included by path from `src/` or `src/backends/` (`"rhi/command_check.h"`, `"vulkan/vulkan_device.h"`). [review]
 
 ## Ownership
 - No raw `new` or `delete`; `std::unique_ptr` for single ownership. [tool]
 - Handles for shared references; `std::shared_ptr` only with a reason at the declaration. [review]
-- `friend` only where `VTYPE` generates it for the Reflection table; any other `friend` needs Justin's approval and a reason at the declaration. [script, review]
+- `friend` needs Justin's approval and a reason at the declaration. [script, review]
 - Pass views or `const&`; accessors return borrowed references. [tool, review]
 - Ownership points down only: an object never holds a pointer or reference to its owner or creator. What it needs from above is given to it at creation, by value. [review]
 
 ## Duplication
 - One owner for each piece of logic, constant and failure code; extend the owner, never copy it. A routine parameterised by its caller is still a copy. [review, script]
-- Documentation too: every decision, rule and fact is written in one place only, and everything else links to it. [review]
 - A second implementation of existing functionality needs Justin's approval and a stated reason. [review]
 
 ## Hot path
@@ -45,35 +44,19 @@ The measured fastest correct layout beats textbook idiom.
 - A non-obvious layout names its measurement in a comment. [review]
 
 ## Optimisation
-- Standard C++ may come first in a task, marked `// PERF: …`. [loop]
-- The optimiser resolves every marker and sweeps all code written in the task, with before-and-after measurements. [loop]
-- Flagged code outside the task gets an issue and `// PERF(#issue): …`. [loop]
-- No unreferenced `PERF` marker reaches a PR. [script]
-
+- Standard C++ may come first in a task, marked `// PERF: …`; code flagged outside the task is marked `// PERF(#issue): …`. The process is in [`contributing.md`](contributing.md#optimisation). [loop]
 
 ## Comments
 - The code is the comment: names and structure explain it. [review]
 - Prefer one overview comment for a block of code to comments plastered through it; add more only where they truly make the code understandable. [review]
 - Why, not what; public declarations document ownership, lifetime, preconditions and failure. [review]
-- An annotation description is published data, not a comment: it says what, for users. Never repeat it in a comment. [review]
 - `TODO` and `FIXME` reference an issue. [script]
 
 ## Tests
-- Catch2; each case has one module tag and one kind tag (`[unit]` or `[gpu]`), partitioning the suite. [script]
 - Test behaviour, never implementation: pure logic as data in and out, GPU work on real drivers. [review]
-- Test doubles only for non-GPU dependencies, and always Trompeloeil mocks; no hand-written fakes or spies. [review]
-
-## Build
-- CMake 3.28; options via `cmake_dependent_option`; no `file(GLOB_RECURSE)`. [build, script]
-
-## Dependencies
-- Prefer a mature open-source library to writing our own, when it meets these rules. [review]
-- OSI-approved permissive licences only; never copyleft (GPL, LGPL, AGPL, MPL). [script]
-- It must support every target platform. [CI]
-- One module owns it behind a Vesper interface; its reason is in that module's doc. Test and build tools are exempt. [script, review]
+- Test doubles only for non-GPU dependencies; no hand-written fakes or spies. [review]
 
 ## Patterns
 - A recurring problem uses its listed pattern. A new pattern needs Justin's approval and is added here first. [review]
-- Failure: `std::expected` with an error struct holding a code from one engine-wide list and its associated data, such as a description.
-- Configuration: each module owns its typed configuration.
-- Published types: field markup macros, read by the annotation tool (`modules/reflection.md`).
+- Failure: `std::expected` with an error struct holding a code from one library-wide list and its associated data, such as a description.
+- Configuration: each object owns its typed configuration.

@@ -7,8 +7,7 @@ else. [`research.md`](research.md) has what other engines and RHIs do.
 
 ## Requirements
 
-- Standalone library first. Any C++ renderer is a first-class consumer;
-  Vesper is one of them.
+- Standalone library first. Any C++ renderer is a first-class consumer.
 - Hardware floor: modern desktop and recent mobile. Vulkan 1.3 with
   descriptor indexing, D3D12 Shader Model 6.6, Metal 3 (Apple GPU family 7+).
   Bindless is available everywhere; no non-bindless binding path.
@@ -412,7 +411,7 @@ hand-written wrappers would each drift from the header.
   Reason: lots of engines turn exceptions off, the C API already returns
   results, and the library needs C++23 anyway.
 - In `bindings/<language>`, each tested through the real library.
-- Order: C++ first, which the tests and Vesper use; then C#; then Rust and
+- Order: C++ first, which the tests use; then C#; then Rust and
   Python.
 - No package publishing (NuGet, crates.io, PyPI) until the API settles.
   Reason: each needs prebuilt libraries and CI on every platform.
