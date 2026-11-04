@@ -43,7 +43,7 @@ constexpr BufferDesc kReadbackBuffer{.size = kSize, .memory = BufferMemory::Read
 
 // An Instance and a device on its first adapter, presenting nowhere.
 struct BufferDevice {
-    explicit BufferDevice(const TestInstanceDesc& desc) {
+    explicit BufferDevice(const InstanceDesc& desc) {
         auto created = createInstance(desc, kValidation);
         INFO(failureOf(created));
         REQUIRE(created.has_value());

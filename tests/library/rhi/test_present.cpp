@@ -8,8 +8,6 @@
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/swapchain.h"
-#include "null/null_device.h"
-#include "null/null_instance.h"
 #include "rhi_test_support.h"
 
 #include <catch2/catch_message.hpp>
@@ -54,7 +52,7 @@ bfr::core::Result<Token> submitOne(Device& device, CommandListHandle commandList
 }
 
 struct HeadlessSwapchain {
-    explicit HeadlessSwapchain(const TestInstanceDesc& desc) {
+    explicit HeadlessSwapchain(const InstanceDesc& desc) {
         auto created = createInstance(desc, kValidation);
         INFO(failureOf(created));
         REQUIRE(created.has_value());
@@ -362,50 +360,6 @@ TEST_CASE("Device refuses a submit that names one list twice, and the list is st
         const auto token = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
         INFO(failureOf(token));
         REQUIRE(token.has_value());
-        CHECK(device.wait(*token).has_value());
-        CHECK(device.destroyCommandPool(*pool).has_value());
-    }
-    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
-}
-
-// Only the null backend can be made to refuse a submit: no real driver fails
-// one on demand. What the device does after is the same on every backend.
-TEST_CASE("Device spends the lists of a submit the queue refuses, and goes on", "[rhi][unit]") {
-    std::vector<std::string> messages;
-    {
-        auto created = null::NullInstance::create(recordingInto(Backend{}, messages), kValidation);
-        REQUIRE(created.has_value());
-        null::NullDevice device{**created, kTestDevice};
-        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
-        REQUIRE(pool.has_value());
-        const auto before = device.beginCommands(*pool);
-        REQUIRE(before.has_value());
-        const auto earlier = device.submit({.queue = 0, .commandLists = std::span{&*before, 1}, .waits = {}});
-        INFO(failureOf(earlier));
-        REQUIRE(earlier.has_value());
-        const auto first = device.beginCommands(*pool);
-        const auto second = device.beginCommands(*pool);
-        REQUIRE(first.has_value());
-        REQUIRE(second.has_value());
-
-        device.refuseNextSubmit();
-        const std::array lists{*first, *second};
-        const auto refused = device.submit({.queue = 0, .commandLists = lists, .waits = {}});
-        REQUIRE_FALSE(refused.has_value());
-        CHECK(refused.error().code == bfr::core::ErrorCode::RhiDeviceFailed);
-
-        // The lists are spent, the earlier token stands, the pool resets
-        // without waiting on a submit that never went, and the next one goes.
-        CHECK(device.destroyCommandList(*first).error().code == bfr::core::ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyCommandList(*second).error().code == bfr::core::ErrorCode::RhiInvalidHandle);
-        CHECK(device.wait(*earlier).has_value());
-        CHECK(device.resetCommandPool(*pool).has_value());
-        const auto again = device.beginCommands(*pool);
-        REQUIRE(again.has_value());
-        const auto token = device.submit({.queue = 0, .commandLists = std::span{&*again, 1}, .waits = {}});
-        INFO(failureOf(token));
-        REQUIRE(token.has_value());
-        CHECK(token->value == earlier->value + 1);
         CHECK(device.wait(*token).has_value());
         CHECK(device.destroyCommandPool(*pool).has_value());
     }

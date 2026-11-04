@@ -1,8 +1,8 @@
 #pragma once
 
 // Which backends the agnostic test cases run on: every backend the build has,
-// or only those the test program's --backend options name. ctest's default
-// entries pass --backend null; its gpu entries name a GPU backend.
+// or only those the test program's --backend options name. ctest's entries
+// name one: vulkan on lavapipe by default, each GPU backend under gpu.
 
 #include <string_view>
 

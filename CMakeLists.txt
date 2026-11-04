@@ -90,8 +90,7 @@ include(cmake/bfr_build.cmake)
 # BFR's code, compiled once for both libraries below. include/bfr is its
 # public API: bfr.h, the C API, and the C++ layers behind it, bfr/core and
 # bfr/rhi. Each backend is one directory under src/backends, private, and
-# only src/rhi/instance.cpp names them. The null backend is the tests' own, built
-# into them alone.
+# only src/rhi/instance.cpp names them.
 add_library(bfr_objects OBJECT
     src/c_api/c_api.cpp
     src/core/error.cpp

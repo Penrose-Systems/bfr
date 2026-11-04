@@ -52,7 +52,7 @@ constexpr TextureUsage kCopies{.copySrc = true, .copyDst = true};
 
 // An Instance and a device on its first adapter, presenting nowhere.
 struct TextureDevice {
-    explicit TextureDevice(const TestInstanceDesc& desc) {
+    explicit TextureDevice(const InstanceDesc& desc) {
         auto created = createInstance(desc, kValidation);
         INFO(failureOf(created));
         REQUIRE(created.has_value());

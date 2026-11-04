@@ -48,7 +48,7 @@ constexpr std::uint32_t kPositionFloats = 4;
 
 // An Instance and a device on its first adapter, presenting nowhere.
 struct DrawDevice {
-    explicit DrawDevice(const TestInstanceDesc& desc) {
+    explicit DrawDevice(const InstanceDesc& desc) {
         auto created = createInstance(desc, kValidation);
         INFO(failureOf(created));
         REQUIRE(created.has_value());
@@ -65,13 +65,7 @@ struct DrawDevice {
 
 // Whether backend takes the SPIR-V checked in, as test_pipeline.cpp says.
 bool takesSpirv(const TestBackend& backend) {
-    return !backend.backend.has_value() || *backend.backend == Backend::Vulkan;
-}
-
-// Whether backend runs what it records: the null backend runs nothing, so
-// what it leaves in a buffer is not checked.
-bool runs(const TestBackend& backend) {
-    return backend.backend.has_value();
+    return backend.backend == Backend::Vulkan;
 }
 
 ShaderCode spirv(std::span<const std::uint8_t> bytes) {
@@ -282,15 +276,13 @@ TEST_CASE("Device dispatches a compute pipeline that writes a storage buffer thr
         REQUIRE(sent.has_value());
         REQUIRE(device.wait(*sent).has_value());
 
-        if (runs(backend)) {
-            // The shader writes each invocation its own index.
-            const auto read = device.mapBuffer(readback);
-            REQUIRE(read.has_value());
-            std::array<std::uint32_t, kWorkgroup> values{};
-            std::memcpy(values.data(), read->data(), kBytes);
-            for (std::uint32_t i = 0; i < kWorkgroup; ++i) {
-                CHECK(values.at(i) == i);
-            }
+        // The shader writes each invocation its own index.
+        const auto read = device.mapBuffer(readback);
+        REQUIRE(read.has_value());
+        std::array<std::uint32_t, kWorkgroup> values{};
+        std::memcpy(values.data(), read->data(), kBytes);
+        for (std::uint32_t i = 0; i < kWorkgroup; ++i) {
+            CHECK(values.at(i) == i);
         }
         CHECK(device.destroyPipeline(pipeline).has_value());
         CHECK(device.destroyBuffer(target).has_value());
@@ -375,23 +367,20 @@ TEST_CASE("Device draws a triangle pulled from a storage buffer into a texture, 
         REQUIRE(sent.has_value());
         REQUIRE(device.wait(*sent).has_value());
 
-        if (runs(backend)) {
-            // Row 0 is the top of the texture: red where the triangle is, the
-            // clear below it.
-            const auto read = device.mapBuffer(readback);
-            REQUIRE(read.has_value());
-            const auto texel = [&](std::uint32_t x, std::uint32_t y) {
-                std::array<std::uint8_t, kTexelBytes> rgba{};
-                std::memcpy(rgba.data(), read->data() + (y * bytesPerRow) + (std::uint64_t{x} * kTexelBytes),
-                            kTexelBytes);
-                return rgba;
-            };
-            constexpr std::array<std::uint8_t, kTexelBytes> kRed{255, 0, 0, 255};
-            constexpr std::array<std::uint8_t, kTexelBytes> kBlack{0, 0, 0, 255};
-            CHECK(texel(kSide / 2, 1) == kRed);
-            CHECK(texel(kSide / 2, kSide - 1) == kBlack);
-            CHECK(texel(0, kSide - 1) == kBlack);
-        }
+        // Row 0 is the top of the texture: red where the triangle is, the
+        // clear below it.
+        const auto read = device.mapBuffer(readback);
+        REQUIRE(read.has_value());
+        const auto texel = [&](std::uint32_t x, std::uint32_t y) {
+            std::array<std::uint8_t, kTexelBytes> rgba{};
+            std::memcpy(rgba.data(), read->data() + (y * bytesPerRow) + (std::uint64_t{x} * kTexelBytes), kTexelBytes);
+            return rgba;
+        };
+        constexpr std::array<std::uint8_t, kTexelBytes> kRed{255, 0, 0, 255};
+        constexpr std::array<std::uint8_t, kTexelBytes> kBlack{0, 0, 0, 255};
+        CHECK(texel(kSide / 2, 1) == kRed);
+        CHECK(texel(kSide / 2, kSide - 1) == kBlack);
+        CHECK(texel(0, kSide - 1) == kBlack);
         CHECK(device.destroyPipeline(pipeline).has_value());
         CHECK(device.destroyTexture(target).has_value());
         CHECK(device.destroyBuffer(positions).has_value());

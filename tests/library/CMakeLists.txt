@@ -1,7 +1,7 @@
 # One Catch2 executable for every test of the library; each case carries its
 # area tag, such as [core] or [rhi], and a kind tag: [unit], [agnostic] for a
-# case on the core interface that runs on each backend, the null one included,
-# or [gpu] for a case that needs a real backend (code_style.md).
+# case on the core interface that runs on each backend, or [gpu] for a case
+# that needs a real backend (code_style.md).
 find_package(Catch2 3 CONFIG REQUIRED)
 include(Catch)
 
@@ -14,12 +14,29 @@ bfr_apply_compiler_flags(bfr_test_main)
 target_include_directories(bfr_test_main PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(bfr_test_main PUBLIC Catch2::Catch2)
 
+# Mesa's lavapipe: Vulkan on the CPU, so the agnostic cases run on a machine
+# with no GPU. Without it they run only under the gpu label.
+if(BFR_BACKEND_VULKAN)
+    find_file(BFR_LAVAPIPE_ICD lvp_icd.json PATHS /usr/share/vulkan/icd.d /usr/local/share/vulkan/icd.d
+        /etc/vulkan/icd.d NO_DEFAULT_PATH)
+    if(NOT BFR_LAVAPIPE_ICD)
+        message(STATUS "lavapipe not found: the agnostic cases run only under the gpu label")
+    endif()
+endif()
+
 # Registers target's cases with ctest. The unit cases run everywhere, and so
-# do the agnostic cases, on the null backend. Under the gpu label, the [gpu]
-# cases run, and the agnostic cases run again on each GPU backend the build
-# has. Hidden cases ([.]) run only through their own entries.
+# do the agnostic cases, on lavapipe when it is there. Under the gpu label,
+# the [gpu] cases run, and the agnostic cases run again on each GPU backend
+# the build has. Hidden cases ([.]) run only through their own entries.
 function(bfr_discover_tests target)
-    catch_discover_tests(${target} TEST_SPEC "~[gpu]" EXTRA_ARGS --backend null)
+    catch_discover_tests(${target} TEST_SPEC "~[gpu]~[agnostic]")
+    # Catch names each entry's script by its spec and arguments alone, so this
+    # spec is spelled apart from the gpu label's vulkan entry; no agnostic
+    # case is [gpu], so it selects the same cases.
+    if(BFR_LAVAPIPE_ICD)
+        catch_discover_tests(${target} TEST_SPEC "[agnostic]~[gpu]" TEST_SUFFIX " (lavapipe)"
+            EXTRA_ARGS --backend vulkan PROPERTIES ENVIRONMENT "VK_DRIVER_FILES=${BFR_LAVAPIPE_ICD}")
+    endif()
     catch_discover_tests(${target} TEST_SPEC "[gpu]~[.]" PROPERTIES LABELS gpu)
     if(BFR_BACKEND_VULKAN)
         catch_discover_tests(${target} TEST_SPEC "[agnostic]" TEST_SUFFIX " (vulkan)"
@@ -55,12 +72,10 @@ add_executable(bfr_tests
     rhi/test_present.cpp
     rhi/test_sampler.cpp
     rhi/test_swapchain.cpp
-    rhi/test_texture.cpp
-    ${PROJECT_SOURCE_DIR}/src/backends/null/null_device.cpp
-    ${PROJECT_SOURCE_DIR}/src/backends/null/null_instance.cpp)
+    rhi/test_texture.cpp)
 bfr_apply_compiler_flags(bfr_tests)
 # Test helpers shared across the tests, such as scoped_env.h, and the
-# library's private headers under src, the null backend's among them.
+# library's private headers under src.
 target_include_directories(bfr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src
     ${PROJECT_SOURCE_DIR}/src/backends)
 target_link_libraries(bfr_tests PRIVATE bfr bfr_test_main bfr_sanitizer_options Catch2::Catch2)

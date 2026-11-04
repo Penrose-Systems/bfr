@@ -38,7 +38,7 @@ const bfr::core::window::NativeWindow kHeadless = bfr::core::window::Headless{};
 // An Instance made with desc, whose recording outlives it, and a device that
 // presents to a headless window.
 struct HeadlessDevice {
-    explicit HeadlessDevice(const TestInstanceDesc& desc, const RhiConfig& config = kValidation) {
+    explicit HeadlessDevice(const InstanceDesc& desc, const RhiConfig& config = kValidation) {
         auto created = createInstance(desc, config);
         INFO(failureOf(created));
         REQUIRE(created.has_value());

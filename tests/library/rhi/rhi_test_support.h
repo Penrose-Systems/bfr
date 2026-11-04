@@ -9,7 +9,6 @@
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "bfr/rhi/swapchain.h"
-#include "null/null_instance.h"
 #include "test_backends.h"
 
 #include <catch2/catch_message.hpp>
@@ -62,22 +61,15 @@ DeviceDesc testDeviceWith(Change change) {
 /// For a device that presents to no window yet.
 inline const core::window::NativeWindow kNoWindow{};
 
-/// A backend the agnostic cases run on: one the build has, or the null one,
-/// which only these tests reach and which has no Backend.
+/// A backend the agnostic cases run on: one the build has.
 struct TestBackend {
     std::string_view name;
-    std::optional<Backend> backend;
+    Backend backend{};
 };
 
 [[nodiscard]] inline std::string_view name(const TestBackend& backend) {
     return backend.name;
 }
-
-/// What createInstance needs to make an Instance on a TestBackend.
-struct TestInstanceDesc {
-    InstanceDesc desc;
-    bool null = false;
-};
 
 /// Each backend the agnostic cases run on (test_backends.h), for a test case
 /// that runs once on each: `const TestBackend backend = GENERATE(eachBackend());`.
@@ -86,25 +78,21 @@ inline auto eachBackend() {
     for (const Backend backend : backends()) {
         chosen.push_back({.name = name(backend), .backend = backend});
     }
-    chosen.push_back({.name = "null", .backend = std::nullopt});
     std::erase_if(chosen, [](const TestBackend& backend) { return !bfr::test::runsOnBackend(backend.name); });
     INFO("no backend --backend named is in this build");
     REQUIRE_FALSE(chosen.empty());
     return Catch::Generators::from_range(chosen);
 }
 
-/// An Instance on backend: the null one when it has no Backend.
-[[nodiscard]] inline core::Result<std::unique_ptr<Instance>> createInstance(const TestInstanceDesc& test,
+/// An Instance as desc says.
+[[nodiscard]] inline core::Result<std::unique_ptr<Instance>> createInstance(const InstanceDesc& desc,
                                                                             const RhiConfig& config) {
-    if (test.null) {
-        return null::NullInstance::create(test.desc, config);
-    }
-    return Instance::create(test.desc, config);
+    return Instance::create(desc, config);
 }
 
 /// A description on backend, with nothing recorded.
-inline TestInstanceDesc describe(const TestBackend& backend) {
-    return {.desc = {.backend = backend.backend.value_or(Backend{})}, .null = !backend.backend.has_value()};
+inline InstanceDesc describe(const TestBackend& backend) {
+    return {.backend = backend.backend};
 }
 
 /// A description on backend that records every warning and error the Instance and
@@ -116,8 +104,8 @@ inline InstanceDesc recordingInto(Backend backend, std::vector<std::string>& mes
 }
 
 /// recordingInto on a TestBackend.
-inline TestInstanceDesc recordingInto(const TestBackend& backend, std::vector<std::string>& messages) {
-    return {.desc = recordingInto(backend.backend.value_or(Backend{}), messages), .null = !backend.backend.has_value()};
+inline InstanceDesc recordingInto(const TestBackend& backend, std::vector<std::string>& messages) {
+    return recordingInto(backend.backend, messages);
 }
 
 /// A description on backend that records only errors: a backend's loader may

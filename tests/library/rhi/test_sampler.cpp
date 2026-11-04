@@ -47,7 +47,7 @@ namespace {
 // An Instance and a device on its first adapter, presenting nowhere, holding
 // what desc says.
 struct SamplerDevice {
-    SamplerDevice(const TestInstanceDesc& instanceDesc, const DeviceDesc& desc) {
+    SamplerDevice(const InstanceDesc& instanceDesc, const DeviceDesc& desc) {
         auto created = createInstance(instanceDesc, kValidation);
         INFO(failureOf(created));
         REQUIRE(created.has_value());
@@ -78,12 +78,7 @@ BufferHandle created(Device& device, const BufferDesc& desc) {
 
 // Whether backend takes the SPIR-V checked in, as test_pipeline.cpp says.
 bool takesSpirv(const TestBackend& backend) {
-    return !backend.backend.has_value() || *backend.backend == Backend::Vulkan;
-}
-
-// Whether backend runs what it records: the null backend runs nothing.
-bool runs(const TestBackend& backend) {
-    return backend.backend.has_value();
+    return backend.backend == Backend::Vulkan;
 }
 
 // The push constants sample.comp declares.
@@ -270,17 +265,15 @@ TEST_CASE("Device samples a texture through a sampler's slot: nearest and linear
         REQUIRE(sent.has_value());
         REQUIRE(device.wait(*sent).has_value());
 
-        if (runs(backend)) {
-            const auto read = device.mapBuffer(readback);
-            REQUIRE(read.has_value());
-            std::array<float, std::size_t{2} * kSamples> values{};
-            std::memcpy(values.data(), read->data(), sizeof(values));
-            using Catch::Matchers::WithinAbs;
-            CHECK_THAT(values[0], WithinAbs(0.0, 0.0));
-            CHECK_THAT(values[1], WithinAbs(1.0, 0.0));
-            CHECK_THAT(values[2], WithinAbs(kQuarterWhite, kUnormStep));
-            CHECK_THAT(values[3], WithinAbs(0.0, 0.0));
-        }
+        const auto read = device.mapBuffer(readback);
+        REQUIRE(read.has_value());
+        std::array<float, std::size_t{2} * kSamples> values{};
+        std::memcpy(values.data(), read->data(), sizeof(values));
+        using Catch::Matchers::WithinAbs;
+        CHECK_THAT(values[0], WithinAbs(0.0, 0.0));
+        CHECK_THAT(values[1], WithinAbs(1.0, 0.0));
+        CHECK_THAT(values[2], WithinAbs(kQuarterWhite, kUnormStep));
+        CHECK_THAT(values[3], WithinAbs(0.0, 0.0));
         CHECK(device.destroyPipeline(*pipeline).has_value());
         CHECK(device.destroySampler(bordered).has_value());
         CHECK(device.destroySampler(edged).has_value());

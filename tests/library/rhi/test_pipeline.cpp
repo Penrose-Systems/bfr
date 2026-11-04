@@ -1,6 +1,6 @@
 // What every backend does with pipelines, through the interface alone. Each
 // case runs on every backend the build has. The shaders are SPIR-V, compiled
-// from tests/library/shaders, which the Vulkan and null backends take; a case
+// from tests/library/shaders, which the Vulkan backend takes; a case
 // that needs code skips on a backend with none checked in.
 
 #include "bfr/core/error.h"
@@ -40,7 +40,7 @@ constexpr std::uint32_t kWorkgroup = 64;
 
 // An Instance and a device on its first adapter, presenting nowhere.
 struct PipelineDevice {
-    explicit PipelineDevice(const TestInstanceDesc& desc) {
+    explicit PipelineDevice(const InstanceDesc& desc) {
         auto created = createInstance(desc, kValidation);
         INFO(failureOf(created));
         REQUIRE(created.has_value());
@@ -55,10 +55,10 @@ struct PipelineDevice {
     std::unique_ptr<Device> device;
 };
 
-// Whether backend takes the SPIR-V checked in: Vulkan does, and the null
-// backend takes any code. A case that needs code skips elsewhere.
+// Whether backend takes the SPIR-V checked in: Vulkan does. A case that
+// needs code skips elsewhere.
 bool takesSpirv(const TestBackend& backend) {
-    return !backend.backend.has_value() || *backend.backend == Backend::Vulkan;
+    return backend.backend == Backend::Vulkan;
 }
 
 ShaderCode spirv(std::span<const std::uint8_t> bytes) {

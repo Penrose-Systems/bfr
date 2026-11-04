@@ -80,13 +80,11 @@ option. Several instances of different backends may coexist in one process.
 Reason: Windows has two backends and tools may want both; one indirect call
 per command is small next to driver cost.
 
-A null backend is built into the library's tests alone: one adapter that
-reports nothing (every limit 0, no heaps, no queues, no optional feature), a
-device that accepts every call and draws nothing. The library does not
-contain it. Reason: every agnostic test then runs on two backends on every
-machine, and anything shaped like one API fails against the other; to an app
-a backend that draws nothing is no use. BFR promises no numeric minimum: an
-app reads the caps and decides.
+There is no null backend. The agnostic tests run on each backend the build
+has, and on Mesa's lavapipe, which runs Vulkan on the CPU, so they run on a
+machine with no GPU. Reason: a backend that draws nothing tests nothing a
+driver does, and every call would need a second, empty version. BFR promises
+no numeric minimum: an app reads the caps and decides.
 
 A device can be rebuilt while the app runs: on another backend, on another
 adapter, or on the same one after device loss. BFR waits for the GPU, reads
@@ -282,7 +280,7 @@ encoder switching needs lookahead.
   draws, direct dispatches.
 - Each backend keeps the same record of what a list has bound and makes the
   same usage checks of a draw or dispatch (`src/rhi/command_check.h`), so a
-  misuse fails the same way on every backend, the null one included.
+  misuse fails the same way on every backend.
 
 ### Swapchain
 
