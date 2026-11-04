@@ -119,10 +119,8 @@ void recordBarrier(const VolkDeviceTable& table, VkCommandBuffer buffer, const V
 core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance& rhi, VkPhysicalDevice adapter,
                                                                  VkDevice device, const QueueFamilies& families,
                                                                  const DeviceDesc& desc, bool hasBudget,
-                                                                 const RasterFeatures& features,
-                                                                 const SamplerFeatures& samplerFeatures) {
-    auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, families, desc, hasBudget, features,
-                                               samplerFeatures);
+                                                                 const RasterFeatures& features) {
+    auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, families, desc, hasBudget, features);
     if (auto opened = made->openQueues(families, desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
@@ -141,7 +139,7 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
 
 VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device,
                            const QueueFamilies& families, const DeviceDesc& desc, bool hasBudget,
-                           const RasterFeatures& features, const SamplerFeatures& samplerFeatures)
+                           const RasterFeatures& features)
     : instance_(&rhi),
       adapter_(adapter),
       device_(device),
@@ -149,7 +147,6 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       presentFamily_(families.present.value_or(families.graphics)),
       hasBudget_(hasBudget),
       rasterFeatures_(features),
-      samplerFeatures_(samplerFeatures),
       desc_(desc),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
       commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),

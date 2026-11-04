@@ -18,10 +18,9 @@ struct D3D12Sampler {
 
 /// Writes a sampler as desc says at destination, through device11 when the
 /// device has it, so integer border colours and unnormalized coordinates
-/// reach D3D12. Fails with RhiUnsupported when desc needs what features lack,
-/// or a setting D3D12 has none for.
+/// reach D3D12. Fails with RhiUnsupported for a member D3D12 has no setting
+/// for: LOD averaging, and without device11 those two.
 [[nodiscard]] core::Result<void> writeD3D12Sampler(ID3D12Device& device, ID3D12Device11* device11,
-                                                   const SamplerFeatures& features, const SamplerDesc& desc,
-                                                   D3D12_CPU_DESCRIPTOR_HANDLE destination);
+                                                   const SamplerDesc& desc, D3D12_CPU_DESCRIPTOR_HANDLE destination);
 
 } // namespace bfr::rhi::d3d12

@@ -41,10 +41,19 @@ AdapterInfo infoOf(MTL::Device* device) {
     return info;
 }
 
+// MTLSamplerDescriptor's documentation: maxAnisotropy "between 1 and 16,
+// inclusive"; lodBias "the range is [-16.0, 15.999]".
+constexpr float kMaxSamplerAnisotropy = 16;
+constexpr float kMaxSamplerLodBias = 15.999F;
+
 Limits limitsOf(MTL::Device* device) {
     Limits limits;
     limits.maxBufferSize = device->maxBufferLength();
     limits.colorSampleCounts = sampleCountsOf(device);
+    limits.maxSamplerAnisotropy = kMaxSamplerAnisotropy;
+    if (device->supportsFamily(MTL::GPUFamilyApple10)) {
+        limits.maxSamplerLodBias = kMaxSamplerLodBias;
+    }
     return limits;
 }
 
@@ -73,12 +82,29 @@ BindlessLimits bindlessOf(MTL::Device* device) {
     return bindless;
 }
 
+// What samplers may be, from the Metal Feature Set Tables (Oct 2026) and
+// MTLSamplerDescriptor's documentation, for the Apple7 and later families the
+// floor asks for: anisotropy from Apple2; minimum and maximum reduction and
+// LOD bias from Apple10; mirror clamp to edge, unnormalized coordinates and
+// LOD averaging with no family named. Border colours are the three presets
+// alone, and nothing says how they apply to integer formats.
+void addSamplerFeatures(MTL::Device* device, Features& features) {
+    const bool apple10 = device->supportsFamily(MTL::GPUFamilyApple10);
+    features.samplerAnisotropy = true;
+    features.samplerMinmax = apple10;
+    features.samplerLodBias = apple10;
+    features.samplerMirrorClampToEdge = true;
+    features.samplerUnnormalizedCoordinates = true;
+    features.samplerLodAverage = true;
+}
+
 Features featuresOf(MTL::Device* device) {
     Features features;
     features.rayQuery = device->supportsRaytracing();
     features.accelerationStructure = device->supportsRaytracing();
     features.barycentrics = device->supportsShaderBarycentricCoordinates();
     features.compressionBc = device->supportsBCTextureCompression();
+    addSamplerFeatures(device, features);
     return features;
 }
 

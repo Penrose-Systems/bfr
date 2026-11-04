@@ -231,7 +231,6 @@ private:
     // Null when the runtime has no ID3D12Device11; samplers then go through
     // CreateSampler.
     Microsoft::WRL::ComPtr<ID3D12Device11> device11_;
-    SamplerFeatures samplerFeatures_;
     Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter_;
     std::size_t heapCount_;
     DeviceDesc desc_;

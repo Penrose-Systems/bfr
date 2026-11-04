@@ -2755,9 +2755,10 @@ public:
 
     /// Creates a sampler, as desc says, with a slot in the sampler table. Not for the frame path:
     /// it frees samplers the GPU is done with. Fails with error_invalid_argument for a value BFR
-    /// does not have, error_unsupported when the backend has no setting for a member, or the device
-    /// lacks the feature it needs, error_limit_reached when the sampler table is full, and
-    /// error_device_failed when the backend refuses the desc.
+    /// does not have, error_unsupported when the backend has no setting for a member,
+    /// error_limit_reached when the sampler table is full, and error_device_failed when the backend
+    /// refuses the desc. Every other member reaches the backend as it is; the caps say what the
+    /// adapter has.
     [[nodiscard]] Expected<Sampler> createSampler(const SamplerDesc& desc) const;
 
     /// Creates a compute pipeline, as desc says, before returning. Not for the frame path: it

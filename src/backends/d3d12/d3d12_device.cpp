@@ -88,7 +88,6 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
                          std::size_t heapCount, const DeviceDesc& desc)
     : instance_(&rhi),
       device_(std::move(device)),
-      samplerFeatures_(samplerFeaturesOf(device_.Get())),
       adapter_(std::move(adapter)),
       heapCount_(heapCount),
       desc_(desc),

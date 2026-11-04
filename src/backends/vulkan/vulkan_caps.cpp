@@ -363,7 +363,15 @@ Features featuresFrom(const FeatureQuery& features, const PropertyQuery& propert
         .samplerAnisotropy = on(core.samplerAnisotropy),
         .samplerMinmax = on(features.vulkan12.samplerFilterMinmax),
         .samplerMirrorClampToEdge = on(features.vulkan12.samplerMirrorClampToEdge),
+        // The spec forbids neither with anisotropy, though its Texel
+        // Anisotropic Filtering section warns that vendors read nearest
+        // filters differently. Integer border presets and unnormalized
+        // coordinates are core 1.0, with no feature.
+        .samplerAnisotropyNearestMip = on(core.samplerAnisotropy),
+        .samplerAnisotropyNearestFilter = on(core.samplerAnisotropy),
         .samplerCustomBorderColor = customBorderColors(features),
+        .samplerIntegerBorderColor = true,
+        .samplerUnnormalizedCoordinates = true,
         // Core, but a portability driver may refuse it, and its feature struct
         // is provisional, outside the headers BFR builds with
         // (VUID-VkSamplerCreateInfo-samplerMipLodBias-04467).

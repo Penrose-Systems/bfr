@@ -11,9 +11,8 @@
 
 namespace bfr::rhi::d3d12 {
 
-/// What device's samplers may be, as its options answer: the caps report it
-/// and createSampler refuses a desc that needs what it lacks. A question the
-/// device won't answer leaves false.
+/// What device's samplers may be, as its options answer, for the caps. A
+/// question the device won't answer leaves false.
 struct SamplerFeatures {
     /// OPTIONS19 AnisoFilterWithPointMipSupported.
     bool anisotropyNearestMip = false;
@@ -22,6 +21,9 @@ struct SamplerFeatures {
     bool device11 = false;
     /// OPTIONS17 NonNormalizedCoordinateSamplersSupported, with device11.
     bool unnormalizedCoordinates = false;
+    /// OPTIONS14 AdvancedTextureOpsSupported, with device11: the DirectX
+    /// spec puts integer border colours under it.
+    bool integerBorderColor = false;
     /// OPTIONS19 MaxSamplerDescriptorHeapSize; 0 when the device won't say.
     std::uint32_t maxSamplerHeapSize = 0;
 };

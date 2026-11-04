@@ -54,49 +54,33 @@ D3D12_TEXTURE_ADDRESS_MODE addressFor(AddressMode mode) {
     }
 }
 
-// desc's filters as one D3D12_FILTER. Fails with RhiUnsupported for
-// anisotropy with a nearest min or mag filter, which no D3D12_FILTER has, and
-// with a nearest mip filter where the device lacks it.
-core::Result<D3D12_FILTER> encodedFilterFor(const SamplerFeatures& features, const SamplerDesc& desc) {
-    const D3D12_FILTER_REDUCTION_TYPE reduction = reductionFor(desc.reduction);
-    if (desc.maxAnisotropy == 0) {
-        return D3D12_ENCODE_BASIC_FILTER(filterFor(desc.minFilter), filterFor(desc.magFilter),
-                                         filterFor(desc.mipFilter), reduction);
-    }
-    if (desc.minFilter == Filter::Nearest || desc.magFilter == Filter::Nearest) {
-        return core::failure(core::ErrorCode::RhiUnsupported,
-                             "D3D12 has no anisotropic filter with a nearest min or mag filter");
-    }
-    if (desc.mipFilter == Filter::Linear) {
-        return D3D12_ENCODE_ANISOTROPIC_FILTER(reduction);
-    }
-    if (!features.anisotropyNearestMip) {
-        return core::failure(core::ErrorCode::RhiUnsupported,
-                             "the adapter has no anisotropic filter with a nearest mip filter");
-    }
-    return D3D12_ENCODE_MIN_MAG_ANISOTROPIC_MIP_POINT_FILTER(reduction);
+// desc's filters as one D3D12_FILTER, built as d3d12.h's encoding macros
+// build theirs: the anisotropic bit when anisotropy is asked for, on the min,
+// mag and mip filters and the reduction asked for. A mix d3d12.h names no
+// filter for reaches D3D12 as it is.
+D3D12_FILTER encodedFilterFor(const SamplerDesc& desc) {
+    const auto basic = static_cast<UINT>(D3D12_ENCODE_BASIC_FILTER(filterFor(desc.minFilter), filterFor(desc.magFilter),
+                                                                   filterFor(desc.mipFilter),
+                                                                   reductionFor(desc.reduction)));
+    const UINT anisotropic = desc.maxAnisotropy != 0 ? UINT{D3D12_ANISOTROPIC_FILTERING_BIT} : 0U;
+    return static_cast<D3D12_FILTER>(basic | anisotropic);
 }
 
 } // namespace
 
-core::Result<void> writeD3D12Sampler(ID3D12Device& device, ID3D12Device11* device11, const SamplerFeatures& features,
-                                     const SamplerDesc& desc, D3D12_CPU_DESCRIPTOR_HANDLE destination) {
+core::Result<void> writeD3D12Sampler(ID3D12Device& device, ID3D12Device11* device11, const SamplerDesc& desc,
+                                     D3D12_CPU_DESCRIPTOR_HANDLE destination) {
     if (desc.lodAverage) {
         return core::failure(core::ErrorCode::RhiUnsupported, "D3D12 has no LOD averaging");
     }
-    if (desc.unnormalizedCoordinates && !features.unnormalizedCoordinates) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "the adapter has no unnormalized sampler coordinates");
-    }
-    if (desc.borderInteger && device11 == nullptr) {
-        return core::failure(core::ErrorCode::RhiUnsupported,
-                             "the device has no ID3D12Device11, which integer border colours need");
-    }
-    const auto filter = encodedFilterFor(features, desc);
-    if (!filter) {
-        return std::unexpected(std::move(filter.error()));
+    if ((desc.borderInteger || desc.unnormalizedCoordinates) && device11 == nullptr) {
+        return core::failure(
+            core::ErrorCode::RhiUnsupported,
+            "the device has no ID3D12Device11, whose sampler desc alone holds integer border colours and unnormalized "
+            "coordinates");
     }
     D3D12_SAMPLER_DESC2 sampler{};
-    sampler.Filter = *filter;
+    sampler.Filter = encodedFilterFor(desc);
     sampler.AddressU = addressFor(desc.addressU);
     sampler.AddressV = addressFor(desc.addressV);
     sampler.AddressW = addressFor(desc.addressW);
@@ -152,9 +136,7 @@ core::Result<SamplerHandle> D3D12Device::createSampler(const SamplerDesc& desc) 
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} samplers",
                              desc_.maxBindlessSamplers);
     }
-    if (auto written = writeD3D12Sampler(*device_.Get(), device11_.Get(), samplerFeatures_, desc,
-                                         layout_.samplerAt(*slot));
-        !written) {
+    if (auto written = writeD3D12Sampler(*device_.Get(), device11_.Get(), desc, layout_.samplerAt(*slot)); !written) {
         samplers_.erase(sampler);
         bindless_.giveSampler(*slot);
         return std::unexpected(std::move(written.error()));

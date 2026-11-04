@@ -1914,9 +1914,9 @@ BFR_API void bfr_destroy_texture(bfr_device* device, bfr_texture texture);
 
 // Creates a sampler, as desc says, with a slot in the sampler table. Not for the frame path: it
 // frees samplers the GPU is done with. Fails with error_invalid_argument for a value BFR does not
-// have, error_unsupported when the backend has no setting for a member, or the device lacks the
-// feature it needs, error_limit_reached when the sampler table is full, and error_device_failed
-// when the backend refuses the desc.
+// have, error_unsupported when the backend has no setting for a member, error_limit_reached when
+// the sampler table is full, and error_device_failed when the backend refuses the desc. Every other
+// member reaches the backend as it is; the caps say what the adapter has.
 BFR_API bfr_result bfr_create_sampler(
     bfr_device* device,
     const bfr_sampler_desc* desc,

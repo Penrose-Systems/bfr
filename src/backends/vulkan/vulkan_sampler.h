@@ -2,7 +2,6 @@
 
 #include "bfr/core/error.h"
 #include "bfr/rhi/sampler.h"
-#include "vulkan/vulkan_caps.h"
 
 #include <volk.h>
 
@@ -32,11 +31,9 @@ private:
 };
 
 /// A sampler as desc says, holding slot. table is device's and outlives it.
-/// Fails with RhiUnsupported when desc needs a feature of features the
-/// device lacks, or LOD averaging, which Vulkan has no setting for, and
-/// RhiDeviceFailed when the API refuses.
+/// Fails with RhiUnsupported for LOD averaging, which Vulkan has no setting
+/// for, and RhiDeviceFailed when the API refuses.
 [[nodiscard]] core::Result<VulkanSampler> createVulkanSampler(const VolkDeviceTable& table, VkDevice device,
-                                                              const SamplerFeatures& features, const SamplerDesc& desc,
-                                                              std::uint32_t slot);
+                                                              const SamplerDesc& desc, std::uint32_t slot);
 
 } // namespace bfr::rhi::vulkan

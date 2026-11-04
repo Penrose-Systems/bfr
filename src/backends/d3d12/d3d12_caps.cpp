@@ -203,10 +203,22 @@ void addAdvancedFeatures(ID3D12Device* device, Features& features) {
 }
 
 // What samplers may be. D3D12 has no anisotropic filter with a nearest min or
-// mag filter (d3d12.h's D3D12_FILTER), and no LOD averaging.
-void addSamplerFeatures(const SamplerFeatures& sampler, Features& features) {
+// mag filter (d3d12.h's D3D12_FILTER), and no LOD averaging. Where no query
+// answers, Microsoft's documentation does:
+// - learn.microsoft.com/windows/win32/direct3d12/hardware-feature-levels:
+//   anisotropy (16) and Mirror Once at every feature level; Min/Max Filters
+//   "Yes | Yes | Optional | No" for 12_1, 12_0, 11_1, 11_0, and no D3D12
+//   query for the optional one.
+// - D3D12_SAMPLER_DESC: BorderColor is any RGBA in 0 to 1, MipLODBias any
+//   offset in D3D12_MIP_LOD_BIAS_MIN to MAX.
+void addSamplerFeatures(ID3D12Device* device, const SamplerFeatures& sampler, Features& features) {
+    features.samplerAnisotropy = true;
+    features.samplerMinmax = featureLevelOf(device) >= D3D_FEATURE_LEVEL_12_0;
+    features.samplerMirrorClampToEdge = true;
+    features.samplerCustomBorderColor = true;
+    features.samplerLodBias = true;
     features.samplerAnisotropyNearestMip = sampler.anisotropyNearestMip;
-    features.samplerIntegerBorderColor = sampler.device11;
+    features.samplerIntegerBorderColor = sampler.integerBorderColor;
     features.samplerUnnormalizedCoordinates = sampler.unnormalizedCoordinates;
 }
 
@@ -214,7 +226,7 @@ Features featuresOf(ID3D12Device* device, const SamplerFeatures& sampler) {
     Features features;
     addBasicFeatures(device, features);
     addAdvancedFeatures(device, features);
-    addSamplerFeatures(sampler, features);
+    addSamplerFeatures(device, sampler, features);
     return features;
 }
 
@@ -246,6 +258,9 @@ SamplerFeatures samplerFeaturesOf(ID3D12Device* device) {
     D3D12_FEATURE_DATA_D3D12_OPTIONS17 options17{};
     sampler.unnormalizedCoordinates = sampler.device11 && query(device, D3D12_FEATURE_D3D12_OPTIONS17, options17) &&
                                       options17.NonNormalizedCoordinateSamplersSupported != FALSE;
+    D3D12_FEATURE_DATA_D3D12_OPTIONS14 options14{};
+    sampler.integerBorderColor = sampler.device11 && query(device, D3D12_FEATURE_D3D12_OPTIONS14, options14) &&
+                                 options14.AdvancedTextureOpsSupported != FALSE;
     return sampler;
 }
 
@@ -303,6 +318,9 @@ Caps readCaps(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
     caps.limits = limitsOf(device, options6);
     const SamplerFeatures sampler = samplerFeaturesOf(device);
     caps.bindless = bindlessOf(sampler);
+    // D3D12 states no limit on samplers with a custom border colour, so any
+    // sampler the table holds may have one.
+    caps.limits.maxCustomBorderColorSamplers = caps.bindless.maxSamplers;
     caps.compute = computeOf(device);
     caps.features = featuresOf(device, sampler);
     caps.memory = memoryOf(desc, device);

@@ -267,9 +267,9 @@ public:
 
     /// A sampler as desc says, with a slot in the sampler table. Cold: it
     /// frees samplers the GPU is done with. Fails with RhiUnsupported when
-    /// the backend has no setting for a member or the device lacks the
-    /// feature it needs, RhiLimitReached when the sampler table is full, and
-    /// RhiDeviceFailed when the API refuses the desc.
+    /// the backend has no setting for a member, RhiLimitReached when the
+    /// sampler table is full, and RhiDeviceFailed when the API refuses the
+    /// desc.
     [[nodiscard]] virtual core::Result<SamplerHandle> createSampler(const SamplerDesc& desc) = 0;
 
     /// The sampler's index in the sampler table, held from creation to

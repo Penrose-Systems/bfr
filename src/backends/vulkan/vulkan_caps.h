@@ -21,7 +21,7 @@ namespace bfr::rhi::vulkan {
 inline constexpr const char* kPortabilitySubset = "VK_KHR_portability_subset";
 
 /// The optional sampler features a device turns on, each when its adapter's
-/// caps report it; createSampler refuses a desc that needs one it lacks.
+/// caps report it.
 struct SamplerFeatures {
     bool anisotropy = false;
     bool minmax = false;

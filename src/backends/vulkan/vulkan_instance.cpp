@@ -464,7 +464,8 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     }
 
     // The optional sampler features, each turned on when the caps report it,
-    // so the caps say what the device has.
+    // so the caps say what the device has. Samplers that use one pass through
+    // either way; validation reports a feature that is off.
     const Features& reported = listed.caps.features;
     const SamplerFeatures sampler{.anisotropy = reported.samplerAnisotropy,
                                   .minmax = reported.samplerMinmax,
@@ -508,8 +509,7 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     }
     BFR_LOG_INFO(logger(), "device on {}, queue families {}, extensions: {}", listed.name, familyList(queues.infos),
                  core::text::join(extensions, ", "));
-    auto made = VulkanDevice::create(*this, physicalDevice, device, *families, wanted, hasBudget_[adapter], raster,
-                                     sampler);
+    auto made = VulkanDevice::create(*this, physicalDevice, device, *families, wanted, hasBudget_[adapter], raster);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }

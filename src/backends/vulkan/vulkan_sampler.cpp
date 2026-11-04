@@ -4,7 +4,6 @@
 #include "bfr/rhi/sampler.h"
 #include "rhi/bindless_slots.h"
 #include "rhi/sampler_border.h"
-#include "vulkan/vulkan_caps.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_pipeline.h"
 #include "vulkan/vulkan_result.h"
@@ -62,30 +61,6 @@ VkBorderColor borderFor(BorderPreset preset, bool integer) {
     }
 }
 
-// Fails with RhiUnsupported when desc needs a feature the device lacks, or a
-// setting Vulkan has none for.
-core::Result<void> checkFeatures(const SamplerFeatures& features, const SamplerDesc& desc, BorderPreset preset) {
-    if (desc.maxAnisotropy != 0 && !features.anisotropy) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "the adapter has no sampler anisotropy");
-    }
-    const bool minmax = desc.reduction == SamplerReduction::Minimum || desc.reduction == SamplerReduction::Maximum;
-    if (minmax && !features.minmax) {
-        return core::failure(core::ErrorCode::RhiUnsupported,
-                             "the adapter has no minimum or maximum sampler reduction");
-    }
-    const std::array modes{desc.addressU, desc.addressV, desc.addressW};
-    if (std::ranges::contains(modes, AddressMode::MirrorClampToEdge) && !features.mirrorClampToEdge) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "the adapter has no mirror clamp to edge");
-    }
-    if (preset == BorderPreset::Custom && !features.customBorderColor) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "the adapter has no custom border colour");
-    }
-    if (desc.lodAverage) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "Vulkan has no LOD averaging");
-    }
-    return {};
-}
-
 } // namespace
 
 VulkanSampler::VulkanSampler(const VolkDeviceTable& table, VkDevice device, VkSampler sampler, std::uint32_t slot)
@@ -103,13 +78,12 @@ VulkanSampler::~VulkanSampler() {
     }
 }
 
-core::Result<VulkanSampler> createVulkanSampler(const VolkDeviceTable& table, VkDevice device,
-                                                const SamplerFeatures& features, const SamplerDesc& desc,
+core::Result<VulkanSampler> createVulkanSampler(const VolkDeviceTable& table, VkDevice device, const SamplerDesc& desc,
                                                 std::uint32_t slot) {
-    const BorderPreset preset = borderPreset(desc);
-    if (auto checked = checkFeatures(features, desc, preset); !checked) {
-        return std::unexpected(std::move(checked.error()));
+    if (desc.lodAverage) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "Vulkan has no LOD averaging");
     }
+    const BorderPreset preset = borderPreset(desc);
     VkSamplerCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     info.magFilter = filterFor(desc.magFilter);
@@ -167,7 +141,7 @@ core::Result<SamplerHandle> VulkanDevice::createSampler(const SamplerDesc& desc)
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
     }
-    auto made = createVulkanSampler(table_, device_, samplerFeatures_, desc, *slot);
+    auto made = createVulkanSampler(table_, device_, desc, *slot);
     if (!made) {
         bindless_.giveSampler(*slot);
         return std::unexpected(std::move(made.error()));

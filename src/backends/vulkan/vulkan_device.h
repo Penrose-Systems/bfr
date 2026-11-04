@@ -118,14 +118,15 @@ public:
     /// maximums size everything the device holds. Fails with RhiDeviceFailed,
     /// destroying device, when the API refuses a queue's timeline or the
     /// bindless layout, and RhiLimitReached when it cannot hold the layout.
-    [[nodiscard]] static core::Result<std::unique_ptr<VulkanDevice>> create(
-        VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const QueueFamilies& families,
-        const DeviceDesc& desc, bool hasBudget, const RasterFeatures& features, const SamplerFeatures& samplerFeatures);
+    [[nodiscard]] static core::Result<std::unique_ptr<VulkanDevice>> create(VulkanInstance& rhi,
+                                                                            VkPhysicalDevice adapter, VkDevice device,
+                                                                            const QueueFamilies& families,
+                                                                            const DeviceDesc& desc, bool hasBudget,
+                                                                            const RasterFeatures& features);
 
     /// For create, with the number of queues create opens.
     VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const QueueFamilies& families,
-                 const DeviceDesc& desc, bool hasBudget, const RasterFeatures& features,
-                 const SamplerFeatures& samplerFeatures);
+                 const DeviceDesc& desc, bool hasBudget, const RasterFeatures& features);
     ~VulkanDevice() override;
     VulkanDevice(const VulkanDevice&) = delete;
     VulkanDevice& operator=(const VulkanDevice&) = delete;
@@ -228,7 +229,6 @@ private:
     std::uint32_t presentFamily_;
     bool hasBudget_;
     RasterFeatures rasterFeatures_;
-    SamplerFeatures samplerFeatures_;
     DeviceDesc desc_;
     std::vector<std::unique_ptr<VulkanQueue>> queues_;
     VkQueue presentQueue_ = VK_NULL_HANDLE;

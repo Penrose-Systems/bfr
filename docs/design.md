@@ -207,9 +207,8 @@ encoder switching needs lookahead.
   made before its destroy has run, never at the destroy itself, so pending
   work never sees a slot reused.
 - A sampler is a handle that holds one slot in the sampler table. Every
-  member of its desc reaches the backend unchanged; a member the backend has
-  no setting for, or a feature the device lacks, fails with
-  `error_unsupported`. Identical samplers are not shared: each create reaches
+  member of its desc reaches the backend unchanged; only a member the backend
+  has no setting for fails, with `error_unsupported`. Identical samplers are not shared: each create reaches
   the backend and holds its own slot. The Vulkan device turns on each
   optional sampler feature its caps report, so the caps say what it has.
 - Metal 4 has no push constants and no `setBytes` on its encoders; resources

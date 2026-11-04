@@ -85,6 +85,8 @@ core::Result<Ref<MTL::SamplerState>> createMetalSampler(MTL::Device& device, con
     descriptor->setSAddressMode(addressFor(desc.addressU));
     descriptor->setTAddressMode(addressFor(desc.addressV));
     descriptor->setRAddressMode(addressFor(desc.addressW));
+    // Every OS Metal 4 runs on has lodBias (macOS and iOS 26), so no
+    // availability guard; GPUs before Apple10 ignore it, as the caps say.
     descriptor->setLodBias(desc.lodBias);
     descriptor->setLodMinClamp(desc.minLod);
     descriptor->setLodMaxClamp(desc.maxLod);
