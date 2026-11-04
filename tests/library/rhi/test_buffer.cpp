@@ -48,7 +48,7 @@ struct BufferDevice {
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         instance = std::move(*created);
-        auto made = instance->createDevice(0, kNoWindow, {});
+        auto made = instance->createDevice(0, kNoWindow, kTestDevice);
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         device = std::move(*made);

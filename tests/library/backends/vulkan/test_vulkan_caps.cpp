@@ -161,7 +161,7 @@ TEST_CASE("Vulkan device without VK_EXT_memory_budget fails with RhiUnsupported"
     const auto rhi = Instance::create(kVulkan, {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
-    const auto device = (*rhi)->createDevice(0, kNoWindow, {});
+    const auto device = (*rhi)->createDevice(0, kNoWindow, kTestDevice);
     INFO(failureOf(device));
     REQUIRE(device.has_value());
 

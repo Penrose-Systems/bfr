@@ -75,7 +75,7 @@ TEST_CASE("Vulkan device fails with RhiWindowFailed when the API refuses a swapc
     const auto rhi = Instance::create(kVulkan, {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
-    const auto device = (*rhi)->createDevice(0, kNoWindow, {});
+    const auto device = (*rhi)->createDevice(0, kNoWindow, kTestDevice);
     INFO(failureOf(device));
     REQUIRE(device.has_value());
 
@@ -95,7 +95,7 @@ TEST_CASE("Vulkan device fails with RhiPresentUnsupported when it can't present 
     const auto rhi = Instance::create(kVulkan, {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
-    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow, {});
+    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow, kTestDevice);
     INFO(failureOf(device));
     REQUIRE(device.has_value());
 
@@ -140,7 +140,7 @@ TEST_CASE("Vulkan device reports a failed present query as the failure it is", "
         const auto rhi = Instance::create(recordingErrorsInto(errors), kValidation);
         INFO(failureOf(rhi));
         REQUIRE(rhi.has_value());
-        const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow, {});
+        const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow, kTestDevice);
         INFO(failureOf(device));
         REQUIRE(device.has_value());
 
@@ -216,7 +216,7 @@ TEST_CASE("Vulkan device presents from a queue family of its own when no graphic
         const auto rhi = Instance::create(errorsAndLogInto(errors, log), kValidation);
         INFO(failureOf(rhi));
         REQUIRE(rhi.has_value());
-        const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kHeadless, {});
+        const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kHeadless, kTestDevice);
         INFO(failureOf(device));
         REQUIRE(device.has_value());
         const auto swapchain = (*device)->createSwapchain(kHeadless, swapchainDesc(**rhi));

@@ -6,6 +6,7 @@
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
 #include "bfr/rhi/caps.h"
+#include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/instance.h"
@@ -44,7 +45,7 @@ struct PipelineDevice {
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         instance = std::move(*created);
-        auto made = instance->createDevice(0, kNoWindow, {});
+        auto made = instance->createDevice(0, kNoWindow, kTestDevice);
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         device = std::move(*made);
@@ -175,10 +176,13 @@ TEST_CASE("Device refuses a bindless table larger than the adapter holds with Rh
         if (samplers == 0) {
             SKIP("the adapter reports no sampler table limit");
         }
-        CHECK(rhi.createDevice(0, kNoWindow, {.maxBindlessSamplers = 0}).error().code == ErrorCode::RhiInvalidCall);
-        CHECK(rhi.createDevice(0, kNoWindow, {.maxBindlessSamplers = samplers + 1}).error().code ==
-              ErrorCode::RhiLimitReached);
-        const auto fits = rhi.createDevice(0, kNoWindow, {.maxBindlessSamplers = samplers});
+        CHECK(rhi.createDevice(0, kNoWindow,
+                               testDeviceWith([&](DeviceDesc& desc) { desc.maxBindlessSamplers = samplers + 1; }))
+                  .error()
+                  .code == ErrorCode::RhiLimitReached);
+        const auto fits = rhi.createDevice(0, kNoWindow, testDeviceWith([&](DeviceDesc& desc) {
+                                               desc.maxBindlessSamplers = samplers;
+                                           }));
         INFO(failureOf(fits));
         CHECK(fits.has_value());
     }

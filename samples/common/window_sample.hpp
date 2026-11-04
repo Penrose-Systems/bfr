@@ -155,6 +155,14 @@ inline std::array<float, 4> colorAt(double t) {
 // window's size in pixels.
 inline int show(bfr::Backend backend, const bfr::Window& window, const std::function<bool()>& poll,
                 const std::function<Size()>& size) {
+    // Two frames in flight, each recording one list from a pool of its own,
+    // which sets the push constants once; one swapchain, and one storage buffer
+    // the vertex shader reads. The device holds exactly that.
+    constexpr std::uint32_t kFramesInFlight = 2;
+    constexpr std::uint32_t kListsPerFrame = 1;
+    constexpr std::uint32_t kPushesPerFrame = 1;
+    constexpr std::uint32_t kSwapchains = 1;
+    constexpr std::uint32_t kStorageBuffers = 1;
     detail::row("Backend", {std::string{bfr::name(backend)}});
     auto instance = bfr::Instance::create(
         {.backend = backend,
@@ -173,7 +181,12 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     bfr::Device device;
     std::uint32_t adapter = 0;
     for (; adapter < adapters->size(); ++adapter) {
-        auto opened = instance->createDevice({.adapter = adapter, .window = window});
+        auto opened = instance->createDevice({.adapter = adapter,
+                                              .window = window,
+                                              .maxCommandLists = kFramesInFlight * kListsPerFrame,
+                                              .maxCommandPools = kFramesInFlight,
+                                              .maxSwapchains = kSwapchains,
+                                              .maxBindlessStorageBuffers = kStorageBuffers});
         if (opened) {
             device = std::move(*opened);
             break;
@@ -227,17 +240,12 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     if (!swapchain) {
         return detail::fail("can't create a swapchain", swapchain.error());
     }
-    constexpr int kFramesInFlight = 2;
-    // A frame records one list, so each frame's pool holds one, which sets the
-    // push constants once.
-    constexpr std::uint32_t kListsPerFrame = 1;
-    constexpr std::uint32_t kPushesPerFrame = 1;
     struct Slot {
         bfr::CommandPool pool;
         bfr::Token done;
     };
     std::vector<Slot> slots;
-    for (int slot = 0; slot < kFramesInFlight; ++slot) {
+    for (std::uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
         auto pool = device.createCommandPool(
             {.queue = 0, .listCount = kListsPerFrame, .pushConstantUpdates = kPushesPerFrame});
         if (!pool) {

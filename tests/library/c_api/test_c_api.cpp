@@ -50,6 +50,12 @@ constexpr std::uint32_t kHeight = 48;
 
 // A value no BFR enum has.
 constexpr int kNotAValue = 99;
+// What the tests' devices hold, more than any test uses.
+constexpr std::uint32_t kDeviceLists = 64;
+constexpr std::uint32_t kDevicePools = 16;
+constexpr std::uint32_t kDeviceSwapchains = 4;
+constexpr std::uint32_t kDeviceTableSlots = 256;
+constexpr std::uint32_t kDeviceSamplers = 16;
 
 // The backends this build has.
 std::vector<bfr_backend> backendsInBuild() {
@@ -104,13 +110,13 @@ struct HeadlessDevice {
                                        .window = kHeadless,
                                        .compute_queues = 0,
                                        .copy_queues = 0,
-                                       .max_command_lists = 0,
-                                       .max_command_pools = 0,
-                                       .max_swapchains = 0,
-                                       .max_bindless_textures = 0,
-                                       .max_bindless_storage_textures = 0,
-                                       .max_bindless_storage_buffers = 0,
-                                       .max_bindless_samplers = 0};
+                                       .max_command_lists = kDeviceLists,
+                                       .max_command_pools = kDevicePools,
+                                       .max_swapchains = kDeviceSwapchains,
+                                       .max_bindless_textures = kDeviceTableSlots,
+                                       .max_bindless_storage_textures = kDeviceTableSlots,
+                                       .max_bindless_storage_buffers = kDeviceTableSlots,
+                                       .max_bindless_samplers = kDeviceSamplers};
             const bfr_result result = bfr_create_device(instance, &desc, &device);
             INFO(lastError());
             REQUIRE((result == BFR_RESULT_SUCCESS || result == BFR_RESULT_ERROR_PRESENT_UNSUPPORTED));

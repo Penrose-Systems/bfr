@@ -1040,26 +1040,26 @@ struct DeviceDesc {
     /// Command lists the device holds at once, across all its pools, and the most swapchains its
     /// recording lists render to at once; past it, calls fail with error_limit_reached. Room for
     /// them is made with the device, so recording and submitting never allocate. A bfr_submit of
-    /// more lists than this fails with error_invalid_argument.
-    std::uint32_t maxCommandLists = BFR_DEFAULT_MAX_COMMAND_LISTS;
-    /// Command pools the device holds at once; past it, bfr_create_command_pool fails with
+    /// more lists than this fails with error_invalid_argument. 0 is none.
+    std::uint32_t maxCommandLists{};
+    /// Command pools the device holds at once, 0 for none; past it, bfr_create_command_pool fails
+    /// with error_limit_reached.
+    std::uint32_t maxCommandPools{};
+    /// Swapchains the device holds at once, 0 for none; past it, bfr_create_swapchain fails with
     /// error_limit_reached.
-    std::uint32_t maxCommandPools = BFR_DEFAULT_MAX_COMMAND_POOLS;
-    /// Swapchains the device holds at once; past it, bfr_create_swapchain fails with
-    /// error_limit_reached.
-    std::uint32_t maxSwapchains = BFR_DEFAULT_MAX_SWAPCHAINS;
-    /// Slots in the sampled texture table bfr_pipeline describes. Made with the device. Fails with
-    /// error_limit_reached when the adapter holds fewer; bfr_caps_bindless.max_textures says how
-    /// many.
-    std::uint32_t maxBindlessTextures = BFR_DEFAULT_MAX_BINDLESS_TEXTURES;
+    std::uint32_t maxSwapchains{};
+    /// Slots in the sampled texture table bfr_pipeline describes, 0 for none. Made with the device.
+    /// Fails with error_limit_reached when the adapter holds fewer; bfr_caps_bindless.max_textures
+    /// says how many.
+    std::uint32_t maxBindlessTextures{};
     /// Slots in the storage texture table; fails as max_bindless_textures does, against
     /// max_storage_textures.
-    std::uint32_t maxBindlessStorageTextures = BFR_DEFAULT_MAX_BINDLESS_STORAGE_TEXTURES;
+    std::uint32_t maxBindlessStorageTextures{};
     /// Slots in the storage buffer table; fails as max_bindless_textures does, against
     /// max_storage_buffers.
-    std::uint32_t maxBindlessStorageBuffers = BFR_DEFAULT_MAX_BINDLESS_STORAGE_BUFFERS;
+    std::uint32_t maxBindlessStorageBuffers{};
     /// Slots in the sampler table; fails as max_bindless_textures does, against max_samplers.
-    std::uint32_t maxBindlessSamplers = BFR_DEFAULT_MAX_BINDLESS_SAMPLERS;
+    std::uint32_t maxBindlessSamplers{};
 };
 
 /// How to create a swapchain.

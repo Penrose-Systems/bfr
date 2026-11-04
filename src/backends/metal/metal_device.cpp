@@ -539,7 +539,9 @@ core::Result<CommandListHandle> MetalDevice::beginCommands(CommandPoolHandle com
     // this one. The list pool was made at its maximum, so this never grows.
     // The tables are bound through the slot's argument table for the whole
     // list; the push constants join them as they are set.
-    made.arguments->setAddress(tables().buffer->gpuAddress(), kTablesBufferIndex);
+    if (tables().buffer) {
+        made.arguments->setAddress(tables().buffer->gpuAddress(), kTablesBufferIndex);
+    }
     const CommandListHandle commandList = commandLists_.emplace(MetalCommandList{.buffer = made.buffer.get(),
                                                                                  .pool = commandPool,
                                                                                  .slot = slot,

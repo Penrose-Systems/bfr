@@ -273,17 +273,22 @@ core::Result<D3D12BindlessLayout> createD3D12BindlessLayout(ID3D12Device& device
                              "a shader-visible heap holds at most {}",
                              resourceCount, D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_2);
     }
-    auto resources = createHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                                static_cast<std::uint32_t>(resourceCount));
-    if (!resources) {
-        return std::unexpected(std::move(resources.error()));
+    // Tables of 0 slots are none, so a heap with no descriptors is not made.
+    if (resourceCount != 0) {
+        auto resources = createHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+                                    static_cast<std::uint32_t>(resourceCount));
+        if (!resources) {
+            return std::unexpected(std::move(resources.error()));
+        }
+        layout.resources = std::move(*resources);
     }
-    layout.resources = std::move(*resources);
-    auto samplers = createHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, desc.maxBindlessSamplers);
-    if (!samplers) {
-        return std::unexpected(std::move(samplers.error()));
+    if (desc.maxBindlessSamplers != 0) {
+        auto samplers = createHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, desc.maxBindlessSamplers);
+        if (!samplers) {
+            return std::unexpected(std::move(samplers.error()));
+        }
+        layout.samplers = std::move(*samplers);
     }
-    layout.samplers = std::move(*samplers);
     return layout;
 }
 

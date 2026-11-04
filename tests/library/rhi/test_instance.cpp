@@ -73,7 +73,7 @@ TEST_CASE("Instance fails to create a device on an adapter it does not list", "[
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto device = (*rhi)->createDevice((*rhi)->adapters().size(), kNoWindow, {});
+    const auto device = (*rhi)->createDevice((*rhi)->adapters().size(), kNoWindow, kTestDevice);
 
     REQUIRE_FALSE(device.has_value());
     CHECK(device.error().code == bfr::core::ErrorCode::RhiAdapterOutOfRange);
@@ -89,7 +89,7 @@ TEST_CASE("Instance creates a device on every adapter it lists", "[rhi][agnostic
     REQUIRE_FALSE((*rhi)->adapters().empty());
 
     for (std::size_t adapter = 0; adapter < (*rhi)->adapters().size(); ++adapter) {
-        const auto device = (*rhi)->createDevice(adapter, kNoWindow, {});
+        const auto device = (*rhi)->createDevice(adapter, kNoWindow, kTestDevice);
         INFO((*rhi)->adapters()[adapter].name << ' ' << failureOf(device));
         REQUIRE(device.has_value());
         CHECK(*device != nullptr);

@@ -244,6 +244,15 @@ core::Result<MetalBindlessTables> createMetalBindlessTables(MTL::Device& device,
     const std::uint32_t storageBuffers = storageTextures + desc.maxBindlessStorageTextures;
     const std::uint32_t samplers = storageBuffers + desc.maxBindlessStorageBuffers;
     const std::uint64_t entries = std::uint64_t{samplers} + desc.maxBindlessSamplers;
+    // Tables of 0 slots are none, so an argument buffer with no entries is
+    // not made.
+    if (entries == 0) {
+        return MetalBindlessTables{.buffer = {},
+                                   .storageTextures = storageTextures,
+                                   .storageBuffers = storageBuffers,
+                                   .samplers = samplers,
+                                   .resident = {}};
+    }
     // Shared, so the CPU writes entries as views are made.
     MTL::Buffer* buffer = device.newBuffer(entries * kTableEntryBytes, MTL::ResourceStorageModeShared);
     if (buffer == nullptr) {

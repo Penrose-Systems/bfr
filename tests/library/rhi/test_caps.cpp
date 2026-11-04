@@ -178,7 +178,7 @@ TEST_CASE("Device reports its memory budget heap by heap", "[rhi][caps][agnostic
     for (std::size_t adapter = 0; adapter < (*rhi)->adapters().size(); ++adapter) {
         const Adapter& listed = (*rhi)->adapters()[adapter];
         INFO(listed.name);
-        const auto device = (*rhi)->createDevice(adapter, kNoWindow, {});
+        const auto device = (*rhi)->createDevice(adapter, kNoWindow, kTestDevice);
         INFO(failureOf(device));
         REQUIRE(device.has_value());
 

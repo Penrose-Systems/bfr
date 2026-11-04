@@ -2,6 +2,7 @@
 // through the interface alone. Each case runs on every backend the build has.
 
 #include "bfr/core/error.h"
+#include "bfr/core/handle.h"
 #include "bfr/core/window.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
@@ -289,7 +290,8 @@ TEST_CASE("Device runs a compute queue beside graphics when the adapter has one"
         Instance& rhi = **created;
         const std::size_t adapter = headlessAdapter(rhi);
         const std::uint32_t computeQueues = std::min<std::uint32_t>(rhi.adapters()[adapter].caps.queues.compute, 1);
-        auto opened = rhi.createDevice(adapter, kHeadless, {.compute = computeQueues});
+        auto opened = rhi.createDevice(adapter, kHeadless,
+                                       testDeviceWith([&](DeviceDesc& desc) { desc.compute = computeQueues; }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
         Device& device = **opened;
@@ -345,7 +347,7 @@ TEST_CASE("Device refuses a submit that names one list twice, and the list is st
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
         Instance& rhi = **created;
-        auto opened = rhi.createDevice(headlessAdapter(rhi), kHeadless, {});
+        auto opened = rhi.createDevice(headlessAdapter(rhi), kHeadless, kTestDevice);
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
         Device& device = **opened;
@@ -373,7 +375,7 @@ TEST_CASE("Device spends the lists of a submit the queue refuses, and goes on", 
     {
         auto created = null::NullInstance::create(recordingInto(Backend{}, messages), kValidation);
         REQUIRE(created.has_value());
-        null::NullDevice device{**created, {}};
+        null::NullDevice device{**created, kTestDevice};
         const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(pool.has_value());
         const auto before = device.beginCommands(*pool);
@@ -417,8 +419,10 @@ TEST_CASE("Device frees a pool destroyed while the GPU runs its lists once the G
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
         Instance& rhi = **created;
-        auto opened = rhi.createDevice(headlessAdapter(rhi), kHeadless,
-                                       {.maxCommandLists = kPoolLists, .maxCommandPools = 1});
+        auto opened = rhi.createDevice(headlessAdapter(rhi), kHeadless, testDeviceWith([](DeviceDesc& desc) {
+                                           desc.maxCommandLists = kPoolLists;
+                                           desc.maxCommandPools = 1;
+                                       }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
         Device& device = **opened;
@@ -456,8 +460,10 @@ TEST_CASE("Device serves pools made, submitted, waited on and destroyed from sev
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
         Instance& rhi = **created;
-        auto opened = rhi.createDevice(headlessAdapter(rhi), kHeadless,
-                                       {.maxCommandLists = kThreads * kPoolLists, .maxCommandPools = kThreads});
+        auto opened = rhi.createDevice(headlessAdapter(rhi), kHeadless, testDeviceWith([](DeviceDesc& desc) {
+                                           desc.maxCommandLists = kThreads * kPoolLists;
+                                           desc.maxCommandPools = kThreads;
+                                       }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
         Device& device = **opened;
@@ -516,6 +522,32 @@ TEST_CASE("Device serves pools made, submitted, waited on and destroyed from sev
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("Device opened for nothing holds nothing, and says so when asked for something", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        auto created = createInstance(recordingInto(backend, messages), kValidation);
+        REQUIRE(created.has_value());
+        Instance& rhi = **created;
+        auto opened = rhi.createDevice(headlessAdapter(rhi), kHeadless, DeviceDesc{});
+        INFO(failureOf(opened));
+        REQUIRE(opened.has_value());
+        Device& device = **opened;
+        CHECK(device.createCommandPool({.queue = 0, .listCount = 0}).error().code ==
+              bfr::core::ErrorCode::RhiLimitReached);
+        CHECK(device.createSwapchain(kHeadless, swapchainDesc(rhi)).error().code ==
+              bfr::core::ErrorCode::RhiLimitReached);
+        constexpr std::uint64_t kBytes = 256;
+        CHECK(device.createBuffer({.size = kBytes, .usage = {.storage = true}}).error().code ==
+              bfr::core::ErrorCode::RhiLimitReached);
+        const auto plain = device.createBuffer({.size = kBytes, .usage = {.copyDst = true}});
+        INFO(failureOf(plain));
+        REQUIRE(plain.has_value());
+        CHECK(device.destroyBuffer(*plain).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("Device holds the lists, pools and swapchains it was opened for, and no more", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
@@ -525,10 +557,17 @@ TEST_CASE("Device holds the lists, pools and swapchains it was opened for, and n
         Instance& rhi = **created;
         const std::size_t adapter = headlessAdapter(rhi);
         constexpr std::uint32_t kLists = 2;
-        CHECK(rhi.createDevice(adapter, kHeadless, {.maxCommandLists = 0}).error().code ==
-              bfr::core::ErrorCode::RhiInvalidCall);
-        auto opened = rhi.createDevice(adapter, kHeadless,
-                                       {.maxCommandLists = kLists, .maxCommandPools = 1, .maxSwapchains = 1});
+        // A maximum a handle cannot name is refused; 0 is none.
+        CHECK(rhi.createDevice(adapter, kHeadless, testDeviceWith([](DeviceDesc& desc) {
+                                   desc.maxCommandLists = bfr::core::Handle<void>::kMaxIndices + 1;
+                               }))
+                  .error()
+                  .code == bfr::core::ErrorCode::RhiInvalidCall);
+        auto opened = rhi.createDevice(adapter, kHeadless, testDeviceWith([](DeviceDesc& desc) {
+                                           desc.maxCommandLists = kLists;
+                                           desc.maxCommandPools = 1;
+                                           desc.maxSwapchains = 1;
+                                       }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
         Device& device = **opened;

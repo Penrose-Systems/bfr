@@ -34,6 +34,31 @@ inline constexpr std::uint32_t kPoolLists = 8;
 
 inline const RhiConfig kValidation{.validation = true};
 
+// What the tests' devices hold, more than any test uses; a test of one of
+// these maximums sets its own with testDeviceWith.
+inline constexpr std::uint32_t kTestLists = 64;
+inline constexpr std::uint32_t kTestPools = 16;
+inline constexpr std::uint32_t kTestSwapchains = 4;
+inline constexpr std::uint32_t kTestTableSlots = 256;
+inline constexpr std::uint32_t kTestSamplers = 16;
+inline constexpr DeviceDesc kTestDevice{.compute = 0,
+                                        .copy = 0,
+                                        .maxCommandLists = kTestLists,
+                                        .maxCommandPools = kTestPools,
+                                        .maxSwapchains = kTestSwapchains,
+                                        .maxBindlessTextures = kTestTableSlots,
+                                        .maxBindlessStorageTextures = kTestTableSlots,
+                                        .maxBindlessStorageBuffers = kTestTableSlots,
+                                        .maxBindlessSamplers = kTestSamplers};
+
+/// kTestDevice with change made to it.
+template <class Change>
+DeviceDesc testDeviceWith(Change change) {
+    DeviceDesc desc = kTestDevice;
+    change(desc);
+    return desc;
+}
+
 /// For a device that presents to no window yet.
 inline const core::window::NativeWindow kNoWindow{};
 
@@ -138,7 +163,7 @@ inline SwapchainDesc swapchainDesc(const Instance& rhi) {
 /// present to it at all: NVIDIA's driver has no headless surfaces.
 inline std::unique_ptr<Device> presentingDevice(Instance& rhi, const core::window::NativeWindow& window) {
     for (std::size_t adapter = 0; adapter < rhi.adapters().size(); ++adapter) {
-        auto device = rhi.createDevice(adapter, window, {});
+        auto device = rhi.createDevice(adapter, window, kTestDevice);
         if (device.has_value()) {
             return std::move(*device);
         }

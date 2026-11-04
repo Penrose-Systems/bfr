@@ -53,7 +53,7 @@ struct DrawDevice {
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         instance = std::move(*created);
-        auto made = instance->createDevice(0, kNoWindow, {});
+        auto made = instance->createDevice(0, kNoWindow, kTestDevice);
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         device = std::move(*made);
@@ -148,7 +148,6 @@ TEST_CASE("Device gives a storage buffer and a sampled or storage texture a slot
     {
         const DrawDevice made{recordingInto(backend, messages)};
         Device& device = *made.device;
-        const DeviceDesc defaults{};
         constexpr std::uint64_t kBytes = 256;
         const BufferHandle first = created(device, {.size = kBytes, .usage = {.storage = true}});
         const BufferHandle second = created(device, {.size = kBytes, .usage = {.storage = true}});
@@ -158,8 +157,8 @@ TEST_CASE("Device gives a storage buffer and a sampled or storage texture a slot
         REQUIRE(firstSlot.has_value());
         REQUIRE(secondSlot.has_value());
         CHECK(*firstSlot != *secondSlot);
-        CHECK(*firstSlot < defaults.maxBindlessStorageBuffers);
-        CHECK(*secondSlot < defaults.maxBindlessStorageBuffers);
+        CHECK(*firstSlot < kTestDevice.maxBindlessStorageBuffers);
+        CHECK(*secondSlot < kTestDevice.maxBindlessStorageBuffers);
         CHECK(device.bufferSlot(plain).error().code == ErrorCode::RhiInvalidCall);
 
         const TextureDesc square{.dimension = TextureDimension::D2,
@@ -177,8 +176,8 @@ TEST_CASE("Device gives a storage buffer and a sampled or storage texture a slot
         const TextureHandle neither = created(device, copied);
         const auto bothSlots = device.textureSlots(both);
         REQUIRE(bothSlots.has_value());
-        CHECK(bothSlots->sampled < defaults.maxBindlessTextures);
-        CHECK(bothSlots->storage < defaults.maxBindlessStorageTextures);
+        CHECK(bothSlots->sampled < kTestDevice.maxBindlessTextures);
+        CHECK(bothSlots->storage < kTestDevice.maxBindlessStorageTextures);
         const auto neitherSlots = device.textureSlots(neither);
         REQUIRE(neitherSlots.has_value());
         CHECK(neitherSlots->sampled == 0);
@@ -218,7 +217,7 @@ TEST_CASE("Device gives a depth-stencil texture that shaders sample a slot, and 
                                                      .usage = {.sampled = true, .depthStencil = true}});
         const auto slots = device.textureSlots(depth);
         REQUIRE(slots.has_value());
-        CHECK(slots->sampled < DeviceDesc{}.maxBindlessTextures);
+        CHECK(slots->sampled < kTestDevice.maxBindlessTextures);
 
         const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(pool.has_value());

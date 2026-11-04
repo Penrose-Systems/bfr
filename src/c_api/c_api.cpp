@@ -1133,22 +1133,17 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
         // 0 asks for the default, which bfr.h names.
-        const auto orDefault = [](std::uint32_t value, std::uint32_t fallback) {
-            return value == 0 ? fallback : value;
-        };
-        auto created = instance->instance->createDevice(
-            desc->adapter, *window,
-            {.compute = desc->compute_queues,
-             .copy = desc->copy_queues,
-             .maxCommandLists = orDefault(desc->max_command_lists, BFR_DEFAULT_MAX_COMMAND_LISTS),
-             .maxCommandPools = orDefault(desc->max_command_pools, BFR_DEFAULT_MAX_COMMAND_POOLS),
-             .maxSwapchains = orDefault(desc->max_swapchains, BFR_DEFAULT_MAX_SWAPCHAINS),
-             .maxBindlessTextures = orDefault(desc->max_bindless_textures, BFR_DEFAULT_MAX_BINDLESS_TEXTURES),
-             .maxBindlessStorageTextures = orDefault(desc->max_bindless_storage_textures,
-                                                     BFR_DEFAULT_MAX_BINDLESS_STORAGE_TEXTURES),
-             .maxBindlessStorageBuffers = orDefault(desc->max_bindless_storage_buffers,
-                                                    BFR_DEFAULT_MAX_BINDLESS_STORAGE_BUFFERS),
-             .maxBindlessSamplers = orDefault(desc->max_bindless_samplers, BFR_DEFAULT_MAX_BINDLESS_SAMPLERS)});
+        auto created =
+            instance->instance->createDevice(desc->adapter, *window,
+                                             {.compute = desc->compute_queues,
+                                              .copy = desc->copy_queues,
+                                              .maxCommandLists = desc->max_command_lists,
+                                              .maxCommandPools = desc->max_command_pools,
+                                              .maxSwapchains = desc->max_swapchains,
+                                              .maxBindlessTextures = desc->max_bindless_textures,
+                                              .maxBindlessStorageTextures = desc->max_bindless_storage_textures,
+                                              .maxBindlessStorageBuffers = desc->max_bindless_storage_buffers,
+                                              .maxBindlessSamplers = desc->max_bindless_samplers});
         if (!created) {
             return fail(created.error());
         }

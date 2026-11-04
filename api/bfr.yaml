@@ -32,13 +32,6 @@
 version: {major: 0, minor: 1, patch: 0}
 
 constants:
-  default_max_command_lists: {value: 8192, doc: What bfr_device_desc.max_command_lists of 0 means.}
-  default_max_command_pools: {value: 512, doc: What bfr_device_desc.max_command_pools of 0 means.}
-  default_max_swapchains: {value: 512, doc: What bfr_device_desc.max_swapchains of 0 means.}
-  default_max_bindless_textures: {value: 65536, doc: What bfr_device_desc.max_bindless_textures of 0 means.}
-  default_max_bindless_storage_textures: {value: 16384, doc: What bfr_device_desc.max_bindless_storage_textures of 0 means.}
-  default_max_bindless_storage_buffers: {value: 65536, doc: What bfr_device_desc.max_bindless_storage_buffers of 0 means.}
-  default_max_bindless_samplers: {value: 2048, doc: What bfr_device_desc.max_bindless_samplers of 0 means.}
   max_color_targets: {value: 8, doc: The most color targets a graphics pipeline renders to.}
   push_constants_size: {value: 128, doc: Bytes of push constants every pipeline's shaders read; the layout bfr_pipeline states.}
   mask_all: {value: 4294967295, doc: What a mask member of 0 means; every bit of the mask set.}
@@ -580,37 +573,30 @@ structs:
         doc: Copy queues to open; 0 is none. Fails with error_unsupported when the adapter has fewer.
       - name: max_command_lists
         type: u32
-        default: default_max_command_lists
         doc: >-
           Command lists the device holds at once, across all its pools, and the most swapchains
           its recording lists render to at once; past it, calls fail with error_limit_reached. Room
           for them is made with the device, so recording and submitting never allocate. A
-          bfr_submit of more lists than this fails with error_invalid_argument.
+          bfr_submit of more lists than this fails with error_invalid_argument. 0 is none.
       - name: max_command_pools
         type: u32
-        default: default_max_command_pools
-        doc: Command pools the device holds at once; past it, bfr_create_command_pool fails with error_limit_reached.
+        doc: Command pools the device holds at once, 0 for none; past it, bfr_create_command_pool fails with error_limit_reached.
       - name: max_swapchains
         type: u32
-        default: default_max_swapchains
-        doc: Swapchains the device holds at once; past it, bfr_create_swapchain fails with error_limit_reached.
+        doc: Swapchains the device holds at once, 0 for none; past it, bfr_create_swapchain fails with error_limit_reached.
       - name: max_bindless_textures
         type: u32
-        default: default_max_bindless_textures
         doc: >-
-          Slots in the sampled texture table bfr_pipeline describes. Made with the device. Fails with
+          Slots in the sampled texture table bfr_pipeline describes, 0 for none. Made with the device. Fails with
           error_limit_reached when the adapter holds fewer; bfr_caps_bindless.max_textures says how many.
       - name: max_bindless_storage_textures
         type: u32
-        default: default_max_bindless_storage_textures
         doc: Slots in the storage texture table; fails as max_bindless_textures does, against max_storage_textures.
       - name: max_bindless_storage_buffers
         type: u32
-        default: default_max_bindless_storage_buffers
         doc: Slots in the storage buffer table; fails as max_bindless_textures does, against max_storage_buffers.
       - name: max_bindless_samplers
         type: u32
-        default: default_max_bindless_samplers
         doc: Slots in the sampler table; fails as max_bindless_textures does, against max_samplers.
 
   swapchain_desc:

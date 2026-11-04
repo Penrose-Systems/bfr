@@ -33,27 +33,6 @@ typedef uint32_t bfr_bool;
 #define BFR_FALSE 0u
 #define BFR_TRUE 1u
 
-// What bfr_device_desc.max_command_lists of 0 means.
-#define BFR_DEFAULT_MAX_COMMAND_LISTS 8192u
-
-// What bfr_device_desc.max_command_pools of 0 means.
-#define BFR_DEFAULT_MAX_COMMAND_POOLS 512u
-
-// What bfr_device_desc.max_swapchains of 0 means.
-#define BFR_DEFAULT_MAX_SWAPCHAINS 512u
-
-// What bfr_device_desc.max_bindless_textures of 0 means.
-#define BFR_DEFAULT_MAX_BINDLESS_TEXTURES 65536u
-
-// What bfr_device_desc.max_bindless_storage_textures of 0 means.
-#define BFR_DEFAULT_MAX_BINDLESS_STORAGE_TEXTURES 16384u
-
-// What bfr_device_desc.max_bindless_storage_buffers of 0 means.
-#define BFR_DEFAULT_MAX_BINDLESS_STORAGE_BUFFERS 65536u
-
-// What bfr_device_desc.max_bindless_samplers of 0 means.
-#define BFR_DEFAULT_MAX_BINDLESS_SAMPLERS 2048u
-
 // The most color targets a graphics pipeline renders to.
 #define BFR_MAX_COLOR_TARGETS 8u
 
@@ -730,26 +709,25 @@ typedef struct bfr_device_desc {
     // Command lists the device holds at once, across all its pools, and the most swapchains its
     // recording lists render to at once; past it, calls fail with error_limit_reached. Room for
     // them is made with the device, so recording and submitting never allocate. A bfr_submit of
-    // more lists than this fails with error_invalid_argument. 0 is BFR_DEFAULT_MAX_COMMAND_LISTS.
+    // more lists than this fails with error_invalid_argument. 0 is none.
     uint32_t max_command_lists;
-    // Command pools the device holds at once; past it, bfr_create_command_pool fails with
-    // error_limit_reached. 0 is BFR_DEFAULT_MAX_COMMAND_POOLS.
+    // Command pools the device holds at once, 0 for none; past it, bfr_create_command_pool fails
+    // with error_limit_reached.
     uint32_t max_command_pools;
-    // Swapchains the device holds at once; past it, bfr_create_swapchain fails with
-    // error_limit_reached. 0 is BFR_DEFAULT_MAX_SWAPCHAINS.
+    // Swapchains the device holds at once, 0 for none; past it, bfr_create_swapchain fails with
+    // error_limit_reached.
     uint32_t max_swapchains;
-    // Slots in the sampled texture table bfr_pipeline describes. Made with the device. Fails with
-    // error_limit_reached when the adapter holds fewer; bfr_caps_bindless.max_textures says how
-    // many. 0 is BFR_DEFAULT_MAX_BINDLESS_TEXTURES.
+    // Slots in the sampled texture table bfr_pipeline describes, 0 for none. Made with the device.
+    // Fails with error_limit_reached when the adapter holds fewer; bfr_caps_bindless.max_textures
+    // says how many.
     uint32_t max_bindless_textures;
     // Slots in the storage texture table; fails as max_bindless_textures does, against
-    // max_storage_textures. 0 is BFR_DEFAULT_MAX_BINDLESS_STORAGE_TEXTURES.
+    // max_storage_textures.
     uint32_t max_bindless_storage_textures;
     // Slots in the storage buffer table; fails as max_bindless_textures does, against
-    // max_storage_buffers. 0 is BFR_DEFAULT_MAX_BINDLESS_STORAGE_BUFFERS.
+    // max_storage_buffers.
     uint32_t max_bindless_storage_buffers;
-    // Slots in the sampler table; fails as max_bindless_textures does, against max_samplers. 0 is
-    // BFR_DEFAULT_MAX_BINDLESS_SAMPLERS.
+    // Slots in the sampler table; fails as max_bindless_textures does, against max_samplers.
     uint32_t max_bindless_samplers;
 } bfr_device_desc;
 

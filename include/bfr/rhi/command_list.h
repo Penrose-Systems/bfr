@@ -38,19 +38,19 @@ enum class QueueType : std::uint8_t {
 /// every list, pool, swapchain and slot is made with the device, so nothing on
 /// the frame path allocates; past a maximum, calls fail with RhiLimitReached,
 /// except a submit of more than maxCommandLists lists, which fails with
-/// RhiInvalidCall. A table larger than the adapter holds fails the device
-/// with RhiLimitReached; BindlessLimits says what it holds. The maximums start
-/// at bfr.h's defaults, which api/bfr.yaml owns.
+/// RhiInvalidCall. Every maximum is the caller's to set, since only the caller
+/// knows what it uses; 0 is none. A table larger than the adapter holds fails
+/// the device with RhiLimitReached; BindlessLimits says what it holds.
 struct DeviceDesc {
     std::uint32_t compute = 0;
     std::uint32_t copy = 0;
-    std::uint32_t maxCommandLists = BFR_DEFAULT_MAX_COMMAND_LISTS;
-    std::uint32_t maxCommandPools = BFR_DEFAULT_MAX_COMMAND_POOLS;
-    std::uint32_t maxSwapchains = BFR_DEFAULT_MAX_SWAPCHAINS;
-    std::uint32_t maxBindlessTextures = BFR_DEFAULT_MAX_BINDLESS_TEXTURES;
-    std::uint32_t maxBindlessStorageTextures = BFR_DEFAULT_MAX_BINDLESS_STORAGE_TEXTURES;
-    std::uint32_t maxBindlessStorageBuffers = BFR_DEFAULT_MAX_BINDLESS_STORAGE_BUFFERS;
-    std::uint32_t maxBindlessSamplers = BFR_DEFAULT_MAX_BINDLESS_SAMPLERS;
+    std::uint32_t maxCommandLists = 0;
+    std::uint32_t maxCommandPools = 0;
+    std::uint32_t maxSwapchains = 0;
+    std::uint32_t maxBindlessTextures = 0;
+    std::uint32_t maxBindlessStorageTextures = 0;
+    std::uint32_t maxBindlessStorageBuffers = 0;
+    std::uint32_t maxBindlessSamplers = 0;
 };
 
 /// How to create a command pool: the queue its lists record for, how many

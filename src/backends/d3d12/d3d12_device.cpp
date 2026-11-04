@@ -494,17 +494,31 @@ core::Result<CommandListHandle> D3D12Device::beginCommands(CommandPoolHandle com
     // kind of pipeline the queue runs.
     const D3D12_COMMAND_LIST_TYPE type = queues_[(*pool)->queue]->listType;
     if (type != D3D12_COMMAND_LIST_TYPE_COPY) {
-        const std::array<ID3D12DescriptorHeap*, 2> heaps{layout_.resources.Get(), layout_.samplers.Get()};
-        made.list->SetDescriptorHeaps(static_cast<UINT>(heaps.size()), heaps.data());
-        const D3D12_GPU_DESCRIPTOR_HANDLE resources = layout_.resources->GetGPUDescriptorHandleForHeapStart();
-        const D3D12_GPU_DESCRIPTOR_HANDLE samplers = layout_.samplers->GetGPUDescriptorHandleForHeapStart();
-        made.list->SetComputeRootSignature(layout_.rootSignature.Get());
-        made.list->SetComputeRootDescriptorTable(kResourceTableParameter, resources);
-        made.list->SetComputeRootDescriptorTable(kSamplerTableParameter, samplers);
+        // A device with no tables of a kind has no heap of it, and binds none.
+        std::array<ID3D12DescriptorHeap*, 2> heaps{};
+        UINT heapCount = 0;
+        for (ID3D12DescriptorHeap* heap : {layout_.resources.Get(), layout_.samplers.Get()}) {
+            if (heap != nullptr) {
+                heaps.at(heapCount++) = heap;
+            }
+        }
+        made.list->SetDescriptorHeaps(heapCount, heaps.data());
+        const auto bindTables = [&](auto setRootSignature, auto setTable) {
+            (made.list.Get()->*setRootSignature)(layout_.rootSignature.Get());
+            if (layout_.resources) {
+                (made.list.Get()->*setTable)(kResourceTableParameter,
+                                             layout_.resources->GetGPUDescriptorHandleForHeapStart());
+            }
+            if (layout_.samplers) {
+                (made.list.Get()->*setTable)(kSamplerTableParameter,
+                                             layout_.samplers->GetGPUDescriptorHandleForHeapStart());
+            }
+        };
+        bindTables(&ID3D12GraphicsCommandList::SetComputeRootSignature,
+                   &ID3D12GraphicsCommandList::SetComputeRootDescriptorTable);
         if (type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
-            made.list->SetGraphicsRootSignature(layout_.rootSignature.Get());
-            made.list->SetGraphicsRootDescriptorTable(kResourceTableParameter, resources);
-            made.list->SetGraphicsRootDescriptorTable(kSamplerTableParameter, samplers);
+            bindTables(&ID3D12GraphicsCommandList::SetGraphicsRootSignature,
+                       &ID3D12GraphicsCommandList::SetGraphicsRootDescriptorTable);
         }
     }
     // A new handle for each recording, so last frame's handle never names

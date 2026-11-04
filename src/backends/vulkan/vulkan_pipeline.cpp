@@ -283,6 +283,7 @@ core::Result<VulkanBindlessLayout> VulkanBindlessLayout::create(const VolkDevice
     std::array<VkDescriptorSetLayoutBinding, kBindingCount> bindings{};
     std::array<VkDescriptorBindingFlags, kBindingCount> flags{};
     std::array<VkDescriptorPoolSize, kBindingCount> sizes{};
+    std::uint32_t sizeCount = 0;
     for (std::size_t i = 0; i < kBindingCount; ++i) {
         bindings.at(i) = {.binding = tables.at(i).binding,
                           .descriptorType = tables.at(i).type,
@@ -290,7 +291,10 @@ core::Result<VulkanBindlessLayout> VulkanBindlessLayout::create(const VolkDevice
                           .stageFlags = VK_SHADER_STAGE_ALL,
                           .pImmutableSamplers = nullptr};
         flags.at(i) = kTableFlags;
-        sizes.at(i) = {.type = tables.at(i).type, .descriptorCount = tables.at(i).count};
+        // A table of 0 slots is none: the pool makes room for no descriptor of it.
+        if (tables.at(i).count != 0) {
+            sizes.at(sizeCount++) = {.type = tables.at(i).type, .descriptorCount = tables.at(i).count};
+        }
     }
     VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlags{};
     bindingFlags.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
@@ -328,7 +332,7 @@ core::Result<VulkanBindlessLayout> VulkanBindlessLayout::create(const VolkDevice
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     poolInfo.maxSets = 1;
-    poolInfo.poolSizeCount = kBindingCount;
+    poolInfo.poolSizeCount = sizeCount;
     poolInfo.pPoolSizes = sizes.data();
     if (const VkResult result = table.vkCreateDescriptorPool(device, &poolInfo, nullptr, &made.pool_);
         result != VK_SUCCESS) {

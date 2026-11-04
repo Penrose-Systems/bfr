@@ -12,9 +12,9 @@
 
 namespace bfr::rhi {
 
-/// Fails with RhiInvalidCall when a maximum in desc is 0 or more than a handle
-/// can name, so a device holds exactly what it was asked for. Each backend's
-/// createDevice calls it first.
+/// Fails with RhiInvalidCall when a maximum in desc is more than a handle can
+/// name, so a device holds exactly what it was asked for; 0 is none. Each
+/// backend's createDevice calls it first.
 [[nodiscard]] inline core::Result<void> checkLimits(const DeviceDesc& desc) {
     constexpr std::uint32_t kMost = core::Handle<void>::kMaxIndices;
     for (const auto& [name, value] :
@@ -23,8 +23,8 @@ namespace bfr::rhi {
           std::pair{"maxBindlessStorageTextures", desc.maxBindlessStorageTextures},
           std::pair{"maxBindlessStorageBuffers", desc.maxBindlessStorageBuffers},
           std::pair{"maxBindlessSamplers", desc.maxBindlessSamplers}}) {
-        if (value == 0 || value > kMost) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "{} is {}; it must be 1 to {}", name, value, kMost);
+        if (value > kMost) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "{} is {}; it is at most {}", name, value, kMost);
         }
     }
     return {};

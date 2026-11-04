@@ -31,6 +31,24 @@ constexpr std::uint32_t kHeight = 48;
 // Lists the test command pool holds, more than a frame records.
 constexpr std::uint32_t kPoolLists = 4;
 constexpr bfr::Window kHeadless{.system = bfr::WindowSystem::Headless};
+// What the tests' devices hold, more than any test uses.
+constexpr std::uint32_t kDeviceLists = 64;
+constexpr std::uint32_t kDevicePools = 16;
+constexpr std::uint32_t kDeviceSwapchains = 4;
+constexpr std::uint32_t kDeviceTableSlots = 256;
+constexpr std::uint32_t kDeviceSamplers = 16;
+
+bfr::DeviceDesc testDevice(std::uint32_t adapter) {
+    return {.adapter = adapter,
+            .window = kHeadless,
+            .maxCommandLists = kDeviceLists,
+            .maxCommandPools = kDevicePools,
+            .maxSwapchains = kDeviceSwapchains,
+            .maxBindlessTextures = kDeviceTableSlots,
+            .maxBindlessStorageTextures = kDeviceTableSlots,
+            .maxBindlessStorageBuffers = kDeviceTableSlots,
+            .maxBindlessSamplers = kDeviceSamplers};
+}
 
 // Records every message an instance reports, from whichever thread reports it.
 // It outlives the instance and devices it records for.
@@ -107,7 +125,7 @@ bfr::Device headlessDevice(const bfr::Instance& instance) {
     const auto adapters = instance.adapters();
     REQUIRE(adapters.has_value());
     for (std::uint32_t adapter = 0; adapter < adapters->size(); ++adapter) {
-        auto device = instance.createDevice({.adapter = adapter, .window = kHeadless});
+        auto device = instance.createDevice(testDevice(adapter));
         if (device.has_value()) {
             return std::move(*device);
         }
@@ -555,7 +573,7 @@ TEST_CASE("C++ API gives a device's memory budget or says the driver can't", "[c
         const auto adapter = headlessAdapter(instance);
         const auto caps = instance.caps(adapter);
         REQUIRE(caps.has_value());
-        auto device = instance.createDevice({.adapter = adapter, .window = kHeadless});
+        auto device = instance.createDevice(testDevice(adapter));
         INFO(failureOf(device));
         REQUIRE(device.has_value());
 
