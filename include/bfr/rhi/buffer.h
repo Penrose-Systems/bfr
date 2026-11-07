@@ -27,7 +27,8 @@ struct BufferUsage {
     bool copyDst = false;
     /// Shaders read it as constants.
     bool uniform = false;
-    /// Shaders read and write it.
+    /// Shaders read and write it. D3D12 views it in 32-bit values, so there
+    /// its size must be a multiple of 4.
     bool storage = false;
     /// Indexed draws read it.
     bool index = false;

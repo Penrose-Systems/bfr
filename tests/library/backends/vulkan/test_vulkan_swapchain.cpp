@@ -4,6 +4,7 @@
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
@@ -21,7 +22,7 @@
 
 #include <cstdint>
 #include <memory>
-#include <sstream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -37,19 +38,6 @@ constexpr std::uint32_t kHeight = 48;
 
 // A headless window: the swapchain decides its size.
 const bfr::core::window::NativeWindow kHeadless = bfr::core::window::Headless{};
-
-// A description on the Vulkan backend that records errors in errors and
-// writes every message from info up to log, one a line.
-InstanceDesc errorsAndLogInto(std::vector<std::string>& errors, std::ostringstream& log) {
-    return {.backend = Backend::Vulkan,
-            .logger = {[&errors, &log](bfr::core::Severity severity, std::string_view message) {
-                           if (severity == bfr::core::Severity::Error) {
-                               errors.emplace_back(message);
-                           }
-                           log << message << '\n';
-                       },
-                       bfr::core::Severity::Info}};
-}
 
 // An Instance made with desc, whose recording outlives it, and a device that
 // presents to a headless window.
@@ -80,7 +68,7 @@ TEST_CASE("Vulkan device fails with RhiWindowFailed when the API refuses a swapc
     REQUIRE(device.has_value());
 
     // The desc is never used: making the swapchain fails first.
-    const auto swapchain = (*device)->createSwapchain(kHeadless, SwapchainDesc{});
+    const auto swapchain = (*device)->createSwapchain(kHeadless, kTestSwapchain);
 
     REQUIRE_FALSE(swapchain.has_value());
     CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiWindowFailed);
@@ -100,7 +88,7 @@ TEST_CASE("Vulkan device fails with RhiPresentUnsupported when it can't present 
     REQUIRE(device.has_value());
 
     // The desc is never used: making the swapchain fails first.
-    const auto swapchain = (*device)->createSwapchain(kHeadless, SwapchainDesc{});
+    const auto swapchain = (*device)->createSwapchain(kHeadless, kTestSwapchain);
 
     REQUIRE_FALSE(swapchain.has_value());
     CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
@@ -145,7 +133,7 @@ TEST_CASE("Vulkan device reports a failed present query as the failure it is", "
         REQUIRE(device.has_value());
 
         // The desc is never used: making the swapchain fails first.
-        const auto swapchain = (*device)->createSwapchain(kHeadless, SwapchainDesc{});
+        const auto swapchain = (*device)->createSwapchain(kHeadless, kTestSwapchain);
 
         REQUIRE_FALSE(swapchain.has_value());
         CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiWindowFailed);
@@ -205,31 +193,83 @@ TEST_CASE("Vulkan device builds a swapchain once a call the API refused succeeds
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Vulkan device presents from a queue family of its own when no graphics family presents", "[vulkan][gpu]") {
+TEST_CASE("Vulkan fails with RhiPresentUnsupported when only a family it opens no queue on presents", "[vulkan][gpu]") {
     // lavapipe also lists family 1, which does nothing but present, and is the
-    // only family that presents.
+    // only family that presents. No kind of queue opens on it.
     const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
     const ScopedEnv separate("BFR_ADAPTER_SEPARATE_PRESENT", "1");
     std::vector<std::string> errors;
-    std::ostringstream log;
     {
-        const auto rhi = Instance::create(errorsAndLogInto(errors, log), kValidation);
+        const auto rhi = Instance::create(recordingErrorsInto(errors), kValidation);
         INFO(failureOf(rhi));
         REQUIRE(rhi.has_value());
+
         const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kHeadless, kTestDevice);
-        INFO(failureOf(device));
-        REQUIRE(device.has_value());
-        const auto swapchain = (*device)->createSwapchain(kHeadless, swapchainDesc(**rhi));
-        INFO(failureOf(swapchain));
-        REQUIRE(swapchain.has_value());
 
-        const auto images = (*device)->resizeSwapchain(*swapchain, kWidth, kHeight);
-
-        INFO(failureOf(images));
-        CHECK(images.has_value());
+        REQUIRE_FALSE(device.has_value());
+        CHECK(device.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
     }
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
-    if (bfr::core::kLoggingEnabled) {
-        CHECK_THAT(log.str(), Catch::Matchers::ContainsSubstring(", queue families 0, 1, extensions"));
+}
+
+TEST_CASE("Vulkan device passes acquire's timeout and gives VK_TIMEOUT as RhiTimeout", "[vulkan][gpu]") {
+    constexpr std::uint64_t kNoWait = 0;
+    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
+    std::vector<std::string> errors;
+    {
+        const HeadlessDevice headless{recordingErrorsInto(errors)};
+        Device& device = *headless.device;
+        const auto swapchain = device.createSwapchain(kHeadless, swapchainDesc(*headless.instance));
+        REQUIRE(swapchain.has_value());
+        REQUIRE(device.resizeSwapchain(*swapchain, kWidth, kHeight).has_value());
+        {
+            const ScopedEnv timeout("BFR_ACQUIRE_TIMEOUT", "1");
+            const auto timedOut = device.acquire(*swapchain, kNoWait);
+            REQUIRE_FALSE(timedOut.has_value());
+            CHECK(timedOut.error().code == bfr::core::ErrorCode::RhiTimeout);
+        }
+        // Nothing was acquired, so the next acquire takes an image.
+        CHECK(device.acquire(*swapchain, kTestWait).has_value());
+        CHECK(device.destroySwapchain(*swapchain).has_value());
     }
+    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Vulkan device gives VK_SUBOPTIMAL_KHR from acquire and present as Suboptimal", "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
+    std::vector<std::string> errors;
+    {
+        const HeadlessDevice headless{recordingErrorsInto(errors)};
+        Device& device = *headless.device;
+        const auto swapchain = device.createSwapchain(kHeadless, swapchainDesc(*headless.instance));
+        REQUIRE(swapchain.has_value());
+        REQUIRE(device.resizeSwapchain(*swapchain, kWidth, kHeight).has_value());
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = 2});
+        REQUIRE(pool.has_value());
+        // One frame: acquire, clear the image, submit, present.
+        const auto frame = [&]() -> std::pair<SwapchainStatus, SwapchainStatus> {
+            const auto acquired = device.acquire(*swapchain, kTestWait);
+            REQUIRE(acquired.has_value());
+            const auto list = device.beginCommands(*pool);
+            REQUIRE(list.has_value());
+            RenderingDesc clear{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+            clear.colorAttachments[0] = {.texture = {}, .loadOp = LoadOp::Clear, .storeOp = StoreOp::Store};
+            REQUIRE(device.beginRendering(*list, *swapchain, clear).has_value());
+            REQUIRE(device.endRendering(*list).has_value());
+            const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+            REQUIRE(sent.has_value());
+            const auto presented = device.present(*swapchain);
+            REQUIRE(presented.has_value());
+            REQUIRE(device.wait(*sent, kTestWait).has_value());
+            REQUIRE(device.resetCommandPool(*pool).has_value());
+            return {*acquired, *presented};
+        };
+
+        CHECK(frame() == std::pair{SwapchainStatus::Matches, SwapchainStatus::Matches});
+        const ScopedEnv suboptimal("BFR_SUBOPTIMAL", "1");
+        CHECK(frame() == std::pair{SwapchainStatus::Suboptimal, SwapchainStatus::Suboptimal});
+        CHECK(device.destroyCommandPool(*pool).has_value());
+        CHECK(device.destroySwapchain(*swapchain).has_value());
+    }
+    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }

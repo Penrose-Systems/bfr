@@ -3,8 +3,11 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/format.h"
+#include "bfr/rhi/pipeline.h"
 #include "vulkan/instance_table.h"
+#include "vulkan/queue_families.h"
 #include "vulkan/vulkan_list.h"
+#include "vulkan/vulkan_pipeline.h"
 #include "vulkan/vulkan_result.h"
 
 #include <volk.h>
@@ -33,18 +36,16 @@ struct FloorFeature {
 using Vulkan12 = VkPhysicalDeviceVulkan12Features;
 using Vulkan13 = VkPhysicalDeviceVulkan13Features;
 
-// Bindless takes descriptor indexing with update-after-bind; queue progress
-// takes timelines; barriers take synchronization2; rendering takes dynamic
-// rendering; GPU addresses take buffer device address.
+// What BFR's own calls use: bindless takes descriptor indexing with
+// update-after-bind and partially bound tables; queue progress takes
+// timelines; barriers take synchronization2; rendering takes dynamic
+// rendering. Every other feature is reported and enabled where the adapter
+// has it, and refuses no adapter.
 constexpr std::array kFloor12{
     FloorFeature<Vulkan12>{.name = "descriptorIndexing", .member = &Vulkan12::descriptorIndexing},
     FloorFeature<Vulkan12>{.name = "runtimeDescriptorArray", .member = &Vulkan12::runtimeDescriptorArray},
     FloorFeature<Vulkan12>{.name = "descriptorBindingPartiallyBound",
                            .member = &Vulkan12::descriptorBindingPartiallyBound},
-    FloorFeature<Vulkan12>{.name = "descriptorBindingVariableDescriptorCount",
-                           .member = &Vulkan12::descriptorBindingVariableDescriptorCount},
-    FloorFeature<Vulkan12>{.name = "descriptorBindingUpdateUnusedWhilePending",
-                           .member = &Vulkan12::descriptorBindingUpdateUnusedWhilePending},
     FloorFeature<Vulkan12>{.name = "descriptorBindingSampledImageUpdateAfterBind",
                            .member = &Vulkan12::descriptorBindingSampledImageUpdateAfterBind},
     FloorFeature<Vulkan12>{.name = "descriptorBindingStorageImageUpdateAfterBind",
@@ -58,13 +59,11 @@ constexpr std::array kFloor12{
     FloorFeature<Vulkan12>{.name = "shaderStorageImageArrayNonUniformIndexing",
                            .member = &Vulkan12::shaderStorageImageArrayNonUniformIndexing},
     FloorFeature<Vulkan12>{.name = "timelineSemaphore", .member = &Vulkan12::timelineSemaphore},
-    FloorFeature<Vulkan12>{.name = "bufferDeviceAddress", .member = &Vulkan12::bufferDeviceAddress},
 };
 
 constexpr std::array kFloor13{
     FloorFeature<Vulkan13>{.name = "dynamicRendering", .member = &Vulkan13::dynamicRendering},
     FloorFeature<Vulkan13>{.name = "synchronization2", .member = &Vulkan13::synchronization2},
-    FloorFeature<Vulkan13>{.name = "maintenance4", .member = &Vulkan13::maintenance4},
 };
 
 // Makes next the last link of the chain whose last pNext tail points at.
@@ -74,67 +73,9 @@ void link(void**& tail, Struct& next) {
     tail = &next.pNext;
 }
 
-// The feature structs one query fills: the core ones always, and an
+// The property structs one query fills: the core ones always, and an
 // extension's only when the adapter lists it, since chaining one it lacks is
 // invalid. The chain points into itself, so it stays where it is made.
-struct FeatureQuery {
-    FeatureQuery(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const VkExtensionProperties> extensions) {
-        core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        vulkan11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
-        vulkan12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-        vulkan13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-        accelerationStructure.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
-        rayTracingPipeline.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
-        rayQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
-        mesh.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
-        shadingRate.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR;
-        atomicFloat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
-        imageAtomicInt64.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_IMAGE_ATOMIC_INT64_FEATURES_EXT;
-        barycentric.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR;
-        customBorderColor.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT;
-
-        void** tail = &core.pNext;
-        link(tail, vulkan11);
-        link(tail, vulkan12);
-        link(tail, vulkan13);
-        const auto linkIfListed = [&tail, extensions](const char* extension, auto& next) {
-            if (lists(extensions, extension)) {
-                link(tail, next);
-            }
-        };
-        linkIfListed(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, accelerationStructure);
-        linkIfListed(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, rayTracingPipeline);
-        linkIfListed(VK_KHR_RAY_QUERY_EXTENSION_NAME, rayQuery);
-        linkIfListed(VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh);
-        linkIfListed(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, shadingRate);
-        linkIfListed(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME, atomicFloat);
-        linkIfListed(VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME, imageAtomicInt64);
-        linkIfListed(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME, barycentric);
-        linkIfListed(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, customBorderColor);
-        vk.vkGetPhysicalDeviceFeatures2(adapter, &core);
-    }
-    ~FeatureQuery() = default;
-    FeatureQuery(const FeatureQuery&) = delete;
-    FeatureQuery& operator=(const FeatureQuery&) = delete;
-    FeatureQuery(FeatureQuery&&) = delete;
-    FeatureQuery& operator=(FeatureQuery&&) = delete;
-
-    VkPhysicalDeviceFeatures2 core{};
-    VkPhysicalDeviceVulkan11Features vulkan11{};
-    VkPhysicalDeviceVulkan12Features vulkan12{};
-    VkPhysicalDeviceVulkan13Features vulkan13{};
-    VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructure{};
-    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipeline{};
-    VkPhysicalDeviceRayQueryFeaturesKHR rayQuery{};
-    VkPhysicalDeviceMeshShaderFeaturesEXT mesh{};
-    VkPhysicalDeviceFragmentShadingRateFeaturesKHR shadingRate{};
-    VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFloat{};
-    VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT imageAtomicInt64{};
-    VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR barycentric{};
-    VkPhysicalDeviceCustomBorderColorFeaturesEXT customBorderColor{};
-};
-
-// The property structs one query fills, chained as FeatureQuery's are.
 struct PropertyQuery {
     PropertyQuery(const InstanceTable& vk, VkPhysicalDevice adapter,
                   std::span<const VkExtensionProperties> extensions) {
@@ -187,7 +128,7 @@ bool on(VkBool32 value) {
 
 // A custom border colour needs both features: BFR's sampler desc gives no
 // format to go with it (VUID-VkSamplerCustomBorderColorCreateInfoEXT-format-04014).
-bool customBorderColors(const FeatureQuery& features) {
+bool customBorderColors(const DeviceFeatures& features) {
     return on(features.customBorderColor.customBorderColors) &&
            on(features.customBorderColor.customBorderColorWithoutFormat);
 }
@@ -211,9 +152,8 @@ AdapterInfo infoFrom(const PropertyQuery& properties) {
     };
 }
 
-Limits limitsFrom(const PropertyQuery& properties, const FeatureQuery& features) {
+Limits limitsFrom(const PropertyQuery& properties, const DeviceFeatures& features) {
     const VkPhysicalDeviceLimits& core = properties.core.properties.limits;
-    const bool shadingRateTexture = on(features.shadingRate.attachmentFragmentShadingRate);
     return {
         .maxTexture1d = core.maxImageDimension1D,
         .maxTexture2d = core.maxImageDimension2D,
@@ -228,7 +168,8 @@ Limits limitsFrom(const PropertyQuery& properties, const FeatureQuery& features)
         .maxStorageBufferRange = core.maxStorageBufferRange,
         .maxTexelBufferElements = core.maxTexelBufferElements,
         .maxPushConstantsSize = core.maxPushConstantsSize,
-        .maxColorAttachments = core.maxColorAttachments,
+        // The device's count, up to the kMaxColorTargets a rendering holds.
+        .maxColorAttachments = std::min(core.maxColorAttachments, kMaxColorTargets),
         .maxRenderWidth = core.maxFramebufferWidth,
         .maxRenderHeight = core.maxFramebufferHeight,
         .maxRenderLayers = core.maxFramebufferLayers,
@@ -238,7 +179,8 @@ Limits limitsFrom(const PropertyQuery& properties, const FeatureQuery& features)
         .stencilSampleCounts = core.framebufferStencilSampleCounts,
         .noAttachmentSampleCounts = core.framebufferNoAttachmentsSampleCounts,
         .storageTextureSampleCounts = core.storageImageSampleCounts,
-        .maxViewports = core.maxViewports,
+        // A pipeline and setViewport take one viewport.
+        .maxViewports = kViewports,
         .maxViewportWidth = core.maxViewportDimensions[0],
         .maxViewportHeight = core.maxViewportDimensions[1],
         .maxDrawIndirectCount = core.maxDrawIndirectCount,
@@ -249,12 +191,9 @@ Limits limitsFrom(const PropertyQuery& properties, const FeatureQuery& features)
         .maxCustomBorderColorSamplers = customBorderColors(features)
                                             ? properties.customBorderColor.maxCustomBorderColorSamplers
                                             : 0,
-        .minShadingRateTile = shadingRateTexture
-                                  ? properties.shadingRate.minFragmentShadingRateAttachmentTexelSize.width
-                                  : 0,
-        .maxShadingRateTile = shadingRateTexture
-                                  ? properties.shadingRate.maxFragmentShadingRateAttachmentTexelSize.width
-                                  : 0,
+        // Set by readCaps, from the features it reports.
+        .minShadingRateTile = {},
+        .maxShadingRateTile = {},
         .minUniformBufferAlignment = core.minUniformBufferOffsetAlignment,
         .minStorageBufferAlignment = core.minStorageBufferOffsetAlignment,
         .minTexelBufferAlignment = core.minTexelBufferOffsetAlignment,
@@ -272,7 +211,8 @@ BindlessLimits bindlessFrom(const PropertyQuery& properties) {
         .maxTextures = vulkan12.maxDescriptorSetUpdateAfterBindSampledImages,
         .maxStorageTextures = vulkan12.maxDescriptorSetUpdateAfterBindStorageImages,
         .maxStorageBuffers = vulkan12.maxDescriptorSetUpdateAfterBindStorageBuffers,
-        .maxUniformBuffers = vulkan12.maxDescriptorSetUpdateAfterBindUniformBuffers,
+        // The device builds no bindless table of uniform buffers.
+        .maxUniformBuffers = 0,
         .maxSamplers = vulkan12.maxDescriptorSetUpdateAfterBindSamplers,
         .maxPerStage = vulkan12.maxPerStageUpdateAfterBindResources,
     };
@@ -291,54 +231,19 @@ ComputeLimits computeFrom(const PropertyQuery& properties) {
     };
 }
 
-MeshLimits meshFrom(const PropertyQuery& properties, const FeatureQuery& features) {
-    if (!on(features.mesh.meshShader)) {
-        return {};
-    }
-    const VkPhysicalDeviceMeshShaderPropertiesEXT& mesh = properties.mesh;
-    return {
-        .maxMeshWorkgroupSize = std::to_array(mesh.maxMeshWorkGroupSize),
-        .maxMeshInvocations = mesh.maxMeshWorkGroupInvocations,
-        .maxMeshOutputVertices = mesh.maxMeshOutputVertices,
-        .maxMeshOutputPrimitives = mesh.maxMeshOutputPrimitives,
-        .maxMeshSharedMemory = mesh.maxMeshSharedMemorySize,
-        .maxTaskWorkgroupSize = on(features.mesh.taskShader) ? std::to_array(mesh.maxTaskWorkGroupSize)
-                                                             : std::array<std::uint32_t, 3>{},
-        .maxTaskInvocations = on(features.mesh.taskShader) ? mesh.maxTaskWorkGroupInvocations : 0,
-        .maxTaskPayloadSize = on(features.mesh.taskShader) ? mesh.maxTaskPayloadSize : 0,
-    };
-}
-
-RayTracingLimits rayTracingFrom(const PropertyQuery& properties, const FeatureQuery& features) {
-    RayTracingLimits limits;
-    if (on(features.accelerationStructure.accelerationStructure)) {
-        const VkPhysicalDeviceAccelerationStructurePropertiesKHR& structures = properties.accelerationStructure;
-        limits.maxGeometries = structures.maxGeometryCount;
-        limits.maxInstances = structures.maxInstanceCount;
-        limits.maxPrimitives = structures.maxPrimitiveCount;
-        limits.scratchAlignment = structures.minAccelerationStructureScratchOffsetAlignment;
-    }
-    if (on(features.rayTracingPipeline.rayTracingPipeline)) {
-        const VkPhysicalDeviceRayTracingPipelinePropertiesKHR& pipeline = properties.rayTracingPipeline;
-        limits.maxRecursionDepth = pipeline.maxRayRecursionDepth;
-        limits.handleSize = pipeline.shaderGroupHandleSize;
-        limits.handleAlignment = pipeline.shaderGroupHandleAlignment;
-        limits.tableAlignment = pipeline.shaderGroupBaseAlignment;
-    }
-    return limits;
-}
-
-Features featuresFrom(const FeatureQuery& features, const PropertyQuery& properties,
+Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& properties,
                       std::span<const VkExtensionProperties> extensions) {
     const VkPhysicalDeviceFeatures& core = features.core.features;
     return {
-        .rayQuery = on(features.rayQuery.rayQuery),
-        .rayTracingPipeline = on(features.rayTracingPipeline.rayTracingPipeline),
-        .accelerationStructure = on(features.accelerationStructure.accelerationStructure),
-        .meshShader = on(features.mesh.meshShader),
-        .taskShader = on(features.mesh.taskShader),
-        .shadingRate = on(features.shadingRate.pipelineFragmentShadingRate),
-        .shadingRateTexture = on(features.shadingRate.attachmentFragmentShadingRate),
+        // BFR has no call for these, or conservative raster, yet (roadmap
+        // steps 12 and 13), so the device enables none of their extensions.
+        .rayQuery = false,
+        .rayTracingPipeline = false,
+        .accelerationStructure = false,
+        .meshShader = false,
+        .taskShader = false,
+        .shadingRate = false,
+        .shadingRateTexture = false,
         .shaderFloat16 = on(features.vulkan12.shaderFloat16),
         .shaderFloat64 = on(core.shaderFloat64),
         .shaderInt8 = on(features.vulkan12.shaderInt8),
@@ -348,7 +253,7 @@ Features featuresFrom(const FeatureQuery& features, const PropertyQuery& propert
         .atomicInt64Texture = on(features.imageAtomicInt64.shaderImageInt64Atomics),
         .atomicFloat32Add = on(features.atomicFloat.shaderBufferFloat32AtomicAdd),
         .barycentrics = on(features.barycentric.fragmentShaderBarycentric),
-        .conservativeRaster = lists(extensions, VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME),
+        .conservativeRaster = false,
         .geometryShader = on(core.geometryShader),
         .tessellation = on(core.tessellationShader),
         .multiview = on(features.vulkan11.multiview),
@@ -372,10 +277,10 @@ Features featuresFrom(const FeatureQuery& features, const PropertyQuery& propert
         .samplerCustomBorderColor = customBorderColors(features),
         .samplerIntegerBorderColor = true,
         .samplerUnnormalizedCoordinates = true,
-        // Core, but a portability driver may refuse it, and its feature struct
-        // is provisional, outside the headers BFR builds with
+        // Core, but a portability driver says whether it has it
         // (VUID-VkSamplerCreateInfo-samplerMipLodBias-04467).
-        .samplerLodBias = !lists(extensions, kPortabilitySubset),
+        .samplerLodBias = !lists(extensions, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME) ||
+                          on(features.portability.samplerMipLodBias),
         .compressionBc = on(core.textureCompressionBC),
         .compressionEtc2 = on(core.textureCompressionETC2),
         .compressionAstc = on(core.textureCompressionASTC_LDR),
@@ -426,31 +331,74 @@ Memory memoryFrom(const InstanceTable& vk, VkPhysicalDevice adapter, VkPhysicalD
     return memory;
 }
 
-// Graphics counts every family that runs graphics; compute, those that run
-// compute but not graphics; copy, those that run neither. Each kind's
-// timestamp bits are the most any of its families has.
-Queues queuesFrom(const InstanceTable& vk, VkPhysicalDevice adapter) {
-    std::uint32_t count = 0;
-    vk.vkGetPhysicalDeviceQueueFamilyProperties(adapter, &count, nullptr);
-    std::vector<VkQueueFamilyProperties> families(count);
-    vk.vkGetPhysicalDeviceQueueFamilyProperties(adapter, &count, families.data());
-    Queues queues;
-    for (const VkQueueFamilyProperties& family : families) {
-        const VkQueueFlags flags = family.queueFlags;
-        if ((flags & VK_QUEUE_GRAPHICS_BIT) != 0) {
-            queues.graphics += family.queueCount;
-            queues.graphicsTimestampBits = std::max(queues.graphicsTimestampBits, family.timestampValidBits);
-        }
-        else if ((flags & VK_QUEUE_COMPUTE_BIT) != 0) {
-            queues.compute += family.queueCount;
-            queues.computeTimestampBits = std::max(queues.computeTimestampBits, family.timestampValidBits);
-        }
-        else if ((flags & VK_QUEUE_TRANSFER_BIT) != 0) {
-            queues.copy += family.queueCount;
-            queues.copyTimestampBits = std::max(queues.copyTimestampBits, family.timestampValidBits);
+// The levels a family lists in its VkQueueFamilyGlobalPriorityPropertiesKHR.
+QueueLevels levelsFrom(const VkQueueFamilyGlobalPriorityPropertiesKHR& listed) {
+    QueueLevels levels;
+    for (const VkQueueGlobalPriorityKHR level : std::span{listed.priorities}.first(
+             std::min<std::size_t>(listed.priorityCount, VK_MAX_GLOBAL_PRIORITY_SIZE_KHR))) {
+        switch (level) {
+            case VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR:
+                levels.low = true;
+                break;
+            case VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR:
+                levels.normal = true;
+                break;
+            case VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR:
+                levels.high = true;
+                break;
+            case VK_QUEUE_GLOBAL_PRIORITY_REALTIME_KHR:
+                levels.realtime = true;
+                break;
+            default:
+                break;
         }
     }
-    return queues;
+    return levels;
+}
+
+// Each kind's queues, timestamp bits and levels on the family a device opens
+// it on, none for a kind the device can't open. The levels are each family's
+// list where the adapter has VK_KHR_global_priority, none without it; ranks
+// is the adapter's discreteQueuePriorities.
+Queues queuesFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const VkExtensionProperties> extensions,
+                  const VkPhysicalDeviceLimits& limits) {
+    std::uint32_t count = 0;
+    vk.vkGetPhysicalDeviceQueueFamilyProperties2(adapter, &count, nullptr);
+    const bool listsLevels = lists(extensions, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME);
+    std::vector<VkQueueFamilyGlobalPriorityPropertiesKHR> listed(count);
+    std::vector<VkQueueFamilyProperties2> queried(count);
+    for (std::uint32_t index = 0; index < count; ++index) {
+        listed[index].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES_KHR;
+        queried[index].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
+        // Chaining an extension's struct the adapter lacks is invalid.
+        queried[index].pNext = listsLevels ? &listed[index] : nullptr;
+    }
+    vk.vkGetPhysicalDeviceQueueFamilyProperties2(adapter, &count, queried.data());
+    std::vector<VkQueueFamilyProperties> families(count);
+    std::ranges::transform(queried, families.begin(), &VkQueueFamilyProperties2::queueFamilyProperties);
+    // Without a surface. A surface may move each kind to a family of its kind
+    // that presents to it, which may have other counts, timestamp bits and
+    // levels; bfr_caps_queues says so.
+    const QueueFamilies chosen = chooseQueueFamilies(families, {});
+    const QueueCounts counts = countQueues(chosen, families);
+    const auto bits = [&families](std::uint32_t queues, std::optional<std::uint32_t> family) {
+        return queues == 0 ? 0 : families[*family].timestampValidBits;
+    };
+    const auto levels = [&listed, listsLevels](std::uint32_t queues, std::optional<std::uint32_t> family) {
+        return queues == 0 || !listsLevels ? QueueLevels{} : levelsFrom(listed[*family]);
+    };
+    return {
+        .graphics = counts.graphics,
+        .compute = counts.compute,
+        .copy = counts.copy,
+        .graphicsTimestampBits = bits(counts.graphics, chosen.graphics),
+        .computeTimestampBits = bits(counts.compute, chosen.compute),
+        .copyTimestampBits = bits(counts.copy, chosen.transfer),
+        .ranks = limits.discreteQueuePriorities,
+        .graphicsLevels = levels(counts.graphics, chosen.graphics),
+        .computeLevels = levels(counts.compute, chosen.compute),
+        .copyLevels = levels(counts.copy, chosen.transfer),
+    };
 }
 
 struct FormatPair {
@@ -509,6 +457,18 @@ constexpr std::array kVulkanFormats{
     FormatPair{.format = Format::B5g6r5Unorm, .vulkan = VK_FORMAT_R5G6B5_UNORM_PACK16},
     FormatPair{.format = Format::Bgr5a1Unorm, .vulkan = VK_FORMAT_A1R5G5B5_UNORM_PACK16},
     FormatPair{.format = Format::Bgra4Unorm, .vulkan = VK_FORMAT_A4R4G4B4_UNORM_PACK16},
+    FormatPair{.format = Format::R64Uint, .vulkan = VK_FORMAT_R64_UINT},
+    FormatPair{.format = Format::R64Sint, .vulkan = VK_FORMAT_R64_SINT},
+    FormatPair{.format = Format::R64Float, .vulkan = VK_FORMAT_R64_SFLOAT},
+    FormatPair{.format = Format::Rg64Uint, .vulkan = VK_FORMAT_R64G64_UINT},
+    FormatPair{.format = Format::Rg64Sint, .vulkan = VK_FORMAT_R64G64_SINT},
+    FormatPair{.format = Format::Rg64Float, .vulkan = VK_FORMAT_R64G64_SFLOAT},
+    FormatPair{.format = Format::Rgb64Uint, .vulkan = VK_FORMAT_R64G64B64_UINT},
+    FormatPair{.format = Format::Rgb64Sint, .vulkan = VK_FORMAT_R64G64B64_SINT},
+    FormatPair{.format = Format::Rgb64Float, .vulkan = VK_FORMAT_R64G64B64_SFLOAT},
+    FormatPair{.format = Format::Rgba64Uint, .vulkan = VK_FORMAT_R64G64B64A64_UINT},
+    FormatPair{.format = Format::Rgba64Sint, .vulkan = VK_FORMAT_R64G64B64A64_SINT},
+    FormatPair{.format = Format::Rgba64Float, .vulkan = VK_FORMAT_R64G64B64A64_SFLOAT},
     FormatPair{.format = Format::D16Unorm, .vulkan = VK_FORMAT_D16_UNORM},
     FormatPair{.format = Format::D24UnormS8Uint, .vulkan = VK_FORMAT_D24_UNORM_S8_UINT},
     FormatPair{.format = Format::D32Float, .vulkan = VK_FORMAT_D32_SFLOAT},
@@ -637,31 +597,43 @@ bool has(VkFormatFeatureFlags2 features, VkFormatFeatureFlags2 feature) {
 
 } // namespace
 
-DeviceFeatures::DeviceFeatures(const SamplerFeatures& sampler) {
-    vulkan12_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-    vulkan12_.pNext = &vulkan13_;
-    vulkan13_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-    for (const auto& feature : kFloor12) {
-        vulkan12_.*feature.member = VK_TRUE;
-    }
-    for (const auto& feature : kFloor13) {
-        vulkan13_.*feature.member = VK_TRUE;
-    }
-    const auto bit = [](bool set) {
-        return set ? VK_TRUE : VK_FALSE;
+DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter,
+                               std::span<const VkExtensionProperties> extensions) {
+    core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    vulkan11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    vulkan12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    vulkan13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    atomicFloat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+    imageAtomicInt64.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_IMAGE_ATOMIC_INT64_FEATURES_EXT;
+    barycentric.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR;
+    customBorderColor.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT;
+    portability.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR;
+    globalPriority.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GLOBAL_PRIORITY_QUERY_FEATURES_KHR;
+    maintenance9.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_9_FEATURES_KHR;
+
+    void** tail = &core.pNext;
+    link(tail, vulkan11);
+    link(tail, vulkan12);
+    link(tail, vulkan13);
+    // Chaining an extension's struct the adapter lacks is invalid.
+    const auto linkIfListed = [this, &tail, extensions](const char* extension, auto& next) {
+        if (lists(extensions, extension)) {
+            link(tail, next);
+            enabledExtensions.push_back(extension);
+        }
     };
-    vulkan12_.samplerFilterMinmax = bit(sampler.minmax);
-    vulkan12_.samplerMirrorClampToEdge = bit(sampler.mirrorClampToEdge);
-    if (sampler.customBorderColor) {
-        customBorderColor_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT;
-        customBorderColor_.customBorderColors = VK_TRUE;
-        customBorderColor_.customBorderColorWithoutFormat = VK_TRUE;
-        vulkan13_.pNext = &customBorderColor_;
-    }
+    linkIfListed(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME, portability);
+    linkIfListed(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME, atomicFloat);
+    linkIfListed(VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME, imageAtomicInt64);
+    linkIfListed(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME, barycentric);
+    linkIfListed(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, customBorderColor);
+    linkIfListed(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME, globalPriority);
+    linkIfListed(VK_KHR_MAINTENANCE_9_EXTENSION_NAME, maintenance9);
+    vk.vkGetPhysicalDeviceFeatures2(adapter, &core);
 }
 
 std::vector<std::string> missingFloorFeatures(const InstanceTable& vk, VkPhysicalDevice adapter) {
-    const FeatureQuery features(vk, adapter, {});
+    const DeviceFeatures features(vk, adapter, {});
     std::vector<std::string> missing;
     for (const auto& feature : kFloor12) {
         if (!on(features.vulkan12.*feature.member)) {
@@ -676,20 +648,68 @@ std::vector<std::string> missingFloorFeatures(const InstanceTable& vk, VkPhysica
     return missing;
 }
 
-Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const VkExtensionProperties> extensions) {
-    const FeatureQuery features(vk, adapter, extensions);
-    const PropertyQuery properties(vk, adapter, extensions);
+// The limits of what reported says the device has: none while a feature
+// reports false, as mesh shaders, ray tracing and shading rate textures do
+// until BFR has a call for them (roadmap steps 12 and 13).
+MeshLimits meshFrom(const PropertyQuery& properties, const Features& reported) {
+    if (!reported.meshShader) {
+        return {};
+    }
+    const VkPhysicalDeviceMeshShaderPropertiesEXT& mesh = properties.mesh;
     return {
+        .maxMeshWorkgroupSize = std::to_array(mesh.maxMeshWorkGroupSize),
+        .maxMeshInvocations = mesh.maxMeshWorkGroupInvocations,
+        .maxMeshOutputVertices = mesh.maxMeshOutputVertices,
+        .maxMeshOutputPrimitives = mesh.maxMeshOutputPrimitives,
+        .maxMeshSharedMemory = mesh.maxMeshSharedMemorySize,
+        .maxTaskWorkgroupSize = reported.taskShader ? std::to_array(mesh.maxTaskWorkGroupSize)
+                                                    : std::array<std::uint32_t, kWorkgroupDimensions>{},
+        .maxTaskInvocations = reported.taskShader ? mesh.maxTaskWorkGroupInvocations : 0,
+        .maxTaskPayloadSize = reported.taskShader ? mesh.maxTaskPayloadSize : 0,
+    };
+}
+
+RayTracingLimits rayTracingFrom(const PropertyQuery& properties, const Features& reported) {
+    RayTracingLimits limits;
+    if (reported.accelerationStructure) {
+        const VkPhysicalDeviceAccelerationStructurePropertiesKHR& structures = properties.accelerationStructure;
+        limits.maxGeometries = structures.maxGeometryCount;
+        limits.maxInstances = structures.maxInstanceCount;
+        limits.maxPrimitives = structures.maxPrimitiveCount;
+        limits.scratchAlignment = structures.minAccelerationStructureScratchOffsetAlignment;
+    }
+    if (reported.rayTracingPipeline) {
+        const VkPhysicalDeviceRayTracingPipelinePropertiesKHR& pipeline = properties.rayTracingPipeline;
+        limits.maxRecursionDepth = pipeline.maxRayRecursionDepth;
+        limits.handleSize = pipeline.shaderGroupHandleSize;
+        limits.handleAlignment = pipeline.shaderGroupHandleAlignment;
+        limits.tableAlignment = pipeline.shaderGroupBaseAlignment;
+    }
+    return limits;
+}
+
+Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const VkExtensionProperties> extensions) {
+    const DeviceFeatures features(vk, adapter, extensions);
+    const PropertyQuery properties(vk, adapter, extensions);
+    const Features reported = featuresFrom(features, properties, extensions);
+    Caps caps{
         .info = infoFrom(properties),
         .limits = limitsFrom(properties, features),
         .bindless = bindlessFrom(properties),
         .compute = computeFrom(properties),
-        .mesh = meshFrom(properties, features),
-        .rayTracing = rayTracingFrom(properties, features),
-        .features = featuresFrom(features, properties, extensions),
+        .mesh = meshFrom(properties, reported),
+        .rayTracing = rayTracingFrom(properties, reported),
+        .features = reported,
         .memory = memoryFrom(vk, adapter, properties.core.properties.deviceType),
-        .queues = queuesFrom(vk, adapter),
+        .queues = queuesFrom(vk, adapter, extensions, properties.core.properties.limits),
     };
+    if (reported.shadingRateTexture) {
+        const VkExtent2D& smallest = properties.shadingRate.minFragmentShadingRateAttachmentTexelSize;
+        const VkExtent2D& largest = properties.shadingRate.maxFragmentShadingRateAttachmentTexelSize;
+        caps.limits.minShadingRateTile = {smallest.width, smallest.height};
+        caps.limits.maxShadingRateTile = {largest.width, largest.height};
+    }
+    return caps;
 }
 
 core::Result<FormatCaps> readFormatCaps(const InstanceTable& vk, VkPhysicalDevice adapter, Format format) {
@@ -830,6 +850,9 @@ MemoryBudget readBudget(const InstanceTable& vk, VkPhysicalDevice adapter) {
 }
 
 VkFormat vulkanFormat(Format format) {
+    if (format == Format::Undefined) {
+        return VK_FORMAT_UNDEFINED;
+    }
     return std::ranges::find(kVulkanFormats, format, &FormatPair::format)->vulkan;
 }
 

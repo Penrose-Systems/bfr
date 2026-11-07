@@ -3,6 +3,7 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/pipeline.h"
+#include "rhi/enum_check.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -11,15 +12,20 @@
 namespace bfr::rhi {
 
 /// Fails with RhiInvalidCall when desc asks for a rendering no backend can
-/// begin: more color attachments than there are, none at all, a color
+/// begin: a load or store op BFR doesn't have, more color attachments than there are, none at all, a color
 /// attachment naming no texture, or, with a swapchain, no color attachment or
 /// attachment 0 naming a texture when the swapchain's image is it. Each
 /// backend's beginRendering calls it first, then looks its handles up.
 [[nodiscard]] inline core::Result<void> checkRenderingDesc(bool hasSwapchain, const RenderingDesc& desc) {
+    if (auto checked = checkEnums(desc); !checked) {
+        return checked;
+    }
     if (desc.colorAttachmentCount > kMaxColorTargets) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "{} color attachments is more than the {} there are",
                              desc.colorAttachmentCount, kMaxColorTargets);
     }
+    // The render area is the attachments' size; rendering with none needs a
+    // size in RenderingDesc, which it does not have yet.
     if (desc.colorAttachmentCount == 0 && desc.depthStencil.texture.isNull()) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "no attachment to render to");
     }
@@ -42,61 +48,32 @@ namespace bfr::rhi {
 }
 
 /// Fails with RhiInvalidCall when data is not whole 32-bit values or more
-/// than the push constants hold. Each backend's pushConstants calls it first.
-[[nodiscard]] inline core::Result<void> checkPushConstants(std::span<const std::byte> data) {
+/// than the size bytes the push constants hold, the size the device's caps
+/// report. Each backend's pushConstants calls it first.
+[[nodiscard]] inline core::Result<void> checkPushConstants(std::span<const std::byte> data, std::uint32_t size) {
     constexpr std::size_t kValueBytes = sizeof(std::uint32_t);
     if (data.size() % kValueBytes != 0) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes of push constants is not whole 32-bit values",
                              data.size());
     }
-    if (data.size() > kPushConstantsSize) {
+    if (data.size() > size) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes of push constants; there are {}", data.size(),
-                             kPushConstantsSize);
+                             size);
     }
     return {};
 }
 
-/// What a recording list has had bound, which the usage checks every backend
-/// makes of a draw or dispatch read; each backend keeps one per list.
+/// Whether a Metal list's rendering is open, so its render encoder exists.
 struct RecordState {
     bool rendering = false;
-    bool graphicsBound = false;
-    bool computeBound = false;
-    bool indexBound = false;
 };
 
-/// Fails with RhiInvalidCall when a viewport, scissor or draw is recorded
-/// outside rendering.
+/// Fails with RhiInvalidCall when no rendering is open: Metal records a
+/// viewport, scissor, draw or endRendering on the rendering's encoder, which
+/// exists only while one is.
 [[nodiscard]] inline core::Result<void> checkRendering(const RecordState& state) {
     if (!state.rendering) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "no rendering is open");
-    }
-    return {};
-}
-
-/// Fails with RhiInvalidCall when a draw is recorded outside rendering or
-/// with no graphics pipeline bound, and, when indexed, no index buffer bound.
-[[nodiscard]] inline core::Result<void> checkDraw(const RecordState& state, bool indexed) {
-    if (auto checked = checkRendering(state); !checked) {
-        return checked;
-    }
-    if (!state.graphicsBound) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "no graphics pipeline is bound");
-    }
-    if (indexed && !state.indexBound) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "no index buffer is bound");
-    }
-    return {};
-}
-
-/// Fails with RhiInvalidCall when a dispatch is recorded inside rendering or
-/// with no compute pipeline bound.
-[[nodiscard]] inline core::Result<void> checkDispatch(const RecordState& state) {
-    if (state.rendering) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "a dispatch is recorded outside rendering");
-    }
-    if (!state.computeBound) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "no compute pipeline is bound");
     }
     return {};
 }

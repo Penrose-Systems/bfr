@@ -30,9 +30,19 @@ namespace bfr::rhi::metal {
 
 namespace {
 
-// Device memory is the GPU's alone; the CPU shares upload and readback memory.
+// Device memory is the GPU's alone; the CPU shares upload and readback memory,
+// write-combined for upload, which the CPU only writes, and cached for
+// readback, which it reads.
 MTL::ResourceOptions optionsFor(BufferMemory memory) {
-    return memory == BufferMemory::Device ? MTL::ResourceStorageModePrivate : MTL::ResourceStorageModeShared;
+    switch (memory) {
+        case BufferMemory::Device:
+            return MTL::ResourceStorageModePrivate;
+        case BufferMemory::Upload:
+            return MTL::ResourceStorageModeShared | MTL::ResourceCPUCacheModeWriteCombined;
+        case BufferMemory::Readback:
+            return MTL::ResourceStorageModeShared | MTL::ResourceCPUCacheModeDefaultCache;
+    }
+    return MTL::ResourceStorageModeShared;
 }
 
 } // namespace

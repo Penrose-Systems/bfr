@@ -10,6 +10,8 @@
 #include "core/fixed_vector.h"
 #include "core/slot_chains.h"
 #include "rhi/command_check.h"
+#include "rhi/device_limits.h"
+#include "rhi/enum_check.h"
 #include "vulkan/queue_families.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_buffer.h"
@@ -119,8 +121,8 @@ void recordBarrier(const VolkDeviceTable& table, VkCommandBuffer buffer, const V
 core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance& rhi, VkPhysicalDevice adapter,
                                                                  VkDevice device, const QueueFamilies& families,
                                                                  const DeviceDesc& desc, bool hasBudget,
-                                                                 const RasterFeatures& features) {
-    auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, families, desc, hasBudget, features);
+                                                                 bool hasSwapchain, std::uint32_t pushConstantsSize) {
+    auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, desc, hasBudget, hasSwapchain, pushConstantsSize);
     if (auto opened = made->openQueues(families, desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
@@ -129,7 +131,7 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
         return std::unexpected(std::move(allocator.error()));
     }
     made->allocator_ = *allocator;
-    auto layout = VulkanBindlessLayout::create(made->table_, device, desc);
+    auto layout = VulkanBindlessLayout::create(made->table_, device, desc, pushConstantsSize);
     if (!layout) {
         return std::unexpected(std::move(layout.error()));
     }
@@ -137,17 +139,15 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
     return made;
 }
 
-VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device,
-                           const QueueFamilies& families, const DeviceDesc& desc, bool hasBudget,
-                           const RasterFeatures& features)
+VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const DeviceDesc& desc,
+                           bool hasBudget, bool hasSwapchain, std::uint32_t pushConstantsSize)
     : instance_(&rhi),
       adapter_(adapter),
       device_(device),
-      graphicsFamily_(families.graphics),
-      presentFamily_(families.present.value_or(families.graphics)),
       hasBudget_(hasBudget),
-      rasterFeatures_(features),
-      desc_(desc),
+      hasSwapchain_(hasSwapchain),
+      pushConstantsSize_(pushConstantsSize),
+      desc_(heldPart(desc)),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
       commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
       commandLists_("command lists", desc.maxCommandLists, desc.maxCommandLists, rhi.logger()),
@@ -155,14 +155,13 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       lists_(desc.maxCommandLists),
       renderSlots_(desc.maxCommandLists),
       renders_(desc.maxCommandLists),
-      submissions_(1 + desc.compute + desc.copy),
+      submissions_(queueCount(desc)),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
       samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
       bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
-    table_.vkGetDeviceQueue(device_, presentFamily_, 0, &presentQueue_);
 }
 
 core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const DeviceDesc& desc) {
@@ -185,16 +184,18 @@ core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const
         queues_.push_back(std::move(queue));
         return {};
     };
-    if (auto opened = open(QueueType::Graphics, families.graphics, 0); !opened) {
-        return opened;
-    }
-    for (std::uint32_t index = 0; index < desc.compute; ++index) {
-        if (auto opened = open(QueueType::Compute, families.compute, index); !opened) {
+    for (std::uint32_t index = 0; index < desc.graphics.size(); ++index) {
+        if (auto opened = open(QueueType::Graphics, *families.graphics, index); !opened) {
             return opened;
         }
     }
-    for (std::uint32_t index = 0; index < desc.copy; ++index) {
-        if (auto opened = open(QueueType::Copy, families.transfer, index); !opened) {
+    for (std::uint32_t index = 0; index < desc.compute.size(); ++index) {
+        if (auto opened = open(QueueType::Compute, *families.compute, index); !opened) {
+            return opened;
+        }
+    }
+    for (std::uint32_t index = 0; index < desc.copy.size(); ++index) {
+        if (auto opened = open(QueueType::Copy, *families.transfer, index); !opened) {
             return opened;
         }
     }
@@ -208,9 +209,6 @@ core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const
         queue->chains = core::FixedVector<VulkanSwapchain*>{desc.maxSwapchains};
         queue->waitValues.resize(queues_.size());
         queue->retired = core::FixedVector<VulkanRetiredPool>{desc.maxCommandPools};
-        if (queue->queue == presentQueue_) {
-            presentOn_ = queue.get();
-        }
         if (std::ranges::find(families_, queue->family) == families_.end()) {
             families_.push_back(queue->family);
         }
@@ -238,12 +236,6 @@ core::Result<void> VulkanDevice::checkQueue(std::uint32_t queue) const {
 core::Result<void> VulkanDevice::checkToken(Token token) const {
     if (auto checked = checkQueue(token.queue); !checked) {
         return checked;
-    }
-    const std::uint64_t submitted = queues_[token.queue]->submitted.load(std::memory_order_acquire);
-    if (token.value > submitted) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "no submit has returned token {} on queue {}; the last is {}", token.value, token.queue,
-                             submitted);
     }
     return {};
 }
@@ -307,21 +299,32 @@ core::Result<VulkanCommandList*> VulkanDevice::commandListFor(CommandListHandle 
 
 core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::NativeWindow& window,
                                                             const SwapchainDesc& desc) {
+    if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    // Without VK_KHR_swapchain there is no vkCreateSwapchainKHR to call.
+    if (!hasSwapchain_) {
+        return core::failure(core::ErrorCode::RhiPresentUnsupported,
+                             "the device has no VK_KHR_swapchain, so it can't present");
+    }
     auto surface = instance_->surfaceFor(window);
     if (!surface) {
         return std::unexpected(std::move(surface.error()));
     }
+    if (auto checked = checkQueue(desc.queue); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Fixed for the surface, so asked once.
-    const auto presents = instance_->presents(adapter_, presentFamily_, *surface);
+    const auto presents = instance_->presents(adapter_, queues_[desc.queue]->family, *surface);
     if (!presents) {
         return std::unexpected(presents.error());
     }
     if (!*presents) {
-        return core::failure(core::ErrorCode::RhiPresentUnsupported,
-                             "the device's present queue doesn't present to the window");
+        return core::failure(core::ErrorCode::RhiPresentUnsupported, "queue {} doesn't present to the window",
+                             desc.queue);
     }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, instance_->instanceTable(),
-                                                          std::move(*surface), desc, instance_->logger());
+                                                          std::move(*surface), desc, families_, instance_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached, "a device holds at most {} swapchains",
                              desc_.maxSwapchains);
@@ -360,24 +363,23 @@ core::Result<void> VulkanDevice::destroySwapchain(SwapchainHandle swapchain) {
     return core::failure(core::ErrorCode::RhiInvalidHandle, "the swapchain handle is stale");
 }
 
-core::Result<void> VulkanDevice::acquire(SwapchainHandle swapchain) {
+core::Result<SwapchainStatus> VulkanDevice::acquire(SwapchainHandle swapchain, std::uint64_t timeoutNs) {
     auto found = swapchainFor(swapchain);
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    return (*found)->acquire();
+    return (*found)->acquire(timeoutNs);
 }
 
-core::Result<void> VulkanDevice::present(SwapchainHandle swapchain) {
+core::Result<SwapchainStatus> VulkanDevice::present(SwapchainHandle swapchain) {
     auto found = swapchainFor(swapchain);
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    if (presentOn_ != nullptr) {
-        const std::scoped_lock lock{presentOn_->lock};
-        return (*found)->present(presentQueue_);
-    }
-    return (*found)->present(presentQueue_);
+    // The queue is the swapchain's, which may be submitted to from another thread at once.
+    VulkanQueue& queue = *queues_[(*found)->queue()];
+    const std::scoped_lock lock{queue.lock};
+    return (*found)->present(queue.queue);
 }
 
 core::Result<CommandPoolHandle> VulkanDevice::createCommandPool(const CommandPoolDesc& desc) {
@@ -456,10 +458,6 @@ core::Result<void> VulkanDevice::resetCommandPool(CommandPoolHandle commandPool)
     if (!pool) {
         return std::unexpected(std::move(pool.error()));
     }
-    if ((*pool)->recording != 0) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "{} lists from the pool are still recording; submit or destroy them", (*pool)->recording);
-    }
     const auto completed = completedValue(*queues_[(*pool)->queue]);
     if (!completed) {
         return std::unexpected(completed.error());
@@ -471,6 +469,11 @@ core::Result<void> VulkanDevice::resetCommandPool(CommandPoolHandle commandPool)
     }
     if (const VkResult result = table_.vkResetCommandPool(device_, (*pool)->pool, 0); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkResetCommandPool", .result = result});
+    }
+    // Vulkan's reset returns a buffer still recording to its initial state,
+    // so the list recording into it ends with it.
+    for (std::uint32_t slot = (*pool)->first; slot != core::SlotChains::kEnd; slot = listSlots_.next(slot)) {
+        end(lists_[slot].live);
     }
     (*pool)->next = (*pool)->first;
     (*pool)->pushed = 0;
@@ -538,12 +541,8 @@ core::Result<CommandListHandle> VulkanDevice::beginCommands(CommandPoolHandle co
     }
     // A new handle for each recording, so last frame's handle never names
     // this one. The list pool was made at its maximum, so this never grows.
-    const CommandListHandle commandList = commandLists_.emplace(VulkanCommandList{.buffer = buffer,
-                                                                                  .pool = commandPool,
-                                                                                  .slot = slot,
-                                                                                  .state = {},
-                                                                                  .presenting = {},
-                                                                                  .rendered = core::SlotChains::kEnd});
+    const CommandListHandle commandList = commandLists_.emplace(VulkanCommandList{
+        .buffer = buffer, .pool = commandPool, .slot = slot, .presenting = {}, .rendered = core::SlotChains::kEnd});
     if (commandList.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command lists",
                              desc_.maxCommandLists);
@@ -559,9 +558,6 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
-    }
-    if ((*list)->state.rendering) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is already open");
     }
     if (auto checked = checkRenderingDesc(!swapchain.isNull(), desc); !checked) {
         return checked;
@@ -585,7 +581,12 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
         color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         color.loadOp = loadOpFor(attachment.loadOp);
         color.storeOp = storeOpFor(attachment.storeOp);
-        std::ranges::copy(attachment.clearColor, color.clearValue.color.float32);
+        if (attachment.clearInteger) {
+            std::ranges::copy(attachment.clearColorInteger, color.clearValue.color.uint32);
+        }
+        else {
+            std::ranges::copy(attachment.clearColor, color.clearValue.color.float32);
+        }
         if (i == 0 && !swapchain.isNull()) {
             auto chain = swapchainFor(swapchain);
             if (!chain) {
@@ -662,7 +663,6 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
         rendering.pStencilAttachment = (aspects & VK_IMAGE_ASPECT_STENCIL_BIT) != 0 ? &stencil : nullptr;
     }
     table_.vkCmdBeginRendering(buffer, &rendering);
-    (*list)->state.rendering = true;
     (*list)->presenting = image.has_value() ? std::optional{swapchain} : std::nullopt;
     // The whole area, until the caller sets its own.
     const auto whole = static_cast<float>(extent.width);
@@ -679,9 +679,6 @@ core::Result<void> VulkanDevice::endRendering(CommandListHandle commandList) {
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
-    }
-    if (auto checked = checkRendering((*list)->state); !checked) {
-        return checked;
     }
     VkCommandBuffer buffer = (*list)->buffer;
     table_.vkCmdEndRendering(buffer);
@@ -701,7 +698,6 @@ core::Result<void> VulkanDevice::endRendering(CommandListHandle commandList) {
         // image, in this list or another, starts from where this one leaves it.
         (*chain)->setLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     }
-    (*list)->state.rendering = false;
     (*list)->presenting.reset();
     return {};
 }
@@ -734,20 +730,10 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
     const auto full = [this] {
         return core::failure(core::ErrorCode::RhiInvalidCall, "a submit takes at most {} lists", desc_.maxCommandLists);
     };
-    // Each submit has a serial of its own, so a list named twice is caught
-    // in this one pass, without searching what was gathered so far.
-    const std::uint64_t serial = submitSerial_.fetch_add(1, std::memory_order_relaxed) + 1;
     for (const CommandListHandle commandList : desc.commandLists) {
         auto list = commandListFor(commandList);
         if (!list) {
             return std::unexpected(std::move(list.error()));
-        }
-        if ((*list)->queued == serial) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "the list is named twice in the submit");
-        }
-        (*list)->queued = serial;
-        if ((*list)->state.rendering) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is still open; end it first");
         }
         if (const VulkanCommandPool* pool = commandPools_.find((*list)->pool);
             pool != nullptr && pool->queue != desc.queue) {
@@ -868,7 +854,7 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
     return Token{.queue = desc.queue, .value = value};
 }
 
-core::Result<void> VulkanDevice::wait(Token token) {
+core::Result<void> VulkanDevice::wait(Token token, std::uint64_t timeoutNs) {
     if (auto checked = checkToken(token); !checked) {
         return checked;
     }
@@ -878,8 +864,10 @@ core::Result<void> VulkanDevice::wait(Token token) {
     info.semaphoreCount = 1;
     info.pSemaphores = &queue.timeline;
     info.pValues = &token.value;
-    if (const VkResult result = table_.vkWaitSemaphores(device_, &info, std::numeric_limits<std::uint64_t>::max());
-        result != VK_SUCCESS) {
+    if (const VkResult result = table_.vkWaitSemaphores(device_, &info, timeoutNs); result == VK_TIMEOUT) {
+        return core::failure(core::ErrorCode::RhiTimeout, "the GPU had not passed the token in time");
+    }
+    else if (result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkWaitSemaphores", .result = result});
     }
     if (queue.retiredCount.load(std::memory_order_acquire) != 0) {

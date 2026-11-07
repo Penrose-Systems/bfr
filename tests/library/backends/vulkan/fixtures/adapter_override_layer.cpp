@@ -8,12 +8,22 @@
 // - BFR_ADAPTER_HIDE: the adapter leaves this device extension out.
 // - BFR_ADAPTER_ADD: the adapter lists this device extension too, and
 //   vkCreateDevice drops it, since the driver underneath lacks it.
+// - BFR_ADAPTER_LOD_BIAS: the adapter's VK_KHR_portability_subset features
+//   report samplerMipLodBias as this, 0 or 1; the driver underneath has no
+//   such struct to fill.
 // - BFR_ADAPTER_NO_COMPUTE: no queue family reports compute.
 // - BFR_ADAPTER_NO_GRAPHICS: no queue family reports graphics.
 // - BFR_ADAPTER_SEPARATE_PRESENT: the adapter also lists a queue family that
 //   does nothing but present, the only one that presents; vkCreateDevice drops
 //   its queue, since the driver underneath lacks the family.
 // - BFR_PRESENT_UNSUPPORTED: no queue family presents to any surface.
+// - BFR_SUBOPTIMAL: vkAcquireNextImageKHR and vkQueuePresentKHR answer
+//   VK_SUBOPTIMAL_KHR where the driver answers VK_SUCCESS.
+// - BFR_EXPECT_APPLICATION: vkCreateInstance fails with
+//   VK_ERROR_INITIALIZATION_FAILED unless its VkApplicationInfo reads
+//   "<application name>,<version>,<engine name>,<version>", a null name as "".
+// - BFR_ACQUIRE_TIMEOUT: vkAcquireNextImageKHR given a timeout of 0 answers
+//   VK_TIMEOUT without asking the driver, as if no image were ready.
 // - BFR_FAIL: the named function fails with VK_ERROR_UNKNOWN, or the result
 //   BFR_FAIL_RESULT names (VK_ERROR_OUT_OF_HOST_MEMORY, VK_ERROR_DEVICE_LOST,
 //   VK_ERROR_SURFACE_LOST_KHR or VK_ERROR_FORMAT_NOT_SUPPORTED), and leaves
@@ -32,6 +42,7 @@
 
 #include <vulkan/vk_layer.h>
 #include <vulkan/vk_platform.h>
+#include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
 
 #include <algorithm>
@@ -40,6 +51,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <format>
 #include <span>
 #include <string>
 #include <string_view>
@@ -62,6 +74,8 @@ PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR nextGetSurfaceCapabilities = nullp
 PFN_vkGetPhysicalDeviceSurfaceFormatsKHR nextGetSurfaceFormats = nullptr;
 PFN_vkCreateSwapchainKHR nextCreateSwapchain = nullptr;
 PFN_vkGetSwapchainImagesKHR nextGetSwapchainImages = nullptr;
+PFN_vkAcquireNextImageKHR nextAcquireNextImage = nullptr;
+PFN_vkQueuePresentKHR nextQueuePresent = nullptr;
 
 // What a failing call returns: BFR_FAIL_RESULT's result, or VK_ERROR_UNKNOWN.
 VkResult failure() {
@@ -122,6 +136,20 @@ VKAPI_ATTR VkResult VKAPI_CALL createInstance(const VkInstanceCreateInfo* info, 
     }
     nextGetInstanceProcAddr = link->u.pLayerInfo->pfnNextGetInstanceProcAddr;
     link->u.pLayerInfo = link->u.pLayerInfo->pNext;
+    if (const char* expected = std::getenv("BFR_EXPECT_APPLICATION"); expected != nullptr) {
+        const VkApplicationInfo* application = info->pApplicationInfo;
+        const auto text = [](const char* name) {
+            return std::string_view{name == nullptr ? "" : name};
+        };
+        const std::string got = application == nullptr
+                                    ? std::string{}
+                                    : std::format("{},{},{},{}", text(application->pApplicationName),
+                                                  application->applicationVersion, text(application->pEngineName),
+                                                  application->engineVersion);
+        if (got != expected) {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+    }
 
     const VkResult result = next<PFN_vkCreateInstance>(VK_NULL_HANDLE, "vkCreateInstance")(info, allocator, instance);
     if (result == VK_SUCCESS) {
@@ -194,6 +222,9 @@ VKAPI_ATTR VkResult VKAPI_CALL createDevice(VkPhysicalDevice adapter, const VkDe
             nextGetDeviceProcAddr(*device, "vkCreateSwapchainKHR"));
         nextGetSwapchainImages = std::bit_cast<PFN_vkGetSwapchainImagesKHR>(
             nextGetDeviceProcAddr(*device, "vkGetSwapchainImagesKHR"));
+        nextAcquireNextImage = std::bit_cast<PFN_vkAcquireNextImageKHR>(
+            nextGetDeviceProcAddr(*device, "vkAcquireNextImageKHR"));
+        nextQueuePresent = std::bit_cast<PFN_vkQueuePresentKHR>(nextGetDeviceProcAddr(*device, "vkQueuePresentKHR"));
     }
     return result;
 }
@@ -285,6 +316,12 @@ VKAPI_ATTR void VKAPI_CALL getPhysicalDeviceFeatures2(VkPhysicalDevice device, V
         }
         else if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) {
             clearNamed(*std::bit_cast<Vulkan13*>(next), kVulkan13Features);
+        }
+        else if (const char* lodBias = std::getenv("BFR_ADAPTER_LOD_BIAS");
+                 lodBias != nullptr &&
+                 next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR) {
+            std::bit_cast<VkPhysicalDevicePortabilitySubsetFeaturesKHR*>(next)->samplerMipLodBias =
+                std::string_view{lodBias} == "1" ? VK_TRUE : VK_FALSE;
         }
     }
 }
@@ -450,6 +487,23 @@ VKAPI_ATTR VkResult VKAPI_CALL getSwapchainImages(VkDevice device, VkSwapchainKH
     return nextGetSwapchainImages(device, swapchain, count, images);
 }
 
+// VK_SUBOPTIMAL_KHR for a success when BFR_SUBOPTIMAL is set.
+VkResult suboptimalIfAsked(VkResult result) {
+    return result == VK_SUCCESS && std::getenv("BFR_SUBOPTIMAL") != nullptr ? VK_SUBOPTIMAL_KHR : result;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL acquireNextImage(VkDevice device, VkSwapchainKHR swapchain, std::uint64_t timeout,
+                                                VkSemaphore semaphore, VkFence fence, std::uint32_t* image) {
+    if (timeout == 0 && std::getenv("BFR_ACQUIRE_TIMEOUT") != nullptr) {
+        return VK_TIMEOUT;
+    }
+    return suboptimalIfAsked(nextAcquireNextImage(device, swapchain, timeout, semaphore, fence, image));
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL queuePresent(VkQueue queue, const VkPresentInfoKHR* info) {
+    return suboptimalIfAsked(nextQueuePresent(queue, info));
+}
+
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL getDeviceProcAddr(VkDevice device, const char* name) {
     const std::string_view function{name};
     if (function == "vkGetDeviceProcAddr") {
@@ -460,6 +514,12 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL getDeviceProcAddr(VkDevice device, cons
     }
     if (function == "vkGetSwapchainImagesKHR") {
         return std::bit_cast<PFN_vkVoidFunction>(&getSwapchainImages);
+    }
+    if (function == "vkAcquireNextImageKHR") {
+        return std::bit_cast<PFN_vkVoidFunction>(&acquireNextImage);
+    }
+    if (function == "vkQueuePresentKHR") {
+        return std::bit_cast<PFN_vkVoidFunction>(&queuePresent);
     }
     return nextGetDeviceProcAddr(device, name);
 }

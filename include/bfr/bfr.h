@@ -33,14 +33,17 @@ typedef uint32_t bfr_bool;
 #define BFR_FALSE 0u
 #define BFR_TRUE 1u
 
-// The most color targets a graphics pipeline renders to.
+// The most color targets a graphics pipeline renders to. Fixed at D3D12's
+// D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT so the descs hold fixed arrays; a Vulkan device may report
+// more in max_color_attachments. Taking a span sized by that cap instead may be revisited.
 #define BFR_MAX_COLOR_TARGETS 8u
 
-// Bytes of push constants every pipeline's shaders read; the layout bfr_pipeline states.
-#define BFR_PUSH_CONSTANTS_SIZE 128u
-
-// What a mask member of 0 means; every bit of the mask set.
+// Every bit of a mask set.
 #define BFR_MASK_ALL 4294967295u
+
+// A bindless slot a texture doesn't have, in a table its usage doesn't set; no table has a slot
+// this high.
+#define BFR_NO_SLOT 4294967295u
 
 // The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".
 #define BFR_MAX_MESSAGE_LENGTH 1024u
@@ -96,6 +99,8 @@ typedef enum bfr_result {
     BFR_RESULT_ERROR_UNSUPPORTED = -18,
     // The API failed when asked about the adapter; the message says how.
     BFR_RESULT_ERROR_QUERY_FAILED = -19,
+    // The wait ran past the caller's timeout.
+    BFR_RESULT_ERROR_TIMEOUT = -20,
     BFR_RESULT_FORCE32 = 0x7FFFFFFF
 } bfr_result;
 
@@ -205,6 +210,18 @@ typedef enum bfr_format {
     BFR_FORMAT_BGR5A1_UNORM = 49,
     // Blue in the low bits.
     BFR_FORMAT_BGRA4_UNORM = 50,
+    BFR_FORMAT_R64_UINT = 51,
+    BFR_FORMAT_R64_SINT = 52,
+    BFR_FORMAT_R64_FLOAT = 53,
+    BFR_FORMAT_RG64_UINT = 54,
+    BFR_FORMAT_RG64_SINT = 55,
+    BFR_FORMAT_RG64_FLOAT = 56,
+    BFR_FORMAT_RGB64_UINT = 57,
+    BFR_FORMAT_RGB64_SINT = 58,
+    BFR_FORMAT_RGB64_FLOAT = 59,
+    BFR_FORMAT_RGBA64_UINT = 60,
+    BFR_FORMAT_RGBA64_SINT = 61,
+    BFR_FORMAT_RGBA64_FLOAT = 62,
     BFR_FORMAT_D16_UNORM = 100,
     BFR_FORMAT_D24_UNORM_S8_UINT = 101,
     BFR_FORMAT_D32_FLOAT = 102,
@@ -361,12 +378,37 @@ typedef enum bfr_alpha_mode {
 typedef enum bfr_queue_type {
     // Graphics, compute and copies.
     BFR_QUEUE_TYPE_GRAPHICS = 0,
-    // Compute and copies, beside the graphics queue.
+    // Compute and copies.
     BFR_QUEUE_TYPE_COMPUTE = 1,
     // Copies alone.
     BFR_QUEUE_TYPE_COPY = 2,
     BFR_QUEUE_TYPE_FORCE32 = 0x7FFFFFFF
 } bfr_queue_type;
+
+// What the backend said of a swapchain as an image was acquired or presented.
+typedef enum bfr_swapchain_status {
+    // It said nothing more than that the call succeeded.
+    BFR_SWAPCHAIN_STATUS_MATCHES = 0,
+    // It no longer matches its window exactly but still presents; Vulkan's VK_SUBOPTIMAL_KHR.
+    // bfr_resize_swapchain makes it match, when the caller chooses.
+    BFR_SWAPCHAIN_STATUS_SUBOPTIMAL = 1,
+    BFR_SWAPCHAIN_STATUS_FORCE32 = 0x7FFFFFFF
+} bfr_swapchain_status;
+
+// A queue's priority against every queue on the system, other processes' included. Which levels
+// each kind of queue takes is in bfr_caps_queues; one above normal may need privileges the process
+// lacks, and then fails as the backend says.
+typedef enum bfr_queue_level {
+    // The system's default, which a backend's queues have when none is set.
+    BFR_QUEUE_LEVEL_NORMAL = 0,
+    // Below the default.
+    BFR_QUEUE_LEVEL_LOW = 1,
+    // Above the default.
+    BFR_QUEUE_LEVEL_HIGH = 2,
+    // The highest.
+    BFR_QUEUE_LEVEL_REALTIME = 3,
+    BFR_QUEUE_LEVEL_FORCE32 = 0x7FFFFFFF
+} bfr_queue_level;
 
 // What an attachment holds when rendering begins.
 typedef enum bfr_load_op {
@@ -633,8 +675,9 @@ typedef struct bfr_instance bfr_instance;
 typedef struct bfr_device bfr_device;
 
 // The images presented to one window. Calls on one swapchain must not overlap, destroying it
-// included; the caller synchronizes them. Different swapchains may be used from different threads
-// at once. A generational handle; 0 is never valid.
+// included, and a bfr_submit of a list that renders to it counts as one; the caller synchronizes
+// them. Different swapchains may be used from different threads at once. A generational handle; 0
+// is never valid.
 typedef struct bfr_swapchain {
     uint64_t bits;
 } bfr_swapchain;
@@ -670,19 +713,20 @@ typedef struct bfr_texture {
 // shares one resource layout, which its shaders declare as follows. Four unbounded tables, each
 // indexed by the slot a resource is given when it is created, which bfr_get_buffer_slot,
 // bfr_get_texture_slots and bfr_get_sampler_slot report and which is the same number on every
-// backend, and one block of bfr_push_constants_size bytes of push constants that every stage reads,
-// set by bfr_push_constants. On Vulkan the tables are the bindings of descriptor set 0, in order: 0
-// sampled images, 1 storage images, 2 storage buffers, 3 samplers, each an update-after-bind and
-// partially-bound runtime array; the push constants are a push constant range over all stages. On
-// D3D12 the tables are unbounded descriptor ranges, each starting at register 0 of its own space:
-// SRV space 0 sampled textures, UAV space 1 storage textures, UAV space 2 storage buffers as raw
-// buffer views, sampler space 3 samplers; the push constants are bfr_push_constants_size / 4 root
-// constants at b0 of space 0. On Metal the tables are one argument buffer at buffer(0), holding the
-// sampled textures, storage textures, storage buffers and samplers in that order, each a region of
-// as many 8-byte entries as the bfr_device_desc's max_bindless member for its kind, so a shader
-// declares them with the sizes the device was opened with; the push constants are at buffer(1).
-// Uniform buffers have no table: they are not in every backend's floor. A pipeline's shaders are
-// bytecode for the backend the device runs on. A generational handle; 0 is never valid.
+// backend, and one block of the caps' max_push_constants_size bytes of push constants that every
+// stage reads, set by bfr_push_constants. On Vulkan the tables are the bindings of descriptor set
+// 0, in order: 0 sampled images, 1 storage images, 2 storage buffers, 3 samplers, each an update-
+// after-bind and partially-bound runtime array; the push constants are a push constant range over
+// all stages. On D3D12 the tables are unbounded descriptor ranges, each starting at register 0 of
+// its own space: SRV space 0 sampled textures, UAV space 1 storage textures, UAV space 2 storage
+// buffers as raw buffer views, sampler space 3 samplers; the push constants are
+// max_push_constants_size / 4 root constants at b0 of space 0. On Metal the tables are one argument
+// buffer at buffer(0), holding the sampled textures, storage textures, storage buffers and samplers
+// in that order, each a region of as many 8-byte entries as the bfr_device_desc's max_bindless
+// member for its kind, so a shader declares them with the sizes the device was opened with; the
+// push constants are at buffer(1). Uniform buffers have no table: they are not in every backend's
+// floor. A pipeline's shaders are bytecode for the backend the device runs on. A generational
+// handle; 0 is never valid.
 typedef struct bfr_pipeline {
     uint64_t bits;
 } bfr_pipeline;
@@ -707,15 +751,24 @@ typedef void (*bfr_message_callback)(
 typedef struct bfr_instance_desc {
     const bfr_chain* next;
     bfr_backend backend;
-    // Enable the backend's validation layer.
+    // Enable the backend's validation layer. On Metal its messages go to the system log.
     bfr_bool validation;
     // May be null.
     bfr_message_callback message_callback;
-    // The least severe message to send; 0 means warning.
+    // The least severe message to send.
     bfr_message_severity min_severity;
     // Passed to message_callback, which may still be called after bfr_destroy_instance while a
     // device lives. May be null.
     void* message_user_data;
+    // The application's name, passed to the backend where it takes one; read during the call only.
+    // Empty is none.
+    bfr_string application_name;
+    // The application's version, passed as given where the backend takes one.
+    uint32_t application_version;
+    // The engine's name, as application_name.
+    bfr_string engine_name;
+    // The engine's version, as application_version.
+    uint32_t engine_version;
 } bfr_instance_desc;
 
 // An adapter, as an instance lists it. Nothing is opened.
@@ -731,24 +784,45 @@ typedef struct bfr_window {
     // The window: an HWND on Windows, a Window XID on X11 (as a pointer), a wl_surface* on Wayland,
     // a CAMetalLayer* on Apple.
     void* window;
-    // The Display* on X11, the wl_display* on Wayland; unused elsewhere.
+    // The Display* on X11, the wl_display* on Wayland, the HINSTANCE on Windows; unused on Apple.
     void* display;
     bfr_window_system system;
 } bfr_window;
 
-// How to open an adapter. The device's queues are numbered: the graphics queue is 0, then the
+// One queue a device opens.
+typedef struct bfr_queue_desc {
+    // 0 to 1: its priority against the device's other queues, higher first; passed to the backend
+    // as given. Where bfr_caps_queues.ranks is 0 the backend doesn't rank a device's queues, so
+    // queues of different ranks fail the device with error_unsupported.
+    float rank;
+    // Its priority against every queue on the system; 0 is normal. A level the backend has no
+    // setting for fails the device with error_unsupported. Vulkan sets one level for all the queues
+    // of a kind, so there different levels in one kind fail the same way.
+    bfr_queue_level level;
+} bfr_queue_desc;
+
+// How to open an adapter. The device's queues are numbered: the graphics queues from 0, then the
 // compute queues, then the copy queues, in the order asked for here.
 typedef struct bfr_device_desc {
     const bfr_chain* next;
     // Index into the instance's adapter list.
     uint32_t adapter;
-    // The window the device must be able to present to; all zero opens it without presenting.
+    // The window one of the device's queues must be able to present to, else it fails with
+    // error_present_unsupported; all zero opens it without asking.
     bfr_window window;
-    // Compute queues to open beside the graphics queue; 0 is none. Fails with error_unsupported
-    // when the adapter has fewer; bfr_caps.queues says how many it has.
-    uint32_t compute_queues;
-    // Copy queues to open; 0 is none. Fails with error_unsupported when the adapter has fewer.
-    uint32_t copy_queues;
+    // The graphics queues to open, read during the call only; none is none. Fails with
+    // error_unsupported when the adapter has fewer; bfr_caps.queues says how many it has. An array
+    // of graphics_queue_count elements. May be null.
+    const bfr_queue_desc* graphics_queues;
+    uint32_t graphics_queue_count;
+    // The compute queues to open, as graphics_queues says. An array of compute_queue_count
+    // elements. May be null.
+    const bfr_queue_desc* compute_queues;
+    uint32_t compute_queue_count;
+    // The copy queues to open, as graphics_queues says. An array of copy_queue_count elements. May
+    // be null.
+    const bfr_queue_desc* copy_queues;
+    uint32_t copy_queue_count;
     // Command lists the device holds at once, across all its pools, and the most swapchains its
     // recording lists render to at once; past it, calls fail with error_limit_reached. Room for
     // them is made with the device, so recording and submitting never allocate. A bfr_submit of
@@ -760,17 +834,20 @@ typedef struct bfr_device_desc {
     // Swapchains the device holds at once, 0 for none; past it, bfr_create_swapchain fails with
     // error_limit_reached.
     uint32_t max_swapchains;
-    // Slots in the sampled texture table bfr_pipeline describes, 0 for none. Made with the device.
-    // Fails with error_limit_reached when the adapter holds fewer; bfr_caps_bindless.max_textures
-    // says how many.
+    // Slots in the sampled texture table bfr_pipeline describes, 0 for none. Made with the device,
+    // passed to the backend as given; bfr_caps_bindless.max_textures says how many the adapter
+    // holds, and more is the backend's to refuse, which Vulkan's validation does. D3D12 makes the
+    // three resource tables in one heap, so there they fail with error_limit_reached when together
+    // they are more than it holds.
     uint32_t max_bindless_textures;
-    // Slots in the storage texture table; fails as max_bindless_textures does, against
-    // max_storage_textures.
+    // Slots in the storage texture table, as max_bindless_textures says;
+    // bfr_caps_bindless.max_storage_textures says how many the adapter holds.
     uint32_t max_bindless_storage_textures;
-    // Slots in the storage buffer table; fails as max_bindless_textures does, against
-    // max_storage_buffers.
+    // Slots in the storage buffer table, as max_bindless_textures says;
+    // bfr_caps_bindless.max_storage_buffers says how many the adapter holds.
     uint32_t max_bindless_storage_buffers;
-    // Slots in the sampler table; fails as max_bindless_textures does, against max_samplers.
+    // Slots in the sampler table, passed as max_bindless_textures is;
+    // bfr_caps_bindless.max_samplers says how many the adapter holds.
     uint32_t max_bindless_samplers;
 } bfr_device_desc;
 
@@ -779,16 +856,20 @@ typedef struct bfr_swapchain_desc {
     const bfr_chain* next;
     // The window to present to.
     bfr_window window;
+    // The device's queue that presents its images; one the device lacks fails with
+    // error_invalid_argument. Fails with error_present_unsupported when it can't present to the
+    // window.
+    uint32_t queue;
     // Images to request, passed to the backend as given. bfr_swapchain_images says how many it
     // made.
     uint32_t image_count;
     // How to present; 0 is fifo. Fails with error_unsupported when the backend has no setting for
     // it.
     bfr_present_mode present_mode;
-    // The images' format; 0 is bgra8_unorm. Fails with error_unsupported when the backend has no
-    // setting for it with color_space.
+    // The images' format. Fails with error_unsupported when the backend has no setting for it with
+    // color_space.
     bfr_format format;
-    // How the display reads the images; 0 is srgb.
+    // How the display reads the images.
     bfr_color_space color_space;
     // How the window blends alpha; 0 is opaque. Fails with error_unsupported when the backend has
     // no setting for it.
@@ -820,6 +901,12 @@ typedef struct bfr_color_attachment {
     bfr_store_op store_op;
     // Red, green, blue and alpha, 0 to 1, when load_op is clear.
     float clear_color[4];
+    // The target holds integers: clear_color_integer applies instead. D3D12 clears with floats, so
+    // there a value a 32-bit float does not hold exactly fails with
+    // BFR_RESULT_ERROR_INVALID_ARGUMENT.
+    bfr_bool clear_integer;
+    // Red, green, blue and alpha bits, when load_op is clear; a signed format reads them as int32.
+    uint32_t clear_color_integer[4];
 } bfr_color_attachment;
 
 // The depth-stencil target of a rendering: a texture with depth_stencil usage, in layout
@@ -833,7 +920,7 @@ typedef struct bfr_depth_stencil_attachment {
     bfr_store_op store_op;
     // 0 to 1, when load_op is clear.
     float clear_depth;
-    // When load_op is clear.
+    // When load_op is clear. The low 8 bits count.
     uint32_t clear_stencil;
 } bfr_depth_stencil_attachment;
 
@@ -870,7 +957,7 @@ typedef struct bfr_rect {
 // How to create a command pool.
 typedef struct bfr_command_pool_desc {
     const bfr_chain* next;
-    // The queue its lists record for; 0 is the graphics queue.
+    // The queue its lists record for, numbered as bfr_device_desc says.
     uint32_t queue;
     // Lists the pool holds, made with it from the device's max_command_lists. bfr_begin_commands
     // hands them out in turn until bfr_reset_command_pool gives them back.
@@ -887,7 +974,8 @@ typedef struct bfr_buffer_usage {
     bfr_bool copy_dst;
     // Shaders read it as constants.
     bfr_bool uniform;
-    // Shaders read and write it.
+    // Shaders read and write it. D3D12 views it in 32-bit values, so there its size must be a
+    // multiple of 4.
     bfr_bool storage;
     // Indexed draws read it.
     bfr_bool index;
@@ -930,6 +1018,8 @@ typedef struct bfr_texture_usage {
 } bfr_texture_usage;
 
 // How to create a texture, in device memory. The CPU reaches it only by copies through a buffer.
+// More than one layer, or more than 6 for cube, makes an array texture, which shaders declare as
+// one.
 typedef struct bfr_texture_desc {
     const bfr_chain* next;
     // 0 is d2.
@@ -950,7 +1040,8 @@ typedef struct bfr_texture_desc {
 } bfr_texture_desc;
 
 // Where a texture is in the bindless tables bfr_pipeline states, from creation to destruction: the
-// index shaders use. A table the texture's usage does not set has no slot for it, and reads 0.
+// index shaders use. A table the texture's usage does not set has no slot for it, and reads
+// BFR_NO_SLOT.
 typedef struct bfr_texture_slots {
     // Its index in the texture table; only with sampled usage.
     uint32_t sampled;
@@ -1061,7 +1152,8 @@ typedef struct bfr_raster_state {
     bfr_fill_mode fill;
     // Clamps depth to the viewport's range instead of clipping to it.
     bfr_bool depth_clamp;
-    // Added to each fragment's depth, in units of the depth format's smallest step.
+    // Added to each fragment's depth, in units of the depth format's smallest step. D3D12 takes
+    // whole numbers only, so there a fraction fails with BFR_RESULT_ERROR_INVALID_ARGUMENT.
     float depth_bias;
     // Added to each fragment's depth, times its depth slope.
     float depth_bias_slope;
@@ -1079,9 +1171,9 @@ typedef struct bfr_stencil_face {
     bfr_stencil_op depth_fail;
     // Reference value against stored.
     bfr_compare_op compare;
-    // The bits compared. The low 8 bits count. 0 is BFR_MASK_ALL.
+    // The bits compared. The low 8 bits count.
     uint32_t read_mask;
-    // The bits written. The low 8 bits count. 0 is BFR_MASK_ALL.
+    // The bits written. The low 8 bits count.
     uint32_t write_mask;
 } bfr_stencil_face;
 
@@ -1098,8 +1190,8 @@ typedef struct bfr_depth_stencil_state {
     bfr_stencil_face back;
 } bfr_depth_stencil_state;
 
-// How a graphics pipeline blends a fragment into one color target. Off by default: the fragment's
-// color replaces the target's.
+// How a graphics pipeline blends a fragment into one color target. With enable false the fragment's
+// color replaces the target's, in the channels write_mask names.
 typedef struct bfr_blend_state {
     bfr_bool enable;
     bfr_blend_factor src_color;
@@ -1108,7 +1200,7 @@ typedef struct bfr_blend_state {
     bfr_blend_factor src_alpha;
     bfr_blend_factor dst_alpha;
     bfr_blend_op alpha_op;
-    // Which channels are written: bit 0 red, 1 green, 2 blue, 3 alpha. 0 is BFR_MASK_ALL.
+    // Which channels are written: bit 0 red, 1 green, 2 blue, 3 alpha. Bits above 3 are ignored.
     uint32_t write_mask;
 } bfr_blend_state;
 
@@ -1151,7 +1243,7 @@ typedef struct bfr_graphics_pipeline_desc {
 // A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was submitted
 // has run. An all-zero token has already completed.
 typedef struct bfr_token {
-    // Index of the queue on the device; 0 is the graphics queue.
+    // Index of the queue on the device, numbered as bfr_device_desc says.
     uint32_t queue;
     uint64_t value;
 } bfr_token;
@@ -1159,7 +1251,7 @@ typedef struct bfr_token {
 // What to send to a queue.
 typedef struct bfr_submit_desc {
     const bfr_chain* next;
-    // The queue to send to; 0 is the graphics queue.
+    // The queue to send to, numbered as bfr_device_desc says.
     uint32_t queue;
     // Recorded from pools on the same queue; the GPU runs them in this order. An array of
     // command_list_count elements.
@@ -1193,7 +1285,8 @@ typedef struct bfr_caps_info {
     bfr_string driver_info;
     // The driver's version, in the vendor's own encoding.
     uint64_t driver_version;
-    // The newest API version the adapter supports: Vulkan 1.3.280 is 1, 3, 280.
+    // The newest API version the adapter supports: Vulkan 1.3.280 is 1, 3, 280. D3D12: the highest
+    // feature level, 12_1 being 12, 1. Metal: the GPU family version, Metal 4 being 4.
     uint32_t api_major;
     uint32_t api_minor;
     uint32_t api_patch;
@@ -1234,7 +1327,8 @@ typedef struct bfr_caps_limits {
     uint32_t max_storage_buffer_range;
     // Most elements in a texel buffer view.
     uint32_t max_texel_buffer_elements;
-    // Most bytes of push constants.
+    // Bytes of push constants every pipeline's shaders read, and the most bfr_push_constants takes:
+    // the device's limit on Vulkan, the root signature's room on D3D12, 128 on Metal.
     uint32_t max_push_constants_size;
     uint32_t max_color_attachments;
     // Widest render area.
@@ -1244,13 +1338,14 @@ typedef struct bfr_caps_limits {
     // Most layers rendered at once.
     uint32_t max_render_layers;
     // Sample counts for float and normalized color attachments: each set bit is a count it
-    // supports, 1, 2, 4 and so on.
+    // supports, 1, 2, 4 and so on. 0 on D3D12, which answers per format only, in
+    // bfr_format_caps.sample_counts.
     uint32_t color_sample_counts;
-    // Sample counts for integer color attachments.
+    // Sample counts for integer color attachments; 0 on D3D12, as color_sample_counts says.
     uint32_t integer_sample_counts;
-    // Sample counts for depth attachments.
+    // Sample counts for depth attachments; 0 on D3D12, as color_sample_counts says.
     uint32_t depth_sample_counts;
-    // Sample counts for stencil attachments.
+    // Sample counts for stencil attachments; 0 on D3D12, as color_sample_counts says.
     uint32_t stencil_sample_counts;
     // Sample counts for rendering with no attachments.
     uint32_t no_attachment_sample_counts;
@@ -1267,10 +1362,10 @@ typedef struct bfr_caps_limits {
     float max_sampler_lod_bias;
     // Samplers with a custom border colour alive at once.
     uint32_t max_custom_border_color_samplers;
-    // Smallest tile of a shading rate texture; 0 without one.
-    uint32_t min_shading_rate_tile;
-    // Largest tile of a shading rate texture; 0 without one.
-    uint32_t max_shading_rate_tile;
+    // Smallest tile of a shading rate texture, width and height; 0 without one.
+    uint32_t min_shading_rate_tile[2];
+    // Largest tile of a shading rate texture, width and height; 0 without one.
+    uint32_t max_shading_rate_tile[2];
     // Alignment in bytes of a uniform buffer view's offset.
     uint64_t min_uniform_buffer_alignment;
     // Alignment in bytes of a storage buffer view's offset.
@@ -1311,7 +1406,8 @@ typedef struct bfr_caps_compute {
     uint32_t max_workgroup_invocations;
     // Most bytes of workgroup shared memory.
     uint32_t max_shared_memory;
-    // Invocations in a subgroup (a wave or warp) by default.
+    // Invocations in a subgroup (a wave or warp) by default. D3D12 has no default; it reports its
+    // minimum.
     uint32_t subgroup_size;
     uint32_t min_subgroup_size;
     uint32_t max_subgroup_size;
@@ -1463,7 +1559,18 @@ typedef struct bfr_caps_memory {
     bfr_bool unified;
 } bfr_caps_memory;
 
-// How many queues of each type the adapter has.
+// The bfr_queue_level values a kind of queue takes; each true where the backend says so.
+typedef struct bfr_queue_levels {
+    bfr_bool normal;
+    bfr_bool low;
+    bfr_bool high;
+    bfr_bool realtime;
+} bfr_queue_levels;
+
+// How many queues of each type the adapter has, and what they do, for a device opened without a
+// window. On Vulkan a window may move a type to another family that presents to it, with its own
+// counts, timestamp bits and levels. The counts are 0 where the backend has no count of queues;
+// bfr_create_device then takes any number of each.
 typedef struct bfr_caps_queues {
     // Queues that run graphics.
     uint32_t graphics;
@@ -1475,6 +1582,13 @@ typedef struct bfr_caps_queues {
     uint32_t graphics_timestamp_bits;
     uint32_t compute_timestamp_bits;
     uint32_t copy_timestamp_bits;
+    // The distinct priorities the backend gives a device's queues by their bfr_queue_desc.rank; 0
+    // where it doesn't rank them.
+    uint32_t ranks;
+    // Levels a graphics queue takes; none set where the backend has no setting.
+    bfr_queue_levels graphics_levels;
+    bfr_queue_levels compute_levels;
+    bfr_queue_levels copy_levels;
 } bfr_caps_queues;
 
 // Everything about an adapter that stays the same while it runs.
@@ -1635,7 +1749,8 @@ BFR_API bfr_result bfr_get_swapchain_formats(
 // driver cannot say.
 BFR_API bfr_result bfr_get_budget(bfr_device* device, bfr_memory_budget* budget);
 
-// Opens an adapter. With a window in desc, picks a queue that can present to it.
+// Opens an adapter with the queues desc asks for. With a window in desc, fails with
+// error_present_unsupported unless one of them can present to it.
 BFR_API bfr_result bfr_create_device(
     bfr_instance* instance,
     const bfr_device_desc* desc,
@@ -1670,12 +1785,24 @@ BFR_API void bfr_destroy_swapchain(bfr_device* device, bfr_swapchain swapchain);
 
 // Takes the swapchain's next image, for bfr_begin_rendering. Fails with error_out_of_date when the
 // swapchain has no images or no longer matches its window; bfr_resize_swapchain then gives it new
-// ones.
-BFR_API bfr_result bfr_acquire(bfr_device* device, bfr_swapchain swapchain);
+// ones. Fails with error_timeout when no image came in time.
+// timeout_ns: Nanoseconds to wait for an image, passed to the backend's acquire. Unused where
+// acquire doesn't wait. Where the backend can only wait with no limit or for a time of its own, the
+// largest u64 waits with no limit and any other for the backend's time.
+// status: What the backend said of the swapchain.
+BFR_API bfr_result bfr_acquire(
+    bfr_device* device,
+    bfr_swapchain swapchain,
+    uint64_t timeout_ns,
+    bfr_swapchain_status* status);
 
 // Shows the acquired image once what bfr_submit sent for it is done. Fails with error_out_of_date
 // when the swapchain no longer matches its window; the image was still presented when it could be.
-BFR_API bfr_result bfr_present(bfr_device* device, bfr_swapchain swapchain);
+// status: What the backend said of the swapchain.
+BFR_API bfr_result bfr_present(
+    bfr_device* device,
+    bfr_swapchain swapchain,
+    bfr_swapchain_status* status);
 
 // Creates a command pool, as desc says, with its lists made. Fails with error_limit_reached at the
 // device's max_command_pools, or when fewer than desc.list_count of its max_command_lists are free.
@@ -1684,9 +1811,10 @@ BFR_API bfr_result bfr_create_command_pool(
     const bfr_command_pool_desc* desc,
     bfr_command_pool* command_pool);
 
-// Gives every list the pool made back to it, so bfr_begin_commands may use their memory again.
-// Fails with error_invalid_argument while a list from the pool is recording, or while the GPU has
-// not passed the token of the pool's last submit; bfr_wait on it first.
+// Gives every list the pool made back to it, so bfr_begin_commands may use their memory again. A
+// list from the pool still recording ends with it on Vulkan; on D3D12 and Metal it fails with
+// error_invalid_argument. Fails with error_invalid_argument while the GPU has not passed the token
+// of the pool's last submit; bfr_wait on it first.
 BFR_API bfr_result bfr_reset_command_pool(bfr_device* device, bfr_command_pool command_pool);
 
 // Destroys a command pool and every list it made, once the GPU has finished with them; the handles
@@ -1714,20 +1842,42 @@ BFR_API bfr_result bfr_begin_rendering(
     const bfr_rendering_desc* desc);
 
 // Ends the rendering bfr_begin_rendering began; a swapchain image is then ready to present, and a
-// texture is in the layout it was given in.
+// texture is in the layout it was given in. Metal has no encoder to end when none is open, so there
+// it fails with error_invalid_argument.
 BFR_API bfr_result bfr_end_rendering(bfr_device* device, bfr_command_list command_list);
 
-// Sets the viewport the draws after it use, inside rendering.
+// Sets the viewport the draws after it use. Metal sets it on the rendering's encoder, so there it
+// fails with error_invalid_argument outside rendering.
 BFR_API bfr_result bfr_set_viewport(
     bfr_device* device,
     bfr_command_list command_list,
     const bfr_viewport* viewport);
 
-// Sets the scissor the draws after it keep to, inside rendering.
+// Sets the scissor the draws after it keep to. Fails as bfr_set_viewport does.
 BFR_API bfr_result bfr_set_scissor(
     bfr_device* device,
     bfr_command_list command_list,
     const bfr_rect* scissor);
+
+// Sets the color the constant blend factors of the draws after it read. Vulkan has no color until
+// it is set, and Metal sets it on the rendering's encoder, so a draw that reads it needs it set in
+// its rendering. Fails as bfr_set_viewport does.
+BFR_API bfr_result bfr_set_blend_constants(
+    bfr_device* device,
+    bfr_command_list command_list,
+    float red,
+    float green,
+    float blue,
+    float alpha);
+
+// Sets the value the stencil test of the draws after it compares against, and stencil_op replace
+// writes, on both faces. The low 8 bits count. Vulkan has no value until it is set, and Metal sets
+// it on the rendering's encoder, so a draw that tests stencil needs it set in its rendering. Fails
+// as bfr_set_viewport does.
+BFR_API bfr_result bfr_set_stencil_reference(
+    bfr_device* device,
+    bfr_command_list command_list,
+    uint32_t reference);
 
 // Makes pipeline the one draws or dispatches after it run, a graphics pipeline for draws and a
 // compute one for dispatches, until another of its kind is bound. Draws assemble the list topology
@@ -1738,9 +1888,9 @@ BFR_API bfr_result bfr_bind_pipeline(
     bfr_pipeline pipeline);
 
 // Sets the first size bytes of the push constants every shader reads, as bfr_pipeline states, for
-// the draws and dispatches after it. size is a multiple of 4 and at most bfr_push_constants_size,
-// else error_invalid_argument. Fails with error_limit_reached past the pool's
-// push_constant_updates.
+// the draws and dispatches after it. size is a multiple of 4 and at most the caps'
+// max_push_constants_size, else error_invalid_argument. Fails with error_limit_reached past the
+// pool's push_constant_updates.
 // data: An array of size elements.
 BFR_API bfr_result bfr_push_constants(
     bfr_device* device,
@@ -1761,7 +1911,8 @@ BFR_API bfr_result bfr_bind_index_buffer(
 // Records a draw of vertex_count vertices, instance_count times, with the bound graphics pipeline,
 // inside rendering. The vertex shader sees vertex indices from first_vertex. Whether it sees
 // instance indices from first_instance or from 0 is the backend's: Vulkan and Metal count from
-// first_instance, D3D12's SV_InstanceID from 0.
+// first_instance, D3D12's SV_InstanceID from 0. Metal draws on the rendering's encoder, so there it
+// fails with error_invalid_argument outside rendering.
 BFR_API bfr_result bfr_draw(
     bfr_device* device,
     bfr_command_list command_list,
@@ -1858,8 +2009,12 @@ BFR_API bfr_result bfr_copy_texture(
 // token: May be null.
 BFR_API bfr_result bfr_submit(bfr_device* device, const bfr_submit_desc* desc, bfr_token* token);
 
-// Blocks until the GPU has passed token, whichever queue it is on.
-BFR_API bfr_result bfr_wait(bfr_device* device, const bfr_token* token);
+// Blocks until the GPU has passed token, whichever queue it is on, which may be one no submit has
+// returned yet, or until timeout_ns has passed, which fails with error_timeout.
+// timeout_ns: Nanoseconds to wait, passed to the backend's wait. A backend that counts in
+// milliseconds is given them rounded up, and on D3D12 one past its longest count waits with no
+// limit.
+BFR_API bfr_result bfr_wait(bfr_device* device, const bfr_token* token, uint64_t timeout_ns);
 
 // Writes whether the GPU has passed token, without blocking.
 BFR_API bfr_result bfr_poll(bfr_device* device, const bfr_token* token, bfr_bool* complete);
@@ -1932,22 +2087,19 @@ BFR_API bfr_result bfr_get_sampler_slot(bfr_device* device, bfr_sampler sampler,
 BFR_API void bfr_destroy_sampler(bfr_device* device, bfr_sampler sampler);
 
 // Creates a compute pipeline, as desc says, before returning. Not for the frame path: it compiles,
-// and frees pipelines the GPU is done with. Fails with error_invalid_argument for a desc with no
-// code or a workgroup dimension of 0, error_limit_reached at the device's maximum of pipelines, and
-// error_device_failed when the backend refuses the code or the desc; the message carries what it
-// said.
+// and frees pipelines the GPU is done with. Fails with error_limit_reached at the device's maximum
+// of pipelines, and error_device_failed when the backend refuses the code or the desc; the message
+// carries what it said.
 BFR_API bfr_result bfr_create_compute_pipeline(
     bfr_device* device,
     const bfr_compute_pipeline_desc* desc,
     bfr_pipeline* pipeline);
 
 // Creates a graphics pipeline, as desc says, before returning. Not for the frame path, as
-// bfr_create_compute_pipeline is not. Fails with error_invalid_argument for a desc with no vertex
-// code, more than max_color_targets targets, a target of format undefined, a depth-stencil test
-// without a depth-stencil format, or samples of 0, error_unsupported when the desc uses raster or
-// blend state the adapter lacks, such as wireframe fill, error_limit_reached at the device's
-// maximum of pipelines, and error_device_failed when the backend refuses the code or the desc; the
-// message carries what it said.
+// bfr_create_compute_pipeline is not. A target of format undefined is an unused one. Fails with
+// error_invalid_argument for a desc with more than max_color_targets targets, error_limit_reached
+// at the device's maximum of pipelines, and error_device_failed when the backend refuses the code
+// or the desc; the message carries what it said.
 BFR_API bfr_result bfr_create_graphics_pipeline(
     bfr_device* device,
     const bfr_graphics_pipeline_desc* desc,

@@ -249,40 +249,11 @@ VkPipelineColorBlendAttachmentState blendFor(const BlendState& blend) {
             .colorWriteMask = blend.writeMask & kAllComponents};
 }
 
-bool sameBlend(const VkPipelineColorBlendAttachmentState& a, const VkPipelineColorBlendAttachmentState& b) {
-    return a.blendEnable == b.blendEnable && a.srcColorBlendFactor == b.srcColorBlendFactor &&
-           a.dstColorBlendFactor == b.dstColorBlendFactor && a.colorBlendOp == b.colorBlendOp &&
-           a.srcAlphaBlendFactor == b.srcAlphaBlendFactor && a.dstAlphaBlendFactor == b.dstAlphaBlendFactor &&
-           a.alphaBlendOp == b.alphaBlendOp && a.colorWriteMask == b.colorWriteMask;
-}
-
-// Fails with RhiUnsupported when desc's state needs a feature the device lacks.
-core::Result<void> checkFeatures(const RasterFeatures& features, const GraphicsPipelineDesc& desc,
-                                 std::span<const VkPipelineColorBlendAttachmentState> blends) {
-    if (desc.raster.fill == FillMode::Wireframe && !features.fillModeNonSolid) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "the adapter has no wireframe fill");
-    }
-    if (desc.raster.depthClamp && !features.depthClamp) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "the adapter has no depth clamp");
-    }
-    if (desc.raster.depthBiasClamp != 0 && !features.depthBiasClamp) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "the adapter has no depth bias clamp");
-    }
-    if (!features.independentBlend) {
-        for (const VkPipelineColorBlendAttachmentState& blend : blends) {
-            if (!sameBlend(blend, blends.front())) {
-                return core::failure(core::ErrorCode::RhiUnsupported,
-                                     "the adapter blends every color target the same way");
-            }
-        }
-    }
-    return {};
-}
-
 } // namespace
 
 core::Result<VulkanBindlessLayout> VulkanBindlessLayout::create(const VolkDeviceTable& table, VkDevice device,
-                                                                const DeviceDesc& desc) {
+                                                                const DeviceDesc& desc,
+                                                                std::uint32_t pushConstantsSize) {
     const std::array<Table, kBindingCount> tables = tablesFor(desc);
     std::array<VkDescriptorSetLayoutBinding, kBindingCount> bindings{};
     std::array<VkDescriptorBindingFlags, kBindingCount> flags{};
@@ -312,7 +283,8 @@ core::Result<VulkanBindlessLayout> VulkanBindlessLayout::create(const VolkDevice
     layoutInfo.pBindings = bindings.data();
 
     // The API says first whether it can hold a set this large; the per-type
-    // limits were checked against the caps, but the whole set has its own.
+    // limits are the caller's to keep within the caps, but the whole set has
+    // its own.
     VkDescriptorSetLayoutSupport support{};
     support.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_SUPPORT;
     table.vkGetDescriptorSetLayoutSupport(device, &layoutInfo, &support);
@@ -352,7 +324,7 @@ core::Result<VulkanBindlessLayout> VulkanBindlessLayout::create(const VolkDevice
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkAllocateDescriptorSets", .result = result});
     }
 
-    const VkPushConstantRange pushConstants{.stageFlags = VK_SHADER_STAGE_ALL, .offset = 0, .size = kPushConstantsSize};
+    const VkPushConstantRange pushConstants{.stageFlags = VK_SHADER_STAGE_ALL, .offset = 0, .size = pushConstantsSize};
     VkPipelineLayoutCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineInfo.setLayoutCount = 1;
@@ -461,22 +433,15 @@ void VulkanBindlessLayout::destroy() {
 }
 
 VulkanPipeline::VulkanPipeline(const VolkDeviceTable& table, VkDevice device, VkPipeline pipeline,
-                               VkPipelineBindPoint bindPoint, VkPrimitiveTopology topology,
-                               std::array<std::uint32_t, kWorkgroupDimensions> workgroupSize)
-    : table_(&table),
-      device_(device),
-      pipeline_(pipeline),
-      bindPoint_(bindPoint),
-      topology_(topology),
-      workgroupSize_(workgroupSize) {}
+                               VkPipelineBindPoint bindPoint, VkPrimitiveTopology topology)
+    : table_(&table), device_(device), pipeline_(pipeline), bindPoint_(bindPoint), topology_(topology) {}
 
 VulkanPipeline::VulkanPipeline(VulkanPipeline&& other) noexcept
     : table_(other.table_),
       device_(other.device_),
       pipeline_(std::exchange(other.pipeline_, VK_NULL_HANDLE)),
       bindPoint_(other.bindPoint_),
-      topology_(other.topology_),
-      workgroupSize_(other.workgroupSize_) {}
+      topology_(other.topology_) {}
 
 VulkanPipeline::~VulkanPipeline() {
     if (pipeline_ != VK_NULL_HANDLE) {
@@ -501,22 +466,17 @@ core::Result<VulkanPipeline> createVulkanComputePipeline(const VolkDeviceTable& 
     if (result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateComputePipelines", .result = result});
     }
-    return VulkanPipeline{
-        table, device, pipeline, VK_PIPELINE_BIND_POINT_COMPUTE, VK_PRIMITIVE_TOPOLOGY_MAX_ENUM, desc.workgroupSize};
+    return VulkanPipeline{table, device, pipeline, VK_PIPELINE_BIND_POINT_COMPUTE, VK_PRIMITIVE_TOPOLOGY_MAX_ENUM};
 }
 
 core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable& table, VkDevice device,
-                                                          VkPipelineLayout layout, const RasterFeatures& features,
-                                                          const GraphicsPipelineDesc& desc) {
+                                                          VkPipelineLayout layout, const GraphicsPipelineDesc& desc) {
     const std::span targets{desc.colorTargets.data(), desc.colorTargetCount};
     std::array<VkFormat, kMaxColorTargets> colorFormats{};
     std::array<VkPipelineColorBlendAttachmentState, kMaxColorTargets> blends{};
     for (std::size_t i = 0; i < targets.size(); ++i) {
         colorFormats.at(i) = vulkanFormat(targets[i].format);
         blends.at(i) = blendFor(targets[i].blend);
-    }
-    if (auto checked = checkFeatures(features, desc, std::span{blends.data(), targets.size()}); !checked) {
-        return std::unexpected(std::move(checked.error()));
     }
 
     auto vertex = createModule(table, device, desc.vertex.code);
@@ -548,8 +508,8 @@ core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable&
     inputAssembly.topology = topologyFor(desc.topology);
     VkPipelineViewportStateCreateInfo viewport{};
     viewport.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewport.viewportCount = 1;
-    viewport.scissorCount = 1;
+    viewport.viewportCount = kViewports;
+    viewport.scissorCount = kViewports;
     VkPipelineRasterizationStateCreateInfo raster{};
     raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     raster.depthClampEnable = desc.raster.depthClamp ? VK_TRUE : VK_FALSE;
@@ -622,7 +582,7 @@ core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable&
     if (result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateGraphicsPipelines", .result = result});
     }
-    return VulkanPipeline{table, device, pipeline, VK_PIPELINE_BIND_POINT_GRAPHICS, topologyFor(desc.topology), {}};
+    return VulkanPipeline{table, device, pipeline, VK_PIPELINE_BIND_POINT_GRAPHICS, topologyFor(desc.topology)};
 }
 
 // The device's pipeline calls, beside the pipelines they make.
@@ -636,9 +596,6 @@ core::Result<VulkanPipeline*> VulkanDevice::pipelineFor(PipelineHandle pipeline)
 }
 
 core::Result<PipelineHandle> VulkanDevice::createComputePipeline(const ComputePipelineDesc& desc) {
-    if (auto checked = checkComputePipelineDesc(desc); !checked) {
-        return std::unexpected(std::move(checked.error()));
-    }
     // Cold, so pipelines the GPU is done with are freed here, never on the
     // frame path.
     collectBuffers();
@@ -658,7 +615,7 @@ core::Result<PipelineHandle> VulkanDevice::createGraphicsPipeline(const Graphics
         return std::unexpected(std::move(checked.error()));
     }
     collectBuffers();
-    auto made = createVulkanGraphicsPipeline(table_, device_, layout_.pipelineLayout(), rasterFeatures_, desc);
+    auto made = createVulkanGraphicsPipeline(table_, device_, layout_.pipelineLayout(), desc);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }

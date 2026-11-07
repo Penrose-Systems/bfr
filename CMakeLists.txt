@@ -139,6 +139,10 @@ if(BFR_BACKEND_VULKAN)
         src/backends/vulkan/vulkan_texture.cpp)
     target_link_libraries(bfr_objects PRIVATE volk::volk_headers Vulkan::UtilityHeaders
         GPUOpen::VulkanMemoryAllocator)
+    # VK_KHR_portability_subset, which a portability driver such as MoltenVK
+    # lists, is provisional: its feature struct is only in vulkan_beta.h.
+    set(bfr_vulkan_beta VK_ENABLE_BETA_EXTENSIONS)
+    target_compile_definitions(bfr_objects PRIVATE ${bfr_vulkan_beta})
     # The window systems the Vulkan backend makes surfaces on. Only volk and
     # the surface code see them: the Xlib and Windows headers they pull in
     # define macros that would leak into the rest. volk keeps its tables the
@@ -154,13 +158,14 @@ if(BFR_BACKEND_VULKAN)
         PROPERTIES COMPILE_DEFINITIONS "${bfr_vulkan_platforms}")
     add_library(bfr_volk OBJECT src/backends/vulkan/volk.cpp)
     target_link_libraries(bfr_volk PRIVATE volk::volk_headers)
-    target_compile_definitions(bfr_volk PRIVATE ${bfr_vulkan_platforms})
+    target_compile_definitions(bfr_volk PRIVATE ${bfr_vulkan_platforms} ${bfr_vulkan_beta})
     set_target_properties(bfr_volk PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
     list(APPEND bfr_backend_objects bfr_volk)
     # VMA, the allocator the Vulkan backend's buffers take memory from.
     add_library(bfr_vma OBJECT src/backends/vulkan/vma.cpp)
     target_include_directories(bfr_vma PRIVATE src/backends)
     target_link_libraries(bfr_vma PRIVATE volk::volk_headers GPUOpen::VulkanMemoryAllocator)
+    target_compile_definitions(bfr_vma PRIVATE ${bfr_vulkan_beta})
     set_target_properties(bfr_vma PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
     list(APPEND bfr_backend_objects bfr_vma)
 endif()

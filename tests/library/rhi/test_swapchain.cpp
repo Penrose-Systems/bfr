@@ -5,6 +5,7 @@
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
 #include "bfr/rhi/device.h"
+#include "bfr/rhi/format.h"
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "bfr/rhi/swapchain.h"
@@ -70,6 +71,19 @@ TEST_CASE("Device builds a headless swapchain at the size asked for", "[rhi][agn
         CHECK(images->height == kHeight);
         CHECK(images->count >= 2);
         CHECK(headless.device->destroySwapchain(*swapchain).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device refuses a swapchain of a format BFR does not have", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const HeadlessDevice headless{recordingInto(backend, messages)};
+        SwapchainDesc desc = swapchainDesc(*headless.instance);
+        desc.format = Format::Undefined;
+
+        CHECK(headless.device->createSwapchain(kHeadless, desc).error().code == bfr::core::ErrorCode::RhiInvalidCall);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -218,7 +232,9 @@ TEST_CASE("Device builds the image count its swapchain was created with", "[rhi]
         // window allows that many.
         const bool roomForMore = surface->maxImageCount == 0 || surface->maxImageCount > surface->minImageCount;
         const std::uint32_t wanted = surface->minImageCount + (roomForMore ? 1 : 0);
-        const auto swapchain = headless.device->createSwapchain(kHeadless, {.imageCount = wanted});
+        SwapchainDesc desc = kTestSwapchain;
+        desc.imageCount = wanted;
+        const auto swapchain = headless.device->createSwapchain(kHeadless, desc);
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
 

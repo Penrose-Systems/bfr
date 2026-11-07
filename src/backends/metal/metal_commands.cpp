@@ -6,6 +6,7 @@
 #include "metal/metal_pipeline.h"
 #include "metal/metal_util.h"
 #include "rhi/command_check.h"
+#include "rhi/enum_check.h"
 
 #include <Foundation/NSTypes.hpp>
 #include <Metal/MTL4ArgumentTable.hpp>
@@ -17,6 +18,7 @@
 #include <Metal/MTLRenderCommandEncoder.hpp>
 #include <Metal/MTLTypes.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -115,6 +117,31 @@ core::Result<void> MetalDevice::setScissor(CommandListHandle commandList, const 
     return {};
 }
 
+core::Result<void> MetalDevice::setBlendConstants(CommandListHandle commandList, const std::array<float, 4>& color) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    if (auto checked = checkRendering((*list)->state); !checked) {
+        return checked;
+    }
+    const auto [red, green, blue, alpha] = color;
+    (*list)->encoder->setBlendColor(red, green, blue, alpha);
+    return {};
+}
+
+core::Result<void> MetalDevice::setStencilReference(CommandListHandle commandList, std::uint32_t reference) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    if (auto checked = checkRendering((*list)->state); !checked) {
+        return checked;
+    }
+    (*list)->encoder->setStencilReferenceValue(reference);
+    return {};
+}
+
 core::Result<void> MetalDevice::bindPipeline(CommandListHandle commandList, PipelineHandle pipeline) {
     auto list = commandListFor(commandList);
     if (!list) {
@@ -126,11 +153,9 @@ core::Result<void> MetalDevice::bindPipeline(CommandListHandle commandList, Pipe
     }
     if ((*found)->compute) {
         (*list)->compute = pipeline;
-        (*list)->state.computeBound = true;
     }
     else {
         (*list)->graphics = pipeline;
-        (*list)->state.graphicsBound = true;
     }
     return {};
 }
@@ -140,7 +165,7 @@ core::Result<void> MetalDevice::pushConstants(CommandListHandle commandList, std
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (auto checked = checkPushConstants(data); !checked) {
+    if (auto checked = checkPushConstants(data, kPushConstantsSize); !checked) {
         return checked;
     }
     MetalCommandPool* pool = commandPools_.find((*list)->pool);
@@ -151,17 +176,26 @@ core::Result<void> MetalDevice::pushConstants(CommandListHandle commandList, std
     if (auto counted = countPushConstants(pool->pushed, pool->pushConstantUpdates); !counted) {
         return counted;
     }
-    // The next entry of the pool's ring takes the bytes, and the argument
-    // table points at it for the draws and dispatches after this.
+    // The next entry of the pool's ring takes the list's last push, then the
+    // bytes, and the argument table points at it for the draws and
+    // dispatches after this.
     const MetalListSlot& first = lists_[pool->first];
     const std::uint64_t offset = std::uint64_t{entry} * kPushConstantsSize;
-    std::memcpy(static_cast<std::byte*>(first.pushRing->contents()) + offset, data.data(), data.size());
+    auto* const ring = static_cast<std::byte*>(first.pushRing->contents());
+    if ((*list)->pushedAt) {
+        std::memcpy(ring + offset, ring + *(*list)->pushedAt, kPushConstantsSize);
+    }
+    std::memcpy(ring + offset, data.data(), data.size());
+    (*list)->pushedAt = offset;
     lists_[(*list)->slot].arguments->setAddress(first.pushRing->gpuAddress() + offset, kPushConstantsBufferIndex);
     return {};
 }
 
 core::Result<void> MetalDevice::bindIndexBuffer(CommandListHandle commandList, BufferHandle buffer,
                                                 std::uint64_t offset, IndexType type) {
+    if (auto checked = checkKnown(type, "index type"); !checked) {
+        return checked;
+    }
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
@@ -170,10 +204,15 @@ core::Result<void> MetalDevice::bindIndexBuffer(CommandListHandle commandList, B
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
+    // Metal takes the bytes from offset to the end, which there are none of
+    // past it.
+    if (offset > (*found)->buffer->length()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "index offset {} is past the buffer's {} bytes", offset,
+                             (*found)->buffer->length());
+    }
     (*list)->indexType = type == IndexType::Uint16 ? MTL::IndexTypeUInt16 : MTL::IndexTypeUInt32;
     (*list)->indexBuffer = (*found)->buffer->gpuAddress() + offset;
     (*list)->indexBytes = (*found)->buffer->length() - offset;
-    (*list)->state.indexBound = true;
     return {};
 }
 
@@ -184,7 +223,7 @@ core::Result<void> MetalDevice::draw(CommandListHandle commandList, std::uint32_
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (auto checked = checkDraw((*list)->state, false); !checked) {
+    if (auto checked = checkRendering((*list)->state); !checked) {
         return checked;
     }
     const auto pipeline = applyGraphics(**list);
@@ -203,17 +242,21 @@ core::Result<void> MetalDevice::drawIndexed(CommandListHandle commandList, std::
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (auto checked = checkDraw((*list)->state, true); !checked) {
+    if (auto checked = checkRendering((*list)->state); !checked) {
         return checked;
-    }
-    const auto pipeline = applyGraphics(**list);
-    if (!pipeline) {
-        return std::unexpected(std::move(pipeline.error()));
     }
     // Metal takes the first index as an offset into the buffer.
     const NS::UInteger indexBytes = (*list)->indexType == MTL::IndexTypeUInt16 ? sizeof(std::uint16_t)
                                                                                : sizeof(std::uint32_t);
     const NS::UInteger skipped = NS::UInteger{firstIndex} * indexBytes;
+    if (skipped > (*list)->indexBytes) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "first index {} is past the index buffer's end",
+                             firstIndex);
+    }
+    const auto pipeline = applyGraphics(**list);
+    if (!pipeline) {
+        return std::unexpected(std::move(pipeline.error()));
+    }
     (*list)->encoder->drawIndexedPrimitives(primitiveFor((*pipeline)->topology), indexCount, (*list)->indexType,
                                             (*list)->indexBuffer + skipped, (*list)->indexBytes - skipped,
                                             instanceCount, vertexOffset, firstInstance);
@@ -225,9 +268,6 @@ core::Result<void> MetalDevice::dispatch(CommandListHandle commandList, std::uin
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
-    }
-    if (auto checked = checkDispatch((*list)->state); !checked) {
-        return checked;
     }
     auto pipeline = pipelineFor((*list)->compute);
     if (!pipeline) {

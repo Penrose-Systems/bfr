@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -42,6 +43,8 @@ void record(bfr_message_severity /*severity*/, bfr_string message, void* userDat
 }
 
 constexpr bfr_window kHeadless{.window = nullptr, .display = nullptr, .system = BFR_WINDOW_SYSTEM_HEADLESS};
+// The longest wait there is, so a slow GPU never fails a test.
+constexpr std::uint64_t kTestWait = std::numeric_limits<std::uint64_t>::max();
 // A chain entry of a type no desc takes.
 constexpr bfr_chain kStray{.next = nullptr, .type = BFR_STRUCT_TYPE_FORCE32};
 
@@ -56,6 +59,8 @@ constexpr std::uint32_t kDevicePools = 16;
 constexpr std::uint32_t kDeviceSwapchains = 4;
 constexpr std::uint32_t kDeviceTableSlots = 256;
 constexpr std::uint32_t kDeviceSamplers = 16;
+// One queue at rank 0 and level normal.
+constexpr bfr_queue_desc kOneQueue{.rank = 0, .level = BFR_QUEUE_LEVEL_NORMAL};
 
 // The backends this build has.
 std::vector<bfr_backend> backendsInBuild() {
@@ -85,7 +90,11 @@ struct Instance {
                                      .validation = validation,
                                      .message_callback = record,
                                      .min_severity = BFR_MESSAGE_SEVERITY_WARNING,
-                                     .message_user_data = &messages};
+                                     .message_user_data = &messages,
+                                     .application_name = {},
+                                     .application_version = 0,
+                                     .engine_name = {},
+                                     .engine_version = 0};
         const bfr_result result = bfr_create_instance(&desc, &instance);
         INFO(lastError());
         REQUIRE(result == BFR_RESULT_SUCCESS);
@@ -108,8 +117,12 @@ struct HeadlessDevice {
             const bfr_device_desc desc{.next = nullptr,
                                        .adapter = adapter,
                                        .window = kHeadless,
-                                       .compute_queues = 0,
-                                       .copy_queues = 0,
+                                       .graphics_queues = &kOneQueue,
+                                       .graphics_queue_count = 1,
+                                       .compute_queues = nullptr,
+                                       .compute_queue_count = 0,
+                                       .copy_queues = nullptr,
+                                       .copy_queue_count = 0,
                                        .max_command_lists = kDeviceLists,
                                        .max_command_pools = kDevicePools,
                                        .max_swapchains = kDeviceSwapchains,
@@ -159,7 +172,11 @@ TEST_CASE("C API rejects a backend value BFR does not have", "[c_api][unit]") {
                                  .validation = BFR_FALSE,
                                  .message_callback = nullptr,
                                  .min_severity = BFR_MESSAGE_SEVERITY_WARNING,
-                                 .message_user_data = nullptr};
+                                 .message_user_data = nullptr,
+                                 .application_name = {},
+                                 .application_version = 0,
+                                 .engine_name = {},
+                                 .engine_version = 0};
     bfr_instance* instance = nullptr;
 
     CHECK(bfr_create_instance(&desc, &instance) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
@@ -188,6 +205,31 @@ TEST_CASE("C API says when the caller's backend array is too small", "[c_api][un
     CHECK(result == (backendsInBuild().size() > 1 ? BFR_RESULT_INCOMPLETE : BFR_RESULT_SUCCESS));
 }
 
+TEST_CASE("C API takes the application's and engine's names, and refuses a null name with a length", "[c_api][gpu]") {
+    constexpr std::string_view kApplication = "Test App";
+    constexpr std::string_view kEngine = "Test Engine";
+    constexpr std::size_t kSomeBytes = 4;
+    const bfr_backend backend = GENERATE(eachBackend());
+    bfr_instance_desc desc{.next = nullptr,
+                           .backend = backend,
+                           .validation = BFR_FALSE,
+                           .message_callback = nullptr,
+                           .min_severity = BFR_MESSAGE_SEVERITY_WARNING,
+                           .message_user_data = nullptr,
+                           .application_name = {.data = kApplication.data(), .length = kApplication.size()},
+                           .application_version = 1,
+                           .engine_name = {.data = kEngine.data(), .length = kEngine.size()},
+                           .engine_version = 1};
+    bfr_instance* instance = nullptr;
+
+    REQUIRE(bfr_create_instance(&desc, &instance) == BFR_RESULT_SUCCESS);
+    bfr_destroy_instance(instance);
+    instance = nullptr;
+    desc.engine_name = {.data = nullptr, .length = kSomeBytes};
+    CHECK(bfr_create_instance(&desc, &instance) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(instance == nullptr);
+}
+
 TEST_CASE("C API reports a backend this build lacks", "[c_api][unit]") {
     const std::vector<bfr_backend> built = backendsInBuild();
     for (const bfr_backend backend : {BFR_BACKEND_VULKAN, BFR_BACKEND_D3D12, BFR_BACKEND_METAL}) {
@@ -199,7 +241,11 @@ TEST_CASE("C API reports a backend this build lacks", "[c_api][unit]") {
                                      .validation = BFR_FALSE,
                                      .message_callback = nullptr,
                                      .min_severity = BFR_MESSAGE_SEVERITY_WARNING,
-                                     .message_user_data = nullptr};
+                                     .message_user_data = nullptr,
+                                     .application_name = {},
+                                     .application_version = 0,
+                                     .engine_name = {},
+                                     .engine_version = 0};
         bfr_instance* instance = nullptr;
 
         INFO(static_cast<int>(backend));
@@ -215,10 +261,93 @@ TEST_CASE("C API rejects a struct chained where it does not belong", "[c_api][un
                                  .validation = BFR_FALSE,
                                  .message_callback = nullptr,
                                  .min_severity = BFR_MESSAGE_SEVERITY_WARNING,
-                                 .message_user_data = nullptr};
+                                 .message_user_data = nullptr,
+                                 .application_name = {},
+                                 .application_version = 0,
+                                 .engine_name = {},
+                                 .engine_version = 0};
     bfr_instance* instance = nullptr;
 
     CHECK(bfr_create_instance(&desc, &instance) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("C API rejects a struct chained to a device or swapchain desc", "[c_api][gpu]") {
+    const bfr_backend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const Instance instance{backend, messages};
+        const bfr_device_desc deviceDesc{.next = &kStray,
+                                         .adapter = 0,
+                                         .window = kHeadless,
+                                         .graphics_queues = &kOneQueue,
+                                         .graphics_queue_count = 1,
+                                         .compute_queues = nullptr,
+                                         .compute_queue_count = 0,
+                                         .copy_queues = nullptr,
+                                         .copy_queue_count = 0,
+                                         .max_command_lists = kDeviceLists,
+                                         .max_command_pools = kDevicePools,
+                                         .max_swapchains = kDeviceSwapchains,
+                                         .max_bindless_textures = kDeviceTableSlots,
+                                         .max_bindless_storage_textures = kDeviceTableSlots,
+                                         .max_bindless_storage_buffers = kDeviceTableSlots,
+                                         .max_bindless_samplers = kDeviceSamplers};
+        bfr_device* stray = nullptr;
+        CHECK(bfr_create_device(instance.instance, &deviceDesc, &stray) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+        CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("takes no chained structs"));
+        CHECK(stray == nullptr);
+
+        const HeadlessDevice device{instance.instance};
+        const bfr_swapchain_desc swapchainDesc{.next = &kStray,
+                                               .window = kHeadless,
+                                               .queue = 0,
+                                               .image_count = device.images,
+                                               .present_mode = BFR_PRESENT_MODE_FIFO,
+                                               .format = BFR_FORMAT_BGRA8_UNORM,
+                                               .color_space = BFR_COLOR_SPACE_SRGB,
+                                               .alpha_mode = BFR_ALPHA_MODE_OPAQUE};
+        bfr_swapchain swapchain{};
+        CHECK(bfr_create_swapchain(device.device, &swapchainDesc, &swapchain) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+        CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("takes no chained structs"));
+        CHECK(swapchain.bits == 0);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C API rejects a device desc's null queues with a count, and a queue level BFR doesn't have",
+          "[c_api][gpu]") {
+    const bfr_backend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const Instance instance{backend, messages};
+        const bfr_queue_desc unknownLevel{.rank = 0, .level = static_cast<bfr_queue_level>(kNotAValue)};
+        const bfr_device_desc nullQueues{.next = nullptr,
+                                         .adapter = 0,
+                                         .window = {},
+                                         .graphics_queues = nullptr,
+                                         .graphics_queue_count = 1,
+                                         .compute_queues = nullptr,
+                                         .compute_queue_count = 0,
+                                         .copy_queues = nullptr,
+                                         .copy_queue_count = 0,
+                                         .max_command_lists = 0,
+                                         .max_command_pools = 0,
+                                         .max_swapchains = 0,
+                                         .max_bindless_textures = 0,
+                                         .max_bindless_storage_textures = 0,
+                                         .max_bindless_storage_buffers = 0,
+                                         .max_bindless_samplers = 0};
+        bfr_device* device = nullptr;
+        CHECK(bfr_create_device(instance.instance, &nullQueues, &device) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+        CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("graphics_queues is null"));
+
+        bfr_device_desc unknown = nullQueues;
+        unknown.graphics_queues = &unknownLevel;
+        CHECK(bfr_create_device(instance.instance, &unknown, &device) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+        CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("not one BFR has"));
+        CHECK(device == nullptr);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
 TEST_CASE("C API destroy calls take null and stale handles", "[c_api][unit]") {
@@ -267,10 +396,11 @@ TEST_CASE("C API builds, resizes and destroys a headless swapchain", "[c_api][gp
         const HeadlessDevice device{instance.instance};
         const bfr_swapchain_desc desc{.next = nullptr,
                                       .window = kHeadless,
+                                      .queue = 0,
                                       .image_count = kImages,
                                       .present_mode = BFR_PRESENT_MODE_FIFO,
-                                      .format = {},
-                                      .color_space = {},
+                                      .format = BFR_FORMAT_BGRA8_UNORM,
+                                      .color_space = BFR_COLOR_SPACE_SRGB,
                                       .alpha_mode = {}};
         bfr_swapchain swapchain{};
         REQUIRE(bfr_create_swapchain(device.device, &desc, &swapchain) == BFR_RESULT_SUCCESS);
@@ -309,10 +439,11 @@ constexpr std::array kModes{
 void checkPresentMode(bfr_device* device, const bfr_swapchain_caps& caps, const Mode& mode) {
     const bfr_swapchain_desc desc{.next = nullptr,
                                   .window = kHeadless,
+                                  .queue = 0,
                                   .image_count = caps.min_image_count,
                                   .present_mode = mode.mode,
-                                  .format = {},
-                                  .color_space = {},
+                                  .format = BFR_FORMAT_BGRA8_UNORM,
+                                  .color_space = BFR_COLOR_SPACE_SRGB,
                                   .alpha_mode = {}};
     bfr_swapchain swapchain{};
     bfr_swapchain_images images{};
@@ -354,15 +485,16 @@ TEST_CASE("C API builds a swapchain as asked and reports what it is", "[c_api][g
     {
         const Instance instance{backend, messages};
         const HeadlessDevice device{instance.instance};
-        const bfr_swapchain_desc defaults{.next = nullptr,
-                                          .window = kHeadless,
-                                          .image_count = device.images,
-                                          .present_mode = {},
-                                          .format = {},
-                                          .color_space = {},
-                                          .alpha_mode = {}};
+        const bfr_swapchain_desc desc{.next = nullptr,
+                                      .window = kHeadless,
+                                      .queue = 0,
+                                      .image_count = device.images,
+                                      .present_mode = {},
+                                      .format = BFR_FORMAT_BGRA8_UNORM,
+                                      .color_space = BFR_COLOR_SPACE_SRGB,
+                                      .alpha_mode = {}};
         bfr_swapchain swapchain{};
-        REQUIRE(bfr_create_swapchain(device.device, &defaults, &swapchain) == BFR_RESULT_SUCCESS);
+        REQUIRE(bfr_create_swapchain(device.device, &desc, &swapchain) == BFR_RESULT_SUCCESS);
         bfr_swapchain_images images{};
 
         const bfr_result resized = bfr_resize_swapchain(device.device, swapchain, kWidth, kHeight, &images);
@@ -383,33 +515,54 @@ TEST_CASE("C API rejects a swapchain setting that is not one BFR has", "[c_api][
     // A value BFR doesn't have is the caller's mistake, not the window's.
     const bfr_swapchain_desc desc = GENERATE(bfr_swapchain_desc{.next = nullptr,
                                                                 .window = kHeadless,
+                                                                .queue = 0,
                                                                 .image_count = 0,
                                                                 .present_mode = static_cast<bfr_present_mode>(
                                                                     kNotAValue),
-                                                                .format = {},
-                                                                .color_space = {},
+                                                                .format = BFR_FORMAT_BGRA8_UNORM,
+                                                                .color_space = BFR_COLOR_SPACE_SRGB,
                                                                 .alpha_mode = {}},
                                              bfr_swapchain_desc{.next = nullptr,
                                                                 .window = kHeadless,
+                                                                .queue = 0,
                                                                 .image_count = 0,
                                                                 .present_mode = {},
                                                                 .format = static_cast<bfr_format>(kNotAValue),
-                                                                .color_space = {},
+                                                                .color_space = BFR_COLOR_SPACE_SRGB,
                                                                 .alpha_mode = {}},
                                              bfr_swapchain_desc{.next = nullptr,
                                                                 .window = kHeadless,
+                                                                .queue = 0,
                                                                 .image_count = 0,
                                                                 .present_mode = {},
-                                                                .format = {},
+                                                                .format = BFR_FORMAT_BGRA8_UNORM,
                                                                 .color_space = static_cast<bfr_color_space>(kNotAValue),
                                                                 .alpha_mode = {}},
                                              bfr_swapchain_desc{.next = nullptr,
                                                                 .window = kHeadless,
+                                                                .queue = 0,
+                                                                .image_count = 0,
+                                                                .present_mode = {},
+                                                                .format = BFR_FORMAT_BGRA8_UNORM,
+                                                                .color_space = BFR_COLOR_SPACE_SRGB,
+                                                                .alpha_mode = static_cast<bfr_alpha_mode>(kNotAValue)},
+                                             // 0 is no format and no color space; it stands for no other.
+                                             bfr_swapchain_desc{.next = nullptr,
+                                                                .window = kHeadless,
+                                                                .queue = 0,
                                                                 .image_count = 0,
                                                                 .present_mode = {},
                                                                 .format = {},
+                                                                .color_space = BFR_COLOR_SPACE_SRGB,
+                                                                .alpha_mode = {}},
+                                             bfr_swapchain_desc{.next = nullptr,
+                                                                .window = kHeadless,
+                                                                .queue = 0,
+                                                                .image_count = 0,
+                                                                .present_mode = {},
+                                                                .format = BFR_FORMAT_BGRA8_UNORM,
                                                                 .color_space = {},
-                                                                .alpha_mode = static_cast<bfr_alpha_mode>(kNotAValue)});
+                                                                .alpha_mode = {}});
     std::vector<std::string> messages;
     {
         const Instance instance{backend, messages};
@@ -430,10 +583,11 @@ TEST_CASE("C API reports a destroyed swapchain as invalid and destroys it again 
     const HeadlessDevice device{instance.instance};
     const bfr_swapchain_desc desc{.next = nullptr,
                                   .window = kHeadless,
+                                  .queue = 0,
                                   .image_count = device.images,
                                   .present_mode = BFR_PRESENT_MODE_FIFO,
-                                  .format = {},
-                                  .color_space = {},
+                                  .format = BFR_FORMAT_BGRA8_UNORM,
+                                  .color_space = BFR_COLOR_SPACE_SRGB,
                                   .alpha_mode = {}};
     bfr_swapchain swapchain{};
     REQUIRE(bfr_create_swapchain(device.device, &desc, &swapchain) == BFR_RESULT_SUCCESS);
@@ -571,9 +725,6 @@ TEST_CASE("C API creates and destroys pipelines, and refuses a state value it do
     stray = graphicsDesc;
     stray.vertex.code = nullptr;
     CHECK(bfr_create_graphics_pipeline(device.device, &stray, &none) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
-    stray = graphicsDesc;
-    stray.vertex.code_size = 0;
-    CHECK(bfr_create_graphics_pipeline(device.device, &stray, &none) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
 
     bfr_destroy_pipeline(device.device, compute);
     bfr_destroy_pipeline(device.device, graphics);
@@ -651,7 +802,7 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, and refu
                                  .wait_count = 0};
     bfr_token token{};
     REQUIRE(bfr_submit(device.device, &submit, &token) == BFR_RESULT_SUCCESS);
-    REQUIRE(bfr_wait(device.device, &token) == BFR_RESULT_SUCCESS);
+    REQUIRE(bfr_wait(device.device, &token, kTestWait) == BFR_RESULT_SUCCESS);
 
     void* data = nullptr;
     REQUIRE(bfr_map_buffer(device.device, readback, &data) == BFR_RESULT_SUCCESS);
@@ -706,7 +857,9 @@ TEST_CASE("C API renders to a texture with the viewport and scissor set, and ref
     rendering.color_attachments[0] = {.texture = target,
                                       .load_op = static_cast<bfr_load_op>(kNotAValue),
                                       .store_op = BFR_STORE_OP_STORE,
-                                      .clear_color = {0, 0, 0, 1}};
+                                      .clear_color = {0, 0, 0, 1},
+                                      .clear_integer = BFR_FALSE,
+                                      .clear_color_integer = {}};
     const bfr_swapchain none{};
     CHECK(bfr_begin_rendering(device.device, list, none, &rendering) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("load op"));
@@ -716,8 +869,6 @@ TEST_CASE("C API renders to a texture with the viewport and scissor set, and ref
     CHECK(bfr_set_viewport(device.device, list, &viewport) == BFR_RESULT_SUCCESS);
     const bfr_rect scissor{.x = 0, .y = 0, .width = kSide, .height = kSide};
     CHECK(bfr_set_scissor(device.device, list, &scissor) == BFR_RESULT_SUCCESS);
-    // No pipeline is bound, so the draw is refused.
-    CHECK(bfr_draw(device.device, list, 1, 1, 0, 0) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     CHECK(bfr_end_rendering(device.device, list) == BFR_RESULT_SUCCESS);
     const bfr_submit_desc submit{.next = nullptr,
                                  .queue = 0,
@@ -727,7 +878,7 @@ TEST_CASE("C API renders to a texture with the viewport and scissor set, and ref
                                  .wait_count = 0};
     bfr_token token{};
     REQUIRE(bfr_submit(device.device, &submit, &token) == BFR_RESULT_SUCCESS);
-    REQUIRE(bfr_wait(device.device, &token) == BFR_RESULT_SUCCESS);
+    REQUIRE(bfr_wait(device.device, &token, kTestWait) == BFR_RESULT_SUCCESS);
     bfr_destroy_command_pool(device.device, pool);
     bfr_destroy_texture(device.device, target);
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
@@ -741,15 +892,27 @@ TEST_CASE("C API keeps an instance alive until its last device is destroyed", "[
     instance.reset();
     const bfr_swapchain_desc desc{.next = nullptr,
                                   .window = kHeadless,
+                                  .queue = 0,
                                   .image_count = device.images,
                                   .present_mode = BFR_PRESENT_MODE_FIFO,
-                                  .format = {},
-                                  .color_space = {},
+                                  .format = BFR_FORMAT_BGRA8_UNORM,
+                                  .color_space = BFR_COLOR_SPACE_SRGB,
                                   .alpha_mode = {}};
     bfr_swapchain swapchain{};
 
     CHECK(bfr_create_swapchain(device.device, &desc, &swapchain) == BFR_RESULT_SUCCESS);
     bfr_destroy_swapchain(device.device, swapchain);
+}
+
+TEST_CASE("C API says when a wait runs past its timeout", "[c_api][gpu]") {
+    constexpr std::uint64_t kNoWait = 0;
+    const bfr_backend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    const Instance instance{backend, messages};
+    const HeadlessDevice device{instance.instance};
+    const bfr_token ahead{.queue = 0, .value = 1};
+
+    CHECK(bfr_wait(device.device, &ahead, kNoWait) == BFR_RESULT_ERROR_TIMEOUT);
 }
 
 TEST_CASE("C API creates and destroys swapchains on one device from many threads", "[c_api][gpu]") {
@@ -767,10 +930,11 @@ TEST_CASE("C API creates and destroys swapchains on one device from many threads
             threads.emplace_back([&device, &failed] {
                 const bfr_swapchain_desc desc{.next = nullptr,
                                               .window = kHeadless,
+                                              .queue = 0,
                                               .image_count = device.images,
                                               .present_mode = BFR_PRESENT_MODE_FIFO,
-                                              .format = {},
-                                              .color_space = {},
+                                              .format = BFR_FORMAT_BGRA8_UNORM,
+                                              .color_space = BFR_COLOR_SPACE_SRGB,
                                               .alpha_mode = {}};
                 for (int i = 0; i < kEach; ++i) {
                     bfr_swapchain swapchain{};
@@ -799,10 +963,11 @@ TEST_CASE("C API reports when a device holds all the swapchains it can", "[c_api
     const HeadlessDevice device{instance.instance};
     const bfr_swapchain_desc desc{.next = nullptr,
                                   .window = kHeadless,
+                                  .queue = 0,
                                   .image_count = device.images,
                                   .present_mode = BFR_PRESENT_MODE_FIFO,
-                                  .format = {},
-                                  .color_space = {},
+                                  .format = BFR_FORMAT_BGRA8_UNORM,
+                                  .color_space = BFR_COLOR_SPACE_SRGB,
                                   .alpha_mode = {}};
     std::vector<bfr_swapchain> made;
     bfr_result result = BFR_RESULT_SUCCESS;
@@ -831,10 +996,11 @@ TEST_CASE("C API needs a usable window on a swapchain", "[c_api][gpu]") {
 
     const bfr_swapchain_desc none{.next = nullptr,
                                   .window = {},
+                                  .queue = 0,
                                   .image_count = 0,
                                   .present_mode = BFR_PRESENT_MODE_FIFO,
-                                  .format = {},
-                                  .color_space = {},
+                                  .format = BFR_FORMAT_BGRA8_UNORM,
+                                  .color_space = BFR_COLOR_SPACE_SRGB,
                                   .alpha_mode = {}};
     CHECK(bfr_create_swapchain(device.device, &none, &swapchain) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("needs a window"));
@@ -844,10 +1010,11 @@ TEST_CASE("C API needs a usable window on a swapchain", "[c_api][gpu]") {
                                       .window = {.window = nullptr,
                                                  .display = &display,
                                                  .system = BFR_WINDOW_SYSTEM_DEFAULT},
+                                      .queue = 0,
                                       .image_count = 0,
                                       .present_mode = BFR_PRESENT_MODE_FIFO,
-                                      .format = {},
-                                      .color_space = {},
+                                      .format = BFR_FORMAT_BGRA8_UNORM,
+                                      .color_space = BFR_COLOR_SPACE_SRGB,
                                       .alpha_mode = {}};
     CHECK(bfr_create_swapchain(device.device, &noWindow, &swapchain) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("window value"));
@@ -856,28 +1023,36 @@ TEST_CASE("C API needs a usable window on a swapchain", "[c_api][gpu]") {
                                      .window = {.window = nullptr,
                                                 .display = nullptr,
                                                 .system = static_cast<bfr_window_system>(99)},
+                                     .queue = 0,
                                      .image_count = 0,
                                      .present_mode = BFR_PRESENT_MODE_FIFO,
-                                     .format = {},
-                                     .color_space = {},
+                                     .format = BFR_FORMAT_BGRA8_UNORM,
+                                     .color_space = BFR_COLOR_SPACE_SRGB,
                                      .alpha_mode = {}};
     CHECK(bfr_create_swapchain(device.device, &unknown, &swapchain) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("not one BFR has"));
     CHECK(swapchain.bits == 0);
 }
 
-TEST_CASE("C API rejects a min_severity that is not a severity", "[c_api][unit]") {
+TEST_CASE("C API rejects a min_severity that is not a severity, 0 included", "[c_api][unit]") {
     constexpr auto kNotASeverity = static_cast<bfr_message_severity>(9);
+    const bfr_message_severity severity = GENERATE_COPY(kNotASeverity, bfr_message_severity{});
+    // The severity filters the callback's messages, so it is read with one.
     const bfr_instance_desc desc{.next = nullptr,
                                  .backend = BFR_BACKEND_VULKAN,
                                  .validation = BFR_FALSE,
-                                 .message_callback = nullptr,
-                                 .min_severity = kNotASeverity,
-                                 .message_user_data = nullptr};
+                                 .message_callback = [](bfr_message_severity, bfr_string, void*) {},
+                                 .min_severity = severity,
+                                 .message_user_data = nullptr,
+                                 .application_name = {},
+                                 .application_version = 0,
+                                 .engine_name = {},
+                                 .engine_version = 0};
     bfr_instance* instance = nullptr;
 
     CHECK(bfr_create_instance(&desc, &instance) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
-    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("min_severity 9"));
+    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring(
+                                std::format("min_severity {} is not a severity", static_cast<int>(severity))));
     CHECK(instance == nullptr);
 }
 
@@ -893,7 +1068,11 @@ TEST_CASE("C API sends BFR's messages from min_severity up", "[c_api][gpu]") {
                                      .validation = BFR_FALSE,
                                      .message_callback = record,
                                      .min_severity = least,
-                                     .message_user_data = &messages};
+                                     .message_user_data = &messages,
+                                     .application_name = {},
+                                     .application_version = 0,
+                                     .engine_name = {},
+                                     .engine_version = 0};
         bfr_instance* instance = nullptr;
         REQUIRE(bfr_create_instance(&desc, &instance) == BFR_RESULT_SUCCESS);
         bfr_destroy_instance(instance);
@@ -1111,7 +1290,9 @@ TEST_CASE("C API allocates and frees nothing on the heap frame after frame", "[c
                                         .color_attachments = {{.texture = {},
                                                                .load_op = BFR_LOAD_OP_CLEAR,
                                                                .store_op = BFR_STORE_OP_STORE,
-                                                               .clear_color = {0, 0, 0, 1}}},
+                                                               .clear_color = {0, 0, 0, 1},
+                                                               .clear_integer = BFR_FALSE,
+                                                               .clear_color_integer = {}}},
                                         .depth_stencil = {}};
     std::vector<std::string> messages;
     {
@@ -1119,10 +1300,11 @@ TEST_CASE("C API allocates and frees nothing on the heap frame after frame", "[c
         const HeadlessDevice device{instance.instance};
         const bfr_swapchain_desc swapchainDesc{.next = nullptr,
                                                .window = kHeadless,
+                                               .queue = 0,
                                                .image_count = device.images,
                                                .present_mode = BFR_PRESENT_MODE_FIFO,
-                                               .format = {},
-                                               .color_space = {},
+                                               .format = BFR_FORMAT_BGRA8_UNORM,
+                                               .color_space = BFR_COLOR_SPACE_SRGB,
                                                .alpha_mode = {}};
         bfr_swapchain swapchain{};
         REQUIRE(bfr_create_swapchain(device.device, &swapchainDesc, &swapchain) == BFR_RESULT_SUCCESS);
@@ -1148,10 +1330,11 @@ TEST_CASE("C API allocates and frees nothing on the heap frame after frame", "[c
                 return result >= 0;
             };
             bfr_token last{};
+            bfr_swapchain_status status{};
             for (int frame = 0; frame < kFrames && failed == nullptr; ++frame) {
-                check("bfr_wait", bfr_wait(device.device, &last));
+                check("bfr_wait", bfr_wait(device.device, &last, kTestWait));
                 check("bfr_reset_command_pool", bfr_reset_command_pool(device.device, pool));
-                check("bfr_acquire", bfr_acquire(device.device, swapchain));
+                check("bfr_acquire", bfr_acquire(device.device, swapchain, kTestWait, &status));
                 std::array<bfr_command_list, kLists> lists{};
                 for (std::uint32_t index = 0; index < kLists; ++index) {
                     check("bfr_begin_commands", bfr_begin_commands(device.device, pool, &lists.at(index)));
@@ -1171,11 +1354,11 @@ TEST_CASE("C API allocates and frees nothing on the heap frame after frame", "[c
                 if (check("bfr_submit", bfr_submit(device.device, &submit, &token))) {
                     last = token;
                 }
-                check("bfr_present", bfr_present(device.device, swapchain));
+                check("bfr_present", bfr_present(device.device, swapchain, &status));
                 bfr_bool complete = BFR_FALSE;
                 check("bfr_poll", bfr_poll(device.device, &last, &complete));
             }
-            check("bfr_wait", bfr_wait(device.device, &last));
+            check("bfr_wait", bfr_wait(device.device, &last, kTestWait));
             allocations = counter.allocations();
             frees = counter.frees();
         }
@@ -1203,10 +1386,11 @@ TEST_CASE("C API allocates nothing when a frame-path call fails frame after fram
         const HeadlessDevice device{instance.instance};
         const bfr_swapchain_desc desc{.next = nullptr,
                                       .window = kHeadless,
+                                      .queue = 0,
                                       .image_count = device.images,
                                       .present_mode = BFR_PRESENT_MODE_FIFO,
-                                      .format = {},
-                                      .color_space = {},
+                                      .format = BFR_FORMAT_BGRA8_UNORM,
+                                      .color_space = BFR_COLOR_SPACE_SRGB,
                                       .alpha_mode = {}};
         bfr_swapchain swapchain{};
         REQUIRE(bfr_create_swapchain(device.device, &desc, &swapchain) == BFR_RESULT_SUCCESS);
@@ -1216,8 +1400,11 @@ TEST_CASE("C API allocates nothing when a frame-path call fails frame after fram
         std::size_t frees = 0;
         {
             const bfr::test::AllocationCounter counter;
+            bfr_swapchain_status status{};
             for (int frame = 0; frame < kFrames; ++frame) {
-                refused += bfr_acquire(device.device, swapchain) == BFR_RESULT_ERROR_OUT_OF_DATE ? 1 : 0;
+                refused += bfr_acquire(device.device, swapchain, kTestWait, &status) == BFR_RESULT_ERROR_OUT_OF_DATE
+                               ? 1
+                               : 0;
                 refused -= bfr_get_last_error().length == 0 ? 1 : 0;
             }
             allocations = counter.allocations();

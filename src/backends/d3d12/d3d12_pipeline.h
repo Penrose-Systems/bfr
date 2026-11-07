@@ -7,7 +7,6 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
-#include <array>
 #include <cstdint>
 
 namespace bfr::rhi::d3d12 {
@@ -27,6 +26,17 @@ inline constexpr std::uint32_t kPushConstantsSpace = 0;
 inline constexpr std::uint32_t kPushConstantsParameter = 0;
 inline constexpr std::uint32_t kResourceTableParameter = 1;
 inline constexpr std::uint32_t kSamplerTableParameter = 2;
+inline constexpr std::uint32_t kRootParameterCount = kSamplerTableParameter + 1;
+
+/// The push constants take the root signature's room: D3D12_MAX_ROOT_COST
+/// DWORDs, less the one each descriptor table, every other parameter, costs.
+inline constexpr std::uint32_t kDescriptorTableCount = kRootParameterCount - 1;
+inline constexpr std::uint32_t kPushConstantValues = D3D12_MAX_ROOT_COST - kDescriptorTableCount;
+inline constexpr std::uint32_t kPushConstantsSize = kPushConstantValues * sizeof(std::uint32_t);
+
+/// The viewports, and scissors, a draw has: setViewport and setScissor each
+/// set one.
+inline constexpr std::uint32_t kViewportCount = 1;
 
 /// op as D3D12's, for depth and stencil tests and compare samplers.
 [[nodiscard]] D3D12_COMPARISON_FUNC compareFor(CompareOp op);
@@ -69,17 +79,18 @@ struct D3D12BindlessLayout {
 };
 
 /// The layout on device as desc sizes it. Fails with RhiLimitReached when the
-/// three resource tables together are more than a shader-visible heap holds,
-/// and RhiDeviceFailed when D3D12 refuses the root signature or a heap.
-[[nodiscard]] core::Result<D3D12BindlessLayout> createD3D12BindlessLayout(ID3D12Device& device, const DeviceDesc& desc);
+/// three resource tables together are more than viewHeapSize, the device's
+/// shader-visible heap, holds, and RhiDeviceFailed when D3D12 refuses the root
+/// signature or a heap.
+[[nodiscard]] core::Result<D3D12BindlessLayout> createD3D12BindlessLayout(ID3D12Device& device, const DeviceDesc& desc,
+                                                                          std::uint32_t viewHeapSize);
 
 /// A pipeline state object, released when this goes, with the topology class
-/// its draws take and, for compute, the workgroup size its desc gave.
+/// its draws take.
 struct D3D12Pipeline {
     Microsoft::WRL::ComPtr<ID3D12PipelineState> state;
     bool compute = false;
     TopologyClass topology = TopologyClass::Triangle;
-    std::array<std::uint32_t, kWorkgroupDimensions> workgroupSize{};
 };
 
 /// A compute pipeline on rootSignature as desc says, whose code is DXIL. Fails

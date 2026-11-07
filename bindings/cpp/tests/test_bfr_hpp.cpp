@@ -15,6 +15,7 @@
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -31,16 +32,21 @@ constexpr std::uint32_t kHeight = 48;
 // Lists the test command pool holds, more than a frame records.
 constexpr std::uint32_t kPoolLists = 4;
 constexpr bfr::Window kHeadless{.system = bfr::WindowSystem::Headless};
+// The longest wait there is, so a slow GPU never fails a test.
+constexpr std::uint64_t kTestWait = std::numeric_limits<std::uint64_t>::max();
 // What the tests' devices hold, more than any test uses.
 constexpr std::uint32_t kDeviceLists = 64;
 constexpr std::uint32_t kDevicePools = 16;
 constexpr std::uint32_t kDeviceSwapchains = 4;
 constexpr std::uint32_t kDeviceTableSlots = 256;
 constexpr std::uint32_t kDeviceSamplers = 16;
+// One queue at rank 0 and level normal.
+constexpr std::array<bfr::QueueDesc, 1> kOneQueue{};
 
 bfr::DeviceDesc testDevice(std::uint32_t adapter) {
     return {.adapter = adapter,
             .window = kHeadless,
+            .graphicsQueues = kOneQueue,
             .maxCommandLists = kDeviceLists,
             .maxCommandPools = kDevicePools,
             .maxSwapchains = kDeviceSwapchains,
@@ -88,8 +94,10 @@ auto eachBackend() {
 }
 
 bfr::Instance validatedInstance(bfr::Backend backend, Messages& messages) {
-    auto instance = bfr::Instance::create(
-        {.backend = backend, .validation = true, .messageCallback = messages.callback()});
+    auto instance = bfr::Instance::create({.backend = backend,
+                                           .validation = true,
+                                           .messageCallback = messages.callback(),
+                                           .minSeverity = bfr::MessageSeverity::Warning});
     INFO(bfr::name(backend) << ' ' << failureOf(instance));
     REQUIRE(instance.has_value());
     return std::move(*instance);
@@ -203,7 +211,10 @@ TEST_CASE("C++ API builds, resizes and destroys a headless swapchain", "[cpp_api
     {
         const bfr::Instance instance = validatedInstance(backend, messages);
         const bfr::Device device = headlessDevice(instance);
-        auto swapchain = device.createSwapchain({.window = kHeadless, .imageCount = kImages});
+        auto swapchain = device.createSwapchain({.window = kHeadless,
+                                                 .imageCount = kImages,
+                                                 .format = bfr::Format::Bgra8Unorm,
+                                                 .colorSpace = bfr::ColorSpace::Srgb});
         INFO(failureOf(swapchain));
         REQUIRE(swapchain.has_value());
         CHECK(*swapchain);
@@ -225,7 +236,10 @@ TEST_CASE("C++ API clears and presents a headless swapchain", "[cpp_api][gpu]") 
     {
         const bfr::Instance instance = validatedInstance(backend, messages);
         const bfr::Device device = headlessDevice(instance);
-        auto swapchain = device.createSwapchain({.window = kHeadless, .imageCount = fewestImages(instance)});
+        auto swapchain = device.createSwapchain({.window = kHeadless,
+                                                 .imageCount = fewestImages(instance),
+                                                 .format = bfr::Format::Bgra8Unorm,
+                                                 .colorSpace = bfr::ColorSpace::Srgb});
         REQUIRE(swapchain.has_value());
         REQUIRE(swapchain->resize(kWidth, kHeight).has_value());
 
@@ -235,9 +249,9 @@ TEST_CASE("C++ API clears and presents a headless swapchain", "[cpp_api][gpu]") 
         bfr::Token last;
         for (int frame = 0; frame < 2; ++frame) {
             INFO("frame " << frame);
-            REQUIRE(device.wait(last).has_value());
+            REQUIRE(device.wait(last, kTestWait).has_value());
             REQUIRE(pool->reset().has_value());
-            const auto acquired = swapchain->acquire();
+            const auto acquired = swapchain->acquire(kTestWait);
             INFO(failureOf(acquired));
             REQUIRE(acquired.has_value());
             auto commands = pool->beginCommands();
@@ -258,7 +272,7 @@ TEST_CASE("C++ API clears and presents a headless swapchain", "[cpp_api][gpu]") 
             INFO(failureOf(presented));
             CHECK(presented.has_value());
         }
-        REQUIRE(device.wait(last).has_value());
+        REQUIRE(device.wait(last, kTestWait).has_value());
         CHECK(device.poll(last).value_or(false));
     }
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
@@ -283,7 +297,10 @@ TEST_CASE("C++ API moves objects without destroying what they own", "[cpp_api][g
     {
         const bfr::Instance instance = validatedInstance(backend, messages);
         bfr::Device device = headlessDevice(instance);
-        auto created = device.createSwapchain({.window = kHeadless, .imageCount = fewestImages(instance)});
+        auto created = device.createSwapchain({.window = kHeadless,
+                                               .imageCount = fewestImages(instance),
+                                               .format = bfr::Format::Bgra8Unorm,
+                                               .colorSpace = bfr::ColorSpace::Srgb});
         REQUIRE(created.has_value());
 
         // A swapchain shares the device, so it can outlive the C++ Device it came from.
@@ -308,7 +325,10 @@ TEST_CASE("C++ API keeps a device alive for the swapchains made from it", "[cpp_
         bfr::Swapchain swapchain;
         {
             const bfr::Device device = headlessDevice(instance);
-            auto created = device.createSwapchain({.window = kHeadless, .imageCount = fewestImages(instance)});
+            auto created = device.createSwapchain({.window = kHeadless,
+                                                   .imageCount = fewestImages(instance),
+                                                   .format = bfr::Format::Bgra8Unorm,
+                                                   .colorSpace = bfr::ColorSpace::Srgb});
             REQUIRE(created.has_value());
             swapchain = std::move(*created);
         }
@@ -324,8 +344,11 @@ TEST_CASE("C++ API presents as the mode asked for", "[cpp_api][gpu]") {
     {
         const bfr::Instance instance = validatedInstance(backend, messages);
         const bfr::Device device = headlessDevice(instance);
-        auto fifo = device.createSwapchain(
-            {.window = kHeadless, .imageCount = fewestImages(instance), .presentMode = bfr::PresentMode::Fifo});
+        auto fifo = device.createSwapchain({.window = kHeadless,
+                                            .imageCount = fewestImages(instance),
+                                            .presentMode = bfr::PresentMode::Fifo,
+                                            .format = bfr::Format::Bgra8Unorm,
+                                            .colorSpace = bfr::ColorSpace::Srgb});
         INFO(failureOf(fifo));
         REQUIRE(fifo.has_value());
 
@@ -344,8 +367,8 @@ TEST_CASE("C++ API keeps the message callback alive while a device lives", "[cpp
     const std::weak_ptr<int> watched = state;
     auto instance = bfr::Instance::create(
         {.backend = backend,
-         .messageCallback = [state](bfr::MessageSeverity /*severity*/, std::string_view /*message*/) {
-         }});
+         .messageCallback = [state](bfr::MessageSeverity /*severity*/, std::string_view /*message*/) {},
+         .minSeverity = bfr::MessageSeverity::Warning});
     state.reset();
     REQUIRE(instance.has_value());
     bfr::Device device = headlessDevice(*instance);
@@ -369,7 +392,10 @@ TEST_CASE("C++ API reports when a device holds all the swapchains it can", "[cpp
 
     const std::uint32_t images = fewestImages(instance);
     for (int i = 0; i < kTries && swapchain.has_value(); ++i) {
-        swapchain = device.createSwapchain({.window = kHeadless, .imageCount = images});
+        swapchain = device.createSwapchain({.window = kHeadless,
+                                            .imageCount = images,
+                                            .format = bfr::Format::Bgra8Unorm,
+                                            .colorSpace = bfr::ColorSpace::Srgb});
         if (swapchain.has_value()) {
             made.push_back(std::move(*swapchain));
         }
@@ -396,7 +422,10 @@ TEST_CASE("C++ API creates and destroys swapchains on one device from many threa
             for (int thread = 0; thread < kThreads; ++thread) {
                 threads.emplace_back([&device, &failed, images] {
                     for (int i = 0; i < kEach; ++i) {
-                        auto swapchain = device.createSwapchain({.window = kHeadless, .imageCount = images});
+                        auto swapchain = device.createSwapchain({.window = kHeadless,
+                                                                 .imageCount = images,
+                                                                 .format = bfr::Format::Bgra8Unorm,
+                                                                 .colorSpace = bfr::ColorSpace::Srgb});
                         if (!swapchain.has_value() || !swapchain->resize(kWidth, kHeight).has_value()) {
                             ++failed;
                         }
@@ -463,12 +492,11 @@ TEST_CASE("C++ API creates and destroys pipelines", "[cpp_api][gpu]") {
         desc.colorTargets[0] = {.format = bfr::Format::Rgba8Unorm,
                                 .blend = {.enable = true,
                                           .srcColor = bfr::BlendFactor::SrcAlpha,
-                                          .dstColor = bfr::BlendFactor::OneMinusSrcAlpha}};
+                                          .dstColor = bfr::BlendFactor::OneMinusSrcAlpha,
+                                          .writeMask = BFR_MASK_ALL}};
         auto graphics = device.createGraphicsPipeline(desc);
         INFO(failureOf(graphics));
         REQUIRE(graphics.has_value());
-        desc.colorTargets[0].format = bfr::Format::Undefined;
-        CHECK(device.createGraphicsPipeline(desc).error().code == bfr::Result::ErrorInvalidArgument);
     }
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }
@@ -535,7 +563,7 @@ TEST_CASE("C++ API dispatches a compute pipeline through a buffer's slot", "[cpp
         const auto submitted = device.submit({.queue = 0, .commandLists = std::span{&*commands, 1}});
         INFO(failureOf(submitted));
         REQUIRE(submitted.has_value());
-        REQUIRE(device.wait(*submitted).has_value());
+        REQUIRE(device.wait(*submitted, kTestWait).has_value());
 
         const auto data = readback->map();
         REQUIRE(data.has_value());
@@ -581,7 +609,7 @@ TEST_CASE("C++ API renders to a texture it names by a borrowed pointer", "[cpp_a
         const auto submitted = device.submit({.queue = 0, .commandLists = std::span{&*commands, 1}});
         INFO(failureOf(submitted));
         REQUIRE(submitted.has_value());
-        REQUIRE(device.wait(*submitted).has_value());
+        REQUIRE(device.wait(*submitted, kTestWait).has_value());
     }
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }

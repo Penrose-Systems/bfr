@@ -130,9 +130,9 @@ struct MetalCommandList {
     Ref<MTL4::RenderCommandEncoder> encoder;
     std::optional<SwapchainHandle> presenting;
     std::uint32_t rendered = core::SlotChains::kEnd;
-    // The serial of the submit this list is gathered into, so a list named
-    // twice in one submit is caught in a single pass.
-    std::uint64_t queued = 0;
+    // Where in the pool's ring this list last pushed, so the next push keeps
+    // the bytes it does not set, as Vulkan's and D3D12's pushes do.
+    std::optional<std::uint64_t> pushedAt{};
 };
 
 class MetalDevice final : public Device {
@@ -156,8 +156,8 @@ public:
     [[nodiscard]] core::Result<SwapchainImages> resizeSwapchain(SwapchainHandle swapchain, std::uint32_t width,
                                                                 std::uint32_t height) override;
     [[nodiscard]] core::Result<void> destroySwapchain(SwapchainHandle swapchain) override;
-    [[nodiscard]] core::Result<void> acquire(SwapchainHandle swapchain) override;
-    [[nodiscard]] core::Result<void> present(SwapchainHandle swapchain) override;
+    [[nodiscard]] core::Result<SwapchainStatus> acquire(SwapchainHandle swapchain, std::uint64_t timeoutNs) override;
+    [[nodiscard]] core::Result<SwapchainStatus> present(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<CommandPoolHandle> createCommandPool(const CommandPoolDesc& desc) override;
     [[nodiscard]] core::Result<void> resetCommandPool(CommandPoolHandle commandPool) override;
     [[nodiscard]] core::Result<void> destroyCommandPool(CommandPoolHandle commandPool) override;
@@ -167,6 +167,10 @@ public:
     [[nodiscard]] core::Result<void> endRendering(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<void> setViewport(CommandListHandle commandList, const Viewport& viewport) override;
     [[nodiscard]] core::Result<void> setScissor(CommandListHandle commandList, const Rect& scissor) override;
+    [[nodiscard]] core::Result<void> setBlendConstants(CommandListHandle commandList,
+                                                       const std::array<float, 4>& color) override;
+    [[nodiscard]] core::Result<void> setStencilReference(CommandListHandle commandList,
+                                                         std::uint32_t reference) override;
     [[nodiscard]] core::Result<void> bindPipeline(CommandListHandle commandList, PipelineHandle pipeline) override;
     [[nodiscard]] core::Result<void> pushConstants(CommandListHandle commandList,
                                                    std::span<const std::byte> data) override;
@@ -194,7 +198,7 @@ public:
     [[nodiscard]] core::Result<void> copyTexture(CommandListHandle commandList, TextureHandle src, TextureHandle dst,
                                                  std::span<const TextureCopy> regions) override;
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
-    [[nodiscard]] core::Result<void> wait(Token token) override;
+    [[nodiscard]] core::Result<void> wait(Token token, std::uint64_t timeoutNs) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
@@ -258,9 +262,6 @@ private:
     // Live pools and destroyed ones not yet collected, held to
     // desc_.maxCommandPools so every queue's retired array has room.
     std::atomic<std::uint32_t> poolsHeld_{0};
-    // Counts submits on every queue, so each has a serial of its own, even one
-    // that fails, which the token value a queue hands out does not give.
-    std::atomic<std::uint64_t> submitSerial_{0};
 
     core::Submissions submissions_;
     // Every buffer and texture, attached to every queue, so the GPU may use

@@ -12,6 +12,7 @@
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/pipeline.h"
+#include "bfr/rhi/sampler.h"
 #include "bfr/rhi/texture.h"
 #include "rhi_test_support.h"
 #include "shaders/spirv.h"
@@ -125,7 +126,7 @@ GraphicsPipelineDesc colorPipeline() {
                               .colorTargetCount = 1,
                               .depthStencilFormat = Format::Undefined,
                               .samples = 1};
-    desc.colorTargets[0] = {.format = Format::Rgba8Unorm, .blend = {}};
+    desc.colorTargets[0] = {.format = Format::Rgba8Unorm, .blend = {.writeMask = BFR_MASK_ALL}};
     return desc;
 }
 
@@ -174,8 +175,8 @@ TEST_CASE("Device gives a storage buffer and a sampled or storage texture a slot
         CHECK(bothSlots->storage < kTestDevice.maxBindlessStorageTextures);
         const auto neitherSlots = device.textureSlots(neither);
         REQUIRE(neitherSlots.has_value());
-        CHECK(neitherSlots->sampled == 0);
-        CHECK(neitherSlots->storage == 0);
+        CHECK(neitherSlots->sampled == kNoSlot);
+        CHECK(neitherSlots->storage == kNoSlot);
 
         for (const BufferHandle buffer : {first, second, plain}) {
             CHECK(device.destroyBuffer(buffer).has_value());
@@ -235,7 +236,7 @@ TEST_CASE("Device gives a depth-stencil texture that shaders sample a slot, and 
         const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
         INFO(failureOf(sent));
         REQUIRE(sent.has_value());
-        REQUIRE(device.wait(*sent).has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
         CHECK(device.destroyTexture(depth).has_value());
         CHECK(device.destroyCommandPool(*pool).has_value());
     }
@@ -274,7 +275,7 @@ TEST_CASE("Device dispatches a compute pipeline that writes a storage buffer thr
         const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
         INFO(failureOf(sent));
         REQUIRE(sent.has_value());
-        REQUIRE(device.wait(*sent).has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
 
         // The shader writes each invocation its own index.
         const auto read = device.mapBuffer(readback);
@@ -365,7 +366,7 @@ TEST_CASE("Device draws a triangle pulled from a storage buffer into a texture, 
         const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
         INFO(failureOf(sent));
         REQUIRE(sent.has_value());
-        REQUIRE(device.wait(*sent).has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
 
         // Row 0 is the top of the texture: red where the triangle is, the
         // clear below it.
@@ -390,7 +391,347 @@ TEST_CASE("Device draws a triangle pulled from a storage buffer into a texture, 
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Device refuses draws, dispatches and state recorded out of place with RhiInvalidCall", "[rhi][agnostic]") {
+TEST_CASE("Device blends with the constant color setBlendConstants sets", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    if (!takesSpirv(backend)) {
+        SKIP("no " << backend.name << " bytecode is checked in");
+    }
+    std::vector<std::string> messages;
+    {
+        const DrawDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const Limits& limits = made.instance->adapters()[0].caps.limits;
+        const std::uint64_t bytesPerRow = alignUp(std::uint64_t{kSide} * kTexelBytes,
+                                                  std::max<std::uint64_t>(limits.copyRowPitchAlignment, 1));
+
+        // A triangle over the whole target.
+        constexpr std::array<float, std::size_t{kVertices} * kPositionFloats> kWhole{-1, -1, 0,  1, 3, -1,
+                                                                                     0,  1,  -1, 3, 0, 1};
+        const BufferHandle positions =
+            created(device, {.size = sizeof(kWhole), .memory = BufferMemory::Upload, .usage = {.storage = true}});
+        const auto written = device.mapBuffer(positions);
+        REQUIRE(written.has_value());
+        std::memcpy(written->data(), kWhole.data(), sizeof(kWhole));
+        const auto slot = device.bufferSlot(positions);
+        REQUIRE(slot.has_value());
+        const TextureHandle target = created(device, {.dimension = TextureDimension::D2,
+                                                      .format = Format::Rgba8Unorm,
+                                                      .width = kSide,
+                                                      .height = kSide,
+                                                      .depth = 1,
+                                                      .layers = 1,
+                                                      .mipLevels = 1,
+                                                      .samples = 1,
+                                                      .usage = {.copySrc = true, .colorAttachment = true}});
+        const BufferHandle readback = created(device, {.size = bytesPerRow * kSide,
+                                                       .memory = BufferMemory::Readback,
+                                                       .usage = {.copyDst = true}});
+        // The fragment's white times the constant color, plus nothing of the target.
+        GraphicsPipelineDesc desc = colorPipeline();
+        desc.colorTargets[0].blend = {.enable = true,
+                                      .srcColor = BlendFactor::ConstantColor,
+                                      .dstColor = BlendFactor::Zero,
+                                      .colorOp = BlendOp::Add,
+                                      .srcAlpha = BlendFactor::ConstantAlpha,
+                                      .dstAlpha = BlendFactor::Zero,
+                                      .alphaOp = BlendOp::Add,
+                                      .writeMask = BFR_MASK_ALL};
+        const PipelineHandle pipeline = created(device, desc);
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists, .pushConstantUpdates = 1});
+        REQUIRE(pool.has_value());
+        auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+
+        CHECK(device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget).has_value());
+        RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+        rendering.colorAttachments[0] = {.texture = target,
+                                         .loadOp = LoadOp::Clear,
+                                         .storeOp = StoreOp::Store,
+                                         .clearColor = {0, 0, 0, 0}};
+        REQUIRE(device.beginRendering(*list, {}, rendering).has_value());
+        CHECK(device.bindPipeline(*list, pipeline).has_value());
+        CHECK(device.setBlendConstants(*list, {0, 1, 0, 1}).has_value());
+        CHECK(device.pushConstants(*list, bytesOf({.positions = *slot, .color = {1, 1, 1, 1}})).has_value());
+        CHECK(device.draw(*list, kVertices, 1, 0, 0).has_value());
+        CHECK(device.endRendering(*list).has_value());
+        CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::CopySrc).has_value());
+        const BufferTextureCopy whole{.bufferOffset = 0,
+                                      .bytesPerRow = bytesPerRow,
+                                      .rowsPerImage = kSide,
+                                      .mipLevel = 0,
+                                      .layer = 0,
+                                      .aspect = TextureAspect::Color,
+                                      .x = 0,
+                                      .y = 0,
+                                      .z = 0,
+                                      .width = kSide,
+                                      .height = kSide,
+                                      .depth = 1};
+        CHECK(device.copyTextureToBuffer(*list, target, readback, std::span{&whole, 1}).has_value());
+        const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+        REQUIRE(sent.has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
+
+        const auto read = device.mapBuffer(readback);
+        REQUIRE(read.has_value());
+        std::array<std::uint8_t, kTexelBytes> centre{};
+        std::memcpy(centre.data(),
+                    read->data() + ((kSide / 2) * bytesPerRow) + (std::uint64_t{kSide / 2} * kTexelBytes), kTexelBytes);
+        constexpr std::array<std::uint8_t, kTexelBytes> kGreen{0, 255, 0, 255};
+        CHECK(centre == kGreen);
+        CHECK(device.destroyPipeline(pipeline).has_value());
+        CHECK(device.destroyTexture(target).has_value());
+        CHECK(device.destroyBuffer(positions).has_value());
+        CHECK(device.destroyBuffer(readback).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device writes the stencil reference setStencilReference sets", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    if (!takesSpirv(backend)) {
+        SKIP("no " << backend.name << " bytecode is checked in");
+    }
+    const Format format = GENERATE(Format::D24UnormS8Uint, Format::D32FloatS8Uint);
+    std::vector<std::string> messages;
+    {
+        const DrawDevice made{recordingInto(backend, messages)};
+        const auto caps = made.instance->formatCaps(0, format);
+        REQUIRE(caps.has_value());
+        if (!caps->depthStencil || !caps->copySrc) {
+            SKIP("the adapter does not render to and copy from " << static_cast<int>(format));
+        }
+        Device& device = *made.device;
+        const Limits& limits = made.instance->adapters()[0].caps.limits;
+        constexpr std::uint64_t kStencilBytes = 1;
+        const std::uint64_t bytesPerRow = alignUp(std::uint64_t{kSide} * kStencilBytes,
+                                                  std::max<std::uint64_t>(limits.copyRowPitchAlignment, 1));
+
+        constexpr std::array<float, std::size_t{kVertices} * kPositionFloats> kWhole{-1, -1, 0,  1, 3, -1,
+                                                                                     0,  1,  -1, 3, 0, 1};
+        const BufferHandle positions =
+            created(device, {.size = sizeof(kWhole), .memory = BufferMemory::Upload, .usage = {.storage = true}});
+        const auto written = device.mapBuffer(positions);
+        REQUIRE(written.has_value());
+        std::memcpy(written->data(), kWhole.data(), sizeof(kWhole));
+        const auto slot = device.bufferSlot(positions);
+        REQUIRE(slot.has_value());
+        const TextureDesc texture{.dimension = TextureDimension::D2,
+                                  .format = Format::Rgba8Unorm,
+                                  .width = kSide,
+                                  .height = kSide,
+                                  .depth = 1,
+                                  .layers = 1,
+                                  .mipLevels = 1,
+                                  .samples = 1,
+                                  .usage = {.colorAttachment = true}};
+        const TextureHandle color = created(device, texture);
+        TextureDesc depthDesc = texture;
+        depthDesc.format = format;
+        depthDesc.usage = {.copySrc = true, .depthStencil = true};
+        const TextureHandle depth = created(device, depthDesc);
+        const BufferHandle readback = created(device, {.size = bytesPerRow * kSide,
+                                                       .memory = BufferMemory::Readback,
+                                                       .usage = {.copyDst = true}});
+        // Every fragment passes and writes the reference.
+        GraphicsPipelineDesc desc = colorPipeline();
+        const StencilFace replace{.pass = StencilOp::Replace,
+                                  .compare = CompareOp::Always,
+                                  .readMask = BFR_MASK_ALL,
+                                  .writeMask = BFR_MASK_ALL};
+        desc.depthStencil = {.stencilTest = true, .front = replace, .back = replace};
+        desc.depthStencilFormat = format;
+        const PipelineHandle pipeline = created(device, desc);
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists, .pushConstantUpdates = 1});
+        REQUIRE(pool.has_value());
+        auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+
+        CHECK(device.textureBarrier(*list, color, TextureLayout::Undefined, TextureLayout::ColorTarget).has_value());
+        CHECK(device.textureBarrier(*list, depth, TextureLayout::Undefined, TextureLayout::DepthStencilTarget)
+                  .has_value());
+        RenderingDesc rendering{.colorAttachmentCount = 1,
+                                .colorAttachments = {},
+                                .depthStencil = {.texture = depth,
+                                                 .loadOp = LoadOp::Clear,
+                                                 .storeOp = StoreOp::Store,
+                                                 .clearDepth = 1,
+                                                 .clearStencil = 0}};
+        rendering.colorAttachments[0] = {.texture = color, .loadOp = LoadOp::Clear, .storeOp = StoreOp::Store};
+        REQUIRE(device.beginRendering(*list, {}, rendering).has_value());
+        constexpr std::uint32_t kReference = 7;
+        CHECK(device.bindPipeline(*list, pipeline).has_value());
+        CHECK(device.setStencilReference(*list, kReference).has_value());
+        CHECK(device.pushConstants(*list, bytesOf({.positions = *slot, .color = {1, 1, 1, 1}})).has_value());
+        CHECK(device.draw(*list, kVertices, 1, 0, 0).has_value());
+        CHECK(device.endRendering(*list).has_value());
+        CHECK(
+            device.textureBarrier(*list, depth, TextureLayout::DepthStencilTarget, TextureLayout::CopySrc).has_value());
+        const BufferTextureCopy stencil{.bufferOffset = 0,
+                                        .bytesPerRow = bytesPerRow,
+                                        .rowsPerImage = kSide,
+                                        .mipLevel = 0,
+                                        .layer = 0,
+                                        .aspect = TextureAspect::Stencil,
+                                        .x = 0,
+                                        .y = 0,
+                                        .z = 0,
+                                        .width = kSide,
+                                        .height = kSide,
+                                        .depth = 1};
+        CHECK(device.copyTextureToBuffer(*list, depth, readback, std::span{&stencil, 1}).has_value());
+        const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+        REQUIRE(sent.has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
+
+        const auto read = device.mapBuffer(readback);
+        REQUIRE(read.has_value());
+        const auto centre = static_cast<std::uint8_t>(read->data()[((kSide / 2) * bytesPerRow) + (kSide / 2)]);
+        CHECK(centre == kReference);
+        CHECK(device.destroyPipeline(pipeline).has_value());
+        CHECK(device.destroyTexture(color).has_value());
+        CHECK(device.destroyTexture(depth).has_value());
+        CHECK(device.destroyBuffer(positions).has_value());
+        CHECK(device.destroyBuffer(readback).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device clears an integer target to the integers asked for", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    // An unsigned value, and -1, whose bits a signed format reads as int32.
+    constexpr std::uint32_t kUnsigned = 7;
+    constexpr auto kMinusOne = static_cast<std::uint32_t>(-1);
+    const auto [format, bits] = GENERATE_COPY(table<Format, std::uint32_t>({
+        {Format::R32Uint, kUnsigned},
+        {Format::R32Sint, kMinusOne},
+    }));
+    std::vector<std::string> messages;
+    {
+        const DrawDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const Limits& limits = made.instance->adapters()[0].caps.limits;
+        const std::uint64_t bytesPerRow = alignUp(std::uint64_t{kSide} * sizeof(std::uint32_t),
+                                                  std::max<std::uint64_t>(limits.copyRowPitchAlignment, 1));
+        const TextureHandle target = created(device, {.dimension = TextureDimension::D2,
+                                                      .format = format,
+                                                      .width = kSide,
+                                                      .height = kSide,
+                                                      .depth = 1,
+                                                      .layers = 1,
+                                                      .mipLevels = 1,
+                                                      .samples = 1,
+                                                      .usage = {.copySrc = true, .colorAttachment = true}});
+        const BufferHandle readback = created(device, {.size = bytesPerRow * kSide,
+                                                       .memory = BufferMemory::Readback,
+                                                       .usage = {.copyDst = true}});
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+
+        CHECK(device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget).has_value());
+        RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+        rendering.colorAttachments[0] = {.texture = target,
+                                         .loadOp = LoadOp::Clear,
+                                         .storeOp = StoreOp::Store,
+                                         .clearColor = {},
+                                         .clearInteger = true,
+                                         .clearColorInteger = {bits, 0, 0, 0}};
+        const auto begun = device.beginRendering(*list, {}, rendering);
+        INFO(failureOf(begun));
+        REQUIRE(begun.has_value());
+        CHECK(device.endRendering(*list).has_value());
+        CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::CopySrc).has_value());
+        const BufferTextureCopy whole{
+            .bytesPerRow = bytesPerRow, .rowsPerImage = kSide, .width = kSide, .height = kSide, .depth = 1};
+        CHECK(device.copyTextureToBuffer(*list, target, readback, std::span{&whole, 1}).has_value());
+        const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+        INFO(failureOf(sent));
+        REQUIRE(sent.has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
+
+        const auto read = device.mapBuffer(readback);
+        REQUIRE(read.has_value());
+        std::uint32_t texel = 0;
+        std::memcpy(&texel, read->data(), sizeof(texel));
+        CHECK(texel == bits);
+        CHECK(device.destroyTexture(target).has_value());
+        CHECK(device.destroyBuffer(readback).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device refuses an enum value BFR doesn't have with RhiInvalidCall", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    if (!takesSpirv(backend)) {
+        SKIP("no " << backend.name << " bytecode is checked in");
+    }
+    // A number one past each enum's values, as a C++ caller may cast in.
+    constexpr std::uint8_t kPast = 99;
+    std::vector<std::string> messages;
+    {
+        const DrawDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const TextureDesc textureDesc{.dimension = TextureDimension::D2,
+                                      .format = Format::Rgba8Unorm,
+                                      .width = kSide,
+                                      .height = kSide,
+                                      .depth = 1,
+                                      .layers = 1,
+                                      .mipLevels = 1,
+                                      .samples = 1,
+                                      .usage = {.copySrc = true, .colorAttachment = true}};
+        const TextureHandle target = created(device, textureDesc);
+        const BufferHandle indices = created(device, {.size = kSide, .usage = {.copyDst = true, .index = true}});
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+
+        CHECK(
+            device.createBuffer({.size = kSide, .memory = static_cast<BufferMemory>(kPast), .usage = {.copyDst = true}})
+                .error()
+                .code == ErrorCode::RhiInvalidCall);
+        TextureDesc badTexture = textureDesc;
+        badTexture.dimension = static_cast<TextureDimension>(kPast);
+        CHECK(device.createTexture(badTexture).error().code == ErrorCode::RhiInvalidCall);
+        CHECK(device.createSampler({.magFilter = static_cast<Filter>(kPast)}).error().code ==
+              ErrorCode::RhiInvalidCall);
+        GraphicsPipelineDesc pipeline = colorPipeline();
+        pipeline.depthStencil.depthCompare = static_cast<CompareOp>(kPast);
+        CHECK(device.createGraphicsPipeline(pipeline).error().code == ErrorCode::RhiInvalidCall);
+        pipeline = colorPipeline();
+        pipeline.colorTargets[0].blend.srcColor = static_cast<BlendFactor>(kPast);
+        CHECK(device.createGraphicsPipeline(pipeline).error().code == ErrorCode::RhiInvalidCall);
+        CHECK(device.textureBarrier(*list, target, static_cast<TextureLayout>(kPast), TextureLayout::ColorTarget)
+                  .error()
+                  .code == ErrorCode::RhiInvalidCall);
+        CHECK(device.bindIndexBuffer(*list, indices, 0, static_cast<IndexType>(kPast)).error().code ==
+              ErrorCode::RhiInvalidCall);
+        RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+        rendering.colorAttachments[0] = {.texture = target, .loadOp = static_cast<LoadOp>(kPast)};
+        CHECK(device.beginRendering(*list, {}, rendering).error().code == ErrorCode::RhiInvalidCall);
+        const BufferTextureCopy region{.bytesPerRow = std::uint64_t{kSide} * kTexelBytes,
+                                       .rowsPerImage = kSide,
+                                       .aspect = static_cast<TextureAspect>(kPast),
+                                       .width = 1,
+                                       .height = 1,
+                                       .depth = 1};
+        CHECK(device.copyTextureToBuffer(*list, target, indices, std::span{&region, 1}).error().code ==
+              ErrorCode::RhiInvalidCall);
+        CHECK(device.destroyCommandList(*list).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+        CHECK(device.destroyBuffer(indices).has_value());
+        CHECK(device.destroyTexture(target).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device refuses push constants and renderings it can't pass on with RhiInvalidCall", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     if (!takesSpirv(backend)) {
         SKIP("no " << backend.name << " bytecode is checked in");
@@ -422,22 +763,16 @@ TEST_CASE("Device refuses draws, dispatches and state recorded out of place with
         const Viewport whole{.x = 0, .y = 0, .width = kSide, .height = kSide, .minDepth = 0, .maxDepth = 1};
         const Rect all{.x = 0, .y = 0, .width = kSide, .height = kSide};
 
-        // Outside rendering: no draw or draw state; a dispatch wants a pipeline.
-        CHECK(device.setViewport(*list, whole).error().code == ErrorCode::RhiInvalidCall);
-        CHECK(device.setScissor(*list, all).error().code == ErrorCode::RhiInvalidCall);
-        CHECK(device.draw(*list, kVertices, 1, 0, 0).error().code == ErrorCode::RhiInvalidCall);
-        CHECK(device.dispatch(*list, 1, 1, 1).error().code == ErrorCode::RhiInvalidCall);
-        CHECK(device.bindPipeline(*list, compute).has_value());
-        CHECK(device.dispatch(*list, 1, 1, 1).has_value());
-        // Push constants are whole 32-bit values, at most kPushConstantsSize,
-        // and at most the pool's updates.
+        // Push constants are whole 32-bit values, as many bytes as the caps
+        // report and no more, and at most the pool's updates.
         constexpr std::uint32_t kOddBytes = 6;
         CHECK(device.pushConstants(*list, std::array<std::byte, kOddBytes>{}).error().code ==
               ErrorCode::RhiInvalidCall);
-        CHECK(device.pushConstants(*list, std::array<std::byte, kPushConstantsSize + sizeof(std::uint32_t)>{})
-                  .error()
-                  .code == ErrorCode::RhiInvalidCall);
-        for (std::uint32_t update = 0; update < kUpdates; ++update) {
+        const std::uint32_t pushSize = made.instance->adapters()[0].caps.limits.maxPushConstantsSize;
+        const std::vector<std::byte> pushed(pushSize + sizeof(std::uint32_t));
+        CHECK(device.pushConstants(*list, pushed).error().code == ErrorCode::RhiInvalidCall);
+        CHECK(device.pushConstants(*list, std::span{pushed}.first(pushSize)).has_value());
+        for (std::uint32_t update = 1; update < kUpdates; ++update) {
             CHECK(device.pushConstants(*list, bytesOf({})).has_value());
         }
         CHECK(device.pushConstants(*list, bytesOf({})).error().code == ErrorCode::RhiLimitReached);
@@ -451,19 +786,12 @@ TEST_CASE("Device refuses draws, dispatches and state recorded out of place with
         rendering.colorAttachments[0].texture = target;
         CHECK(device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget).has_value());
         REQUIRE(device.beginRendering(*list, {}, rendering).has_value());
-
-        // Inside rendering: no dispatch; a draw wants a pipeline, an indexed
-        // one an index buffer too.
-        CHECK(device.dispatch(*list, 1, 1, 1).error().code == ErrorCode::RhiInvalidCall);
-        CHECK(device.draw(*list, kVertices, 1, 0, 0).error().code == ErrorCode::RhiInvalidCall);
         CHECK(device.bindPipeline(*list, graphics).has_value());
-        CHECK(device.drawIndexed(*list, kVertices, 1, 0, 0, 0).error().code == ErrorCode::RhiInvalidCall);
         CHECK(device.bindIndexBuffer(*list, indices, 0, IndexType::Uint16).has_value());
         CHECK(device.drawIndexed(*list, 0, 0, 0, 0, 0).has_value());
         CHECK(device.setViewport(*list, whole).has_value());
         CHECK(device.setScissor(*list, all).has_value());
         CHECK(device.endRendering(*list).has_value());
-        CHECK(device.endRendering(*list).error().code == ErrorCode::RhiInvalidCall);
 
         CHECK(device.destroyCommandList(*list).has_value());
         CHECK(device.destroyPipeline(graphics).has_value());

@@ -117,10 +117,10 @@ encoder switching needs lookahead.
   live memory budget are calls of their own: per
   format, per window, or changing while the app runs. A limit for a
   feature the adapter lacks is 0.
-- Queue types: graphics, compute, copy. A device opens one graphics queue
-  and the compute and copy queues its desc asks for, refused when the adapter
-  has fewer; caps say how many it has. Queues are numbered: graphics is 0,
-  then compute, then copy. A pool records for one queue; a submit names the
+- Queue types: graphics, compute, copy. A device opens the graphics, compute
+  and copy queues its desc asks for, refused when the adapter has fewer; caps
+  say how many it has. Queues are numbered: graphics from 0, then compute,
+  then copy. A pool records for one queue; a submit names the
   queue, the lists in order and the tokens to wait on, and returns the token
   it signals. Each queue has its own timeline and is externally synchronized,
   so submits to different queues never contend.
@@ -221,8 +221,9 @@ encoder switching needs lookahead.
   count against the member all the same, so the limit means one thing on
   every backend; it is on the pool because a caller declares a capacity, not
   a backend.
-- Limits set the sizes: push constants at most 128 bytes (Vulkan guarantee,
-  within the D3D12 64-DWORD root signature); samplers as
+- Limits set the sizes: push constants as `bfr_caps_limits.max_push_constants_size`
+  reports (the device's limit on Vulkan, the root signature's room on D3D12,
+  128 on Metal); samplers as
   `bfr_caps_bindless.max_samplers` reports. Mobile descriptor limits still
   to check.
 

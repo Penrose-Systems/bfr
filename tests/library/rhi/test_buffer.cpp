@@ -136,7 +136,7 @@ TEST_CASE("Device ends a buffer handle destroyed after a submit at once, and the
 
         CHECK(device.destroyBuffer(buffer).has_value());
         CHECK(device.mapBuffer(buffer).error().code == ErrorCode::RhiInvalidHandle);
-        CHECK(device.wait(*token).has_value());
+        CHECK(device.wait(*token, kTestWait).has_value());
         CHECK(device.destroyCommandPool(*pool).has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
@@ -193,7 +193,7 @@ TEST_CASE("Device copies bytes through device memory to readback, in one list or
             REQUIRE(sent.has_value());
             token = *sent;
         }
-        REQUIRE(device.wait(token).has_value());
+        REQUIRE(device.wait(token, kTestWait).has_value());
 
         const auto read = device.mapBuffer(readback);
         REQUIRE(read.has_value());

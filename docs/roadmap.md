@@ -15,14 +15,15 @@ samplers.
 6. Timings: everything the backends can time, requestable by the client. GPU
    time per pass, draw, dispatch and copy; submit-to-complete, acquire and
    present waits; CPU time inside each BFR call.
-7. Indirect draws and dispatches; exact topologies.
-8. Depth-stencil and multisampled attachments in use; resolves.
-9. Compute and copy queues in use: cross-queue waits.
-10. Pipeline cache blobs.
-11. Mesh shaders and ray tracing, exposed where the backend has them.
-12. Queries (occlusion, statistics), debug labels, memory heaps and placed
-    resources, formatted buffer views, sparse and tiled resources, variable
-    rate shading, HDR and present timing, and whatever each backend's caps
-    turn up as we go.
+7. Sparse and tiled resources: partly resident textures and buffers, tile
+   mapping, and every sparse cap each backend reports.
+8. Indirect draws and dispatches; exact topologies.
+9. Depth-stencil and multisampled attachments in use; resolves.
+10. Compute and copy queues in use: cross-queue waits.
+11. Pipeline cache blobs.
+12. Mesh shaders and ray tracing, exposed where the backend has them.
+13. Queries (occlusion, statistics), debug labels, memory heaps and placed
+    resources, formatted buffer views, variable rate shading, HDR and
+    present timing, and whatever each backend's caps turn up as we go.
 
 Next: 6.

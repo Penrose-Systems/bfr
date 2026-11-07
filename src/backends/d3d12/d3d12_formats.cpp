@@ -15,13 +15,15 @@
 #include <cstdint>
 #include <expected>
 #include <span>
+#include <vector>
 
 namespace bfr::rhi::d3d12 {
 
 namespace {
 
-// The DXGI formats of each BFR format DXGI has one for. Bgr10a2Unorm, S8Uint,
-// ETC2, EAC and ASTC are left out: DXGI has no format for them.
+// The DXGI formats of each BFR format DXGI has one for. Bgr10a2Unorm, the
+// 64-bit formats, S8Uint, ETC2, EAC and ASTC are left out: DXGI has no format
+// for them.
 struct Entry {
     Format format;
     DxgiFormats formats;
@@ -122,18 +124,24 @@ core::Result<Support> supportOf(ID3D12Device* device, DXGI_FORMAT format) {
     return Support{.support1 = static_cast<UINT>(data.Support1), .support2 = static_cast<UINT>(data.Support2)};
 }
 
-// The sample counts DXGI is asked about, besides 1.
-constexpr std::array<UINT, 4> kSampleCounts{2U, 4U, 8U, 16U};
-
 bool has(UINT bits, UINT flag) {
     return (bits & flag) != 0;
 }
 
+// D3D12_FORMAT_SUPPORT1 has no copy bit: CopyTextureRegion and CopyResource
+// take any texture the device makes, so a format copies wherever the device
+// makes a texture of it.
+constexpr UINT kTextureBits = static_cast<UINT>(D3D12_FORMAT_SUPPORT1_TEXTURE1D) |
+                              static_cast<UINT>(D3D12_FORMAT_SUPPORT1_TEXTURE2D) |
+                              static_cast<UINT>(D3D12_FORMAT_SUPPORT1_TEXTURE3D) |
+                              static_cast<UINT>(D3D12_FORMAT_SUPPORT1_TEXTURECUBE);
+
 // Each sample count the format renders at, as bits whose values are the
 // counts; a count the device won't take is left out, whatever the reason.
 std::uint32_t sampleCountsFor(ID3D12Device* device, DXGI_FORMAT format) {
-    std::uint32_t counts = 1;
-    for (const UINT count : kSampleCounts) {
+    std::uint32_t counts = 0;
+    // Every power of two up to the most D3D12 defines, each asked.
+    for (UINT count = 1; count <= D3D12_MAX_MULTISAMPLE_SAMPLE_COUNT; count *= 2) {
         D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS levels{.Format = format,
                                                              .SampleCount = count,
                                                              .Flags = D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE,
@@ -145,6 +153,25 @@ std::uint32_t sampleCountsFor(ID3D12Device* device, DXGI_FORMAT format) {
     }
     return counts;
 }
+
+// Each format and color space a swapchain presents in, and how DXGI is asked
+// for it.
+struct SwapchainEntry {
+    SwapchainFormat format;
+    DxgiSwapchainFormat dxgi;
+};
+
+constexpr std::array kSwapchainEntries{
+    SwapchainEntry{.format = {.format = Format::Bgra8Unorm, .colorSpace = ColorSpace::Srgb},
+                   .dxgi = {.format = DXGI_FORMAT_B8G8R8A8_UNORM,
+                            .colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709}},
+    SwapchainEntry{.format = {.format = Format::Rgba8Unorm, .colorSpace = ColorSpace::Srgb},
+                   .dxgi = {.format = DXGI_FORMAT_R8G8B8A8_UNORM,
+                            .colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709}},
+    SwapchainEntry{.format = {.format = Format::Rgba16Float, .colorSpace = ColorSpace::SrgbExtendedLinear},
+                   .dxgi = {.format = DXGI_FORMAT_R16G16B16A16_FLOAT,
+                            .colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709}},
+};
 
 } // namespace
 
@@ -170,6 +197,8 @@ core::Result<FormatCaps> formatCapsFor(ID3D12Device* device, Format format) {
         caps.storageAtomic = has(support->support2, D3D12_FORMAT_SUPPORT2_UAV_ATOMIC_ADD);
         caps.colorAttachment = has(support->support1, D3D12_FORMAT_SUPPORT1_RENDER_TARGET);
         caps.blend = has(support->support1, D3D12_FORMAT_SUPPORT1_BLENDABLE);
+        caps.copySrc = has(support->support1, kTextureBits);
+        caps.copyDst = caps.copySrc;
         if (caps.colorAttachment) {
             caps.sampleCounts = sampleCountsFor(device, formats.texture);
         }
@@ -180,6 +209,9 @@ core::Result<FormatCaps> formatCapsFor(ID3D12Device* device, Format format) {
             return std::unexpected(support.error());
         }
         caps.depthStencil = has(support->support1, D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL);
+        // A depth texture is made as its depth format, not its shader one.
+        caps.copySrc = has(support->support1, kTextureBits);
+        caps.copyDst = caps.copySrc;
         if (caps.depthStencil) {
             caps.sampleCounts = sampleCountsFor(device, formats.depth);
         }
@@ -187,27 +219,32 @@ core::Result<FormatCaps> formatCapsFor(ID3D12Device* device, Format format) {
     return caps;
 }
 
-SwapchainCaps surfaceCapsFor(bool tearing) {
-    return {.maxImageCount = DXGI_MAX_SWAP_CHAIN_BUFFERS, .immediate = tearing};
-}
-
-std::span<const SwapchainFormat> swapchainFormats() {
-    return {};
+core::Result<std::vector<SwapchainFormat>> swapchainFormats(ID3D12Device* device) {
+    std::vector<SwapchainFormat> formats;
+    for (const SwapchainEntry& entry : kSwapchainEntries) {
+        const auto support = supportOf(device, entry.dxgi.format);
+        if (!support) {
+            return std::unexpected(support.error());
+        }
+        if (has(support->support1, D3D12_FORMAT_SUPPORT1_DISPLAY)) {
+            formats.push_back(entry.format);
+        }
+    }
+    return formats;
 }
 
 DxgiSwapchainFormat swapchainFormatFor(Format format, ColorSpace colorSpace) {
-    if (colorSpace == ColorSpace::Srgb) {
-        if (format == Format::Bgra8Unorm) {
-            return {.format = DXGI_FORMAT_B8G8R8A8_UNORM, .colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709};
-        }
-        if (format == Format::Rgba8Unorm) {
-            return {.format = DXGI_FORMAT_R8G8B8A8_UNORM, .colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709};
-        }
-    }
-    if (colorSpace == ColorSpace::SrgbExtendedLinear && format == Format::Rgba16Float) {
-        return {.format = DXGI_FORMAT_R16G16B16A16_FLOAT, .colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709};
-    }
-    return {};
+    const auto asked = [format, colorSpace](const SwapchainEntry& entry) {
+        return entry.format.format == format && entry.format.colorSpace == colorSpace;
+    };
+    const auto* const found = std::ranges::find_if(kSwapchainEntries, asked);
+    return found != kSwapchainEntries.end() ? found->dxgi : DxgiSwapchainFormat{};
+}
+
+Format swapchainFormatOf(DXGI_FORMAT format) {
+    const auto* const found = std::ranges::find(kSwapchainEntries, format,
+                                                [](const SwapchainEntry& entry) { return entry.dxgi.format; });
+    return found != kSwapchainEntries.end() ? found->format.format : Format::Undefined;
 }
 
 } // namespace bfr::rhi::d3d12

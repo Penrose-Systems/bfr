@@ -15,8 +15,8 @@
 #   optional: true              may be null
 #   lifetime: <object>          returned data stays valid while <object> lives
 #   user_data: <callback>       an opaque member passed to the <callback> beside it
-#   default: <constant>         a u32 or u64 member whose 0 means <constant>; the C++
-#                               member starts at it
+#   default: <constant>         a u32 or u64 member the C++ wrapper starts at <constant>;
+#                               C passes the member as given, 0 included
 #
 # Constants are unsigned integers, named without the bfr_ prefix, each with a doc.
 #
@@ -32,9 +32,9 @@
 version: {major: 0, minor: 1, patch: 0}
 
 constants:
-  max_color_targets: {value: 8, doc: The most color targets a graphics pipeline renders to.}
-  push_constants_size: {value: 128, doc: Bytes of push constants every pipeline's shaders read; the layout bfr_pipeline states.}
-  mask_all: {value: 4294967295, doc: What a mask member of 0 means; every bit of the mask set.}
+  max_color_targets: {value: 8, doc: "The most color targets a graphics pipeline renders to. Fixed at D3D12's D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT so the descs hold fixed arrays; a Vulkan device may report more in max_color_attachments. Taking a span sized by that cap instead may be revisited."}
+  mask_all: {value: 4294967295, doc: Every bit of a mask set.}
+  no_slot: {value: 4294967295, doc: "A bindless slot a texture doesn't have, in a table its usage doesn't set; no table has a slot this high."}
   max_message_length: {value: 1024, doc: The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".}
 
 enums:
@@ -64,6 +64,7 @@ enums:
       error_limit_reached: {value: -17, doc: "A fixed limit was reached, such as how many objects of one type a device holds."}
       error_unsupported: {value: -18, doc: The adapter cannot do or report what was asked; the message says what.}
       error_query_failed: {value: -19, doc: The API failed when asked about the adapter; the message says how.}
+      error_timeout: {value: -20, doc: The wait ran past the caller's timeout.}
 
   backend:
     doc: The native API an instance runs on.
@@ -151,6 +152,18 @@ enums:
       b5g6r5_unorm: {value: 48, doc: Blue in the low bits.}
       bgr5a1_unorm: {value: 49, doc: Blue in the low bits.}
       bgra4_unorm: {value: 50, doc: Blue in the low bits.}
+      r64_uint: {value: 51}
+      r64_sint: {value: 52}
+      r64_float: {value: 53}
+      rg64_uint: {value: 54}
+      rg64_sint: {value: 55}
+      rg64_float: {value: 56}
+      rgb64_uint: {value: 57}
+      rgb64_sint: {value: 58}
+      rgb64_float: {value: 59}
+      rgba64_uint: {value: 60}
+      rgba64_sint: {value: 61}
+      rgba64_float: {value: 62}
       d16_unorm: {value: 100}
       d24_unorm_s8_uint: {value: 101}
       d32_float: {value: 102}
@@ -276,8 +289,26 @@ enums:
     doc: What a queue runs.
     values:
       graphics: {value: 0, doc: "Graphics, compute and copies."}
-      compute: {value: 1, doc: "Compute and copies, beside the graphics queue."}
+      compute: {value: 1, doc: "Compute and copies."}
       copy: {value: 2, doc: Copies alone.}
+
+  swapchain_status:
+    doc: What the backend said of a swapchain as an image was acquired or presented.
+    values:
+      matches: {value: 0, doc: It said nothing more than that the call succeeded.}
+      suboptimal: {value: 1, doc: "It no longer matches its window exactly but still presents; Vulkan's VK_SUBOPTIMAL_KHR. bfr_resize_swapchain makes it match, when the caller chooses."}
+
+  queue_level:
+    doc: >-
+      A queue's priority against every queue on the system, other processes'
+      included. Which levels each kind of queue takes is in bfr_caps_queues;
+      one above normal may need privileges the process lacks, and then fails
+      as the backend says.
+    values:
+      normal: {value: 0, doc: "The system's default, which a backend's queues have when none is set."}
+      low: {value: 1, doc: Below the default.}
+      high: {value: 2, doc: Above the default.}
+      realtime: {value: 3, doc: The highest.}
 
   load_op:
     doc: What an attachment holds when rendering begins.
@@ -468,8 +499,9 @@ handles:
     destroy: destroy_swapchain
     doc: >-
       The images presented to one window. Calls on one swapchain must not
-      overlap, destroying it included; the caller synchronizes them. Different
-      swapchains may be used from different threads at once.
+      overlap, destroying it included, and a bfr_submit of a list that renders
+      to it counts as one; the caller synchronizes them. Different swapchains
+      may be used from different threads at once.
 
   command_pool:
     parent: device
@@ -509,7 +541,7 @@ handles:
       declare as follows. Four unbounded tables, each indexed by the slot a
       resource is given when it is created, which bfr_get_buffer_slot,
       bfr_get_texture_slots and bfr_get_sampler_slot report and which is the same number on every
-      backend, and one block of bfr_push_constants_size bytes of push
+      backend, and one block of the caps' max_push_constants_size bytes of push
       constants that every stage reads, set by bfr_push_constants. On Vulkan the tables are the
       bindings of descriptor set 0, in order: 0 sampled images, 1 storage
       images, 2 storage buffers, 3 samplers, each an update-after-bind and
@@ -518,7 +550,7 @@ handles:
       ranges, each starting at register 0 of its own space: SRV space 0
       sampled textures, UAV space 1 storage textures, UAV space 2 storage
       buffers as raw buffer views, sampler space 3 samplers; the push constants are
-      bfr_push_constants_size / 4 root constants at b0 of space 0. On Metal
+      max_push_constants_size / 4 root constants at b0 of space 0. On Metal
       the tables are one argument buffer at buffer(0), holding the sampled
       textures, storage textures, storage buffers and samplers in that order,
       each a region of as many 8-byte entries as the bfr_device_desc's
@@ -549,9 +581,9 @@ structs:
     extensible: true
     members:
       - {name: backend, type: backend}
-      - {name: validation, type: bool, doc: Enable the backend's validation layer.}
+      - {name: validation, type: bool, doc: Enable the backend's validation layer. On Metal its messages go to the system log.}
       - {name: message_callback, type: message_callback, optional: true}
-      - {name: min_severity, type: message_severity, doc: The least severe message to send; 0 means warning.}
+      - {name: min_severity, type: message_severity, doc: The least severe message to send.}
       - name: message_user_data
         type: opaque
         optional: true
@@ -559,6 +591,14 @@ structs:
         doc: >-
           Passed to message_callback, which may still be called after
           bfr_destroy_instance while a device lives.
+      - name: application_name
+        type: string
+        doc: >-
+          The application's name, passed to the backend where it takes one; read during the call
+          only. Empty is none.
+      - {name: application_version, type: u32, doc: "The application's version, passed as given where the backend takes one."}
+      - {name: engine_name, type: string, doc: "The engine's name, as application_name."}
+      - {name: engine_version, type: u32, doc: "The engine's version, as application_version."}
 
   adapter_info:
     doc: An adapter, as an instance lists it. Nothing is opened.
@@ -578,28 +618,62 @@ structs:
           wl_surface* on Wayland, a CAMetalLayer* on Apple.
       - name: display
         type: opaque
-        doc: The Display* on X11, the wl_display* on Wayland; unused elsewhere.
+        doc: The Display* on X11, the wl_display* on Wayland, the HINSTANCE on Windows; unused on Apple.
       - {name: system, type: window_system}
+
+  queue_desc:
+    doc: One queue a device opens.
+    members:
+      - name: rank
+        type: f32
+        doc: >-
+          0 to 1: its priority against the device's other queues, higher first; passed to the
+          backend as given. Where bfr_caps_queues.ranks is 0 the backend doesn't rank a device's
+          queues, so queues of different ranks fail the device with error_unsupported.
+      - name: level
+        type: queue_level
+        doc: >-
+          Its priority against every queue on the system; 0 is normal. A level the backend has no
+          setting for fails the device with error_unsupported. Vulkan sets one level for all the
+          queues of a kind, so there different levels in one kind fail the same way.
 
   device_desc:
     doc: >-
       How to open an adapter. The device's queues are numbered: the graphics
-      queue is 0, then the compute queues, then the copy queues, in the order
-      asked for here.
+      queues from 0, then the compute queues, then the copy queues, in the
+      order asked for here.
     extensible: true
     members:
       - {name: adapter, type: u32, doc: Index into the instance's adapter list.}
       - name: window
         type: window
-        doc: The window the device must be able to present to; all zero opens it without presenting.
-      - name: compute_queues
-        type: u32
         doc: >-
-          Compute queues to open beside the graphics queue; 0 is none. Fails with error_unsupported
-          when the adapter has fewer; bfr_caps.queues says how many it has.
+          The window one of the device's queues must be able to present to, else it fails with
+          error_present_unsupported; all zero opens it without asking.
+      - name: graphics_queues
+        type: queue_desc
+        array: graphics_queue_count
+        pointer: in
+        optional: true
+        doc: >-
+          The graphics queues to open, read during the call only; none is none. Fails with
+          error_unsupported when the adapter has fewer; bfr_caps.queues says how many it has.
+      - {name: graphics_queue_count, type: u32}
+      - name: compute_queues
+        type: queue_desc
+        array: compute_queue_count
+        pointer: in
+        optional: true
+        doc: >-
+          The compute queues to open, as graphics_queues says.
+      - {name: compute_queue_count, type: u32}
       - name: copy_queues
-        type: u32
-        doc: Copy queues to open; 0 is none. Fails with error_unsupported when the adapter has fewer.
+        type: queue_desc
+        array: copy_queue_count
+        pointer: in
+        optional: true
+        doc: The copy queues to open, as graphics_queues says.
+      - {name: copy_queue_count, type: u32}
       - name: max_command_lists
         type: u32
         doc: >-
@@ -616,23 +690,31 @@ structs:
       - name: max_bindless_textures
         type: u32
         doc: >-
-          Slots in the sampled texture table bfr_pipeline describes, 0 for none. Made with the device. Fails with
-          error_limit_reached when the adapter holds fewer; bfr_caps_bindless.max_textures says how many.
+          Slots in the sampled texture table bfr_pipeline describes, 0 for none. Made with the device, passed to
+          the backend as given; bfr_caps_bindless.max_textures says how many the adapter holds, and more is
+          the backend's to refuse, which Vulkan's validation does. D3D12 makes the three resource tables in one heap, so there they fail with
+          error_limit_reached when together they are more than it holds.
       - name: max_bindless_storage_textures
         type: u32
-        doc: Slots in the storage texture table; fails as max_bindless_textures does, against max_storage_textures.
+        doc: Slots in the storage texture table, as max_bindless_textures says; bfr_caps_bindless.max_storage_textures says how many the adapter holds.
       - name: max_bindless_storage_buffers
         type: u32
-        doc: Slots in the storage buffer table; fails as max_bindless_textures does, against max_storage_buffers.
+        doc: Slots in the storage buffer table, as max_bindless_textures says; bfr_caps_bindless.max_storage_buffers says how many the adapter holds.
       - name: max_bindless_samplers
         type: u32
-        doc: Slots in the sampler table; fails as max_bindless_textures does, against max_samplers.
+        doc: Slots in the sampler table, passed as max_bindless_textures is; bfr_caps_bindless.max_samplers says how many the adapter holds.
 
   swapchain_desc:
     doc: How to create a swapchain.
     extensible: true
     members:
       - {name: window, type: window, doc: The window to present to.}
+      - name: queue
+        type: u32
+        doc: >-
+          The device's queue that presents its images; one the device lacks fails with
+          error_invalid_argument. Fails with error_present_unsupported when it
+          can't present to the window.
       - name: image_count
         type: u32
         doc: >-
@@ -646,11 +728,11 @@ structs:
       - name: format
         type: format
         doc: >-
-          The images' format; 0 is bgra8_unorm. Fails with error_unsupported when the backend has no
-          setting for it with color_space.
+          The images' format. Fails with error_unsupported when the backend has no setting for it
+          with color_space.
       - name: color_space
         type: color_space
-        doc: How the display reads the images; 0 is srgb.
+        doc: How the display reads the images.
       - name: alpha_mode
         type: alpha_mode
         doc: >-
@@ -681,6 +763,8 @@ structs:
       - {name: load_op, type: load_op, doc: What it holds at the start; 0 is load.}
       - {name: store_op, type: store_op, doc: What becomes of it at the end; 0 is store.}
       - {name: clear_color, type: f32, fixed: 4, doc: "Red, green, blue and alpha, 0 to 1, when load_op is clear."}
+      - {name: clear_integer, type: bool, doc: "The target holds integers: clear_color_integer applies instead. D3D12 clears with floats, so there a value a 32-bit float does not hold exactly fails with BFR_RESULT_ERROR_INVALID_ARGUMENT."}
+      - {name: clear_color_integer, type: u32, fixed: 4, doc: "Red, green, blue and alpha bits, when load_op is clear; a signed format reads them as int32."}
 
   depth_stencil_attachment:
     doc: >-
@@ -692,7 +776,7 @@ structs:
       - {name: load_op, type: load_op, doc: 0 is load.}
       - {name: store_op, type: store_op, doc: 0 is store.}
       - {name: clear_depth, type: f32, doc: "0 to 1, when load_op is clear."}
-      - {name: clear_stencil, type: u32, doc: When load_op is clear.}
+      - {name: clear_stencil, type: u32, doc: When load_op is clear. The low 8 bits count.}
 
   rendering_desc:
     doc: >-
@@ -731,7 +815,7 @@ structs:
     doc: How to create a command pool.
     extensible: true
     members:
-      - {name: queue, type: u32, doc: The queue its lists record for; 0 is the graphics queue.}
+      - {name: queue, type: u32, doc: "The queue its lists record for, numbered as bfr_device_desc says."}
       - name: list_count
         type: u32
         doc: >-
@@ -750,7 +834,7 @@ structs:
       - {name: copy_src, type: bool}
       - {name: copy_dst, type: bool}
       - {name: uniform, type: bool, doc: Shaders read it as constants.}
-      - {name: storage, type: bool, doc: Shaders read and write it.}
+      - {name: storage, type: bool, doc: "Shaders read and write it. D3D12 views it in 32-bit values, so there its size must be a multiple of 4."}
       - {name: index, type: bool, doc: Indexed draws read it.}
       - {name: indirect, type: bool, doc: Indirect draws and dispatches read their arguments from it.}
 
@@ -782,7 +866,8 @@ structs:
   texture_desc:
     doc: >-
       How to create a texture, in device memory. The CPU reaches it only by
-      copies through a buffer.
+      copies through a buffer. More than one layer, or more than 6 for cube,
+      makes an array texture, which shaders declare as one.
     extensible: true
     members:
       - {name: dimension, type: texture_dimension, doc: 0 is d2.}
@@ -799,7 +884,7 @@ structs:
     doc: >-
       Where a texture is in the bindless tables bfr_pipeline states, from
       creation to destruction: the index shaders use. A table the texture's
-      usage does not set has no slot for it, and reads 0.
+      usage does not set has no slot for it, and reads BFR_NO_SLOT.
     members:
       - {name: sampled, type: u32, doc: Its index in the texture table; only with sampled usage.}
       - {name: storage, type: u32, doc: Its index in the storage texture table; only with storage usage.}
@@ -897,7 +982,7 @@ structs:
       - {name: front_face, type: front_face}
       - {name: fill, type: fill_mode}
       - {name: depth_clamp, type: bool, doc: "Clamps depth to the viewport's range instead of clipping to it."}
-      - {name: depth_bias, type: f32, doc: "Added to each fragment's depth, in units of the depth format's smallest step."}
+      - {name: depth_bias, type: f32, doc: "Added to each fragment's depth, in units of the depth format's smallest step. D3D12 takes whole numbers only, so there a fraction fails with BFR_RESULT_ERROR_INVALID_ARGUMENT."}
       - {name: depth_bias_slope, type: f32, doc: "Added to each fragment's depth, times its depth slope."}
       - {name: depth_bias_clamp, type: f32, doc: The most the bias may add; 0 is no limit.}
 
@@ -908,8 +993,8 @@ structs:
       - {name: pass, type: stencil_op, doc: When the stencil and depth tests pass.}
       - {name: depth_fail, type: stencil_op, doc: When the stencil test passes and the depth test fails.}
       - {name: compare, type: compare_op, doc: Reference value against stored.}
-      - {name: read_mask, type: u32, default: mask_all, doc: The bits compared. The low 8 bits count.}
-      - {name: write_mask, type: u32, default: mask_all, doc: The bits written. The low 8 bits count.}
+      - {name: read_mask, type: u32, doc: The bits compared. The low 8 bits count.}
+      - {name: write_mask, type: u32, doc: The bits written. The low 8 bits count.}
 
   depth_stencil_state:
     doc: >-
@@ -925,8 +1010,9 @@ structs:
 
   blend_state:
     doc: >-
-      How a graphics pipeline blends a fragment into one color target. Off by
-      default: the fragment's color replaces the target's.
+      How a graphics pipeline blends a fragment into one color target. With
+      enable false the fragment's color replaces the target's, in the channels
+      write_mask names.
     members:
       - {name: enable, type: bool}
       - {name: src_color, type: blend_factor}
@@ -937,8 +1023,7 @@ structs:
       - {name: alpha_op, type: blend_op}
       - name: write_mask
         type: u32
-        default: mask_all
-        doc: "Which channels are written: bit 0 red, 1 green, 2 blue, 3 alpha."
+        doc: "Which channels are written: bit 0 red, 1 green, 2 blue, 3 alpha. Bits above 3 are ignored."
 
   color_target:
     doc: One color target a graphics pipeline renders to.
@@ -979,14 +1064,14 @@ structs:
       A point on a queue's timeline, which bfr_submit writes and the GPU passes
       once what was submitted has run. An all-zero token has already completed.
     members:
-      - {name: queue, type: u32, doc: Index of the queue on the device; 0 is the graphics queue.}
+      - {name: queue, type: u32, doc: "Index of the queue on the device, numbered as bfr_device_desc says."}
       - {name: value, type: u64}
 
   submit_desc:
     doc: What to send to a queue.
     extensible: true
     members:
-      - {name: queue, type: u32, doc: The queue to send to; 0 is the graphics queue.}
+      - {name: queue, type: u32, doc: "The queue to send to, numbered as bfr_device_desc says."}
       - name: command_lists
         type: command_list
         array: command_list_count
@@ -1018,7 +1103,7 @@ structs:
       - {name: driver_name, type: string, lifetime: instance, doc: Empty when the driver does not say.}
       - {name: driver_info, type: string, lifetime: instance, doc: "The driver's version as text; empty when the driver does not say."}
       - {name: driver_version, type: u64, doc: "The driver's version, in the vendor's own encoding."}
-      - {name: api_major, type: u32, doc: "The newest API version the adapter supports: Vulkan 1.3.280 is 1, 3, 280."}
+      - {name: api_major, type: u32, doc: "The newest API version the adapter supports: Vulkan 1.3.280 is 1, 3, 280. D3D12: the highest feature level, 12_1 being 12, 1. Metal: the GPU family version, Metal 4 being 4."}
       - {name: api_minor, type: u32}
       - {name: api_patch, type: u32}
       - {name: device_uuid, type: u8, fixed: 16, doc: The same GPU has the same UUID in every process and API.}
@@ -1042,15 +1127,15 @@ structs:
       - {name: max_uniform_buffer_range, type: u32, doc: Most bytes a shader reads through one uniform buffer view.}
       - {name: max_storage_buffer_range, type: u32, doc: Most bytes a shader reaches through one storage buffer view.}
       - {name: max_texel_buffer_elements, type: u32, doc: Most elements in a texel buffer view.}
-      - {name: max_push_constants_size, type: u32, doc: Most bytes of push constants.}
+      - {name: max_push_constants_size, type: u32, doc: "Bytes of push constants every pipeline's shaders read, and the most bfr_push_constants takes: the device's limit on Vulkan, the root signature's room on D3D12, 128 on Metal."}
       - {name: max_color_attachments, type: u32}
       - {name: max_render_width, type: u32, doc: Widest render area.}
       - {name: max_render_height, type: u32, doc: Tallest render area.}
       - {name: max_render_layers, type: u32, doc: Most layers rendered at once.}
-      - {name: color_sample_counts, type: u32, doc: "Sample counts for float and normalized color attachments: each set bit is a count it supports, 1, 2, 4 and so on."}
-      - {name: integer_sample_counts, type: u32, doc: Sample counts for integer color attachments.}
-      - {name: depth_sample_counts, type: u32, doc: Sample counts for depth attachments.}
-      - {name: stencil_sample_counts, type: u32, doc: Sample counts for stencil attachments.}
+      - {name: color_sample_counts, type: u32, doc: "Sample counts for float and normalized color attachments: each set bit is a count it supports, 1, 2, 4 and so on. 0 on D3D12, which answers per format only, in bfr_format_caps.sample_counts."}
+      - {name: integer_sample_counts, type: u32, doc: "Sample counts for integer color attachments; 0 on D3D12, as color_sample_counts says."}
+      - {name: depth_sample_counts, type: u32, doc: "Sample counts for depth attachments; 0 on D3D12, as color_sample_counts says."}
+      - {name: stencil_sample_counts, type: u32, doc: "Sample counts for stencil attachments; 0 on D3D12, as color_sample_counts says."}
       - {name: no_attachment_sample_counts, type: u32, doc: Sample counts for rendering with no attachments.}
       - {name: storage_texture_sample_counts, type: u32, doc: Sample counts for storage textures.}
       - {name: max_viewports, type: u32}
@@ -1062,8 +1147,8 @@ structs:
       - {name: max_sampler_anisotropy, type: f32}
       - {name: max_sampler_lod_bias, type: f32}
       - {name: max_custom_border_color_samplers, type: u32, doc: Samplers with a custom border colour alive at once.}
-      - {name: min_shading_rate_tile, type: u32, doc: Smallest tile of a shading rate texture; 0 without one.}
-      - {name: max_shading_rate_tile, type: u32, doc: Largest tile of a shading rate texture; 0 without one.}
+      - {name: min_shading_rate_tile, type: u32, fixed: 2, doc: "Smallest tile of a shading rate texture, width and height; 0 without one."}
+      - {name: max_shading_rate_tile, type: u32, fixed: 2, doc: "Largest tile of a shading rate texture, width and height; 0 without one."}
       - {name: min_uniform_buffer_alignment, type: u64, doc: Alignment in bytes of a uniform buffer view's offset.}
       - {name: min_storage_buffer_alignment, type: u64, doc: Alignment in bytes of a storage buffer view's offset.}
       - {name: min_texel_buffer_alignment, type: u64, doc: Alignment in bytes of a texel buffer view's offset.}
@@ -1090,7 +1175,7 @@ structs:
       - {name: max_workgroup_size, type: u32, fixed: 3, doc: "Largest workgroup in x, y and z."}
       - {name: max_workgroup_invocations, type: u32, doc: Most invocations in one workgroup.}
       - {name: max_shared_memory, type: u32, doc: Most bytes of workgroup shared memory.}
-      - {name: subgroup_size, type: u32, doc: Invocations in a subgroup (a wave or warp) by default.}
+      - {name: subgroup_size, type: u32, doc: "Invocations in a subgroup (a wave or warp) by default. D3D12 has no default; it reports its minimum."}
       - {name: min_subgroup_size, type: u32}
       - {name: max_subgroup_size, type: u32}
 
@@ -1203,8 +1288,21 @@ structs:
       - {name: types, type: memory_type, fixed: 32, doc: The first type_count are set.}
       - {name: unified, type: bool, doc: The GPU and CPU share one memory.}
 
+  queue_levels:
+    doc: The bfr_queue_level values a kind of queue takes; each true where the backend says so.
+    members:
+      - {name: normal, type: bool}
+      - {name: low, type: bool}
+      - {name: high, type: bool}
+      - {name: realtime, type: bool}
+
   caps_queues:
-    doc: How many queues of each type the adapter has.
+    doc: >-
+      How many queues of each type the adapter has, and what they do, for a
+      device opened without a window. On Vulkan a window may move a type to
+      another family that presents to it, with its own counts, timestamp bits
+      and levels. The counts are 0 where the backend has no count of queues;
+      bfr_create_device then takes any number of each.
     members:
       - {name: graphics, type: u32, doc: Queues that run graphics.}
       - {name: compute, type: u32, doc: Queues that run compute but not graphics (async compute).}
@@ -1212,6 +1310,14 @@ structs:
       - {name: graphics_timestamp_bits, type: u32, doc: Valid bits in a graphics queue's timestamps; 0 without timestamps.}
       - {name: compute_timestamp_bits, type: u32}
       - {name: copy_timestamp_bits, type: u32}
+      - name: ranks
+        type: u32
+        doc: >-
+          The distinct priorities the backend gives a device's queues by their bfr_queue_desc.rank;
+          0 where it doesn't rank them.
+      - {name: graphics_levels, type: queue_levels, doc: Levels a graphics queue takes; none set where the backend has no setting.}
+      - {name: compute_levels, type: queue_levels}
+      - {name: copy_levels, type: queue_levels}
 
   caps:
     doc: Everything about an adapter that stays the same while it runs.
@@ -1389,8 +1495,9 @@ functions:
 
   create_device:
     doc: >-
-      Opens an adapter. With a window in desc, picks a queue that can present
-      to it.
+      Opens an adapter with the queues desc asks for. With a window in desc,
+      fails with error_present_unsupported unless one of them can present to
+      it.
     returns: result
     params:
       - {name: instance, type: instance}
@@ -1443,11 +1550,19 @@ functions:
     doc: >-
       Takes the swapchain's next image, for bfr_begin_rendering. Fails with
       error_out_of_date when the swapchain has no images or no longer matches
-      its window; bfr_resize_swapchain then gives it new ones.
+      its window; bfr_resize_swapchain then gives it new ones. Fails with
+      error_timeout when no image came in time.
     returns: result
     params:
       - {name: device, type: device}
       - {name: swapchain, type: swapchain}
+      - name: timeout_ns
+        type: u64
+        doc: >-
+          Nanoseconds to wait for an image, passed to the backend's acquire. Unused where acquire
+          doesn't wait. Where the backend can only wait with no limit or for a time of its own, the
+          largest u64 waits with no limit and any other for the backend's time.
+      - {name: status, type: swapchain_status, pointer: out, doc: What the backend said of the swapchain.}
 
   present:
     doc: >-
@@ -1458,6 +1573,7 @@ functions:
     params:
       - {name: device, type: device}
       - {name: swapchain, type: swapchain}
+      - {name: status, type: swapchain_status, pointer: out, doc: What the backend said of the swapchain.}
 
   create_command_pool:
     doc: >-
@@ -1473,9 +1589,10 @@ functions:
   reset_command_pool:
     doc: >-
       Gives every list the pool made back to it, so bfr_begin_commands may use
-      their memory again. Fails with error_invalid_argument while a list from
-      the pool is recording, or while the GPU has not passed the token of the
-      pool's last submit; bfr_wait on it first.
+      their memory again. A list from the pool still recording ends with it on
+      Vulkan; on D3D12 and Metal it fails with error_invalid_argument. Fails
+      with error_invalid_argument while the GPU has not passed the token of
+      the pool's last submit; bfr_wait on it first.
     returns: result
     params:
       - {name: device, type: device}
@@ -1520,14 +1637,16 @@ functions:
   end_rendering:
     doc: >-
       Ends the rendering bfr_begin_rendering began; a swapchain image is then
-      ready to present, and a texture is in the layout it was given in.
+      ready to present, and a texture is in the layout it was given in. Metal
+      has no encoder to end when none is open, so there it fails with
+      error_invalid_argument.
     returns: result
     params:
       - {name: device, type: device}
       - {name: command_list, type: command_list}
 
   set_viewport:
-    doc: Sets the viewport the draws after it use, inside rendering.
+    doc: Sets the viewport the draws after it use. Metal sets it on the rendering's encoder, so there it fails with error_invalid_argument outside rendering.
     returns: result
     params:
       - {name: device, type: device}
@@ -1535,12 +1654,40 @@ functions:
       - {name: viewport, type: viewport, pointer: in}
 
   set_scissor:
-    doc: Sets the scissor the draws after it keep to, inside rendering.
+    doc: Sets the scissor the draws after it keep to. Fails as bfr_set_viewport does.
     returns: result
     params:
       - {name: device, type: device}
       - {name: command_list, type: command_list}
       - {name: scissor, type: rect, pointer: in}
+
+  set_blend_constants:
+    doc: >-
+      Sets the color the constant blend factors of the draws after it read.
+      Vulkan has no color until it is set, and Metal sets it on the
+      rendering's encoder, so a draw that reads it needs it set in its
+      rendering. Fails as bfr_set_viewport does.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: red, type: f32}
+      - {name: green, type: f32}
+      - {name: blue, type: f32}
+      - {name: alpha, type: f32}
+
+  set_stencil_reference:
+    doc: >-
+      Sets the value the stencil test of the draws after it compares against,
+      and stencil_op replace writes, on both faces. The low 8 bits count.
+      Vulkan has no value until it is set, and Metal sets it on the
+      rendering's encoder, so a draw that tests stencil needs it set in its
+      rendering. Fails as bfr_set_viewport does.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: reference, type: u32}
 
   bind_pipeline:
     doc: >-
@@ -1557,7 +1704,7 @@ functions:
     doc: >-
       Sets the first size bytes of the push constants every shader reads, as
       bfr_pipeline states, for the draws and dispatches after it. size is a
-      multiple of 4 and at most bfr_push_constants_size, else
+      multiple of 4 and at most the caps' max_push_constants_size, else
       error_invalid_argument. Fails with error_limit_reached past the pool's
       push_constant_updates.
     returns: result
@@ -1585,7 +1732,9 @@ functions:
       bound graphics pipeline, inside rendering. The vertex shader sees vertex
       indices from first_vertex. Whether it sees instance indices from
       first_instance or from 0 is the backend's: Vulkan and Metal count from
-      first_instance, D3D12's SV_InstanceID from 0.
+      first_instance, D3D12's SV_InstanceID from 0. Metal draws on the
+      rendering's encoder, so there it fails with error_invalid_argument
+      outside rendering.
     returns: result
     params:
       - {name: device, type: device}
@@ -1717,11 +1866,18 @@ functions:
       - {name: token, type: token, pointer: out, optional: true}
 
   wait:
-    doc: Blocks until the GPU has passed token, whichever queue it is on.
+    doc: >-
+      Blocks until the GPU has passed token, whichever queue it is on, which may be one no submit
+      has returned yet, or until timeout_ns has passed, which fails with error_timeout.
     returns: result
     params:
       - {name: device, type: device}
       - {name: token, type: token, pointer: in}
+      - name: timeout_ns
+        type: u64
+        doc: >-
+          Nanoseconds to wait, passed to the backend's wait. A backend that counts in milliseconds
+          is given them rounded up, and on D3D12 one past its longest count waits with no limit.
 
   poll:
     doc: Writes whether the GPU has passed token, without blocking.
@@ -1855,9 +2011,7 @@ functions:
     doc: >-
       Creates a compute pipeline, as desc says, before returning. Not for the
       frame path: it compiles, and frees pipelines the GPU is done with. Fails
-      with error_invalid_argument for a desc with no code or a workgroup
-      dimension of 0, error_limit_reached at the device's maximum of
-      pipelines, and error_device_failed when the backend refuses the code or
+      with error_limit_reached at the device's maximum of pipelines, and error_device_failed when the backend refuses the code or
       the desc; the message carries what it said.
     returns: result
     params:
@@ -1868,13 +2022,9 @@ functions:
   create_graphics_pipeline:
     doc: >-
       Creates a graphics pipeline, as desc says, before returning. Not for the
-      frame path, as bfr_create_compute_pipeline is not. Fails with
-      error_invalid_argument for a desc with no vertex code, more than
-      max_color_targets targets, a target of format undefined, a
-      depth-stencil test without a depth-stencil format, or samples of 0,
-      error_unsupported when the desc uses raster or blend state the adapter
-      lacks, such as wireframe fill, error_limit_reached at the device's
-      maximum of pipelines, and error_device_failed when the backend refuses
+      frame path, as bfr_create_compute_pipeline is not. A target of format
+      undefined is an unused one. Fails with error_invalid_argument for a desc
+      with more than max_color_targets targets, error_limit_reached at the device's maximum of pipelines, and error_device_failed when the backend refuses
       the code or the desc; the message carries what it said.
     returns: result
     params:

@@ -54,6 +54,8 @@ std::string_view name(ErrorCode code) noexcept {
             return "RhiOutOfDate";
         case ErrorCode::RhiInvalidCall:
             return "RhiInvalidCall";
+        case ErrorCode::RhiTimeout:
+            return "RhiTimeout";
     }
     return "Unknown";
 }

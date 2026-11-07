@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace bfr::rhi::vulkan {
@@ -35,9 +36,11 @@ class VulkanSwapchain {
 public:
     /// Builds on surface, which it takes over, through device's table and the
     /// table of the instance the adapter belongs to, as desc says each
-    /// time. It reports to logger; the tables and logger outlive it.
+    /// time, its images shared by families, those of the device's queues. It
+    /// reports to logger; the tables and logger outlive it.
     VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, const InstanceTable& instanceTable,
-                    VulkanSurface surface, const SwapchainDesc& desc, const core::Logger& logger);
+                    VulkanSurface surface, const SwapchainDesc& desc, std::span<const std::uint32_t> families,
+                    const core::Logger& logger);
     ~VulkanSwapchain();
     VulkanSwapchain(const VulkanSwapchain&) = delete;
     VulkanSwapchain& operator=(const VulkanSwapchain&) = delete;
@@ -58,7 +61,7 @@ public:
     /// Takes the next image. Fails with RhiOutOfDate when there are no images
     /// or the surface changed, RhiInvalidCall when an image is already
     /// acquired, and RhiSwapchainFailed when the API refuses.
-    [[nodiscard]] core::Result<void> acquire();
+    [[nodiscard]] core::Result<SwapchainStatus> acquire(std::uint64_t timeoutNs);
 
     /// The acquired image. Fails with RhiInvalidCall when none is.
     [[nodiscard]] core::Result<AcquiredImage> acquired() const;
@@ -77,7 +80,10 @@ public:
     /// afterwards. Fails with RhiOutOfDate when the surface changed, the image
     /// still presented when it could be, RhiInvalidCall when no image is
     /// acquired, and RhiSwapchainFailed when the API refuses.
-    [[nodiscard]] core::Result<void> present(VkQueue queue);
+    [[nodiscard]] core::Result<SwapchainStatus> present(VkQueue queue);
+
+    /// The device's queue it presents from, as its desc says.
+    [[nodiscard]] std::uint32_t queue() const { return desc_.queue; }
 
     [[nodiscard]] const VulkanSurface& surface() const { return surface_; }
 
@@ -93,6 +99,7 @@ private:
     const core::Logger* logger_;
     VulkanSurface surface_;
     SwapchainDesc desc_;
+    std::vector<std::uint32_t> families_;
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
     VkExtent2D extent_{};
     // Refilled by each build, keeping their storage.

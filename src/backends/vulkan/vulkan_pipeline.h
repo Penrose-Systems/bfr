@@ -6,7 +6,6 @@
 
 #include <volk.h>
 
-#include <array>
 #include <cstdint>
 
 namespace bfr::rhi::vulkan {
@@ -17,6 +16,10 @@ inline constexpr std::uint32_t kSampledTextureBinding = 0;
 inline constexpr std::uint32_t kStorageTextureBinding = 1;
 inline constexpr std::uint32_t kStorageBufferBinding = 2;
 inline constexpr std::uint32_t kSamplerBinding = 3;
+
+/// The viewports, and scissors, a pipeline has and setViewport and setScissor
+/// set: one each, so the caps report that many.
+inline constexpr std::uint32_t kViewports = 1;
 
 /// op as Vulkan's, for depth and stencil tests and compare samplers.
 [[nodiscard]] VkCompareOp compareFor(CompareOp op);
@@ -30,9 +33,11 @@ class VulkanBindlessLayout {
 public:
     /// Fails with RhiLimitReached when the API says it cannot hold a set of
     /// desc's sizes, and RhiDeviceFailed when it refuses otherwise. table is
-    /// device's and outlives this.
+    /// device's and outlives this. The push constant range is
+    /// pushConstantsSize bytes over every stage.
     [[nodiscard]] static core::Result<VulkanBindlessLayout> create(const VolkDeviceTable& table, VkDevice device,
-                                                                   const DeviceDesc& desc);
+                                                                   const DeviceDesc& desc,
+                                                                   std::uint32_t pushConstantsSize);
 
     VulkanBindlessLayout() = default;
     ~VulkanBindlessLayout();
@@ -65,23 +70,12 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
 };
 
-/// The optional 1.0 features a graphics pipeline's state may need, which the
-/// device turns on when the adapter has them; a pipeline that needs one the
-/// device lacks fails with RhiUnsupported.
-struct RasterFeatures {
-    bool fillModeNonSolid = false;
-    bool depthClamp = false;
-    bool depthBiasClamp = false;
-    bool independentBlend = false;
-};
-
-/// A VkPipeline, destroyed when this goes, with where it binds, the list
-/// topology of its class, which a draw sets, and, for compute, the workgroup
-/// size its desc gave.
+/// A VkPipeline, destroyed when this goes, with where it binds and the list
+/// topology of its class, which a draw sets.
 class VulkanPipeline {
 public:
     VulkanPipeline(const VolkDeviceTable& table, VkDevice device, VkPipeline pipeline, VkPipelineBindPoint bindPoint,
-                   VkPrimitiveTopology topology, std::array<std::uint32_t, kWorkgroupDimensions> workgroupSize);
+                   VkPrimitiveTopology topology);
     ~VulkanPipeline();
     VulkanPipeline(const VulkanPipeline&) = delete;
     VulkanPipeline& operator=(const VulkanPipeline&) = delete;
@@ -91,9 +85,6 @@ public:
     [[nodiscard]] VkPipeline pipeline() const { return pipeline_; }
     [[nodiscard]] VkPipelineBindPoint bindPoint() const { return bindPoint_; }
     [[nodiscard]] VkPrimitiveTopology topology() const { return topology_; }
-    [[nodiscard]] const std::array<std::uint32_t, kWorkgroupDimensions>& workgroupSize() const {
-        return workgroupSize_;
-    }
 
 private:
     const VolkDeviceTable* table_;
@@ -101,7 +92,6 @@ private:
     VkPipeline pipeline_;
     VkPipelineBindPoint bindPoint_;
     VkPrimitiveTopology topology_;
-    std::array<std::uint32_t, kWorkgroupDimensions> workgroupSize_;
 };
 
 /// A compute pipeline on layout as desc says, whose code is SPIR-V. Fails with
@@ -114,12 +104,10 @@ private:
 /// A graphics pipeline on layout as desc says, whose code is SPIR-V, for
 /// dynamic rendering to desc's formats with a dynamic viewport, scissor,
 /// topology of the desc's class, blend constants and stencil reference. Fails
-/// with RhiInvalidCall when code is not whole words, RhiUnsupported when the
-/// state needs a RasterFeature features lacks, and RhiDeviceFailed when the
-/// API refuses a module or the pipeline.
+/// with RhiInvalidCall when code is not whole words, and RhiDeviceFailed when
+/// the API refuses a module or the pipeline.
 [[nodiscard]] core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable& table, VkDevice device,
                                                                         VkPipelineLayout layout,
-                                                                        const RasterFeatures& features,
                                                                         const GraphicsPipelineDesc& desc);
 
 } // namespace bfr::rhi::vulkan

@@ -31,19 +31,47 @@ enum class QueueType : std::uint8_t {
     Copy,
 };
 
-/// How to open a device: the queues it opens beside its graphics queue, how
-/// many command lists, command pools and swapchains it holds at once, and how
-/// many slots each bindless table has. The device's queues are numbered:
-/// graphics is 0, then the compute queues, then the copy queues. Room for
+/// A queue's priority against every queue on the system, other processes'
+/// included. Normal is the level a backend's queues have when none is set.
+/// Queues::graphicsLevels and the others say which levels each kind takes; one
+/// above normal may need privileges the process lacks, and then fails as the
+/// backend says.
+enum class QueueLevel : std::uint32_t {
+    Normal = 0,
+    Low = 1,
+    High = 2,
+    Realtime = 3,
+};
+
+/// One queue a device opens. rank, 0 to 1, is its priority against the
+/// device's other queues, higher first, passed to the backend as given; where
+/// Queues::ranks is 0 the backend doesn't rank a device's queues, so queues of
+/// different ranks fail the device with RhiUnsupported. A level the backend
+/// has no setting for fails it the same way, as do different levels in one
+/// kind on Vulkan, which sets one level for all of a kind's queues.
+struct QueueDesc {
+    float rank = 0;
+    QueueLevel level = QueueLevel::Normal;
+};
+
+/// How to open a device: the queues it opens, how many command lists, command
+/// pools and swapchains it holds at once, and how many slots each bindless
+/// table has. The queue spans are read during createDevice only. The device's
+/// queues are numbered: the graphics queues from 0, then the compute queues,
+/// then the copy queues, each in its span's order. Room for
 /// every list, pool, swapchain and slot is made with the device, so nothing on
 /// the frame path allocates; past a maximum, calls fail with RhiLimitReached,
 /// except a submit of more than maxCommandLists lists, which fails with
 /// RhiInvalidCall. Every maximum is the caller's to set, since only the caller
-/// knows what it uses; 0 is none. A table larger than the adapter holds fails
-/// the device with RhiLimitReached; BindlessLimits says what it holds.
+/// knows what it uses; 0 is none. Each table's size is passed to the backend
+/// as given, and one larger than the adapter holds, as BindlessLimits says,
+/// is the backend's to refuse, which Vulkan's validation does; D3D12 makes the three resource
+/// tables in one heap, so there they fail with RhiLimitReached when together
+/// they are more than it holds.
 struct DeviceDesc {
-    std::uint32_t compute = 0;
-    std::uint32_t copy = 0;
+    std::span<const QueueDesc> graphics;
+    std::span<const QueueDesc> compute;
+    std::span<const QueueDesc> copy;
     std::uint32_t maxCommandLists = 0;
     std::uint32_t maxCommandPools = 0;
     std::uint32_t maxSwapchains = 0;
@@ -67,7 +95,7 @@ struct CommandPoolDesc {
 /// A point on a queue's timeline: submit returns one, and the GPU passes it
 /// once what was submitted has run. A default token has already completed.
 struct Token {
-    /// Index of the queue on the device; 0 is the graphics queue.
+    /// Index of the queue on the device, numbered as DeviceDesc says.
     std::uint32_t queue = 0;
     std::uint64_t value = 0;
     constexpr bool operator==(const Token&) const = default;
@@ -108,6 +136,13 @@ struct ColorAttachment {
     StoreOp storeOp = StoreOp::Store;
     /// Red, green, blue and alpha, 0 to 1, when loadOp is Clear.
     std::array<float, 4> clearColor{};
+    /// The target holds integers: clearColorInteger applies instead. D3D12
+    /// clears with floats, so there a value a 32-bit float does not hold
+    /// exactly fails with RhiInvalidCall.
+    bool clearInteger = false;
+    /// Red, green, blue and alpha bits, when loadOp is Clear; a signed format
+    /// reads them as int32.
+    std::array<std::uint32_t, 4> clearColorInteger{};
 };
 
 /// The depth-stencil target of a rendering: a texture with depthStencil
@@ -119,6 +154,7 @@ struct DepthStencilAttachment {
     StoreOp storeOp = StoreOp::Store;
     /// 0 to 1, when loadOp is Clear.
     float clearDepth = 0;
+    /// When loadOp is Clear. The low 8 bits count.
     std::uint32_t clearStencil = 0;
 };
 

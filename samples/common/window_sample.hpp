@@ -20,6 +20,7 @@
 #include <format>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -135,6 +136,8 @@ struct Push {
 constexpr std::size_t kVertices = 3;
 constexpr std::array<float, kVertices * 4> kTriangle{-0.5F, -0.5F, 0, 1, 0.5F, -0.5F, 0, 1, 0, 0.5F, 0, 1};
 constexpr std::array<float, 4> kBackground{0.1F, 0.1F, 0.12F, 1};
+// How long to wait for a frame's GPU work and its image: as long as it takes.
+constexpr std::uint64_t kFrameWait = std::numeric_limits<std::uint64_t>::max();
 
 // The triangle's color at time t, in seconds: a hue that goes round once
 // every few seconds.
@@ -163,13 +166,15 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     constexpr std::uint32_t kPushesPerFrame = 1;
     constexpr std::uint32_t kSwapchains = 1;
     constexpr std::uint32_t kStorageBuffers = 1;
+    // One graphics queue, at rank 0 and level normal.
+    constexpr std::array<bfr::QueueDesc, 1> kOneQueue{};
     detail::row("Backend", {std::string{bfr::name(backend)}});
     auto instance = bfr::Instance::create(
         {.backend = backend,
          .validation = true,
-         .messageCallback = [](bfr::MessageSeverity /*severity*/, std::string_view message) {
-             std::cerr << message << "\n";
-         }});
+         .messageCallback = [](bfr::MessageSeverity /*severity*/,
+                               std::string_view message) { std::cerr << message << "\n"; },
+         .minSeverity = bfr::MessageSeverity::Warning});
     if (!instance) {
         return detail::fail("can't create an instance", instance.error());
     }
@@ -183,6 +188,7 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     for (; adapter < adapters->size(); ++adapter) {
         auto opened = instance->createDevice({.adapter = adapter,
                                               .window = window,
+                                              .graphicsQueues = kOneQueue,
                                               .maxCommandLists = kFramesInFlight * kListsPerFrame,
                                               .maxCommandPools = kFramesInFlight,
                                               .maxSwapchains = kSwapchains,
@@ -236,7 +242,10 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     const std::uint32_t imageCount = caps->maxImageCount == 0
                                          ? std::max(caps->minImageCount, 3U)
                                          : std::clamp(3U, caps->minImageCount, caps->maxImageCount);
-    auto swapchain = device.createSwapchain({.window = window, .imageCount = imageCount});
+    auto swapchain = device.createSwapchain({.window = window,
+                                             .imageCount = imageCount,
+                                             .format = bfr::Format::Bgra8Unorm,
+                                             .colorSpace = bfr::ColorSpace::Srgb});
     if (!swapchain) {
         return detail::fail("can't create a swapchain", swapchain.error());
     }
@@ -289,7 +298,7 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
                                                .fragment = shaders->fragment,
                                                .colorTargetCount = 1,
                                                .samples = 1};
-                desc.colorTargets[0].format = images->format;
+                desc.colorTargets[0] = {.format = images->format, .blend = {.writeMask = BFR_MASK_ALL}};
                 auto made = device.createGraphicsPipeline(desc);
                 if (!made) {
                     return detail::fail("can't create the pipeline", made.error());
@@ -300,13 +309,13 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
         }
         // The window changed under the swapchain: rebuild it next time round.
         Slot& slot = slots[frame % slots.size()];
-        if (const auto waited = device.wait(slot.done); !waited) {
+        if (const auto waited = device.wait(slot.done, detail::kFrameWait); !waited) {
             return detail::fail("can't wait for the GPU", waited.error());
         }
         if (const auto reset = slot.pool.reset(); !reset) {
             return detail::fail("can't reset the command pool", reset.error());
         }
-        const auto acquired = swapchain->acquire();
+        const auto acquired = swapchain->acquire(detail::kFrameWait);
         if (!acquired) {
             if (acquired.error().code == bfr::Result::ErrorOutOfDate) {
                 resize = true;

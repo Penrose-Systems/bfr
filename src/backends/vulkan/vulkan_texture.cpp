@@ -7,6 +7,8 @@
 #include "bfr/rhi/texture.h"
 #include "core/slot_chains.h"
 #include "rhi/bindless_slots.h"
+#include "rhi/copy_check.h"
+#include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_buffer.h"
@@ -16,6 +18,8 @@
 
 #include <vulkan/vulkan_core.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <expected>
@@ -109,23 +113,37 @@ VkImageAspectFlags aspectFor(TextureAspect aspect) {
 }
 
 // region as Vulkan takes it: the buffer's rows in texels, which Vulkan counts
-// in and BFR states in bytes.
-VkBufferImageCopy copyFor(const BufferTextureCopy& region, Format format) {
+// in and BFR states in bytes. Fails with RhiInvalidCall when a value has no
+// room in VkBufferImageCopy: a row that is not whole blocks or is more texels
+// than a uint32_t counts, or an offset past an int32_t.
+core::Result<VkBufferImageCopy> copyFor(const BufferTextureCopy& region, Format format) {
     const FormatBlock& block = blockOf(format);
     const std::uint32_t blockBytes = bytesOf(block, region.aspect);
-    return {.bufferOffset = region.bufferOffset,
-            .bufferRowLength = blockBytes == 0
-                                   ? 0
-                                   : static_cast<std::uint32_t>(region.bytesPerRow / blockBytes) * block.width,
-            .bufferImageHeight = region.rowsPerImage,
-            .imageSubresource = {.aspectMask = aspectFor(region.aspect),
-                                 .mipLevel = region.mipLevel,
-                                 .baseArrayLayer = region.layer,
-                                 .layerCount = 1},
-            .imageOffset = {.x = static_cast<std::int32_t>(region.x),
-                            .y = static_cast<std::int32_t>(region.y),
-                            .z = static_cast<std::int32_t>(region.z)},
-            .imageExtent = {.width = region.width, .height = region.height, .depth = region.depth}};
+    const std::uint64_t rowTexels = blockBytes == 0 ? 0 : region.bytesPerRow / blockBytes * block.width;
+    if (blockBytes != 0 && region.bytesPerRow % blockBytes != 0) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes per row is not whole blocks of {} bytes",
+                             region.bytesPerRow, blockBytes);
+    }
+    if (!std::in_range<std::uint32_t>(rowTexels)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes per row is more texels than Vulkan counts",
+                             region.bytesPerRow);
+    }
+    if (!std::in_range<std::int32_t>(region.x) || !std::in_range<std::int32_t>(region.y) ||
+        !std::in_range<std::int32_t>(region.z)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "offset {}, {}, {} is past what Vulkan takes", region.x,
+                             region.y, region.z);
+    }
+    return VkBufferImageCopy{.bufferOffset = region.bufferOffset,
+                             .bufferRowLength = static_cast<std::uint32_t>(rowTexels),
+                             .bufferImageHeight = region.rowsPerImage,
+                             .imageSubresource = {.aspectMask = aspectFor(region.aspect),
+                                                  .mipLevel = region.mipLevel,
+                                                  .baseArrayLayer = region.layer,
+                                                  .layerCount = 1},
+                             .imageOffset = {.x = static_cast<std::int32_t>(region.x),
+                                             .y = static_cast<std::int32_t>(region.y),
+                                             .z = static_cast<std::int32_t>(region.z)},
+                             .imageExtent = {.width = region.width, .height = region.height, .depth = region.depth}};
 }
 
 } // namespace
@@ -255,6 +273,9 @@ core::Result<VulkanTexture*> VulkanDevice::textureFor(TextureHandle texture) {
 }
 
 core::Result<TextureHandle> VulkanDevice::createTexture(const TextureDesc& desc) {
+    if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
     collectBuffers();
     auto slots = bindless_.takeTexture(desc);
@@ -308,6 +329,9 @@ core::Result<void> VulkanDevice::destroyTexture(TextureHandle texture) {
 
 core::Result<void> VulkanDevice::textureBarrier(CommandListHandle commandList, TextureHandle texture,
                                                 TextureLayout before, TextureLayout after) {
+    if (auto checked = checkLayouts(before, after); !checked) {
+        return checked;
+    }
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
@@ -365,8 +389,18 @@ core::Result<void> VulkanDevice::copyBufferToTexture(CommandListHandle commandLi
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
+    if (auto checked = checkAspects((*to)->format(), regions); !checked) {
+        return checked;
+    }
+    // Every region is checked before any is recorded, so a bad one leaves the
+    // list as it was.
     for (const BufferTextureCopy& region : regions) {
-        const VkBufferImageCopy copy = copyFor(region, (*to)->format());
+        if (auto copy = copyFor(region, (*to)->format()); !copy) {
+            return std::unexpected(std::move(copy.error()));
+        }
+    }
+    for (const BufferTextureCopy& region : regions) {
+        const VkBufferImageCopy copy = *copyFor(region, (*to)->format());
         table_.vkCmdCopyBufferToImage((*list)->buffer, (*from)->buffer(), (*to)->image(),
                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
     }
@@ -387,8 +421,18 @@ core::Result<void> VulkanDevice::copyTextureToBuffer(CommandListHandle commandLi
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
+    if (auto checked = checkAspects((*from)->format(), regions); !checked) {
+        return checked;
+    }
+    // Every region is checked before any is recorded, so a bad one leaves the
+    // list as it was.
     for (const BufferTextureCopy& region : regions) {
-        const VkBufferImageCopy copy = copyFor(region, (*from)->format());
+        if (auto copy = copyFor(region, (*from)->format()); !copy) {
+            return std::unexpected(std::move(copy.error()));
+        }
+    }
+    for (const BufferTextureCopy& region : regions) {
+        const VkBufferImageCopy copy = *copyFor(region, (*from)->format());
         table_.vkCmdCopyImageToBuffer((*list)->buffer, (*from)->image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                       (*to)->buffer(), 1, &copy);
     }
@@ -408,6 +452,15 @@ core::Result<void> VulkanDevice::copyTexture(CommandListHandle commandList, Text
     auto to = textureFor(dst);
     if (!to) {
         return std::unexpected(std::move(to.error()));
+    }
+    // VkImageCopy's offsets are int32_t.
+    for (const TextureCopy& region : regions) {
+        const std::array offsets{region.srcX, region.srcY, region.srcZ, region.dstX, region.dstY, region.dstZ};
+        if (!std::ranges::all_of(offsets, [](std::uint32_t offset) { return std::in_range<std::int32_t>(offset); })) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 "offsets {}, {}, {} and {}, {}, {} are past what Vulkan takes", region.srcX,
+                                 region.srcY, region.srcZ, region.dstX, region.dstY, region.dstZ);
+        }
     }
     for (const TextureCopy& region : regions) {
         const VkImageAspectFlags aspect = (*from)->aspects();

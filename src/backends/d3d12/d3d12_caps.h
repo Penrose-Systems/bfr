@@ -26,6 +26,9 @@ struct SamplerFeatures {
     bool integerBorderColor = false;
     /// OPTIONS19 MaxSamplerDescriptorHeapSize; 0 when the device won't say.
     std::uint32_t maxSamplerHeapSize = 0;
+    /// OPTIONS19 MaxViewDescriptorHeapSize, the shader-visible resource heap;
+    /// 0 when the device won't say.
+    std::uint32_t maxViewHeapSize = 0;
 };
 
 /// device's sampler features.
@@ -35,8 +38,8 @@ struct SamplerFeatures {
 /// bindless resource binding, shader model 6.6 and enhanced barriers.
 [[nodiscard]] std::string belowFloor(ID3D12Device* device);
 
-/// What kind of adapter desc describes.
-[[nodiscard]] AdapterType typeOf(const DXGI_ADAPTER_DESC1& desc);
+/// What kind of adapter desc describes, device being the D3D12 device on it.
+[[nodiscard]] AdapterType typeOf(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device);
 
 /// The adapter's name, in UTF-8.
 [[nodiscard]] std::string nameOf(const DXGI_ADAPTER_DESC1& desc);

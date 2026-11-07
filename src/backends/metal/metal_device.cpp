@@ -13,8 +13,12 @@
 #include "metal/metal_pipeline.h"
 #include "metal/metal_swapchain.h"
 #include "metal/metal_util.h"
+#include "rhi/clear_color.h"
 #include "rhi/command_check.h"
+#include "rhi/device_limits.h"
+#include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
+#include "rhi/timeout.h"
 
 #include <Foundation/NSError.hpp>
 #include <Metal/MTL4ArgumentTable.hpp>
@@ -98,7 +102,7 @@ core::Result<std::unique_ptr<MetalDevice>> MetalDevice::create(MetalInstance& rh
 MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const DeviceDesc& desc)
     : instance_(&rhi),
       device_(std::move(device)),
-      desc_(desc),
+      desc_(heldPart(desc)),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
       commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
       commandLists_("command lists", desc.maxCommandLists, desc.maxCommandLists, rhi.logger()),
@@ -106,7 +110,7 @@ MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Devi
       lists_(desc.maxCommandLists),
       renderSlots_(desc.maxCommandLists),
       renders_(desc.maxCommandLists),
-      submissions_(1 + desc.compute + desc.copy),
+      submissions_(queueCount(desc)),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
       samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
@@ -145,15 +149,17 @@ core::Result<void> MetalDevice::open(const DeviceDesc& desc) {
         queues_.push_back(std::move(queue));
         return {};
     };
-    if (auto opened = open(QueueType::Graphics); !opened) {
-        return opened;
+    for (std::size_t index = 0; index < desc.graphics.size(); ++index) {
+        if (auto opened = open(QueueType::Graphics); !opened) {
+            return opened;
+        }
     }
-    for (std::uint32_t index = 0; index < desc.compute; ++index) {
+    for (std::size_t index = 0; index < desc.compute.size(); ++index) {
         if (auto opened = open(QueueType::Compute); !opened) {
             return opened;
         }
     }
-    for (std::uint32_t index = 0; index < desc.copy; ++index) {
+    for (std::size_t index = 0; index < desc.copy.size(); ++index) {
         if (auto opened = open(QueueType::Copy); !opened) {
             return opened;
         }
@@ -227,12 +233,6 @@ core::Result<void> MetalDevice::checkQueue(std::uint32_t queue) const {
 core::Result<void> MetalDevice::checkToken(Token token) const {
     if (auto checked = checkQueue(token.queue); !checked) {
         return checked;
-    }
-    const std::uint64_t submitted = queues_[token.queue]->submitted.load(std::memory_order_acquire);
-    if (token.value > submitted) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "no submit has returned token {} on queue {}; the last is {}", token.value, token.queue,
-                             submitted);
     }
     return {};
 }
@@ -310,19 +310,30 @@ core::Result<MetalCommandList*> MetalDevice::commandListFor(CommandListHandle co
 
 core::Result<SwapchainHandle> MetalDevice::createSwapchain(const core::window::NativeWindow& window,
                                                            const SwapchainDesc& desc) {
+    if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     auto layer = layerFor(window);
     if (!layer) {
         return std::unexpected(std::move(layer.error()));
+    }
+    if (auto checked = checkQueue(desc.queue); !checked) {
+        return std::unexpected(std::move(checked.error()));
     }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, *layer, desc, instance_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached, "a device holds at most {} swapchains",
                              desc_.maxSwapchains);
     }
-    // The layer's drawables are resident for the queue that renders to them.
+    // The layer's drawables are resident for every queue, as buffers and
+    // textures are: any queue may render to them. The layer's residency set
+    // is the one for its device, so the device is set first, as build sets it.
+    (*layer)->setDevice(device_.get());
     if (MTL::ResidencySet* residency = (*layer)->residencySet(); residency != nullptr) {
-        const std::scoped_lock lock{queues_[0]->lock};
-        queues_[0]->queue->addResidencySet(residency);
+        for (const auto& queue : queues_) {
+            const std::scoped_lock lock{queue->lock};
+            queue->queue->addResidencySet(residency);
+        }
     }
     return swapchain;
 }
@@ -354,8 +365,10 @@ core::Result<void> MetalDevice::destroySwapchain(SwapchainHandle swapchain) {
         return std::unexpected(std::move(idle.error()));
     }
     if (MTL::ResidencySet* residency = (*found)->layer()->residencySet(); residency != nullptr) {
-        const std::scoped_lock lock{queues_[0]->lock};
-        queues_[0]->queue->removeResidencySet(residency);
+        for (const auto& queue : queues_) {
+            const std::scoped_lock lock{queue->lock};
+            queue->queue->removeResidencySet(residency);
+        }
     }
     if (swapchains_.erase(swapchain)) {
         return {};
@@ -363,20 +376,21 @@ core::Result<void> MetalDevice::destroySwapchain(SwapchainHandle swapchain) {
     return core::failure(core::ErrorCode::RhiInvalidHandle, "the swapchain handle is stale");
 }
 
-core::Result<void> MetalDevice::acquire(SwapchainHandle swapchain) {
+core::Result<SwapchainStatus> MetalDevice::acquire(SwapchainHandle swapchain, std::uint64_t timeoutNs) {
     auto found = swapchainFor(swapchain);
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    return (*found)->acquire();
+    return (*found)->acquire(timeoutNs);
 }
 
-core::Result<void> MetalDevice::present(SwapchainHandle swapchain) {
+core::Result<SwapchainStatus> MetalDevice::present(SwapchainHandle swapchain) {
     auto found = swapchainFor(swapchain);
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    const std::scoped_lock lock{queues_[0]->lock};
+    // The swapchain's queue's submits read the drawable present gives back.
+    const std::scoped_lock lock{queues_[(*found)->queue()]->lock};
     return (*found)->present();
 }
 
@@ -443,8 +457,8 @@ core::Result<CommandPoolHandle> MetalDevice::createCommandPool(const CommandPool
     }
     // The pool's push constant ring, in its first slot: shared, so the CPU
     // copies into it, and resident, so the GPU reads it. None for a pool that
-    // records no push constants.
-    if (desc.pushConstantUpdates != 0) {
+    // records no push constants, or has no list to record them.
+    if (desc.pushConstantUpdates != 0 && *first != core::SlotChains::kEnd) {
         const std::uint64_t ringBytes = std::uint64_t{desc.pushConstantUpdates} * kPushConstantsSize;
         MTL::Buffer* ring = device_->newBuffer(ringBytes, MTL::ResourceStorageModeShared);
         if (ring == nullptr) {
@@ -577,20 +591,14 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if ((*list)->state.rendering) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is already open");
-    }
     if (auto checked = checkRenderingDesc(!swapchain.isNull(), desc); !checked) {
         return checked;
-    }
-    if (const MetalCommandPool* pool = commandPools_.find((*list)->pool);
-        pool != nullptr && queues_[pool->queue]->type != QueueType::Graphics) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "the list records for queue {}, which does not render",
-                             pool->queue);
     }
     // Every handle is looked up before anything is recorded, so a bad one
     // leaves the list as it was.
     std::array<MTL::Texture*, kMaxColorTargets> colors{};
+    // A swapchain's image is never a signed integer format.
+    std::array<Format, kMaxColorTargets> formats{};
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     MetalSwapchain* chain = nullptr;
@@ -619,6 +627,7 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
             return std::unexpected(std::move(texture.error()));
         }
         colors.at(i) = (*texture)->texture.get();
+        formats.at(i) = (*texture)->format;
         width = (*texture)->width;
         height = (*texture)->height;
     }
@@ -664,10 +673,8 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
         color->setTexture(colors.at(i));
         color->setLoadAction(loadActionFor(attachment.loadOp));
         color->setStoreAction(storeActionFor(attachment.storeOp));
-        color->setClearColor(MTL::ClearColor::Make(static_cast<double>(attachment.clearColor[0]),
-                                                   static_cast<double>(attachment.clearColor[1]),
-                                                   static_cast<double>(attachment.clearColor[2]),
-                                                   static_cast<double>(attachment.clearColor[3])));
+        const auto [red, green, blue, alpha] = clearValues(attachment, formats.at(i));
+        color->setClearColor(MTL::ClearColor::Make(red, green, blue, alpha));
     }
     MTL::RenderPassDepthAttachmentDescriptor* depthAttachment = pass->depthAttachment();
     MTL::RenderPassStencilAttachmentDescriptor* stencilAttachment = pass->stencilAttachment();
@@ -758,20 +765,10 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
     const std::scoped_lock lock{queue.lock};
     queue.buffers.clear();
     queue.chains.clear();
-    // Each submit has a serial of its own, so a list named twice is caught
-    // in this one pass, without searching what was gathered so far.
-    const std::uint64_t serial = submitSerial_.fetch_add(1, std::memory_order_relaxed) + 1;
     for (const CommandListHandle commandList : desc.commandLists) {
         auto list = commandListFor(commandList);
         if (!list) {
             return std::unexpected(std::move(list.error()));
-        }
-        if ((*list)->queued == serial) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "the list is named twice in the submit");
-        }
-        (*list)->queued = serial;
-        if ((*list)->state.rendering) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is still open; end it first");
         }
         if (const MetalCommandPool* pool = commandPools_.find((*list)->pool);
             pool != nullptr && pool->queue != desc.queue) {
@@ -832,13 +829,13 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
     return Token{.queue = desc.queue, .value = value};
 }
 
-core::Result<void> MetalDevice::wait(Token token) {
+core::Result<void> MetalDevice::wait(Token token, std::uint64_t timeoutNs) {
     if (auto checked = checkToken(token); !checked) {
         return checked;
     }
     MetalQueue& queue = *queues_[token.queue];
-    if (!queue.event->waitUntilSignaledValue(token.value, kForever)) {
-        return core::failure(core::ErrorCode::RhiDeviceFailed, "waiting for the GPU timed out");
+    if (!queue.event->waitUntilSignaledValue(token.value, millisecondsRoundedUp(timeoutNs))) {
+        return core::failure(core::ErrorCode::RhiTimeout, "the GPU had not passed the token in time");
     }
     if (queue.retiredCount.load(std::memory_order_acquire) != 0) {
         const std::scoped_lock lock{queue.lock};

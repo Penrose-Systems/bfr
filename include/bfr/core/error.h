@@ -37,6 +37,7 @@ enum class ErrorCode : std::uint8_t {
     RhiBackendUnavailable,
     RhiOutOfDate,
     RhiInvalidCall,
+    RhiTimeout,
 };
 
 /// Text held inside an error, so making, copying or recording one never

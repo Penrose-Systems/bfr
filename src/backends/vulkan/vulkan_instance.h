@@ -77,7 +77,7 @@ public:
                                               const VulkanSurface& surface) const;
 
 private:
-    [[nodiscard]] core::Result<void> createInstance();
+    [[nodiscard]] core::Result<void> createInstance(const InstanceDesc& desc);
     // The messenger that reports validation's messages between the instance's
     // creation and its destruction.
     [[nodiscard]] core::Result<void> createMessenger(const VkDebugUtilsMessengerCreateInfoEXT& info);

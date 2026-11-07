@@ -65,6 +65,14 @@ struct InstanceDesc {
     /// Where the Instance, its devices and, when RhiConfig turns it on, validation
     /// send their messages. Nowhere, until the caller says.
     core::Logger logger = core::Logger::none();
+
+    /// The application and the engine it runs on, passed to the backend as
+    /// given where it takes them; read during create only. An empty name is
+    /// none.
+    std::string_view applicationName{};
+    std::uint32_t applicationVersion = 0;
+    std::string_view engineName{};
+    std::uint32_t engineVersion = 0;
 };
 
 /// The graphics API's entry point and the adapters it found.
@@ -89,16 +97,17 @@ public:
 
     [[nodiscard]] virtual std::span<const Adapter> adapters() const = 0;
 
-    /// A device on adapters()[adapter], as desc says, destroyed before this
-    /// Instance. Its graphics queue presents to presentTo where a queue family
-    /// can, else a queue of its own does; with no window, graphics presents.
-    /// Fails with RhiAdapterOutOfRange when adapter is not an index into
-    /// adapters(), RhiInvalidCall when a maximum in desc is 0 or more than a
-    /// handle names, RhiWindowFailed as Device::createSwapchain describes,
-    /// RhiPresentUnsupported when no queue family presents to presentTo,
-    /// RhiUnsupported when the adapter has fewer compute or copy queues than
-    /// desc asks for, and RhiDeviceFailed when the adapter has no graphics
-    /// queue or the API refuses the device.
+    /// A device on adapters()[adapter] with the queues desc asks for,
+    /// destroyed before this Instance. With a window in presentTo, one of
+    /// those queues must be able to present to it. Fails with
+    /// RhiAdapterOutOfRange when adapter is not an index into adapters(),
+    /// RhiInvalidCall when a maximum in desc is more than a handle names or a
+    /// queue's level is not one BFR has, RhiWindowFailed as
+    /// Device::createSwapchain describes, RhiPresentUnsupported when none of
+    /// its queues can present to presentTo, RhiUnsupported when the adapter
+    /// has fewer queues of a type than desc asks for, or the backend can't
+    /// set the ranks or levels asked for, and RhiDeviceFailed when the API
+    /// refuses the device.
     [[nodiscard]] virtual core::Result<std::unique_ptr<Device>> createDevice(
         std::size_t adapter, const core::window::NativeWindow& presentTo, const DeviceDesc& desc) = 0;
 

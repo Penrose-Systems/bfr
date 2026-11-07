@@ -6,6 +6,7 @@
 #include "metal/metal_pipeline.h"
 #include "metal/metal_util.h"
 #include "rhi/bindless_slots.h"
+#include "rhi/enum_check.h"
 #include "rhi/sampler_border.h"
 
 #include <Metal/Metal.hpp>
@@ -113,6 +114,9 @@ core::Result<Ref<MTL::SamplerState>> createMetalSampler(MTL::Device& device, con
 // The device's sampler calls, beside the samplers they make.
 
 core::Result<SamplerHandle> MetalDevice::createSampler(const SamplerDesc& desc) {
+    if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
     collectBuffers();
     auto slot = bindless_.takeSampler();

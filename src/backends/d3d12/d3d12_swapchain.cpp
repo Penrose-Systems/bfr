@@ -3,6 +3,7 @@
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/caps.h"
 #include "bfr/rhi/swapchain.h"
 #include "d3d12/d3d12_formats.h"
 #include "d3d12/d3d12_result.h"
@@ -13,6 +14,8 @@
 #include <windows.h>
 #include <wrl/client.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <expected>
 #include <format>
@@ -57,7 +60,7 @@ HWND handleOf(const core::window::NativeWindow& window) {
 
 // How a present is made, as the present mode says: the sync interval and the
 // flags. Godot's rendering_device_driver_d3d12.cpp (swap_chain_resize) sets
-// them the same way.
+// them the same way, mailbox as DXGI_PRESENT_RESTART.
 struct PresentSetup {
     UINT syncInterval = 1;
     UINT presentFlags = 0;
@@ -73,19 +76,49 @@ core::Result<PresentSetup> presentSetupFor(PresentMode mode) {
             return PresentSetup{.syncInterval = 0,
                                 .presentFlags = DXGI_PRESENT_ALLOW_TEARING,
                                 .creationFlags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING};
-        case PresentMode::FifoRelaxed:
         case PresentMode::Mailbox:
+            return PresentSetup{.syncInterval = 1, .presentFlags = DXGI_PRESENT_RESTART};
+        case PresentMode::FifoRelaxed:
             break;
     }
     return core::failure(core::ErrorCode::RhiUnsupported, "DXGI has no setting for {} presenting", name(mode));
 }
 
+// Each alpha mode and DXGI's for it; DXGI answers whether the window takes
+// it.
+struct AlphaEntry {
+    AlphaMode mode;
+    DXGI_ALPHA_MODE dxgi;
+};
+
+constexpr std::array kAlphaEntries{
+    AlphaEntry{.mode = AlphaMode::Opaque, .dxgi = DXGI_ALPHA_MODE_IGNORE},
+    AlphaEntry{.mode = AlphaMode::Premultiplied, .dxgi = DXGI_ALPHA_MODE_PREMULTIPLIED},
+    AlphaEntry{.mode = AlphaMode::Postmultiplied, .dxgi = DXGI_ALPHA_MODE_STRAIGHT},
+    AlphaEntry{.mode = AlphaMode::Inherit, .dxgi = DXGI_ALPHA_MODE_UNSPECIFIED},
+};
+
+bool hasAlphaMode(AlphaMode mode) {
+    return std::ranges::contains(kAlphaEntries, mode, &AlphaEntry::mode);
+}
+
 // Fails with RhiUnsupported for a mode DXGI has no setting for.
 core::Result<DXGI_ALPHA_MODE> alphaModeFor(AlphaMode mode) {
-    if (mode == AlphaMode::Opaque) {
-        return DXGI_ALPHA_MODE_IGNORE;
+    const auto* const found = std::ranges::find(kAlphaEntries, mode, &AlphaEntry::mode);
+    if (found == kAlphaEntries.end()) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "DXGI has no setting for {} alpha", name(mode));
     }
-    return core::failure(core::ErrorCode::RhiUnsupported, "DXGI has no setting for {} alpha", name(mode));
+    return found->dxgi;
+}
+
+// Fails with RhiSwapchainFailed for a mode DXGI built that BFR has none for.
+core::Result<AlphaMode> alphaModeOf(DXGI_ALPHA_MODE mode) {
+    const auto* const found = std::ranges::find(kAlphaEntries, mode, &AlphaEntry::dxgi);
+    if (found == kAlphaEntries.end()) {
+        return core::failure(core::ErrorCode::RhiSwapchainFailed, "DXGI built the swapchain with alpha mode {}",
+                             static_cast<int>(mode));
+    }
+    return found->mode;
 }
 
 std::unexpected<core::Error> swapchainFailed(const char* call, HRESULT result) {
@@ -96,6 +129,29 @@ std::unexpected<core::Error> swapchainFailed(const char* call, HRESULT result) {
 
 core::Result<void> checkWindow(const core::window::NativeWindow& window) {
     return std::visit(Checker{}, window);
+}
+
+SwapchainCaps surfaceCapsFor(bool tearing, const core::window::NativeWindow& window) {
+    const auto presents = [](PresentMode mode) {
+        return presentSetupFor(mode).has_value();
+    };
+    // A swapchain for a Win32 window is opaque: Godot sets
+    // DXGI_ALPHA_MODE_IGNORE on every CreateSwapChainForHwnd and blends only
+    // through a composition swapchain (rendering_device_driver_d3d12.cpp,
+    // swap_chain_resize). DXGI has no call that says which a window takes.
+    const bool composed = handleOf(window) == nullptr;
+    const auto hasAlpha = [composed](AlphaMode mode) {
+        return hasAlphaMode(mode) && (composed || mode == AlphaMode::Opaque);
+    };
+    return {.maxImageCount = DXGI_MAX_SWAP_CHAIN_BUFFERS,
+            .fifo = presents(PresentMode::Fifo),
+            .fifoRelaxed = presents(PresentMode::FifoRelaxed),
+            .mailbox = presents(PresentMode::Mailbox),
+            .immediate = tearing && presents(PresentMode::Immediate),
+            .alphaOpaque = hasAlpha(AlphaMode::Opaque),
+            .alphaPremultiplied = hasAlpha(AlphaMode::Premultiplied),
+            .alphaPostmultiplied = hasAlpha(AlphaMode::Postmultiplied),
+            .alphaInherit = hasAlpha(AlphaMode::Inherit)};
 }
 
 D3D12Swapchain::D3D12Swapchain(ComPtr<ID3D12Device> device, ComPtr<IDXGIFactory2> factory,
@@ -201,18 +257,15 @@ core::Result<DXGI_SWAP_CHAIN_DESC1> D3D12Swapchain::makeImages() {
 
 core::Result<SwapchainImages> D3D12Swapchain::build(std::uint32_t width, std::uint32_t height) {
     release();
-    const auto imagesOf = [this](std::uint32_t width, std::uint32_t height, std::uint32_t count) {
-        return SwapchainImages{.width = width,
-                               .height = height,
-                               .count = count,
+    if (width == 0 || height == 0) {
+        BFR_LOG_DEBUG(*logger_, "swapchain left empty: the window has no area");
+        return SwapchainImages{.width = 0,
+                               .height = 0,
+                               .count = 0,
                                .format = desc_.format,
                                .colorSpace = desc_.colorSpace,
                                .presentMode = desc_.presentMode,
                                .alphaMode = desc_.alphaMode};
-    };
-    if (width == 0 || height == 0) {
-        BFR_LOG_DEBUG(*logger_, "swapchain left empty: the window has no area");
-        return imagesOf(0, 0, 0);
     }
     if (auto made = makeChain(width, height); !made) {
         return std::unexpected(std::move(made.error()));
@@ -221,13 +274,27 @@ core::Result<SwapchainImages> D3D12Swapchain::build(std::uint32_t width, std::ui
     if (!built) {
         return std::unexpected(built.error());
     }
+    const auto alpha = alphaModeOf(built->AlphaMode);
+    if (!alpha) {
+        return std::unexpected(alpha.error());
+    }
     count_ = built->BufferCount;
     BFR_LOG_INFO(*logger_, "swapchain {}x{}, {} images, {}", built->Width, built->Height, count_,
                  name(desc_.presentMode));
-    return imagesOf(built->Width, built->Height, count_);
+    // What DXGI built, as GetDesc1 says, but for the color space and present
+    // mode, which DXGI has no getter for: IDXGISwapChain3 sets a color space
+    // but never reports one, and a present mode is the sync interval and
+    // flags each Present is given.
+    return SwapchainImages{.width = built->Width,
+                           .height = built->Height,
+                           .count = count_,
+                           .format = swapchainFormatOf(built->Format),
+                           .colorSpace = desc_.colorSpace,
+                           .presentMode = desc_.presentMode,
+                           .alphaMode = *alpha};
 }
 
-core::Result<void> D3D12Swapchain::acquire() {
+core::Result<SwapchainStatus> D3D12Swapchain::acquire() {
     if (count_ == 0) {
         return core::failure(core::ErrorCode::RhiOutOfDate, "the swapchain has no images; resize it");
     }
@@ -236,7 +303,7 @@ core::Result<void> D3D12Swapchain::acquire() {
     }
     acquired_ = chain_->GetCurrentBackBufferIndex();
     submitted_ = false;
-    return {};
+    return SwapchainStatus::Matches;
 }
 
 ID3D12Resource* D3D12Swapchain::image() const {
@@ -253,7 +320,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE D3D12Swapchain::view() const {
     return {.ptr = firstView_.ptr + (static_cast<SIZE_T>(*acquired_) * viewStride_)};
 }
 
-core::Result<void> D3D12Swapchain::present() {
+core::Result<SwapchainStatus> D3D12Swapchain::present() {
     if (!acquired_.has_value()) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
     }
@@ -267,7 +334,7 @@ core::Result<void> D3D12Swapchain::present() {
     if (FAILED(result)) {
         return swapchainFailed("IDXGISwapChain::Present", result);
     }
-    return {};
+    return SwapchainStatus::Matches;
 }
 
 } // namespace bfr::rhi::d3d12

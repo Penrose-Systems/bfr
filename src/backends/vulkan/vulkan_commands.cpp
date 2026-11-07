@@ -3,12 +3,14 @@
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/pipeline.h"
 #include "rhi/command_check.h"
+#include "rhi/enum_check.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_pipeline.h"
 
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -26,9 +28,6 @@ core::Result<void> VulkanDevice::setViewport(CommandListHandle commandList, cons
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (auto checked = checkRendering((*list)->state); !checked) {
-        return checked;
-    }
     // Vulkan's framebuffer y points down and D3D12's and Metal's clip y points
     // up; a viewport of negative height, core since 1.1, makes clip space the
     // same here as there, winding included.
@@ -38,7 +37,7 @@ core::Result<void> VulkanDevice::setViewport(CommandListHandle commandList, cons
                              .height = -viewport.height,
                              .minDepth = viewport.minDepth,
                              .maxDepth = viewport.maxDepth};
-    table_.vkCmdSetViewport((*list)->buffer, 0, 1, &flipped);
+    table_.vkCmdSetViewport((*list)->buffer, 0, kViewports, &flipped);
     return {};
 }
 
@@ -47,13 +46,33 @@ core::Result<void> VulkanDevice::setScissor(CommandListHandle commandList, const
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (auto checked = checkRendering((*list)->state); !checked) {
-        return checked;
+    // VkRect2D's offset is int32_t.
+    if (!std::in_range<std::int32_t>(scissor.x) || !std::in_range<std::int32_t>(scissor.y)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "scissor offset {}, {} is past what Vulkan takes",
+                             scissor.x, scissor.y);
     }
     const VkRect2D rect{.offset = {.x = static_cast<std::int32_t>(scissor.x),
                                    .y = static_cast<std::int32_t>(scissor.y)},
                         .extent = {.width = scissor.width, .height = scissor.height}};
-    table_.vkCmdSetScissor((*list)->buffer, 0, 1, &rect);
+    table_.vkCmdSetScissor((*list)->buffer, 0, kViewports, &rect);
+    return {};
+}
+
+core::Result<void> VulkanDevice::setBlendConstants(CommandListHandle commandList, const std::array<float, 4>& color) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    table_.vkCmdSetBlendConstants((*list)->buffer, color.data());
+    return {};
+}
+
+core::Result<void> VulkanDevice::setStencilReference(CommandListHandle commandList, std::uint32_t reference) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    table_.vkCmdSetStencilReference((*list)->buffer, VK_STENCIL_FACE_FRONT_AND_BACK, reference);
     return {};
 }
 
@@ -70,11 +89,8 @@ core::Result<void> VulkanDevice::bindPipeline(CommandListHandle commandList, Pip
     if ((*found)->bindPoint() == VK_PIPELINE_BIND_POINT_GRAPHICS) {
         // Topology is dynamic, so a pipeline's class is set as it is bound.
         table_.vkCmdSetPrimitiveTopology((*list)->buffer, (*found)->topology());
-        (*list)->state.graphicsBound = true;
     }
-    else {
-        (*list)->state.computeBound = true;
-    }
+    else {}
     return {};
 }
 
@@ -83,7 +99,7 @@ core::Result<void> VulkanDevice::pushConstants(CommandListHandle commandList, st
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (auto checked = checkPushConstants(data); !checked) {
+    if (auto checked = checkPushConstants(data, pushConstantsSize_); !checked) {
         return checked;
     }
     VulkanCommandPool* pool = commandPools_.find((*list)->pool);
@@ -100,6 +116,9 @@ core::Result<void> VulkanDevice::pushConstants(CommandListHandle commandList, st
 
 core::Result<void> VulkanDevice::bindIndexBuffer(CommandListHandle commandList, BufferHandle buffer,
                                                  std::uint64_t offset, IndexType type) {
+    if (auto checked = checkKnown(type, "index type"); !checked) {
+        return checked;
+    }
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
@@ -110,7 +129,6 @@ core::Result<void> VulkanDevice::bindIndexBuffer(CommandListHandle commandList, 
     }
     table_.vkCmdBindIndexBuffer((*list)->buffer, (*found)->buffer(), offset,
                                 type == IndexType::Uint16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32);
-    (*list)->state.indexBound = true;
     return {};
 }
 
@@ -120,9 +138,6 @@ core::Result<void> VulkanDevice::draw(CommandListHandle commandList, std::uint32
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
-    }
-    if (auto checked = checkDraw((*list)->state, false); !checked) {
-        return checked;
     }
     table_.vkCmdDraw((*list)->buffer, vertexCount, instanceCount, firstVertex, firstInstance);
     return {};
@@ -135,9 +150,6 @@ core::Result<void> VulkanDevice::drawIndexed(CommandListHandle commandList, std:
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (auto checked = checkDraw((*list)->state, true); !checked) {
-        return checked;
-    }
     table_.vkCmdDrawIndexed((*list)->buffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
     return {};
 }
@@ -147,9 +159,6 @@ core::Result<void> VulkanDevice::dispatch(CommandListHandle commandList, std::ui
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
-    }
-    if (auto checked = checkDispatch((*list)->state); !checked) {
-        return checked;
     }
     table_.vkCmdDispatch((*list)->buffer, x, y, z);
     return {};

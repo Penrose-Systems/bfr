@@ -97,6 +97,7 @@ target_sources(bfr_test_main INTERFACE $<TARGET_OBJECTS:bfr_test_vulkan_environm
 target_sources(bfr_tests PRIVATE
     backends/vulkan/test_queue_families.cpp
     backends/vulkan/test_swapchain_settings.cpp
+    backends/vulkan/test_vulkan_copies.cpp
     backends/vulkan/test_vulkan_caps.cpp
     backends/vulkan/test_vulkan_instance.cpp
     backends/vulkan/test_vulkan_surface.cpp
@@ -146,6 +147,8 @@ endfunction()
 set(adapter_override_layer ${CMAKE_CURRENT_BINARY_DIR}/adapter_override_layer)
 bfr_add_test_layer(bfr_test_adapter_override_layer backends/vulkan/fixtures/adapter_override_layer.cpp
     ${adapter_override_layer})
+# It answers VK_KHR_portability_subset's features, which are only in vulkan_beta.h.
+target_compile_definitions(bfr_test_adapter_override_layer PRIVATE VK_ENABLE_BETA_EXTENSIONS)
 file(GENERATE OUTPUT ${adapter_override_layer}/adapter_override_layer.json CONTENT [=[{
     "file_format_version": "1.2.0",
     "layer": {
@@ -207,13 +210,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(bfr_test_fake_loader PRIVATE Vulkan::Headers)
     set_target_properties(bfr_test_fake_loader PROPERTIES
         OUTPUT_NAME vulkan SOVERSION 1 LIBRARY_OUTPUT_DIRECTORY ${fake_loader})
-    foreach(listing layer extension)
-        add_test(NAME vulkan.fake_loader_${listing}s
-            COMMAND bfr_tests "Vulkan with validation reports a failed ${listing} listing")
-        set_tests_properties(vulkan.fake_loader_${listing}s PROPERTIES
-            ENVIRONMENT "LD_LIBRARY_PATH=${fake_loader};BFR_FAKE_LOADER_MODE=${listing}s")
-    endforeach()
-    add_test(NAME vulkan.fake_loader_grow COMMAND bfr_tests "Vulkan with validation lists again when a listing grows")
+    add_test(NAME vulkan.fake_loader_extensions COMMAND bfr_tests "Vulkan reports a failed extension listing")
+    set_tests_properties(vulkan.fake_loader_extensions PROPERTIES
+        ENVIRONMENT "LD_LIBRARY_PATH=${fake_loader};BFR_FAKE_LOADER_MODE=extensions")
+    add_test(NAME vulkan.fake_loader_grow COMMAND bfr_tests "Vulkan lists again when a listing grows")
     set_tests_properties(vulkan.fake_loader_grow PROPERTIES
         ENVIRONMENT "LD_LIBRARY_PATH=${fake_loader};BFR_FAKE_LOADER_MODE=grow")
 endif()

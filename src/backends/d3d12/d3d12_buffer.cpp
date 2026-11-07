@@ -126,6 +126,16 @@ core::Result<BufferHandle> D3D12Device::createBuffer(const BufferDesc& desc) {
     if (auto checked = checkBufferDesc(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    // A storage buffer's raw view counts its 32-bit values in a UINT, so bytes
+    // past the last whole value, or values past a UINT, are out of its view.
+    if (desc.usage.storage && desc.size % sizeof(std::uint32_t) != 0) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "a storage buffer of {} bytes is not whole 32-bit values, which D3D12 views", desc.size);
+    }
+    if (desc.usage.storage && !std::in_range<UINT>(desc.size / sizeof(std::uint32_t))) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "a storage buffer of {} bytes is more than D3D12 views",
+                             desc.size);
+    }
     // Cold, so buffers the GPU is done with are freed here, never on the
     // frame path: freeing one frees the allocator's memory.
     collectBuffers();
@@ -179,6 +189,27 @@ core::Result<std::span<std::byte>> D3D12Device::mapBuffer(BufferHandle buffer) {
                              "the buffer is in device memory, which the CPU does not map");
     }
     return (*found)->mapped;
+}
+
+core::Result<void> D3D12Device::copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
+                                           std::span<const BufferCopy> regions) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto from = bufferFor(src);
+    if (!from) {
+        return std::unexpected(std::move(from.error()));
+    }
+    auto to = bufferFor(dst);
+    if (!to) {
+        return std::unexpected(std::move(to.error()));
+    }
+    for (const BufferCopy& region : regions) {
+        (*list)->list->CopyBufferRegion((*to)->resource.Get(), region.dstOffset, (*from)->resource.Get(),
+                                        region.srcOffset, region.size);
+    }
+    return {};
 }
 
 core::Result<void> D3D12Device::destroyBuffer(BufferHandle buffer) {

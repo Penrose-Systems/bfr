@@ -10,6 +10,7 @@
 #include "bfr/rhi/swapchain.h"
 #include "bfr/rhi/texture.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -31,7 +32,10 @@ public:
     /// is destroyed; resizeSwapchain builds its images. Fails with
     /// RhiWindowFailed when there is no window, when its window system's
     /// surface extension is unavailable, or when the API refuses the window,
-    /// and RhiPresentUnsupported when the device can't present to it.
+    /// RhiPresentUnsupported when the device or desc.queue can't present to
+    /// it, RhiInvalidCall when the device has no queue desc.queue or an enum
+    /// in desc is not one BFR has, and RhiLimitReached when the device holds
+    /// maxSwapchains already.
     [[nodiscard]] virtual core::Result<SwapchainHandle> createSwapchain(const core::window::NativeWindow& window,
                                                                         const SwapchainDesc& desc) = 0;
 
@@ -51,17 +55,23 @@ public:
     /// destroyed.
     [[nodiscard]] virtual core::Result<void> destroySwapchain(SwapchainHandle swapchain) = 0;
 
-    /// Takes the swapchain's next image, for beginRendering. Fails with
-    /// RhiOutOfDate when the swapchain has no images or no longer matches its
-    /// window, which resizeSwapchain mends, RhiInvalidCall when an image is
-    /// already acquired, and RhiInvalidHandle when the swapchain is destroyed.
-    [[nodiscard]] virtual core::Result<void> acquire(SwapchainHandle swapchain) = 0;
+    /// Takes the swapchain's next image, for beginRendering, and gives what
+    /// the backend said of the swapchain as it did. timeoutNs goes to the
+    /// backend's acquire; it is unused where acquire doesn't wait, and where
+    /// the backend can only wait with no limit or for a time of its own, the
+    /// largest value waits with no limit and any other for the backend's time.
+    /// Fails with RhiTimeout when no image came in time, RhiOutOfDate when the
+    /// swapchain has no images or no longer matches its window, which
+    /// resizeSwapchain mends, RhiInvalidCall when an image is already
+    /// acquired, and RhiInvalidHandle when the swapchain is destroyed.
+    [[nodiscard]] virtual core::Result<SwapchainStatus> acquire(SwapchainHandle swapchain, std::uint64_t timeoutNs) = 0;
 
-    /// Shows the acquired image once what submit sent for it is done. Fails
+    /// Shows the acquired image once what submit sent for it is done, and
+    /// gives what the backend said of the swapchain as it did. Fails
     /// with RhiOutOfDate when the swapchain no longer matches its window, the
     /// image still presented when it could be, and RhiInvalidCall when no image
     /// is acquired.
-    [[nodiscard]] virtual core::Result<void> present(SwapchainHandle swapchain) = 0;
+    [[nodiscard]] virtual core::Result<SwapchainStatus> present(SwapchainHandle swapchain) = 0;
 
     /// A command pool as desc says, with its lists made. Fails with
     /// RhiInvalidCall for a queue the device does not have, RhiLimitReached at
@@ -70,9 +80,11 @@ public:
     [[nodiscard]] virtual core::Result<CommandPoolHandle> createCommandPool(const CommandPoolDesc& desc) = 0;
 
     /// Gives every list the pool made back to it, so beginCommands may hand
-    /// them out and use their memory again. Fails with RhiInvalidCall while a list from the
-    /// pool is recording, or while the GPU has not passed the token of the
-    /// pool's last submit, and RhiInvalidHandle when the pool is destroyed.
+    /// them out and use their memory again. A list from the pool still
+    /// recording ends with it on Vulkan; on D3D12 and Metal it fails with
+    /// RhiInvalidCall. Fails with RhiInvalidCall while the GPU has not passed
+    /// the token of the pool's last submit, and RhiInvalidHandle when the pool
+    /// is destroyed.
     [[nodiscard]] virtual core::Result<void> resetCommandPool(CommandPoolHandle commandPool) = 0;
 
     /// Destroys the pool and every list it made once the GPU has finished
@@ -94,24 +106,39 @@ public:
     /// given, when a color attachment but the swapchain's names no texture,
     /// when a swapchain is given with no color attachment or with attachment 0
     /// naming a texture, when no image is acquired, when it was already
-    /// submitted, or when rendering is open, and RhiInvalidHandle when a
+    /// submitted, and RhiInvalidHandle when a
     /// texture is gone.
     [[nodiscard]] virtual core::Result<void> beginRendering(CommandListHandle commandList, SwapchainHandle swapchain,
                                                             const RenderingDesc& desc) = 0;
 
     /// Ends the rendering beginRendering began; a swapchain image is then
     /// ready to present, and a texture is in the layout it was given in.
-    /// Fails with RhiInvalidCall when none is open.
+    /// Fails with RhiInvalidCall on Metal when none is open, as it has no
+    /// encoder to end.
     [[nodiscard]] virtual core::Result<void> endRendering(CommandListHandle commandList) = 0;
 
-    /// Sets the viewport the draws after it use, inside rendering. Fails with
-    /// RhiInvalidCall outside rendering and RhiInvalidHandle when the list is
-    /// gone.
+    /// Sets the viewport the draws after it use. Fails with RhiInvalidCall
+    /// outside rendering on Metal, which sets it on the rendering's encoder,
+    /// and RhiInvalidHandle when the list is gone.
     [[nodiscard]] virtual core::Result<void> setViewport(CommandListHandle commandList, const Viewport& viewport) = 0;
 
-    /// Sets the scissor the draws after it keep to, inside rendering. Fails
-    /// as setViewport does.
+    /// Sets the scissor the draws after it keep to. Fails as setViewport does.
     [[nodiscard]] virtual core::Result<void> setScissor(CommandListHandle commandList, const Rect& scissor) = 0;
+
+    /// Sets the color, red, green, blue and alpha, the constant blend factors
+    /// of the draws after it read. Vulkan has no color until it is set, and
+    /// Metal sets it on the rendering's encoder, so a draw that reads it needs
+    /// it set in its rendering. Fails as setViewport does.
+    [[nodiscard]] virtual core::Result<void> setBlendConstants(CommandListHandle commandList,
+                                                               const std::array<float, 4>& color) = 0;
+
+    /// Sets the value the stencil test of the draws after it compares against,
+    /// and StencilOp::Replace writes, on both faces; the low 8 bits count.
+    /// Vulkan has no value until it is set, and Metal sets it on the
+    /// rendering's encoder, so a draw that tests stencil needs it set in its
+    /// rendering. Fails as setViewport does.
+    [[nodiscard]] virtual core::Result<void> setStencilReference(CommandListHandle commandList,
+                                                                 std::uint32_t reference) = 0;
 
     /// Makes pipeline the one draws or dispatches after it run, a graphics
     /// pipeline for draws and a compute one for dispatches, until another of
@@ -121,7 +148,8 @@ public:
 
     /// Sets the first data.size() bytes of the push constants every shader
     /// reads, for the draws and dispatches after it. Fails with RhiInvalidCall
-    /// when the size is not a multiple of 4 or is more than kPushConstantsSize,
+    /// when the size is not a multiple of 4 or is more than the caps'
+    /// limits.maxPushConstantsSize,
     /// RhiLimitReached past the pool's pushConstantUpdates, and
     /// RhiInvalidHandle when the list is gone.
     [[nodiscard]] virtual core::Result<void> pushConstants(CommandListHandle commandList,
@@ -137,8 +165,9 @@ public:
     /// bound graphics pipeline, inside rendering. The vertex shader sees
     /// vertex indices from firstVertex; whether it sees instance indices from
     /// firstInstance or from 0 is the backend's, as api/bfr.yaml says under
-    /// bfr_draw. Fails with RhiInvalidCall outside rendering or with no
-    /// graphics pipeline bound, and RhiInvalidHandle when the list is gone.
+    /// bfr_draw. Fails with RhiInvalidCall outside rendering on Metal, which
+    /// draws on the rendering's encoder, and RhiInvalidHandle when the list
+    /// or the bound pipeline is gone.
     [[nodiscard]] virtual core::Result<void> draw(CommandListHandle commandList, std::uint32_t vertexCount,
                                                   std::uint32_t instanceCount, std::uint32_t firstVertex,
                                                   std::uint32_t firstInstance) = 0;
@@ -146,15 +175,15 @@ public:
     /// Records a draw of indexCount indices read from the bound index buffer
     /// from firstIndex, each plus vertexOffset giving the vertex index the
     /// vertex shader sees, instanceCount times, inside rendering. Fails as
-    /// draw does, and with RhiInvalidCall when no index buffer is bound.
+    /// draw does.
     [[nodiscard]] virtual core::Result<void> drawIndexed(CommandListHandle commandList, std::uint32_t indexCount,
                                                          std::uint32_t instanceCount, std::uint32_t firstIndex,
                                                          std::int32_t vertexOffset, std::uint32_t firstInstance) = 0;
 
     /// Records a dispatch of x by y by z workgroups of the bound compute
     /// pipeline, outside rendering; commands after a barrier see what it
-    /// wrote. Fails with RhiInvalidCall inside rendering or with no compute
-    /// pipeline bound, and RhiInvalidHandle when the list is gone.
+    /// wrote. Fails with RhiInvalidHandle when the list or the bound pipeline
+    /// is gone.
     [[nodiscard]] virtual core::Result<void> dispatch(CommandListHandle commandList, std::uint32_t x, std::uint32_t y,
                                                       std::uint32_t z) = 0;
 
@@ -201,15 +230,18 @@ public:
     /// was sent before and after the GPU passes the waits, ends the lists, and
     /// returns the token their completion signals. Calls for one queue must
     /// not overlap. Fails with RhiInvalidCall for a queue the device does not
-    /// have, a list from a pool on another queue, a list whose rendering is
-    /// open, or a wait no submit returned, and RhiInvalidHandle for a list
-    /// that is gone.
+    /// have or a list from a pool on another queue, and RhiInvalidHandle for a
+    /// list that is gone. A wait on a token
+    /// no submit has returned yet waits until one does.
     [[nodiscard]] virtual core::Result<Token> submit(const SubmitDesc& desc) = 0;
 
-    /// Blocks until the GPU has passed token. Fails with RhiInvalidCall for a
-    /// token on a queue the device does not have or one no submit has
-    /// returned, and RhiDeviceFailed when the wait fails.
-    [[nodiscard]] virtual core::Result<void> wait(Token token) = 0;
+    /// Blocks until the GPU has passed token, which may be one no submit has
+    /// returned yet, or until timeoutNs has passed. timeoutNs goes to the
+    /// backend's wait; one that counts in milliseconds is given them rounded
+    /// up, and on D3D12 one past its longest count waits with no limit. Fails
+    /// with RhiTimeout when the time runs out, RhiInvalidCall for a token on a
+    /// queue the device does not have, and RhiDeviceFailed when the wait fails.
+    [[nodiscard]] virtual core::Result<void> wait(Token token, std::uint64_t timeoutNs) = 0;
 
     /// Whether the GPU has passed token, without blocking. Fails as wait does.
     [[nodiscard]] virtual core::Result<bool> poll(Token token) = 0;
@@ -284,19 +316,16 @@ public:
 
     /// A compute pipeline as desc says, made before returning. Cold: it
     /// compiles, and frees pipelines the GPU is done with. Fails with
-    /// RhiInvalidCall for a desc with no code or a workgroup dimension of 0,
     /// RhiLimitReached at the device's maximum, and RhiDeviceFailed when the
     /// API refuses the code or the desc, with what it said.
     [[nodiscard]] virtual core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) = 0;
 
     /// A graphics pipeline as desc says, made before returning. Cold, as
-    /// createComputePipeline is. Fails with RhiInvalidCall for a desc with no
-    /// vertex code, more than kMaxColorTargets targets, a target of format
-    /// Undefined, a depth or stencil test without a depth-stencil format, or
-    /// samples of 0, RhiUnsupported when the desc uses raster or blend state
-    /// the adapter lacks, such as wireframe fill, RhiLimitReached at the
-    /// device's maximum, and RhiDeviceFailed when the API refuses the code or
-    /// the desc, with what it said.
+    /// createComputePipeline is. A target of format Undefined is an unused
+    /// one. Fails with RhiInvalidCall for a desc with an enum value or format
+    /// BFR doesn't have or more than kMaxColorTargets targets, RhiLimitReached at the device's maximum, and
+    /// RhiDeviceFailed when the API refuses the code or the desc, with what it
+    /// said.
     [[nodiscard]] virtual core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) = 0;
 
     /// Destroys the pipeline once the GPU has passed every submit made before

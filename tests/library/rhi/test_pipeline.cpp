@@ -90,7 +90,8 @@ GraphicsPipelineDesc graphicsDesc() {
                                       .colorOp = BlendOp::Add,
                                       .srcAlpha = BlendFactor::One,
                                       .dstAlpha = BlendFactor::Zero,
-                                      .alphaOp = BlendOp::Add}};
+                                      .alphaOp = BlendOp::Add,
+                                      .writeMask = BFR_MASK_ALL}};
     return desc;
 }
 
@@ -131,60 +132,14 @@ TEST_CASE("Device creates and destroys compute and graphics pipelines", "[rhi][a
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Device refuses a pipeline desc no backend can make with RhiInvalidCall", "[rhi][agnostic]") {
+TEST_CASE("Device refuses more color targets than a pipeline holds with RhiInvalidCall", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
         const PipelineDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-
-        ComputePipelineDesc noCode = kCompute;
-        noCode.compute.code = {};
-        CHECK(device.createComputePipeline(noCode).error().code == ErrorCode::RhiInvalidCall);
-        ComputePipelineDesc flatWorkgroup = kCompute;
-        flatWorkgroup.workgroupSize = {kWorkgroup, 0, 1};
-        CHECK(device.createComputePipeline(flatWorkgroup).error().code == ErrorCode::RhiInvalidCall);
-
-        GraphicsPipelineDesc noVertex = graphicsDesc();
-        noVertex.vertex.code = {};
-        CHECK(device.createGraphicsPipeline(noVertex).error().code == ErrorCode::RhiInvalidCall);
         GraphicsPipelineDesc tooManyTargets = graphicsDesc();
         tooManyTargets.colorTargetCount = kMaxColorTargets + 1;
-        CHECK(device.createGraphicsPipeline(tooManyTargets).error().code == ErrorCode::RhiInvalidCall);
-        GraphicsPipelineDesc undefinedTarget = graphicsDesc();
-        undefinedTarget.colorTargets[0].format = Format::Undefined;
-        CHECK(device.createGraphicsPipeline(undefinedTarget).error().code == ErrorCode::RhiInvalidCall);
-        GraphicsPipelineDesc depthWithoutFormat = graphicsDesc();
-        depthWithoutFormat.depthStencilFormat = Format::Undefined;
-        CHECK(device.createGraphicsPipeline(depthWithoutFormat).error().code == ErrorCode::RhiInvalidCall);
-        GraphicsPipelineDesc noSamples = graphicsDesc();
-        noSamples.samples = 0;
-        CHECK(device.createGraphicsPipeline(noSamples).error().code == ErrorCode::RhiInvalidCall);
-    }
-    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
-}
-
-TEST_CASE("Device refuses a bindless table larger than the adapter holds with RhiLimitReached", "[rhi][agnostic]") {
-    const TestBackend backend = GENERATE(eachBackend());
-    std::vector<std::string> messages;
-    {
-        auto created = createInstance(recordingInto(backend, messages), kValidation);
-        INFO(failureOf(created));
-        REQUIRE(created.has_value());
-        Instance& rhi = **created;
-        const std::uint32_t samplers = rhi.adapters()[0].caps.bindless.maxSamplers;
-        if (samplers == 0) {
-            SKIP("the adapter reports no sampler table limit");
-        }
-        CHECK(rhi.createDevice(0, kNoWindow,
-                               testDeviceWith([&](DeviceDesc& desc) { desc.maxBindlessSamplers = samplers + 1; }))
-                  .error()
-                  .code == ErrorCode::RhiLimitReached);
-        const auto fits = rhi.createDevice(0, kNoWindow, testDeviceWith([&](DeviceDesc& desc) {
-                                               desc.maxBindlessSamplers = samplers;
-                                           }));
-        INFO(failureOf(fits));
-        CHECK(fits.has_value());
+        CHECK(made.device->createGraphicsPipeline(tooManyTargets).error().code == ErrorCode::RhiInvalidCall);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

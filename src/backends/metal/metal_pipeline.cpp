@@ -392,9 +392,6 @@ core::Result<MetalPipeline*> MetalDevice::pipelineFor(PipelineHandle pipeline) {
 }
 
 core::Result<PipelineHandle> MetalDevice::createComputePipeline(const ComputePipelineDesc& desc) {
-    if (auto checked = checkComputePipelineDesc(desc); !checked) {
-        return std::unexpected(std::move(checked.error()));
-    }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
     collectBuffers();
     auto made = createMetalComputePipeline(*device_.get(), *compiler_.get(), desc);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bfr/bfr.h"
 #include "bfr/core/handle.h"
 #include "bfr/rhi/format.h"
 
@@ -60,22 +61,26 @@ struct TextureUsage {
     bool depthStencil = false;
 };
 
+/// A bindless slot a texture doesn't have; no table has a slot this high.
+inline constexpr std::uint32_t kNoSlot = BFR_NO_SLOT;
+
 /// Where a texture is in the bindless tables api/bfr.yaml states under
 /// bfr_pipeline, from creation to destruction: the index shaders use. A table
-/// the texture's usage does not set has no slot for it, and reads 0.
+/// the texture's usage does not set has no slot for it, and reads kNoSlot.
 struct TextureSlots {
     /// Its index in the texture table; only with sampled usage.
-    std::uint32_t sampled = 0;
+    std::uint32_t sampled = kNoSlot;
     /// Its index in the storage texture table; only with storage usage.
-    std::uint32_t storage = 0;
+    std::uint32_t storage = kNoSlot;
 };
 
 /// How to create a texture, in device memory. Sizes are in texels; height is
 /// 1 for D1, depth is 1 but for D3, layers is 1 for D3 and a multiple of 6
-/// for Cube.
+/// for Cube. More than one layer, or more than 6 for Cube, makes an array
+/// texture, which shaders declare as one.
 struct TextureDesc {
     TextureDimension dimension = TextureDimension::D2;
-    Format format = Format::R8Unorm;
+    Format format = Format::Undefined;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::uint32_t depth = 0;

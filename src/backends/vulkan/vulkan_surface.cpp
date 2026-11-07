@@ -98,8 +98,7 @@ public:
     Made operator()(const core::window::Win32& window) const {
         VkWin32SurfaceCreateInfoKHR info{};
         info.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-        info.hinstance = window.instance != nullptr ? static_cast<HINSTANCE>(window.instance)
-                                                    : GetModuleHandleW(nullptr);
+        info.hinstance = static_cast<HINSTANCE>(window.instance);
         info.hwnd = static_cast<HWND>(window.window);
         return make<PFN_vkCreateWin32SurfaceKHR>(VK_KHR_WIN32_SURFACE_EXTENSION_NAME, "vkCreateWin32SurfaceKHR",
                                                  [&](auto create, VkSurfaceKHR* surface) {

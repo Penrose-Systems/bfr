@@ -41,6 +41,7 @@ InstanceTable loadInstanceTable(VkInstance instance) {
     BFR_LOAD(vkGetPhysicalDeviceMemoryProperties);
     BFR_LOAD(vkGetPhysicalDeviceMemoryProperties2);
     BFR_LOAD(vkGetPhysicalDeviceQueueFamilyProperties);
+    BFR_LOAD(vkGetPhysicalDeviceQueueFamilyProperties2);
     BFR_LOAD(vkGetPhysicalDeviceSurfaceSupportKHR);
     BFR_LOAD(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
     BFR_LOAD(vkGetPhysicalDeviceSurfaceFormatsKHR);

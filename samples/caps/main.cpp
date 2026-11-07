@@ -137,6 +137,18 @@ std::string_view heapKind(const bfr::CapsMemory& memory, std::uint32_t heap) {
     return "system";
 }
 
+// "normal high" for the levels set, "none" for none.
+std::string levelNames(const bfr::QueueLevels& levels) {
+    std::string names;
+    for (const auto& [name, set] : {std::pair{"normal", levels.normal}, std::pair{"low", levels.low},
+                                    std::pair{"high", levels.high}, std::pair{"realtime", levels.realtime}}) {
+        if (set) {
+            names += names.empty() ? name : std::format(" {}", name);
+        }
+    }
+    return names.empty() ? std::string{"none"} : names;
+}
+
 void printMemory(const bfr::CapsMemory& memory) {
     std::vector<std::string> heaps;
     heaps.reserve(memory.heapCount);
@@ -340,7 +352,9 @@ void printSurface(const bfr::Instance& instance, std::uint32_t adapter) {
 
 // The budget needs a device, so this opens one.
 void printBudget(const bfr::Instance& instance, std::uint32_t adapter, const bfr::CapsMemory& memory) {
-    const auto device = instance.createDevice({.adapter = adapter});
+    // A device needs a queue on Vulkan without maintenance9.
+    constexpr std::array<bfr::QueueDesc, 1> kOneQueue{};
+    const auto device = instance.createDevice({.adapter = adapter, .graphicsQueues = kOneQueue});
     if (!device) {
         row("Budget", "can't open a device: " + device.error().message.text());
         return;
@@ -370,6 +384,9 @@ std::string text(std::uint64_t value) {
 }
 std::string text(float value) {
     return std::format("{}", value);
+}
+std::string text(const std::array<std::uint32_t, 2>& value) {
+    return std::format("{} {}", value[0], value[1]);
 }
 std::string text(const std::array<std::uint32_t, 3>& value) {
     return std::format("{} {} {}", value[0], value[1], value[2]);
@@ -546,7 +563,9 @@ void printAllMemory(const bfr::Caps& caps) {
     group("queues",
           {field("graphics", q.graphics), field("compute", q.compute), field("copy", q.copy),
            field("graphicsTimestampBits", q.graphicsTimestampBits),
-           field("computeTimestampBits", q.computeTimestampBits), field("copyTimestampBits", q.copyTimestampBits)});
+           field("computeTimestampBits", q.computeTimestampBits), field("copyTimestampBits", q.copyTimestampBits),
+           field("ranks", q.ranks), field("graphicsLevels", levelNames(q.graphicsLevels)),
+           field("computeLevels", levelNames(q.computeLevels)), field("copyLevels", levelNames(q.copyLevels))});
 }
 
 void printAll(const bfr::Caps& caps) {

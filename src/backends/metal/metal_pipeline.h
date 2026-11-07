@@ -18,6 +18,9 @@ namespace bfr::rhi::metal {
 /// four tables is at buffer(0), the push constants at buffer(1).
 inline constexpr std::uint32_t kTablesBufferIndex = 0;
 inline constexpr std::uint32_t kPushConstantsBufferIndex = 1;
+/// Bytes of each push constant entry in a pool's ring. Metal has no limit to
+/// query; 128 is what NVRHI and Godot use.
+inline constexpr std::uint32_t kPushConstantsSize = 128;
 
 /// Bytes each table entry takes: a resource ID or a GPU address.
 inline constexpr std::uint64_t kTableEntryBytes = 8;

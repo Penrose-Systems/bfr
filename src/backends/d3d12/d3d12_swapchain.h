@@ -3,6 +3,8 @@
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/caps.h"
+#include "bfr/rhi/command_list.h"
 #include "bfr/rhi/swapchain.h"
 
 #include <d3d12.h>
@@ -19,6 +21,13 @@ namespace bfr::rhi::d3d12 {
 /// Whether a swapchain can be made on window: a Win32 window or a headless
 /// one. Fails with RhiWindowFailed as Device::createSwapchain describes.
 [[nodiscard]] core::Result<void> checkWindow(const core::window::NativeWindow& window);
+
+/// What a swapchain on window may be: at most DXGI_MAX_SWAP_CHAIN_BUFFERS
+/// images, the present modes D3D12Swapchain sets up, presenting at once only
+/// when DXGI allows tearing, and the alpha modes it has a DXGI setting for:
+/// opaque only for a Win32 window, every one for a composition swapchain.
+/// DXGI has no call for the rest.
+[[nodiscard]] SwapchainCaps surfaceCapsFor(bool tearing, const core::window::NativeWindow& window);
 
 /// One DXGI swapchain, and what it was last built as; empty until built. It
 /// presents to a Win32 window, or to nothing, as a composition swapchain, for a
@@ -46,7 +55,7 @@ public:
     /// Takes the swapchain's next image. Fails with RhiOutOfDate when the
     /// swapchain has no images and RhiInvalidCall when an image is already
     /// acquired.
-    [[nodiscard]] core::Result<void> acquire();
+    [[nodiscard]] core::Result<SwapchainStatus> acquire();
 
     /// The acquired image, null when none is.
     [[nodiscard]] ID3D12Resource* image() const;
@@ -57,14 +66,23 @@ public:
     /// Whether a submit already renders to the acquired image.
     [[nodiscard]] bool submitted() const { return submitted_; }
 
-    /// Records that a submit renders to the acquired image.
-    void setSubmitted() { submitted_ = true; }
+    /// Records that the submit rendered marks renders to the acquired image.
+    void setSubmitted(Token rendered) {
+        submitted_ = true;
+        rendered_ = rendered;
+    }
+
+    /// The submit that renders to the acquired image, while submitted() says one does.
+    [[nodiscard]] Token rendered() const { return rendered_; }
 
     /// Shows the acquired image after the work submitted for it, which the
     /// queue runs first; no image is acquired afterwards. Fails with
     /// RhiInvalidCall when none is acquired, and RhiSwapchainFailed, or
     /// RhiDeviceLost, when DXGI refuses.
-    [[nodiscard]] core::Result<void> present();
+    [[nodiscard]] core::Result<SwapchainStatus> present();
+
+    /// The device's queue it presents from, as its desc says.
+    [[nodiscard]] std::uint32_t queue() const { return desc_.queue; }
 
 private:
     // Lets go of the images, and the one acquired.
@@ -94,6 +112,7 @@ private:
     // The index of the acquired image.
     std::optional<std::uint32_t> acquired_;
     bool submitted_ = false;
+    Token rendered_;
 };
 
 } // namespace bfr::rhi::d3d12

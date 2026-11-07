@@ -4,7 +4,9 @@
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/device.h"
 #include "bfr/rhi/instance.h"
+#include "bfr/rhi/swapchain.h"
 #include "log_capture.h"
 #include "rhi/rhi_test_support.h"
 #include "scoped_env.h"
@@ -19,6 +21,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <vulkan/vulkan_core.h>
 
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -138,28 +141,19 @@ TEST_CASE("Vulkan reports a loader library without vkGetInstanceProcAddr", "[vul
 
 // Hidden: only the vulkan.fake_loader_* ctest entries run these, each with
 // LD_LIBRARY_PATH at a loader that misbehaves as BFR_FAKE_LOADER_MODE says.
-TEST_CASE("Vulkan with validation reports a failed layer listing", "[vulkan][unit][.]") {
+TEST_CASE("Vulkan reports a failed extension listing", "[vulkan][unit][.]") {
     const auto rhi = Instance::create(kVulkan, kValidation);
 
     REQUIRE_FALSE(rhi.has_value());
-    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiValidationUnavailable);
-    CHECK_THAT(rhi.error().message.text(),
-               Catch::Matchers::ContainsSubstring("vkEnumerateInstanceLayerProperties: VK_ERROR_UNKNOWN"));
-}
-
-TEST_CASE("Vulkan with validation reports a failed extension listing", "[vulkan][unit][.]") {
-    const auto rhi = Instance::create(kVulkan, kValidation);
-
-    REQUIRE_FALSE(rhi.has_value());
-    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiValidationUnavailable);
+    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiInstanceFailed);
     CHECK_THAT(rhi.error().message.text(),
                Catch::Matchers::ContainsSubstring("vkEnumerateInstanceExtensionProperties: VK_ERROR_UNKNOWN"));
 }
 
-TEST_CASE("Vulkan with validation lists again when a listing grows", "[vulkan][unit][.]") {
+TEST_CASE("Vulkan lists again when a listing grows", "[vulkan][unit][.]") {
     const auto rhi = Instance::create(kVulkan, kValidation);
 
-    // Past both listings: only the fake vkCreateInstance fails.
+    // Past the listing: only the fake vkCreateInstance fails.
     INFO(failureOf(rhi));
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiInstanceFailed);
@@ -175,6 +169,26 @@ TEST_CASE("Vulkan lists an adapter from a portability driver", "[vulkan][gpu][.]
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
     CHECK_FALSE((*rhi)->adapters().empty());
+}
+
+TEST_CASE("Vulkan passes the caller's application and engine to VkApplicationInfo", "[vulkan][gpu]") {
+    constexpr std::uint32_t kApplicationVersion = 3;
+    constexpr std::uint32_t kEngineVersion = 7;
+    const AdapterOverrideLayer adapterOverride;
+    const ScopedEnv expected("BFR_EXPECT_APPLICATION", "Test App,3,Test Engine,7");
+    const InstanceDesc named{.backend = Backend::Vulkan,
+                             .logger = bfr::core::Logger::none(),
+                             .applicationName = "Test App",
+                             .applicationVersion = kApplicationVersion,
+                             .engineName = "Test Engine",
+                             .engineVersion = kEngineVersion};
+
+    const auto rhi = Instance::create(named, {});
+    INFO(failureOf(rhi));
+    CHECK(rhi.has_value());
+    const auto unnamed = Instance::create(kVulkan, {});
+    REQUIRE_FALSE(unnamed.has_value());
+    CHECK(unnamed.error().code == bfr::core::ErrorCode::RhiInstanceFailed);
 }
 
 TEST_CASE("Vulkan skips an adapter it fails to check, and says which call failed", "[vulkan][gpu]") {
@@ -211,11 +225,10 @@ TEST_CASE("Vulkan fails with RhiNoAdapter when every adapter is below the floor"
 TEST_CASE("Vulkan fails with RhiNoAdapter when an adapter lacks a floor feature, and names it", "[vulkan][gpu]") {
     const std::string feature =
         GENERATE("descriptorIndexing", "runtimeDescriptorArray", "descriptorBindingPartiallyBound",
-                 "descriptorBindingVariableDescriptorCount", "descriptorBindingUpdateUnusedWhilePending",
                  "descriptorBindingSampledImageUpdateAfterBind", "descriptorBindingStorageImageUpdateAfterBind",
                  "descriptorBindingStorageBufferUpdateAfterBind", "shaderSampledImageArrayNonUniformIndexing",
                  "shaderStorageBufferArrayNonUniformIndexing", "shaderStorageImageArrayNonUniformIndexing",
-                 "timelineSemaphore", "bufferDeviceAddress", "dynamicRendering", "synchronization2", "maintenance4");
+                 "timelineSemaphore", "dynamicRendering", "synchronization2");
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv hidden("BFR_ADAPTER_NO_FEATURE", feature);
 
@@ -240,38 +253,71 @@ TEST_CASE("Vulkan lists a 1.3 adapter without an extension that 1.3 made core", 
     CHECK_FALSE((*rhi)->adapters().empty());
 }
 
-TEST_CASE("Vulkan fails with RhiNoAdapter when a 1.3 adapter lacks the swapchain extension", "[vulkan][gpu]") {
-    const AdapterOverrideLayer adapterOverride;
-    const ScopedEnv version("BFR_ADAPTER_MINOR", "3");
+TEST_CASE("Vulkan lists an adapter without the swapchain extension and its device can't present", "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
     const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_KHR_swapchain");
+    std::vector<std::string> errors;
+    const auto rhi = Instance::create(recordingErrorsInto(errors), kValidation);
+    INFO(failureOf(rhi));
+    REQUIRE(rhi.has_value());
 
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow, kTestDevice);
+    INFO(failureOf(device));
+    REQUIRE(device.has_value());
+    const auto swapchain = (*device)->createSwapchain(bfr::core::window::NativeWindow{bfr::core::window::Headless{}},
+                                                      kTestSwapchain);
 
-    REQUIRE_FALSE(rhi.has_value());
-    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
-    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::ContainsSubstring("lacks VK_KHR_swapchain"));
+    REQUIRE_FALSE(swapchain.has_value());
+    CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
+    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Vulkan fails with RhiNoAdapter when no queue family runs compute", "[vulkan][gpu]") {
-    const AdapterOverrideLayer adapterOverride;
-    const ScopedEnv noCompute("BFR_ADAPTER_NO_COMPUTE", "1");
-
-    const auto rhi = Instance::create(kVulkan, {});
-
-    REQUIRE_FALSE(rhi.has_value());
-    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
-    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::ContainsSubstring("no queue family runs compute"));
-}
-
-TEST_CASE("Vulkan fails with RhiNoAdapter when no queue family runs graphics", "[vulkan][gpu]") {
-    const AdapterOverrideLayer adapterOverride;
+TEST_CASE("Vulkan lists an adapter with no graphics family and opens its compute queues", "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
     const ScopedEnv noGraphics("BFR_ADAPTER_NO_GRAPHICS", "1");
+    std::vector<std::string> errors;
+    const auto rhi = Instance::create(recordingErrorsInto(errors), kValidation);
+    INFO(failureOf(rhi));
+    REQUIRE(rhi.has_value());
+    const std::size_t adapter = cpuAdapter(**rhi);
+    CHECK((*rhi)->adapters()[adapter].caps.queues.graphics == 0);
 
-    const auto rhi = Instance::create(kVulkan, {});
+    DeviceDesc computeOnly = kTestDevice;
+    computeOnly.graphics = {};
+    computeOnly.compute = std::span{kTestQueues}.first(1);
+    const auto device = (*rhi)->createDevice(adapter, kNoWindow, computeOnly);
+    INFO(failureOf(device));
+    CHECK(device.has_value());
+    CHECK(((*rhi)->createDevice(adapter, kNoWindow, kTestDevice).error().code == bfr::core::ErrorCode::RhiUnsupported));
+    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
+}
 
-    REQUIRE_FALSE(rhi.has_value());
-    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
-    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::ContainsSubstring("no queue family runs graphics"));
+TEST_CASE("Vulkan fails with RhiUnsupported for one kind's queues at different levels", "[vulkan][gpu]") {
+    std::vector<std::string> errors;
+    const auto rhi = Instance::create(recordingErrorsInto(errors), kValidation);
+    INFO(failureOf(rhi));
+    REQUIRE(rhi.has_value());
+    const auto adapters = (*rhi)->adapters();
+    const auto found = std::ranges::find_if(adapters,
+                                            [](const Adapter& adapter) { return adapter.caps.queues.graphics >= 2; });
+    if (found == adapters.end()) {
+        SKIP("no adapter has two graphics queues");
+    }
+    constexpr std::array kMixed{QueueDesc{.rank = 0, .level = QueueLevel::Normal},
+                                QueueDesc{.rank = 0, .level = QueueLevel::Low}};
+    DeviceDesc mixed = kTestDevice;
+    mixed.graphics = kMixed;
+
+    const auto device = (*rhi)->createDevice(static_cast<std::size_t>(found - adapters.begin()), kNoWindow, mixed);
+
+    REQUIRE_FALSE(device.has_value());
+    CHECK(device.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    // Without VK_KHR_global_priority, the low level is refused before the mix is.
+    const auto& listed = found->caps.queues.graphicsLevels;
+    if (listed.normal || listed.low || listed.high || listed.realtime) {
+        CHECK_THAT(device.error().message.text(), Catch::Matchers::ContainsSubstring("one level"));
+    }
+    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
 TEST_CASE("Vulkan fails with RhiPresentUnsupported when no queue family presents to the window", "[vulkan][gpu]") {

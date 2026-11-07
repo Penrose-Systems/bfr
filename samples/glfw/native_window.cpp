@@ -13,7 +13,9 @@
 
 NativeWindow nativeWindow(GLFWwindow* window) {
 #if defined(_WIN32)
-    return {.window = glfwGetWin32Window(window)};
+    HWND hwnd = glfwGetWin32Window(window);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast,performance-no-int-to-ptr)
+    return {.window = hwnd, .display = reinterpret_cast<void*>(GetWindowLongPtrW(hwnd, GWLP_HINSTANCE))};
 #elif defined(__linux__)
     if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) {
         return {.window = glfwGetWaylandWindow(window), .display = glfwGetWaylandDisplay(), .wayland = true};

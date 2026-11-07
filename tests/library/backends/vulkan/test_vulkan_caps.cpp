@@ -81,6 +81,28 @@ TEST_CASE("Vulkan reports what the driver says about an adapter", "[vulkan][caps
     }
 }
 
+TEST_CASE("Vulkan reports LOD bias on a portability driver as the driver answers it", "[vulkan][caps][gpu]") {
+    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
+    const ScopedEnv added("BFR_ADAPTER_ADD", "VK_KHR_portability_subset");
+    const bool answer = GENERATE(false, true);
+    const ScopedEnv lodBias("BFR_ADAPTER_LOD_BIAS", answer ? "1" : "0");
+    std::vector<std::string> errors;
+    const auto rhi = Instance::create(recordingErrorsInto(errors), kValidation);
+    INFO(failureOf(rhi));
+    REQUIRE(rhi.has_value());
+    const std::size_t adapter = cpuAdapter(**rhi);
+
+    CHECK((*rhi)->adapters()[adapter].caps.features.samplerLodBias == answer);
+    if (answer) {
+        const auto device = (*rhi)->createDevice(adapter, kNoWindow, kTestDevice);
+        INFO(failureOf(device));
+        REQUIRE(device.has_value());
+        constexpr float kLodBias = 1;
+        CHECK((*device)->createSampler({.lodBias = kLodBias}).has_value());
+        CHECK_THAT(errors, Catch::Matchers::IsEmpty());
+    }
+}
+
 TEST_CASE("Vulkan reports no sample counts for a format the API says it can't render to", "[vulkan][caps][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv failing("BFR_FAIL", "vkGetPhysicalDeviceImageFormatProperties2");

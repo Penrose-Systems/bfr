@@ -17,6 +17,7 @@
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -61,7 +62,8 @@ std::vector<std::string> limitsWithoutFeatures(const Caps& caps) {
         {features.taskShader || caps.mesh.maxTaskPayloadSize == 0, "task"},
         {features.accelerationStructure || caps.rayTracing.maxInstances == 0, "acceleration structure"},
         {features.rayTracingPipeline || caps.rayTracing.handleSize == 0, "ray tracing pipeline"},
-        {features.shadingRateTexture || caps.limits.maxShadingRateTile == 0, "shading rate texture"},
+        {features.shadingRateTexture || caps.limits.maxShadingRateTile == std::array<std::uint32_t, 2>{},
+         "shading rate texture"},
     });
 }
 

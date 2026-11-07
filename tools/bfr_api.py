@@ -237,8 +237,6 @@ def field_doc(field: dict[str, Any]) -> str:
         parts.append(f"An array of {field['array']} elements.")
     if field.get("optional"):
         parts.append("May be null.")
-    if field.get("default"):
-        parts.append(f"0 is {macro(field['default'])}.")
     if field.get("lifetime"):
         parts.append(f"Valid while the {field['lifetime']} lives.")
     return " ".join(part if part.endswith(".") else part + "." for part in parts if part)

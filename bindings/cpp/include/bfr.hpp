@@ -69,6 +69,8 @@ enum class Result : std::int32_t {
     ErrorUnsupported = BFR_RESULT_ERROR_UNSUPPORTED,
     /// The API failed when asked about the adapter; the message says how.
     ErrorQueryFailed = BFR_RESULT_ERROR_QUERY_FAILED,
+    /// The wait ran past the caller's timeout.
+    ErrorTimeout = BFR_RESULT_ERROR_TIMEOUT,
 };
 
 /// value's name in bfr.yaml; empty for a value Result doesn't have.
@@ -95,6 +97,7 @@ enum class Result : std::int32_t {
     case Result::ErrorLimitReached: return "error_limit_reached";
     case Result::ErrorUnsupported: return "error_unsupported";
     case Result::ErrorQueryFailed: return "error_query_failed";
+    case Result::ErrorTimeout: return "error_timeout";
     }
     return {};
 }
@@ -236,6 +239,18 @@ enum class Format : std::int32_t {
     Bgr5a1Unorm = BFR_FORMAT_BGR5A1_UNORM,
     /// Blue in the low bits.
     Bgra4Unorm = BFR_FORMAT_BGRA4_UNORM,
+    R64Uint = BFR_FORMAT_R64_UINT,
+    R64Sint = BFR_FORMAT_R64_SINT,
+    R64Float = BFR_FORMAT_R64_FLOAT,
+    Rg64Uint = BFR_FORMAT_RG64_UINT,
+    Rg64Sint = BFR_FORMAT_RG64_SINT,
+    Rg64Float = BFR_FORMAT_RG64_FLOAT,
+    Rgb64Uint = BFR_FORMAT_RGB64_UINT,
+    Rgb64Sint = BFR_FORMAT_RGB64_SINT,
+    Rgb64Float = BFR_FORMAT_RGB64_FLOAT,
+    Rgba64Uint = BFR_FORMAT_RGBA64_UINT,
+    Rgba64Sint = BFR_FORMAT_RGBA64_SINT,
+    Rgba64Float = BFR_FORMAT_RGBA64_FLOAT,
     D16Unorm = BFR_FORMAT_D16_UNORM,
     D24UnormS8Uint = BFR_FORMAT_D24_UNORM_S8_UINT,
     D32Float = BFR_FORMAT_D32_FLOAT,
@@ -363,6 +378,18 @@ enum class Format : std::int32_t {
     case Format::B5g6r5Unorm: return "b5g6r5_unorm";
     case Format::Bgr5a1Unorm: return "bgr5a1_unorm";
     case Format::Bgra4Unorm: return "bgra4_unorm";
+    case Format::R64Uint: return "r64_uint";
+    case Format::R64Sint: return "r64_sint";
+    case Format::R64Float: return "r64_float";
+    case Format::Rg64Uint: return "rg64_uint";
+    case Format::Rg64Sint: return "rg64_sint";
+    case Format::Rg64Float: return "rg64_float";
+    case Format::Rgb64Uint: return "rgb64_uint";
+    case Format::Rgb64Sint: return "rgb64_sint";
+    case Format::Rgb64Float: return "rgb64_float";
+    case Format::Rgba64Uint: return "rgba64_uint";
+    case Format::Rgba64Sint: return "rgba64_sint";
+    case Format::Rgba64Float: return "rgba64_float";
     case Format::D16Unorm: return "d16_unorm";
     case Format::D24UnormS8Uint: return "d24_unorm_s8_uint";
     case Format::D32Float: return "d32_float";
@@ -573,7 +600,7 @@ enum class AlphaMode : std::int32_t {
 enum class QueueType : std::int32_t {
     /// Graphics, compute and copies.
     Graphics = BFR_QUEUE_TYPE_GRAPHICS,
-    /// Compute and copies, beside the graphics queue.
+    /// Compute and copies.
     Compute = BFR_QUEUE_TYPE_COMPUTE,
     /// Copies alone.
     Copy = BFR_QUEUE_TYPE_COPY,
@@ -585,6 +612,49 @@ enum class QueueType : std::int32_t {
     case QueueType::Graphics: return "graphics";
     case QueueType::Compute: return "compute";
     case QueueType::Copy: return "copy";
+    }
+    return {};
+}
+
+/// What the backend said of a swapchain as an image was acquired or presented.
+enum class SwapchainStatus : std::int32_t {
+    /// It said nothing more than that the call succeeded.
+    Matches = BFR_SWAPCHAIN_STATUS_MATCHES,
+    /// It no longer matches its window exactly but still presents; Vulkan's VK_SUBOPTIMAL_KHR.
+    /// bfr_resize_swapchain makes it match, when the caller chooses.
+    Suboptimal = BFR_SWAPCHAIN_STATUS_SUBOPTIMAL,
+};
+
+/// value's name in bfr.yaml; empty for a value SwapchainStatus doesn't have.
+[[nodiscard]] constexpr std::string_view name(SwapchainStatus value) {
+    switch (value) {
+    case SwapchainStatus::Matches: return "matches";
+    case SwapchainStatus::Suboptimal: return "suboptimal";
+    }
+    return {};
+}
+
+/// A queue's priority against every queue on the system, other processes' included. Which levels
+/// each kind of queue takes is in bfr_caps_queues; one above normal may need privileges the process
+/// lacks, and then fails as the backend says.
+enum class QueueLevel : std::int32_t {
+    /// The system's default, which a backend's queues have when none is set.
+    Normal = BFR_QUEUE_LEVEL_NORMAL,
+    /// Below the default.
+    Low = BFR_QUEUE_LEVEL_LOW,
+    /// Above the default.
+    High = BFR_QUEUE_LEVEL_HIGH,
+    /// The highest.
+    Realtime = BFR_QUEUE_LEVEL_REALTIME,
+};
+
+/// value's name in bfr.yaml; empty for a value QueueLevel doesn't have.
+[[nodiscard]] constexpr std::string_view name(QueueLevel value) {
+    switch (value) {
+    case QueueLevel::Normal: return "normal";
+    case QueueLevel::Low: return "low";
+    case QueueLevel::High: return "high";
+    case QueueLevel::Realtime: return "realtime";
     }
     return {};
 }
@@ -1068,12 +1138,21 @@ class Sampler;
 /// How to create an instance.
 struct InstanceDesc {
     Backend backend{};
-    /// Enable the backend's validation layer.
+    /// Enable the backend's validation layer. On Metal its messages go to the system log.
     bool validation{};
     /// May be empty.
     MessageCallback messageCallback{};
-    /// The least severe message to send; 0 means warning.
+    /// The least severe message to send.
     MessageSeverity minSeverity{};
+    /// The application's name, passed to the backend where it takes one; read during the call only.
+    /// Empty is none.
+    std::string_view applicationName{};
+    /// The application's version, passed as given where the backend takes one.
+    std::uint32_t applicationVersion{};
+    /// The engine's name, as application_name.
+    std::string_view engineName{};
+    /// The engine's version, as application_version.
+    std::uint32_t engineVersion{};
 };
 
 /// An adapter, as an instance lists it. Nothing is opened.
@@ -1088,23 +1167,42 @@ struct Window {
     /// The window: an HWND on Windows, a Window XID on X11 (as a pointer), a wl_surface* on
     /// Wayland, a CAMetalLayer* on Apple.
     void* window{};
-    /// The Display* on X11, the wl_display* on Wayland; unused elsewhere.
+    /// The Display* on X11, the wl_display* on Wayland, the HINSTANCE on Windows; unused on Apple.
     void* display{};
     WindowSystem system{};
 };
 
-/// How to open an adapter. The device's queues are numbered: the graphics queue is 0, then the
+/// One queue a device opens.
+struct QueueDesc {
+    /// 0 to 1: its priority against the device's other queues, higher first; passed to the backend
+    /// as given. Where bfr_caps_queues.ranks is 0 the backend doesn't rank a device's queues, so
+    /// queues of different ranks fail the device with error_unsupported.
+    float rank{};
+    /// Its priority against every queue on the system; 0 is normal. A level the backend has no
+    /// setting for fails the device with error_unsupported. Vulkan sets one level for all the
+    /// queues of a kind, so there different levels in one kind fail the same way.
+    QueueLevel level{};
+};
+static_assert(sizeof(QueueDesc) == sizeof(bfr_queue_desc) && alignof(QueueDesc) == alignof(bfr_queue_desc) &&
+              std::is_standard_layout_v<QueueDesc> && std::is_trivially_copyable_v<QueueDesc>);
+static_assert(offsetof(QueueDesc, rank) == offsetof(bfr_queue_desc, rank));
+static_assert(offsetof(QueueDesc, level) == offsetof(bfr_queue_desc, level));
+
+/// How to open an adapter. The device's queues are numbered: the graphics queues from 0, then the
 /// compute queues, then the copy queues, in the order asked for here.
 struct DeviceDesc {
     /// Index into the instance's adapter list.
     std::uint32_t adapter{};
-    /// The window the device must be able to present to; all zero opens it without presenting.
+    /// The window one of the device's queues must be able to present to, else it fails with
+    /// error_present_unsupported; all zero opens it without asking.
     Window window{};
-    /// Compute queues to open beside the graphics queue; 0 is none. Fails with error_unsupported
-    /// when the adapter has fewer; bfr_caps.queues says how many it has.
-    std::uint32_t computeQueues{};
-    /// Copy queues to open; 0 is none. Fails with error_unsupported when the adapter has fewer.
-    std::uint32_t copyQueues{};
+    /// The graphics queues to open, read during the call only; none is none. Fails with
+    /// error_unsupported when the adapter has fewer; bfr_caps.queues says how many it has.
+    std::span<const QueueDesc> graphicsQueues{};
+    /// The compute queues to open, as graphics_queues says.
+    std::span<const QueueDesc> computeQueues{};
+    /// The copy queues to open, as graphics_queues says.
+    std::span<const QueueDesc> copyQueues{};
     /// Command lists the device holds at once, across all its pools, and the most swapchains its
     /// recording lists render to at once; past it, calls fail with error_limit_reached. Room for
     /// them is made with the device, so recording and submitting never allocate. A bfr_submit of
@@ -1116,17 +1214,20 @@ struct DeviceDesc {
     /// Swapchains the device holds at once, 0 for none; past it, bfr_create_swapchain fails with
     /// error_limit_reached.
     std::uint32_t maxSwapchains{};
-    /// Slots in the sampled texture table bfr_pipeline describes, 0 for none. Made with the device.
-    /// Fails with error_limit_reached when the adapter holds fewer; bfr_caps_bindless.max_textures
-    /// says how many.
+    /// Slots in the sampled texture table bfr_pipeline describes, 0 for none. Made with the device,
+    /// passed to the backend as given; bfr_caps_bindless.max_textures says how many the adapter
+    /// holds, and more is the backend's to refuse, which Vulkan's validation does. D3D12 makes the
+    /// three resource tables in one heap, so there they fail with error_limit_reached when together
+    /// they are more than it holds.
     std::uint32_t maxBindlessTextures{};
-    /// Slots in the storage texture table; fails as max_bindless_textures does, against
-    /// max_storage_textures.
+    /// Slots in the storage texture table, as max_bindless_textures says;
+    /// bfr_caps_bindless.max_storage_textures says how many the adapter holds.
     std::uint32_t maxBindlessStorageTextures{};
-    /// Slots in the storage buffer table; fails as max_bindless_textures does, against
-    /// max_storage_buffers.
+    /// Slots in the storage buffer table, as max_bindless_textures says;
+    /// bfr_caps_bindless.max_storage_buffers says how many the adapter holds.
     std::uint32_t maxBindlessStorageBuffers{};
-    /// Slots in the sampler table; fails as max_bindless_textures does, against max_samplers.
+    /// Slots in the sampler table, passed as max_bindless_textures is;
+    /// bfr_caps_bindless.max_samplers says how many the adapter holds.
     std::uint32_t maxBindlessSamplers{};
 };
 
@@ -1134,16 +1235,20 @@ struct DeviceDesc {
 struct SwapchainDesc {
     /// The window to present to.
     Window window{};
+    /// The device's queue that presents its images; one the device lacks fails with
+    /// error_invalid_argument. Fails with error_present_unsupported when it can't present to the
+    /// window.
+    std::uint32_t queue{};
     /// Images to request, passed to the backend as given. bfr_swapchain_images says how many it
     /// made.
     std::uint32_t imageCount{};
     /// How to present; 0 is fifo. Fails with error_unsupported when the backend has no setting for
     /// it.
     PresentMode presentMode{};
-    /// The images' format; 0 is bgra8_unorm. Fails with error_unsupported when the backend has no
-    /// setting for it with color_space.
+    /// The images' format. Fails with error_unsupported when the backend has no setting for it with
+    /// color_space.
     Format format{};
-    /// How the display reads the images; 0 is srgb.
+    /// How the display reads the images.
     ColorSpace colorSpace{};
     /// How the window blends alpha; 0 is opaque. Fails with error_unsupported when the backend has
     /// no setting for it.
@@ -1175,6 +1280,12 @@ struct ColorAttachment {
     StoreOp storeOp{};
     /// Red, green, blue and alpha, 0 to 1, when load_op is clear.
     std::array<float, 4> clearColor{};
+    /// The target holds integers: clear_color_integer applies instead. D3D12 clears with floats, so
+    /// there a value a 32-bit float does not hold exactly fails with
+    /// BFR_RESULT_ERROR_INVALID_ARGUMENT.
+    bool clearInteger{};
+    /// Red, green, blue and alpha bits, when load_op is clear; a signed format reads them as int32.
+    std::array<std::uint32_t, 4> clearColorInteger{};
 };
 
 /// The depth-stencil target of a rendering: a texture with depth_stencil usage, in layout
@@ -1188,7 +1299,7 @@ struct DepthStencilAttachment {
     StoreOp storeOp{};
     /// 0 to 1, when load_op is clear.
     float clearDepth{};
-    /// When load_op is clear.
+    /// When load_op is clear. The low 8 bits count.
     std::uint32_t clearStencil{};
 };
 
@@ -1223,7 +1334,7 @@ struct Rect {
 
 /// How to create a command pool.
 struct CommandPoolDesc {
-    /// The queue its lists record for; 0 is the graphics queue.
+    /// The queue its lists record for, numbered as bfr_device_desc says.
     std::uint32_t queue{};
     /// Lists the pool holds, made with it from the device's max_command_lists. bfr_begin_commands
     /// hands them out in turn until bfr_reset_command_pool gives them back.
@@ -1240,7 +1351,8 @@ struct BufferUsage {
     bool copyDst{};
     /// Shaders read it as constants.
     bool uniform{};
-    /// Shaders read and write it.
+    /// Shaders read and write it. D3D12 views it in 32-bit values, so there its size must be a
+    /// multiple of 4.
     bool storage{};
     /// Indexed draws read it.
     bool index{};
@@ -1287,6 +1399,8 @@ struct TextureUsage {
 };
 
 /// How to create a texture, in device memory. The CPU reaches it only by copies through a buffer.
+/// More than one layer, or more than 6 for cube, makes an array texture, which shaders declare as
+/// one.
 struct TextureDesc {
     /// 0 is d2.
     TextureDimension dimension{};
@@ -1306,7 +1420,8 @@ struct TextureDesc {
 };
 
 /// Where a texture is in the bindless tables bfr_pipeline states, from creation to destruction: the
-/// index shaders use. A table the texture's usage does not set has no slot for it, and reads 0.
+/// index shaders use. A table the texture's usage does not set has no slot for it, and reads
+/// BFR_NO_SLOT.
 struct TextureSlots {
     /// Its index in the texture table; only with sampled usage.
     std::uint32_t sampled{};
@@ -1443,7 +1558,8 @@ struct RasterState {
     FillMode fill{};
     /// Clamps depth to the viewport's range instead of clipping to it.
     bool depthClamp{};
-    /// Added to each fragment's depth, in units of the depth format's smallest step.
+    /// Added to each fragment's depth, in units of the depth format's smallest step. D3D12 takes
+    /// whole numbers only, so there a fraction fails with BFR_RESULT_ERROR_INVALID_ARGUMENT.
     float depthBias{};
     /// Added to each fragment's depth, times its depth slope.
     float depthBiasSlope{};
@@ -1462,9 +1578,9 @@ struct StencilFace {
     /// Reference value against stored.
     CompareOp compare{};
     /// The bits compared. The low 8 bits count.
-    std::uint32_t readMask = BFR_MASK_ALL;
+    std::uint32_t readMask{};
     /// The bits written. The low 8 bits count.
-    std::uint32_t writeMask = BFR_MASK_ALL;
+    std::uint32_t writeMask{};
 };
 
 /// How a graphics pipeline tests depth and stencil. Off by default; the pipeline then needs no
@@ -1480,8 +1596,8 @@ struct DepthStencilState {
     StencilFace back{};
 };
 
-/// How a graphics pipeline blends a fragment into one color target. Off by default: the fragment's
-/// color replaces the target's.
+/// How a graphics pipeline blends a fragment into one color target. With enable false the
+/// fragment's color replaces the target's, in the channels write_mask names.
 struct BlendState {
     bool enable{};
     BlendFactor srcColor{};
@@ -1490,8 +1606,8 @@ struct BlendState {
     BlendFactor srcAlpha{};
     BlendFactor dstAlpha{};
     BlendOp alphaOp{};
-    /// Which channels are written: bit 0 red, 1 green, 2 blue, 3 alpha.
-    std::uint32_t writeMask = BFR_MASK_ALL;
+    /// Which channels are written: bit 0 red, 1 green, 2 blue, 3 alpha. Bits above 3 are ignored.
+    std::uint32_t writeMask{};
 };
 
 /// One color target a graphics pipeline renders to.
@@ -1531,7 +1647,7 @@ struct GraphicsPipelineDesc {
 /// A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was
 /// submitted has run. An all-zero token has already completed.
 struct Token {
-    /// Index of the queue on the device; 0 is the graphics queue.
+    /// Index of the queue on the device, numbered as bfr_device_desc says.
     std::uint32_t queue{};
     std::uint64_t value{};
 };
@@ -1542,7 +1658,7 @@ static_assert(offsetof(Token, value) == offsetof(bfr_token, value));
 
 /// What to send to a queue.
 struct SubmitDesc {
-    /// The queue to send to; 0 is the graphics queue.
+    /// The queue to send to, numbered as bfr_device_desc says.
     std::uint32_t queue{};
     /// Recorded from pools on the same queue; the GPU runs them in this order.
     std::span<const CommandList> commandLists{};
@@ -1570,7 +1686,8 @@ struct CapsInfo {
     std::string driverInfo{};
     /// The driver's version, in the vendor's own encoding.
     std::uint64_t driverVersion{};
-    /// The newest API version the adapter supports: Vulkan 1.3.280 is 1, 3, 280.
+    /// The newest API version the adapter supports: Vulkan 1.3.280 is 1, 3, 280. D3D12: the highest
+    /// feature level, 12_1 being 12, 1. Metal: the GPU family version, Metal 4 being 4.
     std::uint32_t apiMajor{};
     std::uint32_t apiMinor{};
     std::uint32_t apiPatch{};
@@ -1611,7 +1728,8 @@ struct CapsLimits {
     std::uint32_t maxStorageBufferRange{};
     /// Most elements in a texel buffer view.
     std::uint32_t maxTexelBufferElements{};
-    /// Most bytes of push constants.
+    /// Bytes of push constants every pipeline's shaders read, and the most bfr_push_constants
+    /// takes: the device's limit on Vulkan, the root signature's room on D3D12, 128 on Metal.
     std::uint32_t maxPushConstantsSize{};
     std::uint32_t maxColorAttachments{};
     /// Widest render area.
@@ -1621,13 +1739,14 @@ struct CapsLimits {
     /// Most layers rendered at once.
     std::uint32_t maxRenderLayers{};
     /// Sample counts for float and normalized color attachments: each set bit is a count it
-    /// supports, 1, 2, 4 and so on.
+    /// supports, 1, 2, 4 and so on. 0 on D3D12, which answers per format only, in
+    /// bfr_format_caps.sample_counts.
     std::uint32_t colorSampleCounts{};
-    /// Sample counts for integer color attachments.
+    /// Sample counts for integer color attachments; 0 on D3D12, as color_sample_counts says.
     std::uint32_t integerSampleCounts{};
-    /// Sample counts for depth attachments.
+    /// Sample counts for depth attachments; 0 on D3D12, as color_sample_counts says.
     std::uint32_t depthSampleCounts{};
-    /// Sample counts for stencil attachments.
+    /// Sample counts for stencil attachments; 0 on D3D12, as color_sample_counts says.
     std::uint32_t stencilSampleCounts{};
     /// Sample counts for rendering with no attachments.
     std::uint32_t noAttachmentSampleCounts{};
@@ -1644,10 +1763,10 @@ struct CapsLimits {
     float maxSamplerLodBias{};
     /// Samplers with a custom border colour alive at once.
     std::uint32_t maxCustomBorderColorSamplers{};
-    /// Smallest tile of a shading rate texture; 0 without one.
-    std::uint32_t minShadingRateTile{};
-    /// Largest tile of a shading rate texture; 0 without one.
-    std::uint32_t maxShadingRateTile{};
+    /// Smallest tile of a shading rate texture, width and height; 0 without one.
+    std::array<std::uint32_t, 2> minShadingRateTile{};
+    /// Largest tile of a shading rate texture, width and height; 0 without one.
+    std::array<std::uint32_t, 2> maxShadingRateTile{};
     /// Alignment in bytes of a uniform buffer view's offset.
     std::uint64_t minUniformBufferAlignment{};
     /// Alignment in bytes of a storage buffer view's offset.
@@ -1688,7 +1807,8 @@ struct CapsCompute {
     std::uint32_t maxWorkgroupInvocations{};
     /// Most bytes of workgroup shared memory.
     std::uint32_t maxSharedMemory{};
-    /// Invocations in a subgroup (a wave or warp) by default.
+    /// Invocations in a subgroup (a wave or warp) by default. D3D12 has no default; it reports its
+    /// minimum.
     std::uint32_t subgroupSize{};
     std::uint32_t minSubgroupSize{};
     std::uint32_t maxSubgroupSize{};
@@ -1840,7 +1960,18 @@ struct CapsMemory {
     bool unified{};
 };
 
-/// How many queues of each type the adapter has.
+/// The bfr_queue_level values a kind of queue takes; each true where the backend says so.
+struct QueueLevels {
+    bool normal{};
+    bool low{};
+    bool high{};
+    bool realtime{};
+};
+
+/// How many queues of each type the adapter has, and what they do, for a device opened without a
+/// window. On Vulkan a window may move a type to another family that presents to it, with its own
+/// counts, timestamp bits and levels. The counts are 0 where the backend has no count of queues;
+/// bfr_create_device then takes any number of each.
 struct CapsQueues {
     /// Queues that run graphics.
     std::uint32_t graphics{};
@@ -1852,6 +1983,13 @@ struct CapsQueues {
     std::uint32_t graphicsTimestampBits{};
     std::uint32_t computeTimestampBits{};
     std::uint32_t copyTimestampBits{};
+    /// The distinct priorities the backend gives a device's queues by their bfr_queue_desc.rank; 0
+    /// where it doesn't rank them.
+    std::uint32_t ranks{};
+    /// Levels a graphics queue takes; none set where the backend has no setting.
+    QueueLevels graphicsLevels{};
+    QueueLevels computeLevels{};
+    QueueLevels copyLevels{};
 };
 
 /// Everything about an adapter that stays the same while it runs.
@@ -1953,6 +2091,12 @@ inline Error failure(bfr_result result) {
     return {.code = static_cast<Result>(result), .message = lastError()};
 }
 
+/// The error for a span of more elements than the C API's uint32_t count holds, which is
+/// refused rather than cut short.
+inline Error tooMany(std::string_view what) {
+    return {.code = Result::ErrorInvalidArgument, .message = Message{what}};
+}
+
 /// Calls the MessageCallback user_data points at; nothing it throws reaches C.
 inline void messageCallbackTrampoline(bfr_message_severity severity, bfr_string message, void* user_data) noexcept {
     callQuietly([&] { (*static_cast<const MessageCallback*>(user_data))(static_cast<MessageSeverity>(severity), text(message)); });
@@ -1966,6 +2110,10 @@ inline bfr_instance_desc toC(const InstanceDesc& value, const bfr_chain* next, M
         .message_callback = messageCallback != nullptr ? &messageCallbackTrampoline : nullptr,
         .min_severity = static_cast<bfr_message_severity>(value.minSeverity),
         .message_user_data = messageCallback,
+        .application_name = detail::toC(value.applicationName),
+        .application_version = value.applicationVersion,
+        .engine_name = detail::toC(value.engineName),
+        .engine_version = value.engineVersion,
     };
 }
 
@@ -1977,13 +2125,21 @@ inline bfr_window toC(const Window& value) {
     };
 }
 
+inline bfr_queue_desc toC(const QueueDesc& value) {
+    return {.rank = value.rank, .level = static_cast<bfr_queue_level>(value.level)};
+}
+
 inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
     return {
         .next = next,
         .adapter = value.adapter,
         .window = toC(value.window),
-        .compute_queues = value.computeQueues,
-        .copy_queues = value.copyQueues,
+        .graphics_queues = reinterpret_cast<const bfr_queue_desc*>(value.graphicsQueues.data()),
+        .graphics_queue_count = static_cast<uint32_t>(value.graphicsQueues.size()),
+        .compute_queues = reinterpret_cast<const bfr_queue_desc*>(value.computeQueues.data()),
+        .compute_queue_count = static_cast<uint32_t>(value.computeQueues.size()),
+        .copy_queues = reinterpret_cast<const bfr_queue_desc*>(value.copyQueues.data()),
+        .copy_queue_count = static_cast<uint32_t>(value.copyQueues.size()),
         .max_command_lists = value.maxCommandLists,
         .max_command_pools = value.maxCommandPools,
         .max_swapchains = value.maxSwapchains,
@@ -1998,6 +2154,7 @@ inline bfr_swapchain_desc toC(const SwapchainDesc& value, const bfr_chain* next)
     return {
         .next = next,
         .window = toC(value.window),
+        .queue = value.queue,
         .image_count = value.imageCount,
         .present_mode = static_cast<bfr_present_mode>(value.presentMode),
         .format = static_cast<bfr_format>(value.format),
@@ -2311,8 +2468,8 @@ inline CapsLimits fromC(const bfr_caps_limits& value) {
         .maxSamplerAnisotropy = value.max_sampler_anisotropy,
         .maxSamplerLodBias = value.max_sampler_lod_bias,
         .maxCustomBorderColorSamplers = value.max_custom_border_color_samplers,
-        .minShadingRateTile = value.min_shading_rate_tile,
-        .maxShadingRateTile = value.max_shading_rate_tile,
+        .minShadingRateTile = std::to_array(value.min_shading_rate_tile),
+        .maxShadingRateTile = std::to_array(value.max_shading_rate_tile),
         .minUniformBufferAlignment = value.min_uniform_buffer_alignment,
         .minStorageBufferAlignment = value.min_storage_buffer_alignment,
         .minTexelBufferAlignment = value.min_texel_buffer_alignment,
@@ -2460,6 +2617,15 @@ inline CapsMemory fromC(const bfr_caps_memory& value) {
     };
 }
 
+inline QueueLevels fromC(const bfr_queue_levels& value) {
+    return {
+        .normal = value.normal != BFR_FALSE,
+        .low = value.low != BFR_FALSE,
+        .high = value.high != BFR_FALSE,
+        .realtime = value.realtime != BFR_FALSE,
+    };
+}
+
 inline CapsQueues fromC(const bfr_caps_queues& value) {
     return {
         .graphics = value.graphics,
@@ -2468,6 +2634,10 @@ inline CapsQueues fromC(const bfr_caps_queues& value) {
         .graphicsTimestampBits = value.graphics_timestamp_bits,
         .computeTimestampBits = value.compute_timestamp_bits,
         .copyTimestampBits = value.copy_timestamp_bits,
+        .ranks = value.ranks,
+        .graphicsLevels = fromC(value.graphics_levels),
+        .computeLevels = fromC(value.compute_levels),
+        .copyLevels = fromC(value.copy_levels),
     };
 }
 
@@ -2595,7 +2765,8 @@ public:
     /// the order the window system gives.
     [[nodiscard]] Expected<std::vector<SwapchainFormat>> swapchainFormats(std::uint32_t adapter, const SwapchainQuery& desc) const;
 
-    /// Opens an adapter. With a window in desc, picks a queue that can present to it.
+    /// Opens an adapter with the queues desc asks for. With a window in desc, fails with
+    /// error_present_unsupported unless one of them can present to it.
     [[nodiscard]] Expected<Device> createDevice(const DeviceDesc& desc) const;
 
 private:
@@ -2656,14 +2827,27 @@ public:
     [[nodiscard]] Expected<void> beginRendering(CommandList commandList, const Swapchain& swapchain, const RenderingDesc& desc) const;
 
     /// Ends the rendering bfr_begin_rendering began; a swapchain image is then ready to present,
-    /// and a texture is in the layout it was given in.
+    /// and a texture is in the layout it was given in. Metal has no encoder to end when none is
+    /// open, so there it fails with error_invalid_argument.
     [[nodiscard]] Expected<void> endRendering(CommandList commandList) const;
 
-    /// Sets the viewport the draws after it use, inside rendering.
+    /// Sets the viewport the draws after it use. Metal sets it on the rendering's encoder, so there
+    /// it fails with error_invalid_argument outside rendering.
     [[nodiscard]] Expected<void> setViewport(CommandList commandList, const Viewport& viewport) const;
 
-    /// Sets the scissor the draws after it keep to, inside rendering.
+    /// Sets the scissor the draws after it keep to. Fails as bfr_set_viewport does.
     [[nodiscard]] Expected<void> setScissor(CommandList commandList, const Rect& scissor) const;
+
+    /// Sets the color the constant blend factors of the draws after it read. Vulkan has no color
+    /// until it is set, and Metal sets it on the rendering's encoder, so a draw that reads it needs
+    /// it set in its rendering. Fails as bfr_set_viewport does.
+    [[nodiscard]] Expected<void> setBlendConstants(CommandList commandList, float red, float green, float blue, float alpha) const;
+
+    /// Sets the value the stencil test of the draws after it compares against, and stencil_op
+    /// replace writes, on both faces. The low 8 bits count. Vulkan has no value until it is set,
+    /// and Metal sets it on the rendering's encoder, so a draw that tests stencil needs it set in
+    /// its rendering. Fails as bfr_set_viewport does.
+    [[nodiscard]] Expected<void> setStencilReference(CommandList commandList, std::uint32_t reference) const;
 
     /// Makes pipeline the one draws or dispatches after it run, a graphics pipeline for draws and a
     /// compute one for dispatches, until another of its kind is bound. Draws assemble the list
@@ -2671,8 +2855,8 @@ public:
     [[nodiscard]] Expected<void> bindPipeline(CommandList commandList, const Pipeline& pipeline) const;
 
     /// Sets the first size bytes of the push constants every shader reads, as bfr_pipeline states,
-    /// for the draws and dispatches after it. size is a multiple of 4 and at most
-    /// bfr_push_constants_size, else error_invalid_argument. Fails with error_limit_reached past
+    /// for the draws and dispatches after it. size is a multiple of 4 and at most the caps'
+    /// max_push_constants_size, else error_invalid_argument. Fails with error_limit_reached past
     /// the pool's push_constant_updates.
     [[nodiscard]] Expected<void> pushConstants(CommandList commandList, std::span<const std::uint8_t> data) const;
 
@@ -2683,7 +2867,8 @@ public:
     /// Records a draw of vertex_count vertices, instance_count times, with the bound graphics
     /// pipeline, inside rendering. The vertex shader sees vertex indices from first_vertex. Whether
     /// it sees instance indices from first_instance or from 0 is the backend's: Vulkan and Metal
-    /// count from first_instance, D3D12's SV_InstanceID from 0.
+    /// count from first_instance, D3D12's SV_InstanceID from 0. Metal draws on the rendering's
+    /// encoder, so there it fails with error_invalid_argument outside rendering.
     [[nodiscard]] Expected<void> draw(CommandList commandList, std::uint32_t vertexCount, std::uint32_t instanceCount, std::uint32_t firstVertex, std::uint32_t firstInstance) const;
 
     /// Records a draw of index_count indices read from the bound index buffer from first_index,
@@ -2730,8 +2915,9 @@ public:
     /// them. Different queues may be sent to from different threads at once.
     [[nodiscard]] Expected<Token> submit(const SubmitDesc& desc) const;
 
-    /// Blocks until the GPU has passed token, whichever queue it is on.
-    [[nodiscard]] Expected<void> wait(const Token& token) const;
+    /// Blocks until the GPU has passed token, whichever queue it is on, which may be one no submit
+    /// has returned yet, or until timeout_ns has passed, which fails with error_timeout.
+    [[nodiscard]] Expected<void> wait(const Token& token, std::uint64_t timeoutNs) const;
 
     /// Writes whether the GPU has passed token, without blocking.
     [[nodiscard]] Expected<bool> poll(const Token& token) const;
@@ -2762,17 +2948,14 @@ public:
     [[nodiscard]] Expected<Sampler> createSampler(const SamplerDesc& desc) const;
 
     /// Creates a compute pipeline, as desc says, before returning. Not for the frame path: it
-    /// compiles, and frees pipelines the GPU is done with. Fails with error_invalid_argument for a
-    /// desc with no code or a workgroup dimension of 0, error_limit_reached at the device's maximum
-    /// of pipelines, and error_device_failed when the backend refuses the code or the desc; the
-    /// message carries what it said.
+    /// compiles, and frees pipelines the GPU is done with. Fails with error_limit_reached at the
+    /// device's maximum of pipelines, and error_device_failed when the backend refuses the code or
+    /// the desc; the message carries what it said.
     [[nodiscard]] Expected<Pipeline> createComputePipeline(const ComputePipelineDesc& desc) const;
 
     /// Creates a graphics pipeline, as desc says, before returning. Not for the frame path, as
-    /// bfr_create_compute_pipeline is not. Fails with error_invalid_argument for a desc with no
-    /// vertex code, more than max_color_targets targets, a target of format undefined, a depth-
-    /// stencil test without a depth-stencil format, or samples of 0, error_unsupported when the
-    /// desc uses raster or blend state the adapter lacks, such as wireframe fill,
+    /// bfr_create_compute_pipeline is not. A target of format undefined is an unused one. Fails
+    /// with error_invalid_argument for a desc with more than max_color_targets targets,
     /// error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
     /// backend refuses the code or the desc; the message carries what it said.
     [[nodiscard]] Expected<Pipeline> createGraphicsPipeline(const GraphicsPipelineDesc& desc) const;
@@ -2788,8 +2971,8 @@ private:
 };
 
 /// The images presented to one window. Calls on one swapchain must not overlap, destroying it
-/// included; the caller synchronizes them. Different swapchains may be used from different threads
-/// at once.
+/// included, and a bfr_submit of a list that renders to it counts as one; the caller synchronizes
+/// them. Different swapchains may be used from different threads at once.
 class Swapchain {
 public:
     /// Owns nothing, as a moved-from Swapchain does.
@@ -2822,13 +3005,13 @@ public:
 
     /// Takes the swapchain's next image, for bfr_begin_rendering. Fails with error_out_of_date when
     /// the swapchain has no images or no longer matches its window; bfr_resize_swapchain then gives
-    /// it new ones.
-    [[nodiscard]] Expected<void> acquire();
+    /// it new ones. Fails with error_timeout when no image came in time.
+    [[nodiscard]] Expected<SwapchainStatus> acquire(std::uint64_t timeoutNs);
 
     /// Shows the acquired image once what bfr_submit sent for it is done. Fails with
     /// error_out_of_date when the swapchain no longer matches its window; the image was still
     /// presented when it could be.
-    [[nodiscard]] Expected<void> present();
+    [[nodiscard]] Expected<SwapchainStatus> present();
 
 private:
     Swapchain(bfr_device* device, bfr_swapchain swapchain, detail::KeepAlive keepAlive) : device_(device), swapchain_(swapchain), keepAlive_(std::move(keepAlive)) {}
@@ -2870,8 +3053,9 @@ public:
     [[nodiscard]] explicit operator bool() const { return commandPool_.bits != 0; }
 
     /// Gives every list the pool made back to it, so bfr_begin_commands may use their memory again.
-    /// Fails with error_invalid_argument while a list from the pool is recording, or while the GPU
-    /// has not passed the token of the pool's last submit; bfr_wait on it first.
+    /// A list from the pool still recording ends with it on Vulkan; on D3D12 and Metal it fails
+    /// with error_invalid_argument. Fails with error_invalid_argument while the GPU has not passed
+    /// the token of the pool's last submit; bfr_wait on it first.
     [[nodiscard]] Expected<void> reset();
 
     /// Starts recording the pool's next list. Fails with error_limit_reached when every list it
@@ -3000,14 +3184,14 @@ private:
 /// shares one resource layout, which its shaders declare as follows. Four unbounded tables, each
 /// indexed by the slot a resource is given when it is created, which bfr_get_buffer_slot,
 /// bfr_get_texture_slots and bfr_get_sampler_slot report and which is the same number on every
-/// backend, and one block of bfr_push_constants_size bytes of push constants that every stage
-/// reads, set by bfr_push_constants. On Vulkan the tables are the bindings of descriptor set 0, in
-/// order: 0 sampled images, 1 storage images, 2 storage buffers, 3 samplers, each an update-after-
-/// bind and partially-bound runtime array; the push constants are a push constant range over all
-/// stages. On D3D12 the tables are unbounded descriptor ranges, each starting at register 0 of its
-/// own space: SRV space 0 sampled textures, UAV space 1 storage textures, UAV space 2 storage
+/// backend, and one block of the caps' max_push_constants_size bytes of push constants that every
+/// stage reads, set by bfr_push_constants. On Vulkan the tables are the bindings of descriptor set
+/// 0, in order: 0 sampled images, 1 storage images, 2 storage buffers, 3 samplers, each an update-
+/// after-bind and partially-bound runtime array; the push constants are a push constant range over
+/// all stages. On D3D12 the tables are unbounded descriptor ranges, each starting at register 0 of
+/// its own space: SRV space 0 sampled textures, UAV space 1 storage textures, UAV space 2 storage
 /// buffers as raw buffer views, sampler space 3 samplers; the push constants are
-/// bfr_push_constants_size / 4 root constants at b0 of space 0. On Metal the tables are one
+/// max_push_constants_size / 4 root constants at b0 of space 0. On Metal the tables are one
 /// argument buffer at buffer(0), holding the sampled textures, storage textures, storage buffers
 /// and samplers in that order, each a region of as many 8-byte entries as the bfr_device_desc's
 /// max_bindless member for its kind, so a shader declares them with the sizes the device was opened
@@ -3096,6 +3280,8 @@ inline bfr_color_attachment toC(const ColorAttachment& value) {
         .load_op = static_cast<bfr_load_op>(value.loadOp),
         .store_op = static_cast<bfr_store_op>(value.storeOp),
         .clear_color = {value.clearColor[0], value.clearColor[1], value.clearColor[2], value.clearColor[3]},
+        .clear_integer = value.clearInteger ? BFR_TRUE : BFR_FALSE,
+        .clear_color_integer = {value.clearColorInteger[0], value.clearColorInteger[1], value.clearColorInteger[2], value.clearColorInteger[3]},
     };
 }
 
@@ -3238,6 +3424,15 @@ inline Expected<std::vector<SwapchainFormat>> Instance::swapchainFormats(std::ui
 }
 
 inline Expected<Device> Instance::createDevice(const DeviceDesc& desc) const {
+    if (!std::in_range<uint32_t>(desc.graphicsQueues.size())) {
+        return std::unexpected(detail::tooMany("desc.graphicsQueues holds more elements than a uint32_t counts"));
+    }
+    if (!std::in_range<uint32_t>(desc.computeQueues.size())) {
+        return std::unexpected(detail::tooMany("desc.computeQueues holds more elements than a uint32_t counts"));
+    }
+    if (!std::in_range<uint32_t>(desc.copyQueues.size())) {
+        return std::unexpected(detail::tooMany("desc.copyQueues holds more elements than a uint32_t counts"));
+    }
     const bfr_device_desc cDesc = detail::toC(desc, nullptr);
     bfr_device* device = nullptr;
     if (const bfr_result result = bfr_create_device(instance_, &cDesc, &device); result < 0) {
@@ -3303,6 +3498,20 @@ inline Expected<void> Device::setScissor(CommandList commandList, const Rect& sc
     return {};
 }
 
+inline Expected<void> Device::setBlendConstants(CommandList commandList, float red, float green, float blue, float alpha) const {
+    if (const bfr_result result = bfr_set_blend_constants(device_, commandList.get(), red, green, blue, alpha); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::setStencilReference(CommandList commandList, std::uint32_t reference) const {
+    if (const bfr_result result = bfr_set_stencil_reference(device_, commandList.get(), reference); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
 inline Expected<void> Device::bindPipeline(CommandList commandList, const Pipeline& pipeline) const {
     if (const bfr_result result = bfr_bind_pipeline(device_, commandList.get(), pipeline.get()); result < 0) {
         return std::unexpected(detail::failure(result));
@@ -3311,6 +3520,9 @@ inline Expected<void> Device::bindPipeline(CommandList commandList, const Pipeli
 }
 
 inline Expected<void> Device::pushConstants(CommandList commandList, std::span<const std::uint8_t> data) const {
+    if (!std::in_range<uint32_t>(data.size())) {
+        return std::unexpected(detail::tooMany("data holds more elements than a uint32_t counts"));
+    }
     if (const bfr_result result = bfr_push_constants(device_, commandList.get(), reinterpret_cast<const uint8_t*>(data.data()), static_cast<uint32_t>(data.size())); result < 0) {
         return std::unexpected(detail::failure(result));
     }
@@ -3346,6 +3558,9 @@ inline Expected<void> Device::dispatch(CommandList commandList, std::uint32_t x,
 }
 
 inline Expected<void> Device::copyBuffer(CommandList commandList, const Buffer& src, const Buffer& dst, std::span<const BufferCopy> regions) const {
+    if (!std::in_range<uint32_t>(regions.size())) {
+        return std::unexpected(detail::tooMany("regions holds more elements than a uint32_t counts"));
+    }
     if (const bfr_result result = bfr_copy_buffer(device_, commandList.get(), src.get(), dst.get(), reinterpret_cast<const bfr_buffer_copy*>(regions.data()), static_cast<uint32_t>(regions.size())); result < 0) {
         return std::unexpected(detail::failure(result));
     }
@@ -3367,6 +3582,9 @@ inline Expected<void> Device::textureBarrier(CommandList commandList, const Text
 }
 
 inline Expected<void> Device::copyBufferToTexture(CommandList commandList, const Buffer& buffer, const Texture& texture, std::span<const BufferTextureCopy> regions) const {
+    if (!std::in_range<uint32_t>(regions.size())) {
+        return std::unexpected(detail::tooMany("regions holds more elements than a uint32_t counts"));
+    }
     if (const bfr_result result = bfr_copy_buffer_to_texture(device_, commandList.get(), buffer.get(), texture.get(), reinterpret_cast<const bfr_buffer_texture_copy*>(regions.data()), static_cast<uint32_t>(regions.size())); result < 0) {
         return std::unexpected(detail::failure(result));
     }
@@ -3374,6 +3592,9 @@ inline Expected<void> Device::copyBufferToTexture(CommandList commandList, const
 }
 
 inline Expected<void> Device::copyTextureToBuffer(CommandList commandList, const Texture& texture, const Buffer& buffer, std::span<const BufferTextureCopy> regions) const {
+    if (!std::in_range<uint32_t>(regions.size())) {
+        return std::unexpected(detail::tooMany("regions holds more elements than a uint32_t counts"));
+    }
     if (const bfr_result result = bfr_copy_texture_to_buffer(device_, commandList.get(), texture.get(), buffer.get(), reinterpret_cast<const bfr_buffer_texture_copy*>(regions.data()), static_cast<uint32_t>(regions.size())); result < 0) {
         return std::unexpected(detail::failure(result));
     }
@@ -3381,6 +3602,9 @@ inline Expected<void> Device::copyTextureToBuffer(CommandList commandList, const
 }
 
 inline Expected<void> Device::copyTexture(CommandList commandList, const Texture& src, const Texture& dst, std::span<const TextureCopy> regions) const {
+    if (!std::in_range<uint32_t>(regions.size())) {
+        return std::unexpected(detail::tooMany("regions holds more elements than a uint32_t counts"));
+    }
     if (const bfr_result result = bfr_copy_texture(device_, commandList.get(), src.get(), dst.get(), reinterpret_cast<const bfr_texture_copy*>(regions.data()), static_cast<uint32_t>(regions.size())); result < 0) {
         return std::unexpected(detail::failure(result));
     }
@@ -3388,6 +3612,12 @@ inline Expected<void> Device::copyTexture(CommandList commandList, const Texture
 }
 
 inline Expected<Token> Device::submit(const SubmitDesc& desc) const {
+    if (!std::in_range<uint32_t>(desc.commandLists.size())) {
+        return std::unexpected(detail::tooMany("desc.commandLists holds more elements than a uint32_t counts"));
+    }
+    if (!std::in_range<uint32_t>(desc.waits.size())) {
+        return std::unexpected(detail::tooMany("desc.waits holds more elements than a uint32_t counts"));
+    }
     const bfr_submit_desc cDesc = detail::toC(desc, nullptr);
     bfr_token token{};
     if (const bfr_result result = bfr_submit(device_, &cDesc, &token); result < 0) {
@@ -3396,9 +3626,9 @@ inline Expected<Token> Device::submit(const SubmitDesc& desc) const {
     return detail::fromC(token);
 }
 
-inline Expected<void> Device::wait(const Token& token) const {
+inline Expected<void> Device::wait(const Token& token, std::uint64_t timeoutNs) const {
     const bfr_token cToken = detail::toC(token);
-    if (const bfr_result result = bfr_wait(device_, &cToken); result < 0) {
+    if (const bfr_result result = bfr_wait(device_, &cToken, timeoutNs); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return {};
@@ -3470,18 +3700,20 @@ inline Expected<SwapchainImages> Swapchain::resize(std::uint32_t width, std::uin
     return detail::fromC(images);
 }
 
-inline Expected<void> Swapchain::acquire() {
-    if (const bfr_result result = bfr_acquire(device_, swapchain_); result < 0) {
+inline Expected<SwapchainStatus> Swapchain::acquire(std::uint64_t timeoutNs) {
+    bfr_swapchain_status status{};
+    if (const bfr_result result = bfr_acquire(device_, swapchain_, timeoutNs, &status); result < 0) {
         return std::unexpected(detail::failure(result));
     }
-    return {};
+    return static_cast<SwapchainStatus>(status);
 }
 
-inline Expected<void> Swapchain::present() {
-    if (const bfr_result result = bfr_present(device_, swapchain_); result < 0) {
+inline Expected<SwapchainStatus> Swapchain::present() {
+    bfr_swapchain_status status{};
+    if (const bfr_result result = bfr_present(device_, swapchain_, &status); result < 0) {
         return std::unexpected(detail::failure(result));
     }
-    return {};
+    return static_cast<SwapchainStatus>(status);
 }
 
 inline Expected<void> CommandPool::reset() {

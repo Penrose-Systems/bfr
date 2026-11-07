@@ -2,19 +2,27 @@
 
 #include "bfr/core/error.h"
 #include "bfr/core/handle.h"
+#include "bfr/core/window.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
+#include "rhi/enum_check.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <format>
-#include <tuple>
+#include <optional>
+#include <span>
+#include <string_view>
 #include <utility>
+#include <variant>
 
 namespace bfr::rhi {
 
 /// Fails with RhiInvalidCall when a maximum in desc is more than a handle can
-/// name, so a device holds exactly what it was asked for; 0 is none. Each
-/// backend's createDevice calls it first.
+/// name, so a device holds exactly what it was asked for, 0 being none, when
+/// its graphics, compute and copy queues together are more than a uint32_t
+/// counts, or when a queue's level is not one BFR has. Each backend's
+/// createDevice calls it first.
 [[nodiscard]] inline core::Result<void> checkLimits(const DeviceDesc& desc) {
     constexpr std::uint32_t kMost = core::Handle<void>::kMaxIndices;
     for (const auto& [name, value] :
@@ -27,20 +35,76 @@ namespace bfr::rhi {
             return core::failure(core::ErrorCode::RhiInvalidCall, "{} is {}; it is at most {}", name, value, kMost);
         }
     }
+    const std::uint64_t queues = std::uint64_t{desc.graphics.size()} + desc.compute.size() + desc.copy.size();
+    if (!std::in_range<std::uint32_t>(queues)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "{} graphics, {} compute and {} copy queues are more than BFR counts",
+                             desc.graphics.size(), desc.compute.size(), desc.copy.size());
+    }
+    for (const std::span<const QueueDesc> kind : {desc.graphics, desc.compute, desc.copy}) {
+        for (const QueueDesc& queue : kind) {
+            if (auto checked = checkKnown(queue.level, "queue level"); !checked) {
+                return checked;
+            }
+        }
+    }
     return {};
 }
 
-/// Fails with RhiLimitReached when a bindless table in desc is larger than
-/// the adapter holds, as limits says. Each backend's createDevice calls it
-/// after checkLimits, so every backend refuses the same desc the same way.
-[[nodiscard]] inline core::Result<void> checkBindlessLimits(const DeviceDesc& desc, const BindlessLimits& limits) {
-    for (const auto& [name, asked, held] :
-         {std::tuple{"maxBindlessTextures", desc.maxBindlessTextures, limits.maxTextures},
-          std::tuple{"maxBindlessStorageTextures", desc.maxBindlessStorageTextures, limits.maxStorageTextures},
-          std::tuple{"maxBindlessStorageBuffers", desc.maxBindlessStorageBuffers, limits.maxStorageBuffers},
-          std::tuple{"maxBindlessSamplers", desc.maxBindlessSamplers, limits.maxSamplers}}) {
-        if (asked > held) {
-            return core::failure(core::ErrorCode::RhiLimitReached, "{} is {}; the adapter holds {}", name, asked, held);
+/// How many queues desc opens, which checkLimits has seen a uint32_t counts.
+[[nodiscard]] inline std::uint32_t queueCount(const DeviceDesc& desc) {
+    return static_cast<std::uint32_t>(desc.graphics.size() + desc.compute.size() + desc.copy.size());
+}
+
+/// The part of desc a device keeps: its queue spans point into the caller's
+/// memory, which lives only for createDevice.
+[[nodiscard]] inline DeviceDesc heldPart(DeviceDesc desc) {
+    desc.graphics = {};
+    desc.compute = {};
+    desc.copy = {};
+    return desc;
+}
+
+/// Fails with RhiPresentUnsupported when presentTo is a window and a device
+/// opens no queue to present to it from, for a backend with no window query:
+/// presenting is how many of its queues are of a kind that presents.
+[[nodiscard]] inline core::Result<void> checkPresentQueue(const core::window::NativeWindow& presentTo,
+                                                          std::size_t presenting) {
+    if (!std::holds_alternative<std::monostate>(presentTo) && presenting == 0) {
+        return core::failure(core::ErrorCode::RhiPresentUnsupported,
+                             "the device opens no queue to present to the window from");
+    }
+    return {};
+}
+
+/// Fails with RhiUnsupported, naming backend, when desc's queues have
+/// different ranks, for a backend that doesn't rank a device's queues.
+[[nodiscard]] inline core::Result<void> checkUnranked(const DeviceDesc& desc, std::string_view backend) {
+    std::optional<float> first;
+    for (const std::span<const QueueDesc> kind : {desc.graphics, desc.compute, desc.copy}) {
+        for (const QueueDesc& queue : kind) {
+            if (!first) {
+                first = queue.rank;
+            }
+            if (queue.rank != *first) {
+                return core::failure(core::ErrorCode::RhiUnsupported,
+                                     "{} doesn't rank a device's queues; they were given ranks {} and {}", backend,
+                                     *first, queue.rank);
+            }
+        }
+    }
+    return {};
+}
+
+/// Fails with RhiUnsupported, saying why, when a queue in desc asks for a
+/// level other than normal, for a backend with no level to set.
+[[nodiscard]] inline core::Result<void> checkNormalLevels(const DeviceDesc& desc, std::string_view why) {
+    for (const std::span<const QueueDesc> kind : {desc.graphics, desc.compute, desc.copy}) {
+        for (const QueueDesc& queue : kind) {
+            if (queue.level != QueueLevel::Normal) {
+                return core::failure(core::ErrorCode::RhiUnsupported, "a queue asks for level {}, but {}",
+                                     std::to_underlying(queue.level), why);
+            }
         }
     }
     return {};

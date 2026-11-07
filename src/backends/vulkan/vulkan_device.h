@@ -101,32 +101,29 @@ struct VulkanCommandList {
     VkCommandBuffer buffer = VK_NULL_HANDLE;
     CommandPoolHandle pool;
     std::uint32_t slot = 0;
-    RecordState state;
     std::optional<SwapchainHandle> presenting;
     std::uint32_t rendered = core::SlotChains::kEnd;
-    // The serial of the submit this list is gathered into, so a list named
-    // twice in one submit is caught in a single pass.
-    std::uint64_t queued = 0;
 };
 
 class VulkanDevice final : public Device {
 public:
-    /// A device over device, which rhi made on adapter with one graphics queue
-    /// on families.graphics, queues.compute on families.compute and queues.copy
-    /// on families.transfer, and with features turned on; rhi outlives it.
-    /// hasBudget says whether adapter has VK_EXT_memory_budget; desc's
+    /// A device over device, which rhi made on adapter with desc.graphics
+    /// queues on families.graphics, desc.compute on families.compute and
+    /// desc.copy on families.transfer, each family set where desc asks for its
+    /// queues; rhi outlives it.
+    /// hasBudget says whether adapter has VK_EXT_memory_budget; hasSwapchain
+    /// whether device enabled VK_KHR_swapchain;
+    /// pushConstantsSize is the adapter's maxPushConstantsSize; desc's
     /// maximums size everything the device holds. Fails with RhiDeviceFailed,
     /// destroying device, when the API refuses a queue's timeline or the
     /// bindless layout, and RhiLimitReached when it cannot hold the layout.
-    [[nodiscard]] static core::Result<std::unique_ptr<VulkanDevice>> create(VulkanInstance& rhi,
-                                                                            VkPhysicalDevice adapter, VkDevice device,
-                                                                            const QueueFamilies& families,
-                                                                            const DeviceDesc& desc, bool hasBudget,
-                                                                            const RasterFeatures& features);
+    [[nodiscard]] static core::Result<std::unique_ptr<VulkanDevice>> create(
+        VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const QueueFamilies& families,
+        const DeviceDesc& desc, bool hasBudget, bool hasSwapchain, std::uint32_t pushConstantsSize);
 
     /// For create, with the number of queues create opens.
-    VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const QueueFamilies& families,
-                 const DeviceDesc& desc, bool hasBudget, const RasterFeatures& features);
+    VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const DeviceDesc& desc, bool hasBudget,
+                 bool hasSwapchain, std::uint32_t pushConstantsSize);
     ~VulkanDevice() override;
     VulkanDevice(const VulkanDevice&) = delete;
     VulkanDevice& operator=(const VulkanDevice&) = delete;
@@ -138,8 +135,8 @@ public:
     [[nodiscard]] core::Result<SwapchainImages> resizeSwapchain(SwapchainHandle swapchain, std::uint32_t width,
                                                                 std::uint32_t height) override;
     [[nodiscard]] core::Result<void> destroySwapchain(SwapchainHandle swapchain) override;
-    [[nodiscard]] core::Result<void> acquire(SwapchainHandle swapchain) override;
-    [[nodiscard]] core::Result<void> present(SwapchainHandle swapchain) override;
+    [[nodiscard]] core::Result<SwapchainStatus> acquire(SwapchainHandle swapchain, std::uint64_t timeoutNs) override;
+    [[nodiscard]] core::Result<SwapchainStatus> present(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<CommandPoolHandle> createCommandPool(const CommandPoolDesc& desc) override;
     [[nodiscard]] core::Result<void> resetCommandPool(CommandPoolHandle commandPool) override;
     [[nodiscard]] core::Result<void> destroyCommandPool(CommandPoolHandle commandPool) override;
@@ -149,6 +146,10 @@ public:
     [[nodiscard]] core::Result<void> endRendering(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<void> setViewport(CommandListHandle commandList, const Viewport& viewport) override;
     [[nodiscard]] core::Result<void> setScissor(CommandListHandle commandList, const Rect& scissor) override;
+    [[nodiscard]] core::Result<void> setBlendConstants(CommandListHandle commandList,
+                                                       const std::array<float, 4>& color) override;
+    [[nodiscard]] core::Result<void> setStencilReference(CommandListHandle commandList,
+                                                         std::uint32_t reference) override;
     [[nodiscard]] core::Result<void> bindPipeline(CommandListHandle commandList, PipelineHandle pipeline) override;
     [[nodiscard]] core::Result<void> pushConstants(CommandListHandle commandList,
                                                    std::span<const std::byte> data) override;
@@ -176,7 +177,7 @@ public:
     [[nodiscard]] core::Result<void> copyTexture(CommandListHandle commandList, TextureHandle src, TextureHandle dst,
                                                  std::span<const TextureCopy> regions) override;
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
-    [[nodiscard]] core::Result<void> wait(Token token) override;
+    [[nodiscard]] core::Result<void> wait(Token token, std::uint64_t timeoutNs) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
@@ -225,14 +226,11 @@ private:
     // Each device calls through its own table: volk's global pointers hold one
     // device's functions, and two adapters can have different drivers.
     VolkDeviceTable table_{};
-    std::uint32_t graphicsFamily_;
-    std::uint32_t presentFamily_;
     bool hasBudget_;
-    RasterFeatures rasterFeatures_;
+    bool hasSwapchain_;
+    std::uint32_t pushConstantsSize_;
     DeviceDesc desc_;
     std::vector<std::unique_ptr<VulkanQueue>> queues_;
-    VkQueue presentQueue_ = VK_NULL_HANDLE;
-    VulkanQueue* presentOn_ = nullptr;
     core::Pool<VulkanSwapchain, Swapchain> swapchains_;
     core::Pool<VulkanCommandPool, CommandPool> commandPools_;
     core::Pool<VulkanCommandList, CommandList> commandLists_;
@@ -246,9 +244,6 @@ private:
     // Live pools and destroyed ones not yet collected, held to
     // desc_.maxCommandPools so every queue's retired array has room.
     std::atomic<std::uint32_t> poolsHeld_{0};
-    // Counts submits on every queue, so each has a serial of its own, even one
-    // that fails, which the token value a queue hands out does not give.
-    std::atomic<std::uint64_t> submitSerial_{0};
 
     // Every queue family the device's queues are on, which each buffer is shared by.
     std::vector<std::uint32_t> families_;

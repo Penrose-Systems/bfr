@@ -20,16 +20,21 @@
 
 namespace bfr::rhi::metal {
 
-/// format's Metal pixel format; Invalid where Metal has none, which Metal
-/// then refuses.
+/// format's Metal pixel format; Invalid for Undefined, and where Metal has
+/// none, which Metal then refuses. format is Undefined or one of kFormats.
 [[nodiscard]] MTL::PixelFormat pixelFormatFor(Format format);
 
-/// What a swapchain on a CAMetalLayer may be: nothing, since Metal has no call
-/// that says.
-[[nodiscard]] SwapchainCaps surfaceCapsFor();
+/// The format pixelFormat is; Undefined for Invalid and for a pixel format no
+/// format maps to.
+[[nodiscard]] Format formatFor(MTL::PixelFormat pixelFormat);
 
-/// The formats and color spaces a CAMetalLayer presents in: none, since Metal
-/// has no call that lists them.
+/// What format may do on device. Metal has no call for it, so it is Godot's
+/// record of Apple's Metal feature set tables, changed as Godot changes it
+/// for the device. format is one of kFormats.
+[[nodiscard]] FormatCaps formatCapsFor(MTL::Device* device, Format format);
+
+/// The formats and color spaces a swapchain on a CAMetalLayer is built in:
+/// those layerFormatFor has a setting for. Metal has no call that lists them.
 [[nodiscard]] std::span<const SwapchainFormat> swapchainFormats();
 
 /// How a layer is set up to present format in colorSpace.

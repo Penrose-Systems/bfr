@@ -17,6 +17,7 @@
 #include <expected>
 #include <format>
 #include <limits>
+#include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -25,8 +26,11 @@ namespace bfr::rhi::vulkan {
 
 namespace {
 
+// The images are shared by every family the device's queues use, as buffers
+// and textures are: a queue of one family may render to an image a queue of
+// another presents.
 VkSwapchainCreateInfoKHR createInfo(VkSurfaceKHR surface, const SwapchainSettings& settings,
-                                    VkSurfaceTransformFlagBitsKHR transform) {
+                                    VkSurfaceTransformFlagBitsKHR transform, std::span<const std::uint32_t> families) {
     VkSwapchainCreateInfoKHR info{};
     info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     info.surface = surface;
@@ -36,7 +40,14 @@ VkSwapchainCreateInfoKHR createInfo(VkSurfaceKHR surface, const SwapchainSetting
     info.imageExtent = settings.extent;
     info.imageArrayLayers = 1;
     info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (families.size() > 1) {
+        info.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+        info.queueFamilyIndexCount = static_cast<std::uint32_t>(families.size());
+        info.pQueueFamilyIndices = families.data();
+    }
+    else {
+        info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
     info.preTransform = transform;
     info.compositeAlpha = settings.compositeAlpha;
     info.presentMode = settings.presentMode;
@@ -63,13 +74,15 @@ core::Result<VkSurfaceCapabilitiesKHR> askSurface(const InstanceTable& vk, VkPhy
 } // namespace
 
 VulkanSwapchain::VulkanSwapchain(VkDevice device, const VolkDeviceTable& table, const InstanceTable& instanceTable,
-                                 VulkanSurface surface, const SwapchainDesc& desc, const core::Logger& logger)
+                                 VulkanSurface surface, const SwapchainDesc& desc,
+                                 std::span<const std::uint32_t> families, const core::Logger& logger)
     : device_(device),
       table_(&table),
       instanceTable_(&instanceTable),
       logger_(&logger),
       surface_(std::move(surface)),
-      desc_(desc) {}
+      desc_(desc),
+      families_(families.begin(), families.end()) {}
 
 VulkanSwapchain::~VulkanSwapchain() {
     release();
@@ -97,7 +110,7 @@ core::Result<SwapchainImages> VulkanSwapchain::build(VkPhysicalDevice adapter, V
         return imagesOf(0, 0, 0);
     }
 
-    const VkSwapchainCreateInfoKHR info = createInfo(surface, settings, capabilities->currentTransform);
+    const VkSwapchainCreateInfoKHR info = createInfo(surface, settings, capabilities->currentTransform, families_);
     // A failed call leaves the handle undefined, so the new swapchain is kept
     // only once it is complete.
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
@@ -196,7 +209,7 @@ void VulkanSwapchain::release() {
     images_.clear();
 }
 
-core::Result<void> VulkanSwapchain::acquire() {
+core::Result<SwapchainStatus> VulkanSwapchain::acquire(std::uint64_t timeoutNs) {
     if (swapchain_ == VK_NULL_HANDLE) {
         return core::failure(core::ErrorCode::RhiOutOfDate, "the swapchain has no images; resize it");
     }
@@ -205,9 +218,12 @@ core::Result<void> VulkanSwapchain::acquire() {
     }
     VkSemaphore semaphore = acquireSemaphores_[nextAcquire_];
     std::uint32_t image = 0;
-    const VkResult result = table_->vkAcquireNextImageKHR(device_, swapchain_,
-                                                          std::numeric_limits<std::uint64_t>::max(), semaphore,
-                                                          VK_NULL_HANDLE, &image);
+    const VkResult result = table_->vkAcquireNextImageKHR(device_, swapchain_, timeoutNs, semaphore, VK_NULL_HANDLE,
+                                                          &image);
+    // Neither signals the semaphore, so it serves the next acquire.
+    if (result == VK_TIMEOUT || result == VK_NOT_READY) {
+        return core::failure(core::ErrorCode::RhiTimeout, "no image came in time");
+    }
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         // The semaphore is left signaled with nothing to wait on it, so it is
         // made again.
@@ -225,10 +241,11 @@ core::Result<void> VulkanSwapchain::acquire() {
         return failure(core::ErrorCode::RhiSwapchainFailed, {.call = "vkAcquireNextImageKHR", .result = result});
     }
     acquiredImage_ = image;
+    const SwapchainStatus status = result == VK_SUBOPTIMAL_KHR ? SwapchainStatus::Suboptimal : SwapchainStatus::Matches;
     acquireUsed_ = nextAcquire_;
     nextAcquire_ = (nextAcquire_ + 1) % static_cast<std::uint32_t>(acquireSemaphores_.size());
     submitted_ = false;
-    return {};
+    return status;
 }
 
 core::Result<AcquiredImage> VulkanSwapchain::acquired() const {
@@ -250,7 +267,7 @@ void VulkanSwapchain::setLayout(VkImageLayout layout) {
     }
 }
 
-core::Result<void> VulkanSwapchain::present(VkQueue queue) {
+core::Result<SwapchainStatus> VulkanSwapchain::present(VkQueue queue) {
     if (!acquiredImage_.has_value()) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
     }
@@ -275,7 +292,7 @@ core::Result<void> VulkanSwapchain::present(VkQueue queue) {
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         return failure(core::ErrorCode::RhiSwapchainFailed, {.call = "vkQueuePresentKHR", .result = result});
     }
-    return {};
+    return result == VK_SUBOPTIMAL_KHR ? SwapchainStatus::Suboptimal : SwapchainStatus::Matches;
 }
 
 } // namespace bfr::rhi::vulkan

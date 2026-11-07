@@ -14,6 +14,16 @@ struct Swapchain;
 
 using SwapchainHandle = core::Handle<Swapchain>;
 
+/// What the backend said of a swapchain as an image was acquired or
+/// presented: Matches when it said nothing more than that the call
+/// succeeded; Suboptimal when it no longer matches its window exactly but
+/// still presents, which Vulkan says with VK_SUBOPTIMAL_KHR, and which
+/// resizeSwapchain mends when the caller chooses.
+enum class SwapchainStatus : std::uint32_t {
+    Matches = 0,
+    Suboptimal = 1,
+};
+
 /// How a swapchain presents. Fifo is on every window; the others are on those
 /// whose swapchain caps list them.
 enum class PresentMode : std::uint8_t {
@@ -72,11 +82,15 @@ enum class AlphaMode : std::uint8_t {
 /// What a swapchain is asked to be. Each value is passed to the backend as
 /// given; the backend accepts or refuses it.
 struct SwapchainDesc {
+    /// The device's queue that presents the images. createSwapchain fails
+    /// with RhiPresentUnsupported when it can't present to the window, and
+    /// with RhiInvalidCall when the device has no such queue.
+    std::uint32_t queue = 0;
     /// The caller sets it; it is passed to the backend as given.
     std::uint32_t imageCount = 0;
     PresentMode presentMode = PresentMode::Fifo;
-    Format format = Format::Bgra8Unorm;
-    ColorSpace colorSpace = ColorSpace::Srgb;
+    Format format = Format::Undefined;
+    ColorSpace colorSpace{};
     AlphaMode alphaMode = AlphaMode::Opaque;
 };
 
@@ -86,8 +100,8 @@ struct SwapchainImages {
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::uint32_t count = 0;
-    Format format = Format::Bgra8Unorm;
-    ColorSpace colorSpace = ColorSpace::Srgb;
+    Format format = Format::Undefined;
+    ColorSpace colorSpace{};
     PresentMode presentMode = PresentMode::Fifo;
     AlphaMode alphaMode = AlphaMode::Opaque;
 };

@@ -3,6 +3,7 @@
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/caps.h"
 #include "bfr/rhi/swapchain.h"
 #include "metal/metal_util.h"
 
@@ -28,6 +29,11 @@ namespace bfr::rhi::metal {
 /// checkWindow does.
 [[nodiscard]] core::Result<Ref<CA::MetalLayer>> layerFor(const core::window::NativeWindow& window);
 
+/// What a swapchain on a CAMetalLayer may be: the present and alpha modes
+/// MetalSwapchain::build accepts, and the drawable counts the layer takes.
+/// Metal has no call for a layer's size limits, so those are 0.
+[[nodiscard]] SwapchainCaps surfaceCapsFor();
+
 /// One swapchain on a CAMetalLayer, and what it was last built as; empty until
 /// built.
 class MetalSwapchain {
@@ -48,10 +54,12 @@ public:
     /// the desc.
     [[nodiscard]] core::Result<SwapchainImages> build(std::uint32_t width, std::uint32_t height);
 
-    /// Takes the layer's next drawable. Fails with RhiOutOfDate when the
-    /// swapchain has no images, RhiInvalidCall when an image is already
-    /// acquired, and RhiSwapchainFailed when Metal gives no drawable.
-    [[nodiscard]] core::Result<void> acquire();
+    /// Takes the layer's next drawable, waiting with no limit when timeoutNs
+    /// is the largest value and for Metal's own time otherwise. Fails with
+    /// RhiOutOfDate when the swapchain has no images, RhiInvalidCall when an
+    /// image is already acquired, RhiTimeout when Metal's time ran out, and
+    /// RhiSwapchainFailed when Metal gives no drawable otherwise.
+    [[nodiscard]] core::Result<SwapchainStatus> acquire(std::uint64_t timeoutNs);
 
     /// The acquired drawable, null when none is.
     [[nodiscard]] CA::MetalDrawable* drawable() const { return drawable_.get(); }
@@ -65,9 +73,11 @@ public:
     /// Shows the acquired drawable once the work submitted for it is done, or
     /// at once when none was; no image is acquired afterwards. Fails with
     /// RhiInvalidCall when none is acquired.
-    [[nodiscard]] core::Result<void> present();
+    [[nodiscard]] core::Result<SwapchainStatus> present();
 
     [[nodiscard]] CA::MetalLayer* layer() const { return layer_.get(); }
+    /// The device's queue it presents from, as its desc says.
+    [[nodiscard]] std::uint32_t queue() const { return desc_.queue; }
 
 private:
     Ref<MTL::Device> device_;

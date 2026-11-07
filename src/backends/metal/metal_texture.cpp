@@ -10,6 +10,8 @@
 #include "metal/metal_formats.h"
 #include "metal/metal_util.h"
 #include "rhi/bindless_slots.h"
+#include "rhi/copy_check.h"
+#include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
 
 #include <Foundation/NSTypes.hpp>
@@ -84,6 +86,11 @@ NS::UInteger bytesPerImage(const FormatBlock& block, const BufferTextureCopy& re
 
 core::Result<MetalTexture> createMetalTexture(MTL::Device& device, const TextureDesc& desc,
                                               Ref<MTL::ResidencySet> residency) {
+    // Metal counts a cube's layers in cubes, so a remainder has nowhere to go.
+    if (desc.dimension == TextureDimension::Cube && desc.layers % kCubeFaces != 0) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "a cube texture's {} layers are not whole cubes of {}",
+                             desc.layers, kCubeFaces);
+    }
     const Ref<MTL::TextureDescriptor> descriptor = adopt(MTL::TextureDescriptor::alloc()->init());
     descriptor->setTextureType(typeFor(desc));
     descriptor->setPixelFormat(pixelFormatFor(desc.format));
@@ -119,6 +126,9 @@ core::Result<MetalTexture*> MetalDevice::textureFor(TextureHandle texture) {
 }
 
 core::Result<TextureHandle> MetalDevice::createTexture(const TextureDesc& desc) {
+    if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
     collectBuffers();
     // Held until made is gone, which takes it out of the set if it is not kept.
@@ -175,8 +185,13 @@ core::Result<void> MetalDevice::destroyTexture(TextureHandle texture) {
 }
 
 // Metal 4 has no texture layouts, so moving one is the full barrier alone.
-core::Result<void> MetalDevice::textureBarrier(CommandListHandle commandList, TextureHandle texture, TextureLayout,
-                                               TextureLayout) {
+core::Result<void> MetalDevice::textureBarrier(CommandListHandle commandList, TextureHandle texture,
+                                               TextureLayout before, TextureLayout after) {
+    // Metal 4 has no layouts, but a layout BFR doesn't have fails here as on
+    // every backend.
+    if (auto checked = checkLayouts(before, after); !checked) {
+        return checked;
+    }
     if (auto found = textureFor(texture); !found) {
         return std::unexpected(std::move(found.error()));
     }
@@ -196,6 +211,9 @@ core::Result<void> MetalDevice::copyBufferToTexture(CommandListHandle commandLis
     auto to = textureFor(texture);
     if (!to) {
         return std::unexpected(std::move(to.error()));
+    }
+    if (auto checked = checkAspects((*to)->format, regions); !checked) {
+        return checked;
     }
     // Metal 4 copies on a compute encoder. The pool drains the autoreleased
     // encoder reference.
@@ -229,6 +247,9 @@ core::Result<void> MetalDevice::copyTextureToBuffer(CommandListHandle commandLis
     auto to = bufferFor(buffer);
     if (!to) {
         return std::unexpected(std::move(to.error()));
+    }
+    if (auto checked = checkAspects((*from)->format, regions); !checked) {
+        return checked;
     }
     const AutoreleasePool pool;
     MTL4::ComputeCommandEncoder* encoder = (*list)->buffer->computeCommandEncoder();

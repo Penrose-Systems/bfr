@@ -65,8 +65,9 @@ struct Limits {
     float maxSamplerAnisotropy = 0;
     float maxSamplerLodBias = 0;
     std::uint32_t maxCustomBorderColorSamplers = 0;
-    std::uint32_t minShadingRateTile = 0;
-    std::uint32_t maxShadingRateTile = 0;
+    /// Width and height.
+    std::array<std::uint32_t, 2> minShadingRateTile{};
+    std::array<std::uint32_t, 2> maxShadingRateTile{};
     std::uint64_t minUniformBufferAlignment = 0;
     std::uint64_t minStorageBufferAlignment = 0;
     std::uint64_t minTexelBufferAlignment = 0;
@@ -196,6 +197,19 @@ struct Memory {
     bool unified = false;
 };
 
+/// The QueueLevel values a kind of queue takes; each true where the backend
+/// says so, none where it has no setting.
+struct QueueLevels {
+    bool normal = false;
+    bool low = false;
+    bool high = false;
+    bool realtime = false;
+};
+
+/// graphics, compute and copy are 0 where the backend has no count of queues;
+/// createDevice then takes any number of each. ranks is how many distinct
+/// priorities the backend gives a device's queues by their QueueDesc::rank; 0
+/// where it doesn't rank them.
 struct Queues {
     std::uint32_t graphics = 0;
     std::uint32_t compute = 0;
@@ -203,6 +217,10 @@ struct Queues {
     std::uint32_t graphicsTimestampBits = 0;
     std::uint32_t computeTimestampBits = 0;
     std::uint32_t copyTimestampBits = 0;
+    std::uint32_t ranks = 0;
+    QueueLevels graphicsLevels;
+    QueueLevels computeLevels;
+    QueueLevels copyLevels;
 };
 
 /// Everything about an adapter that stays the same while it runs.
@@ -219,7 +237,7 @@ struct Caps {
 };
 
 struct FormatCaps {
-    Format format = Format::R8Unorm;
+    Format format = Format::Undefined;
     bool sampled = false;
     bool filterLinear = false;
     bool filterMinmax = false;
@@ -257,8 +275,8 @@ struct SwapchainCaps {
 };
 
 struct SwapchainFormat {
-    Format format = Format::R8Unorm;
-    ColorSpace colorSpace = ColorSpace::Srgb;
+    Format format = Format::Undefined;
+    ColorSpace colorSpace{};
 };
 
 struct HeapBudget {

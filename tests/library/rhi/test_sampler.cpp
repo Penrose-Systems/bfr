@@ -263,7 +263,7 @@ TEST_CASE("Device samples a texture through a sampler's slot: nearest and linear
         const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
         INFO(failureOf(sent));
         REQUIRE(sent.has_value());
-        REQUIRE(device.wait(*sent).has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
 
         const auto read = device.mapBuffer(readback);
         REQUIRE(read.has_value());

@@ -3,6 +3,7 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/sampler.h"
 #include "rhi/bindless_slots.h"
+#include "rhi/enum_check.h"
 #include "rhi/sampler_border.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_pipeline.h"
@@ -135,6 +136,9 @@ core::Result<VulkanSampler> createVulkanSampler(const VolkDeviceTable& table, Vk
 // The device's sampler calls, beside the samplers they make.
 
 core::Result<SamplerHandle> VulkanDevice::createSampler(const SamplerDesc& desc) {
+    if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
     collectBuffers();
     auto slot = bindless_.takeSampler();

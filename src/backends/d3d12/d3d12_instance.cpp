@@ -14,6 +14,7 @@
 #include "d3d12/d3d12_result.h"
 #include "d3d12/d3d12_swapchain.h"
 #include "rhi/device_limits.h"
+#include "rhi/format_check.h"
 
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
@@ -127,8 +128,13 @@ core::Result<void> D3D12Instance::reportMessages(D3D12Adapter& native) {
         return core::failure(core::ErrorCode::RhiValidationUnavailable,
                              D3D12Failure{.call = call, .result = result}.message());
     };
+    // Without ID3D12InfoQueue1 the debug layer still runs, and its messages
+    // go to the debugger, as D3D12 sends them.
     if (const HRESULT result = native.device.As(&native.messages); FAILED(result)) {
-        return unavailable("ID3D12Device::QueryInterface(ID3D12InfoQueue1)", result);
+        BFR_LOG_WARN(
+            logger_, "{}; validation messages go to the debugger",
+            D3D12Failure{.call = "ID3D12Device::QueryInterface(ID3D12InfoQueue1)", .result = result}.message());
+        return {};
     }
     // The messages go to the logger and not to the debugger as well.
     native.messages->SetMuteDebugOutput(TRUE);
@@ -189,7 +195,8 @@ core::Result<void> D3D12Instance::listAdapter(IDXGIAdapter1* found, std::vector<
             return reported;
         }
     }
-    adapters_.push_back({.name = name, .type = typeOf(desc), .caps = readCaps(desc, native.device.Get())});
+    adapters_.push_back(
+        {.name = name, .type = typeOf(desc, native.device.Get()), .caps = readCaps(desc, native.device.Get())});
     native_.push_back(std::move(native));
     return {};
 }
@@ -235,6 +242,13 @@ core::Result<std::unique_ptr<Device>> D3D12Instance::createDevice(std::size_t ad
     if (auto checked = checkLimits(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    // Only direct queues present (Godot's rendering_device_driver_d3d12.cpp, command_queue_family_get).
+    if (auto checked = checkPresentQueue(presentTo, desc.graphics.size()); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkUnranked(desc, "D3D12"); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Every device presents to a Win32 window or to none, so a window only has
     // to be one of those.
     if (!std::holds_alternative<std::monostate>(presentTo)) {
@@ -244,14 +258,16 @@ core::Result<std::unique_ptr<Device>> D3D12Instance::createDevice(std::size_t ad
     }
     const D3D12Adapter& native = native_[adapter];
     const Caps& caps = adapters_[adapter].caps;
-    if (auto checked = checkBindlessLimits(desc, caps.bindless); !checked) {
-        return std::unexpected(std::move(checked.error()));
-    }
-    return D3D12Device::create(*this, native.device, native.adapter, caps.memory.heaps.size(), desc);
+    // The resource tables share one heap, which is each table's most.
+    return D3D12Device::create(*this, native.device, native.adapter, caps.memory.heaps.size(),
+                               caps.bindless.maxPerStage, desc);
 }
 
 core::Result<FormatCaps> D3D12Instance::formatCaps(std::size_t adapter, Format format) const {
     if (auto checked = checkAdapter(adapter); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkFormat(format); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     return formatCapsFor(native_[adapter].device.Get(), format);
@@ -265,7 +281,7 @@ core::Result<SwapchainCaps> D3D12Instance::swapchainCaps(std::size_t adapter,
     if (auto checked = checkWindow(window); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    return surfaceCapsFor(tearing_);
+    return surfaceCapsFor(tearing_, window);
 }
 
 core::Result<std::vector<SwapchainFormat>> D3D12Instance::swapchainFormats(
@@ -276,8 +292,7 @@ core::Result<std::vector<SwapchainFormat>> D3D12Instance::swapchainFormats(
     if (auto checked = checkWindow(window); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    const auto formats = d3d12::swapchainFormats();
-    return std::vector<SwapchainFormat>(formats.begin(), formats.end());
+    return d3d12::swapchainFormats(native_[adapter].device.Get());
 }
 
 } // namespace bfr::rhi::d3d12

@@ -14,6 +14,7 @@
 #include "metal/metal_swapchain.h"
 #include "metal/metal_util.h"
 #include "rhi/device_limits.h"
+#include "rhi/format_check.h"
 
 #include <Foundation/NSArray.hpp>
 #include <Foundation/NSTypes.hpp>
@@ -104,14 +105,21 @@ core::Result<std::unique_ptr<Device>> MetalInstance::createDevice(std::size_t ad
     if (auto checked = checkLimits(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    // Any queue's command buffer can present a drawable.
+    if (auto checked = checkPresentQueue(presentTo, queueCount(desc)); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkUnranked(desc, "Metal"); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkNormalLevels(desc, "Metal has no queue levels"); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Every device presents to a CAMetalLayer, so a window only has to be one.
     if (!std::holds_alternative<std::monostate>(presentTo)) {
         if (auto checked = checkWindow(presentTo); !checked) {
             return std::unexpected(std::move(checked.error()));
         }
-    }
-    if (auto checked = checkBindlessLimits(desc, adapters_[adapter].caps.bindless); !checked) {
-        return std::unexpected(std::move(checked.error()));
     }
     return MetalDevice::create(*this, devices_[adapter], desc);
 }
@@ -120,8 +128,10 @@ core::Result<FormatCaps> MetalInstance::formatCaps(std::size_t adapter, Format f
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Metal has no call for what a format does, so every field is false.
-    return FormatCaps{.format = format};
+    if (auto checked = checkFormat(format); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    return formatCapsFor(devices_[adapter].get(), format);
 }
 
 core::Result<SwapchainCaps> MetalInstance::swapchainCaps(std::size_t adapter,

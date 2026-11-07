@@ -106,26 +106,22 @@ struct D3D12CommandList {
     ID3D12GraphicsCommandList7* list = nullptr;
     CommandPoolHandle pool;
     std::uint32_t slot = 0;
-    RecordState state;
     std::optional<SwapchainHandle> presenting;
     StoreOp presentStoreOp = StoreOp::Store;
-    std::array<ID3D12Resource*, kMaxColorTargets + 1> discards{};
+    std::array<D3D12Target, kMaxColorTargets + 1> discards{};
     std::uint32_t discardCount = 0;
     std::uint32_t rendered = core::SlotChains::kEnd;
-    // The serial of the submit this list is gathered into, so a list named
-    // twice in one submit is caught in a single pass.
-    std::uint64_t queued = 0;
 };
 
 class D3D12Device final : public Device {
 public:
     /// A device on device, which rhi listed from adapter, with heapCount memory
-    /// heaps, a graphics queue and the queues asked for. Fails with
-    /// RhiDeviceFailed when D3D12 gives no queue, fence, root signature or
-    /// descriptor heap.
+    /// heaps, a shader-visible heap of viewHeapSize descriptors at most, and
+    /// the queues desc asks for. Fails with RhiDeviceFailed when D3D12 gives
+    /// no queue, fence, root signature or descriptor heap.
     [[nodiscard]] static core::Result<std::unique_ptr<D3D12Device>> create(
         D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device, Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter,
-        std::size_t heapCount, const DeviceDesc& desc);
+        std::size_t heapCount, std::uint32_t viewHeapSize, const DeviceDesc& desc);
 
     /// For create, with the number of queues create opens.
     D3D12Device(D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device,
@@ -141,8 +137,8 @@ public:
     [[nodiscard]] core::Result<SwapchainImages> resizeSwapchain(SwapchainHandle swapchain, std::uint32_t width,
                                                                 std::uint32_t height) override;
     [[nodiscard]] core::Result<void> destroySwapchain(SwapchainHandle swapchain) override;
-    [[nodiscard]] core::Result<void> acquire(SwapchainHandle swapchain) override;
-    [[nodiscard]] core::Result<void> present(SwapchainHandle swapchain) override;
+    [[nodiscard]] core::Result<SwapchainStatus> acquire(SwapchainHandle swapchain, std::uint64_t timeoutNs) override;
+    [[nodiscard]] core::Result<SwapchainStatus> present(SwapchainHandle swapchain) override;
     [[nodiscard]] core::Result<CommandPoolHandle> createCommandPool(const CommandPoolDesc& desc) override;
     [[nodiscard]] core::Result<void> resetCommandPool(CommandPoolHandle commandPool) override;
     [[nodiscard]] core::Result<void> destroyCommandPool(CommandPoolHandle commandPool) override;
@@ -152,6 +148,10 @@ public:
     [[nodiscard]] core::Result<void> endRendering(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<void> setViewport(CommandListHandle commandList, const Viewport& viewport) override;
     [[nodiscard]] core::Result<void> setScissor(CommandListHandle commandList, const Rect& scissor) override;
+    [[nodiscard]] core::Result<void> setBlendConstants(CommandListHandle commandList,
+                                                       const std::array<float, 4>& color) override;
+    [[nodiscard]] core::Result<void> setStencilReference(CommandListHandle commandList,
+                                                         std::uint32_t reference) override;
     [[nodiscard]] core::Result<void> bindPipeline(CommandListHandle commandList, PipelineHandle pipeline) override;
     [[nodiscard]] core::Result<void> pushConstants(CommandListHandle commandList,
                                                    std::span<const std::byte> data) override;
@@ -179,7 +179,7 @@ public:
     [[nodiscard]] core::Result<void> copyTexture(CommandListHandle commandList, TextureHandle src, TextureHandle dst,
                                                  std::span<const TextureCopy> regions) override;
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
-    [[nodiscard]] core::Result<void> wait(Token token) override;
+    [[nodiscard]] core::Result<void> wait(Token token, std::uint64_t timeoutNs) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
@@ -199,7 +199,7 @@ public:
 
 private:
     [[nodiscard]] core::Result<void> open(const DeviceDesc& desc);
-    [[nodiscard]] core::Result<void> waitFor(D3D12Queue& queue, std::uint64_t value);
+    [[nodiscard]] core::Result<void> waitFor(D3D12Queue& queue, std::uint64_t value, std::uint64_t timeoutNs);
     [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
     [[nodiscard]] core::Result<void> checkToken(Token token) const;
     // Releases the retired pools the GPU is done with and frees their slots.
@@ -248,9 +248,6 @@ private:
     // Live pools and destroyed ones not yet collected, held to
     // desc_.maxCommandPools so every queue's retired array has room.
     std::atomic<std::uint32_t> poolsHeld_{0};
-    // Counts submits on every queue, so each has a serial of its own, even one
-    // that fails, which the token value a queue hands out does not give.
-    std::atomic<std::uint64_t> submitSerial_{0};
 
     core::Submissions submissions_;
     Microsoft::WRL::ComPtr<D3D12MA::Allocator> allocator_;

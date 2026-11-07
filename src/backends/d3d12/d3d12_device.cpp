@@ -10,12 +10,17 @@
 #include "bfr/rhi/texture.h"
 #include "core/fixed_vector.h"
 #include "core/slot_chains.h"
+#include "d3d12/d3d12_caps.h"
 #include "d3d12/d3d12_instance.h"
 #include "d3d12/d3d12_pipeline.h"
 #include "d3d12/d3d12_result.h"
 #include "d3d12/d3d12_swapchain.h"
+#include "rhi/clear_color.h"
 #include "rhi/command_check.h"
+#include "rhi/device_limits.h"
+#include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
+#include "rhi/timeout.h"
 
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -25,10 +30,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <format>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -42,6 +49,9 @@ namespace bfr::rhi::d3d12 {
 namespace {
 
 using Microsoft::WRL::ComPtr;
+
+// waitIdle waits with no limit, as vkDeviceWaitIdle does.
+constexpr std::uint64_t kNoTimeLimit = std::numeric_limits<std::uint64_t>::max();
 
 core::Result<void> deviceFailed(const char* call, HRESULT result) {
     return failure(core::ErrorCode::RhiDeviceFailed, {.call = call, .result = result});
@@ -60,11 +70,26 @@ D3D12_RESOURCE_BARRIER transition(ID3D12Resource* image, D3D12_RESOURCE_STATES b
     return barrier;
 }
 
+// D3D12's priority for level; nothing for one it has none for.
+std::optional<INT> d3d12Priority(QueueLevel level) {
+    switch (level) {
+        case QueueLevel::Normal:
+            return D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+        case QueueLevel::High:
+            return D3D12_COMMAND_QUEUE_PRIORITY_HIGH;
+        case QueueLevel::Realtime:
+            return D3D12_COMMAND_QUEUE_PRIORITY_GLOBAL_REALTIME;
+        case QueueLevel::Low:
+            return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rhi, ComPtr<ID3D12Device> device,
                                                                ComPtr<IDXGIAdapter3> adapter, std::size_t heapCount,
-                                                               const DeviceDesc& desc) {
+                                                               std::uint32_t viewHeapSize, const DeviceDesc& desc) {
     auto made = std::make_unique<D3D12Device>(rhi, std::move(device), std::move(adapter), heapCount, desc);
     // A runtime without it answers E_NOINTERFACE and leaves device11_ null.
     static_cast<void>(made->device_.As(&made->device11_));
@@ -76,7 +101,7 @@ core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rh
         return std::unexpected(std::move(allocator.error()));
     }
     made->allocator_ = std::move(*allocator);
-    auto layout = createD3D12BindlessLayout(*made->device_.Get(), desc);
+    auto layout = createD3D12BindlessLayout(*made->device_.Get(), desc, viewHeapSize);
     if (!layout) {
         return std::unexpected(std::move(layout.error()));
     }
@@ -90,7 +115,7 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       device_(std::move(device)),
       adapter_(std::move(adapter)),
       heapCount_(heapCount),
-      desc_(desc),
+      desc_(heldPart(desc)),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
       commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
       commandLists_("command lists", desc.maxCommandLists, desc.maxCommandLists, rhi.logger()),
@@ -98,7 +123,7 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       lists_(desc.maxCommandLists),
       renderSlots_(desc.maxCommandLists),
       renders_(desc.maxCommandLists),
-      submissions_(1 + desc.compute + desc.copy),
+      submissions_(queueCount(desc)),
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
       samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
@@ -106,7 +131,13 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
 core::Result<void> D3D12Device::open(const DeviceDesc& desc) {
-    const auto open = [this, &desc](QueueType type, D3D12_COMMAND_LIST_TYPE listType) -> core::Result<void> {
+    const auto open = [this, &desc](QueueType type, D3D12_COMMAND_LIST_TYPE listType,
+                                    const QueueDesc& wanted) -> core::Result<void> {
+        const auto priority = d3d12Priority(wanted.level);
+        if (!priority) {
+            return core::failure(core::ErrorCode::RhiUnsupported, "D3D12 has no queue level {}",
+                                 std::to_underlying(wanted.level));
+        }
         auto queue = std::make_unique<D3D12Queue>();
         queue->type = type;
         queue->listType = listType;
@@ -116,7 +147,7 @@ core::Result<void> D3D12Device::open(const DeviceDesc& desc) {
         queue->chains = core::FixedVector<D3D12Swapchain*>{desc.maxSwapchains};
         queue->retired = core::FixedVector<D3D12RetiredPool>{desc.maxCommandPools};
         const D3D12_COMMAND_QUEUE_DESC queueDesc{.Type = listType,
-                                                 .Priority = 0,
+                                                 .Priority = *priority,
                                                  .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE,
                                                  .NodeMask = 0};
         if (const HRESULT result = device_->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&queue->queue));
@@ -134,16 +165,18 @@ core::Result<void> D3D12Device::open(const DeviceDesc& desc) {
         queues_.push_back(std::move(queue));
         return {};
     };
-    if (auto opened = open(QueueType::Graphics, D3D12_COMMAND_LIST_TYPE_DIRECT); !opened) {
-        return opened;
-    }
-    for (std::uint32_t index = 0; index < desc.compute; ++index) {
-        if (auto opened = open(QueueType::Compute, D3D12_COMMAND_LIST_TYPE_COMPUTE); !opened) {
+    for (const QueueDesc& queue : desc.graphics) {
+        if (auto opened = open(QueueType::Graphics, D3D12_COMMAND_LIST_TYPE_DIRECT, queue); !opened) {
             return opened;
         }
     }
-    for (std::uint32_t index = 0; index < desc.copy; ++index) {
-        if (auto opened = open(QueueType::Copy, D3D12_COMMAND_LIST_TYPE_COPY); !opened) {
+    for (const QueueDesc& queue : desc.compute) {
+        if (auto opened = open(QueueType::Compute, D3D12_COMMAND_LIST_TYPE_COMPUTE, queue); !opened) {
+            return opened;
+        }
+    }
+    for (const QueueDesc& queue : desc.copy) {
+        if (auto opened = open(QueueType::Copy, D3D12_COMMAND_LIST_TYPE_COPY, queue); !opened) {
             return opened;
         }
     }
@@ -197,16 +230,31 @@ D3D12Device::~D3D12Device() {
     }
 }
 
-core::Result<void> D3D12Device::waitFor(D3D12Queue& queue, std::uint64_t value) {
+core::Result<void> D3D12Device::waitFor(D3D12Queue& queue, std::uint64_t value, std::uint64_t timeoutNs) {
     if (queue.fence->GetCompletedValue() >= value) {
         return {};
     }
     const std::scoped_lock lock{queue.waitLock};
-    if (const HRESULT result = queue.fence->SetEventOnCompletion(value, queue.event); FAILED(result)) {
-        return deviceFailed("ID3D12Fence::SetEventOnCompletion", result);
-    }
-    if (WaitForSingleObject(queue.event, INFINITE) != WAIT_OBJECT_0) {
-        return core::failure(core::ErrorCode::RhiDeviceFailed, "waiting for the GPU failed");
+    const auto start = std::chrono::steady_clock::now();
+    // An earlier wait that ran out of time leaves its fence value set on the
+    // event, which may wake this one early, so each wake asks the fence again.
+    while (queue.fence->GetCompletedValue() < value) {
+        const auto elapsed = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+        if (elapsed >= timeoutNs) {
+            return core::failure(core::ErrorCode::RhiTimeout, "the GPU had not passed the token in time");
+        }
+        if (const HRESULT result = queue.fence->SetEventOnCompletion(value, queue.event); FAILED(result)) {
+            return deviceFailed("ID3D12Fence::SetEventOnCompletion", result);
+        }
+        // WaitForSingleObject's longest count is INFINITE - 1 milliseconds;
+        // INFINITE itself waits with no limit.
+        const std::uint64_t remainingMs = millisecondsRoundedUp(timeoutNs - elapsed);
+        const DWORD waitMs = remainingMs >= INFINITE ? INFINITE : static_cast<DWORD>(remainingMs);
+        if (const DWORD waited = WaitForSingleObject(queue.event, waitMs);
+            waited != WAIT_OBJECT_0 && waited != WAIT_TIMEOUT) {
+            return core::failure(core::ErrorCode::RhiDeviceFailed, "waiting for the GPU failed");
+        }
     }
     return {};
 }
@@ -222,12 +270,6 @@ core::Result<void> D3D12Device::checkQueue(std::uint32_t queue) const {
 core::Result<void> D3D12Device::checkToken(Token token) const {
     if (auto checked = checkQueue(token.queue); !checked) {
         return checked;
-    }
-    const std::uint64_t submitted = queues_[token.queue]->submitted.load(std::memory_order_acquire);
-    if (token.value > submitted) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "no submit has returned token {} on queue {}; the last is {}", token.value, token.queue,
-                             submitted);
     }
     return {};
 }
@@ -258,7 +300,7 @@ void D3D12Device::releaseSlots(std::uint32_t first) {
 
 core::Result<void> D3D12Device::waitIdle() {
     for (const auto& queue : queues_) {
-        if (auto waited = waitFor(*queue, queue->submitted.load(std::memory_order_acquire)); !waited) {
+        if (auto waited = waitFor(*queue, queue->submitted.load(std::memory_order_acquire), kNoTimeLimit); !waited) {
             return waited;
         }
     }
@@ -298,11 +340,23 @@ core::Result<D3D12CommandList*> D3D12Device::commandListFor(CommandListHandle co
 
 core::Result<SwapchainHandle> D3D12Device::createSwapchain(const core::window::NativeWindow& window,
                                                            const SwapchainDesc& desc) {
+    if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     if (auto checked = checkWindow(window); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkQueue(desc.queue); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    // Only direct queues present (Godot's rendering_device_driver_d3d12.cpp, command_queue_family_get).
+    if (queues_[desc.queue]->listType != D3D12_COMMAND_LIST_TYPE_DIRECT) {
+        return core::failure(core::ErrorCode::RhiPresentUnsupported,
+                             "queue {} is not a graphics queue, and only those present on D3D12", desc.queue);
+    }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, ComPtr<IDXGIFactory2>{instance_->factory()},
-                                                          queues_[0]->queue, window, desc, instance_->logger());
+                                                          queues_[desc.queue]->queue, window, desc,
+                                                          instance_->logger());
     if (swapchain.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached, "a device holds at most {} swapchains",
                              desc_.maxSwapchains);
@@ -342,7 +396,8 @@ core::Result<void> D3D12Device::destroySwapchain(SwapchainHandle swapchain) {
     return core::failure(core::ErrorCode::RhiInvalidHandle, "the swapchain handle is stale");
 }
 
-core::Result<void> D3D12Device::acquire(SwapchainHandle swapchain) {
+// GetCurrentBackBufferIndex doesn't wait, so there is no time to limit.
+core::Result<SwapchainStatus> D3D12Device::acquire(SwapchainHandle swapchain, std::uint64_t /*timeoutNs*/) {
     auto found = swapchainFor(swapchain);
     if (!found) {
         return std::unexpected(std::move(found.error()));
@@ -350,12 +405,22 @@ core::Result<void> D3D12Device::acquire(SwapchainHandle swapchain) {
     return (*found)->acquire();
 }
 
-core::Result<void> D3D12Device::present(SwapchainHandle swapchain) {
+core::Result<SwapchainStatus> D3D12Device::present(SwapchainHandle swapchain) {
     auto found = swapchainFor(swapchain);
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    const std::scoped_lock lock{queues_[0]->lock};
+    // Present runs on the swapchain's queue, which may be submitted to from
+    // another thread at once. Rendering submitted to another queue is waited
+    // for there first, as D3D12 orders only one queue's work.
+    D3D12Queue& queue = *queues_[(*found)->queue()];
+    const std::scoped_lock lock{queue.lock};
+    if (const Token rendered = (*found)->rendered(); (*found)->submitted() && rendered.queue != (*found)->queue()) {
+        if (const HRESULT result = queue.queue->Wait(queues_[rendered.queue]->fence.Get(), rendered.value);
+            FAILED(result)) {
+            return std::unexpected(deviceFailed("ID3D12CommandQueue::Wait", result).error());
+        }
+    }
     return (*found)->present();
 }
 
@@ -533,7 +598,6 @@ core::Result<CommandListHandle> D3D12Device::beginCommands(CommandPoolHandle com
     const CommandListHandle commandList = commandLists_.emplace(D3D12CommandList{.list = made.list.Get(),
                                                                                  .pool = commandPool,
                                                                                  .slot = slot,
-                                                                                 .state = {},
                                                                                  .presenting = {},
                                                                                  .presentStoreOp = StoreOp::Store,
                                                                                  .discards = {},
@@ -556,9 +620,6 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if ((*list)->state.rendering) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is already open");
-    }
     if (auto checked = checkRenderingDesc(!swapchain.isNull(), desc); !checked) {
         return checked;
     }
@@ -570,14 +631,21 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
     // Every handle is looked up before anything is recorded, so a bad one
     // leaves the list as it was.
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMaxColorTargets> colors{};
-    std::array<ID3D12Resource*, kMaxColorTargets + 1> discards{};
+    std::array<std::array<FLOAT, std::tuple_size_v<ClearValues>>, kMaxColorTargets> clears{};
+    std::array<D3D12Target, kMaxColorTargets + 1> discards{};
     std::uint32_t discardCount = 0;
+    // The attachments whose contents are not loaded, discarded as rendering
+    // begins, as the store's are as it ends.
+    std::array<D3D12Target, kMaxColorTargets + 1> unloaded{};
+    std::uint32_t unloadedCount = 0;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     D3D12Swapchain* chain = nullptr;
     for (std::uint32_t i = 0; i < desc.colorAttachmentCount; ++i) {
         const ColorAttachment& attachment = desc.colorAttachments.at(i);
-        ID3D12Resource* resource = nullptr;
+        D3D12Target target;
+        // A swapchain's image is never a signed integer format.
+        Format format = Format::Undefined;
         if (i == 0 && !swapchain.isNull()) {
             auto found = swapchainFor(swapchain);
             if (!found) {
@@ -588,12 +656,12 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
                 return core::failure(core::ErrorCode::RhiInvalidCall,
                                      "the acquired image was already submitted; present it first");
             }
-            resource = chain->image();
-            if (resource == nullptr) {
+            target.resource = chain->image();
+            if (target.resource == nullptr) {
                 return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
             }
             colors.at(i) = chain->view();
-            const D3D12_RESOURCE_DESC image = resource->GetDesc();
+            const D3D12_RESOURCE_DESC image = target.resource->GetDesc();
             width = static_cast<std::uint32_t>(image.Width);
             height = image.Height;
         }
@@ -602,13 +670,28 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
             if (!texture) {
                 return std::unexpected(std::move(texture.error()));
             }
-            resource = (*texture)->resource.Get();
+            target = targetOf(**texture);
             colors.at(i) = (*texture)->target;
             width = (*texture)->desc.width;
             height = (*texture)->desc.height;
+            format = (*texture)->desc.format;
+        }
+        // D3D12 clears with floats, which hold every value clearColor does
+        // but not every integer.
+        const ClearValues values = clearValues(attachment, format);
+        for (std::size_t c = 0; c < values.size(); ++c) {
+            clears.at(i).at(c) = static_cast<FLOAT>(values.at(c));
+            if (attachment.clearInteger && static_cast<double>(clears.at(i).at(c)) != values.at(c)) {
+                return core::failure(core::ErrorCode::RhiInvalidCall,
+                                     "color attachment {} clears to {}, which D3D12's float clear does not hold", i,
+                                     values.at(c));
+            }
+        }
+        if (attachment.loadOp == LoadOp::DontCare) {
+            unloaded.at(unloadedCount++) = target;
         }
         if (attachment.storeOp == StoreOp::DontCare) {
-            discards.at(discardCount++) = resource;
+            discards.at(discardCount++) = target;
         }
     }
     const D3D12Texture* depth = nullptr;
@@ -620,8 +703,11 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
         depth = *texture;
         width = depth->desc.width;
         height = depth->desc.height;
+        if (desc.depthStencil.loadOp == LoadOp::DontCare) {
+            unloaded.at(unloadedCount++) = targetOf(*depth);
+        }
         if (desc.depthStencil.storeOp == StoreOp::DontCare) {
-            discards.at(discardCount++) = depth->resource.Get();
+            discards.at(discardCount++) = targetOf(*depth);
         }
     }
     if (chain != nullptr) {
@@ -647,11 +733,14 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
                                                            D3D12_RESOURCE_STATE_RENDER_TARGET);
         recording->ResourceBarrier(1, &toRender);
     }
+    for (std::uint32_t i = 0; i < unloadedCount; ++i) {
+        discardTarget(recording, unloaded.at(i));
+    }
     recording->OMSetRenderTargets(desc.colorAttachmentCount, colors.data(), FALSE,
                                   depth != nullptr ? &depth->target : nullptr);
     for (std::uint32_t i = 0; i < desc.colorAttachmentCount; ++i) {
         if (desc.colorAttachments.at(i).loadOp == LoadOp::Clear) {
-            recording->ClearRenderTargetView(colors.at(i), desc.colorAttachments.at(i).clearColor.data(), 0, nullptr);
+            recording->ClearRenderTargetView(colors.at(i), clears.at(i).data(), 0, nullptr);
         }
     }
     if (depth != nullptr && desc.depthStencil.loadOp == LoadOp::Clear) {
@@ -663,7 +752,6 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
         recording->ClearDepthStencilView(depth->target, flags, desc.depthStencil.clearDepth,
                                          static_cast<UINT8>(desc.depthStencil.clearStencil), 0, nullptr);
     }
-    (*list)->state.rendering = true;
     (*list)->presenting = chain != nullptr ? std::optional{swapchain} : std::nullopt;
     (*list)->presentStoreOp = chain != nullptr ? desc.colorAttachments.at(0).storeOp : StoreOp::Store;
     (*list)->discards = discards;
@@ -686,14 +774,11 @@ core::Result<void> D3D12Device::endRendering(CommandListHandle commandList) {
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (auto checked = checkRendering((*list)->state); !checked) {
-        return checked;
-    }
     ID3D12GraphicsCommandList7* recording = (*list)->list;
     // What the caller does not keep is discarded, the swapchain's image among
     // it before it moves to present.
     for (std::uint32_t i = 0; i < (*list)->discardCount; ++i) {
-        recording->DiscardResource((*list)->discards.at(i), nullptr);
+        discardTarget(recording, (*list)->discards.at(i));
     }
     if (const std::optional<SwapchainHandle> open = (*list)->presenting; open.has_value()) {
         auto chain = swapchainFor(*open);
@@ -704,7 +789,6 @@ core::Result<void> D3D12Device::endRendering(CommandListHandle commandList) {
                                                             D3D12_RESOURCE_STATE_PRESENT);
         recording->ResourceBarrier(1, &toPresent);
     }
-    (*list)->state.rendering = false;
     (*list)->presenting.reset();
     (*list)->discardCount = 0;
     return {};
@@ -803,6 +887,9 @@ core::Result<void> D3D12Device::barrier(CommandListHandle commandList) {
 
 core::Result<void> D3D12Device::textureBarrier(CommandListHandle commandList, TextureHandle texture,
                                                TextureLayout before, TextureLayout after) {
+    if (auto checked = checkLayouts(before, after); !checked) {
+        return checked;
+    }
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
@@ -858,20 +945,10 @@ core::Result<Token> D3D12Device::submit(const SubmitDesc& desc) {
     const std::scoped_lock lock{queue.lock};
     queue.lists.clear();
     queue.chains.clear();
-    // Each submit has a serial of its own, so a list named twice is caught
-    // in this one pass, without searching what was gathered so far.
-    const std::uint64_t serial = submitSerial_.fetch_add(1, std::memory_order_relaxed) + 1;
     for (const CommandListHandle commandList : desc.commandLists) {
         auto list = commandListFor(commandList);
         if (!list) {
             return std::unexpected(std::move(list.error()));
-        }
-        if ((*list)->queued == serial) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "the list is named twice in the submit");
-        }
-        (*list)->queued = serial;
-        if ((*list)->state.rendering) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "rendering is still open; end it first");
         }
         if (const D3D12CommandPool* pool = commandPools_.find((*list)->pool);
             pool != nullptr && pool->queue != desc.queue) {
@@ -947,18 +1024,18 @@ core::Result<Token> D3D12Device::submit(const SubmitDesc& desc) {
     queue.submitted.store(value, std::memory_order_release);
     finish(true);
     for (D3D12Swapchain* chain : queue.chains) {
-        chain->setSubmitted();
+        chain->setSubmitted({.queue = desc.queue, .value = value});
     }
     collectPools(queue);
     return Token{.queue = desc.queue, .value = value};
 }
 
-core::Result<void> D3D12Device::wait(Token token) {
+core::Result<void> D3D12Device::wait(Token token, std::uint64_t timeoutNs) {
     if (auto checked = checkToken(token); !checked) {
         return checked;
     }
     D3D12Queue& queue = *queues_[token.queue];
-    if (auto waited = waitFor(queue, token.value); !waited) {
+    if (auto waited = waitFor(queue, token.value, timeoutNs); !waited) {
         return waited;
     }
     if (queue.retiredCount.load(std::memory_order_acquire) != 0) {

@@ -17,10 +17,13 @@
 #include <catch2/generators/catch_generators_range.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -40,8 +43,13 @@ inline constexpr std::uint32_t kTestPools = 16;
 inline constexpr std::uint32_t kTestSwapchains = 4;
 inline constexpr std::uint32_t kTestTableSlots = 256;
 inline constexpr std::uint32_t kTestSamplers = 16;
-inline constexpr DeviceDesc kTestDevice{.compute = 0,
-                                        .copy = 0,
+// Queues at rank 0 and level normal, as many as a test opens.
+inline constexpr std::array<QueueDesc, 4> kTestQueues{};
+// The longest wait there is, so a slow GPU never fails a test.
+inline constexpr std::uint64_t kTestWait = std::numeric_limits<std::uint64_t>::max();
+inline constexpr DeviceDesc kTestDevice{.graphics = std::span{kTestQueues}.first(1),
+                                        .compute = {},
+                                        .copy = {},
                                         .maxCommandLists = kTestLists,
                                         .maxCommandPools = kTestPools,
                                         .maxSwapchains = kTestSwapchains,
@@ -138,13 +146,19 @@ inline std::size_t headlessAdapter(const Instance& rhi) {
     return 0;
 }
 
-/// What a test swapchain on a headless window of rhi asks for: the defaults,
-/// with the fewest images the surface reports it takes, as a caller must set.
+/// What a test swapchain asks for, but its image count: a format and color
+/// space every headless surface the tests run on takes.
+inline constexpr SwapchainDesc kTestSwapchain{.format = Format::Bgra8Unorm, .colorSpace = ColorSpace::Srgb};
+
+/// kTestSwapchain on a headless window of rhi, with the fewest images the
+/// surface reports it takes, as a caller must set.
 inline SwapchainDesc swapchainDesc(const Instance& rhi) {
     const auto caps = rhi.swapchainCaps(headlessAdapter(rhi), core::window::Headless{});
     INFO(failureOf(caps));
     REQUIRE(caps.has_value());
-    return {.imageCount = caps->minImageCount};
+    SwapchainDesc desc = kTestSwapchain;
+    desc.imageCount = caps->minImageCount;
+    return desc;
 }
 
 /// A device on the first adapter that presents to window. An adapter may not

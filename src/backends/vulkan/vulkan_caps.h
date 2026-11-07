@@ -16,39 +16,37 @@ namespace bfr::rhi::vulkan {
 
 // Each query below goes through vk, the table of the instance adapter belongs to.
 
-/// A portability driver, such as MoltenVK, lists it, and a device on that
-/// adapter must then enable it. It is provisional, so vulkan_core.h lacks its name.
-inline constexpr const char* kPortabilitySubset = "VK_KHR_portability_subset";
-
-/// The optional sampler features a device turns on, each when its adapter's
-/// caps report it.
-struct SamplerFeatures {
-    bool anisotropy = false;
-    bool minmax = false;
-    bool mirrorClampToEdge = false;
-    /// VK_EXT_custom_border_color, with colours given without a format.
-    bool customBorderColor = false;
-};
-
-/// The features a device turns on in its create info's chain: the floor's,
-/// which every listed adapter has, and the 1.2 and extension features of
-/// sampler. vulkan12.pNext points at vulkan13, so a create info chains
-/// vulkan12; the custom border colour features follow when sampler has them.
-class DeviceFeatures {
-public:
-    explicit DeviceFeatures(const SamplerFeatures& sampler);
+/// The features a device turns on, as adapter reports them: every one in the
+/// core structs, and every one of each extension below that it lists, which
+/// the device then enables. The caps read the same structs, so they say what
+/// the device has. core heads the chain a create info's pNext takes; the chain
+/// points into itself, so it stays where it is made.
+struct DeviceFeatures {
+    DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter,
+                   std::span<const VkExtensionProperties> extensions);
     ~DeviceFeatures() = default;
     DeviceFeatures(const DeviceFeatures&) = delete;
     DeviceFeatures& operator=(const DeviceFeatures&) = delete;
     DeviceFeatures(DeviceFeatures&&) = delete;
     DeviceFeatures& operator=(DeviceFeatures&&) = delete;
 
-    [[nodiscard]] const VkPhysicalDeviceVulkan12Features& head() const { return vulkan12_; }
-
-private:
-    VkPhysicalDeviceVulkan12Features vulkan12_{};
-    VkPhysicalDeviceVulkan13Features vulkan13_{};
-    VkPhysicalDeviceCustomBorderColorFeaturesEXT customBorderColor_{};
+    VkPhysicalDeviceFeatures2 core{};
+    VkPhysicalDeviceVulkan11Features vulkan11{};
+    VkPhysicalDeviceVulkan12Features vulkan12{};
+    VkPhysicalDeviceVulkan13Features vulkan13{};
+    VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFloat{};
+    VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT imageAtomicInt64{};
+    VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR barycentric{};
+    VkPhysicalDeviceCustomBorderColorFeaturesEXT customBorderColor{};
+    /// A portability driver, such as MoltenVK, lists the extension, and a
+    /// device on that adapter must enable it.
+    VkPhysicalDevicePortabilitySubsetFeaturesKHR portability{};
+    /// Queue levels: the extension lets a device's queues take one.
+    VkPhysicalDeviceGlobalPriorityQueryFeaturesKHR globalPriority{};
+    /// A device with no queues needs its maintenance9.
+    VkPhysicalDeviceMaintenance9FeaturesKHR maintenance9{};
+    /// The extensions whose structs are chained, which the device enables.
+    std::vector<const char*> enabledExtensions;
 };
 
 /// The floor's features adapter lacks, by their Vulkan names.
@@ -84,6 +82,8 @@ private:
 /// The heaps' budget and usage, which needs VK_EXT_memory_budget on adapter.
 [[nodiscard]] MemoryBudget readBudget(const InstanceTable& vk, VkPhysicalDevice adapter);
 
+/// format's Vulkan format, VK_FORMAT_UNDEFINED for Undefined; format is
+/// Undefined or one of kFormats.
 [[nodiscard]] VkFormat vulkanFormat(Format format);
 
 /// The Vulkan color space that is colorSpace.

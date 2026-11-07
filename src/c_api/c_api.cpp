@@ -59,23 +59,37 @@ using bfr::core::window::NativeWindow;
 static_assert(static_cast<int>(Severity::Trace) == BFR_MESSAGE_SEVERITY_TRACE);
 static_assert(static_cast<int>(Severity::Error) == BFR_MESSAGE_SEVERITY_ERROR);
 
-// The least severity a desc asks for: 0 means warning. Nullopt for a value
-// that is not a severity.
+// The least severity a desc asks for. Nullopt for a value that is not a
+// severity.
 std::optional<Severity> severityFrom(bfr_message_severity severity) {
-    if (severity == 0) {
-        return Severity::Warning;
-    }
     if (severity < BFR_MESSAGE_SEVERITY_TRACE || severity > BFR_MESSAGE_SEVERITY_ERROR) {
         return std::nullopt;
     }
     return static_cast<Severity>(severity);
 }
 
-// The swapchain desc asks for, each 0 as its documented default. Nothing when a value is one BFR
-// doesn't have; error says which.
+// value as a Format, Undefined included; nothing when it is not one BFR has.
+std::optional<bfr::rhi::Format> formatIn(bfr_format value, const char* what, bfr::core::Message& error) {
+    using namespace bfr::rhi;
+    const auto number = static_cast<std::int64_t>(value);
+    if (number == static_cast<std::int64_t>(Format::Undefined)) {
+        return Format::Undefined;
+    }
+    const auto* found = std::ranges::find_if(kFormats, [number](Format known) {
+        return static_cast<std::int64_t>(known) == number;
+    });
+    if (found == kFormats.end()) {
+        error.format("{} {} is not one BFR has", what, number);
+        return std::nullopt;
+    }
+    return *found;
+}
+
+// The swapchain desc asks for. Nothing when a value is one BFR doesn't have; error says which.
 std::optional<bfr::rhi::SwapchainDesc> swapchainIn(const bfr_swapchain_desc& desc, bfr::core::Message& error) {
     using namespace bfr::rhi;
     SwapchainDesc swapchain;
+    swapchain.queue = desc.queue;
     swapchain.imageCount = desc.image_count;
     switch (desc.present_mode) {
         case BFR_PRESENT_MODE_FIFO:
@@ -95,24 +109,18 @@ std::optional<bfr::rhi::SwapchainDesc> swapchainIn(const bfr_swapchain_desc& des
             error.format("present mode {} is not one BFR has", static_cast<std::int64_t>(desc.present_mode));
             return std::nullopt;
     }
-    if (const auto format = static_cast<std::int64_t>(desc.format); format != 0) {
-        const auto* found = std::ranges::find_if(kFormats, [format](Format known) {
-            return static_cast<std::int64_t>(known) == format;
-        });
-        if (found == kFormats.end()) {
-            error.format("format {} is not one BFR has", format);
-            return std::nullopt;
-        }
-        swapchain.format = *found;
+    const auto format = formatIn(desc.format, "format", error);
+    if (!format) {
+        return std::nullopt;
     }
-    if (const auto colorSpace = static_cast<std::int64_t>(desc.color_space); colorSpace != 0) {
-        if (colorSpace < static_cast<std::int64_t>(ColorSpace::Srgb) ||
-            colorSpace > static_cast<std::int64_t>(ColorSpace::DisplayNative)) {
-            error.format("color space {} is not one BFR has", colorSpace);
-            return std::nullopt;
-        }
-        swapchain.colorSpace = static_cast<ColorSpace>(colorSpace);
+    swapchain.format = *format;
+    const auto colorSpace = static_cast<std::int64_t>(desc.color_space);
+    if (colorSpace < static_cast<std::int64_t>(ColorSpace::Srgb) ||
+        colorSpace > static_cast<std::int64_t>(ColorSpace::DisplayNative)) {
+        error.format("color space {} is not one BFR has", colorSpace);
+        return std::nullopt;
     }
+    swapchain.colorSpace = static_cast<ColorSpace>(colorSpace);
     switch (desc.alpha_mode) {
         case BFR_ALPHA_MODE_OPAQUE:
             swapchain.alphaMode = AlphaMode::Opaque;
@@ -196,6 +204,8 @@ bfr_result resultFor(ErrorCode code) {
             return BFR_RESULT_ERROR_OUT_OF_DATE;
         case ErrorCode::RhiInvalidCall:
             return BFR_RESULT_ERROR_INVALID_ARGUMENT;
+        case ErrorCode::RhiTimeout:
+            return BFR_RESULT_ERROR_TIMEOUT;
     }
     return BFR_RESULT_ERROR_INTERNAL;
 }
@@ -365,6 +375,29 @@ std::optional<E> enumIn(C value, E last, const char* what, bfr::core::Message& e
     return static_cast<E>(number);
 }
 
+static_assert(static_cast<int>(bfr::rhi::QueueLevel::Realtime) == BFR_QUEUE_LEVEL_REALTIME);
+static_assert(static_cast<int>(bfr::rhi::SwapchainStatus::Suboptimal) == BFR_SWAPCHAIN_STATUS_SUBOPTIMAL);
+
+// count queues from queues, which may be null only when count is 0. Nothing
+// when it is null otherwise, or a level is one BFR doesn't have; error says which.
+std::optional<std::vector<bfr::rhi::QueueDesc>> queuesIn(const bfr_queue_desc* queues, std::uint32_t count,
+                                                         const char* what, bfr::core::Message& error) {
+    if (queues == nullptr && count != 0) {
+        error.format("{} is null with a count of {}", what, count);
+        return std::nullopt;
+    }
+    std::vector<bfr::rhi::QueueDesc> out;
+    out.reserve(count);
+    for (const bfr_queue_desc& queue : std::span{queues, count}) {
+        const auto level = enumIn(queue.level, bfr::rhi::QueueLevel::Realtime, "queue level", error);
+        if (!level) {
+            return std::nullopt;
+        }
+        out.push_back({.rank = queue.rank, .level = *level});
+    }
+    return out;
+}
+
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
 }
@@ -414,28 +447,6 @@ std::optional<bfr::rhi::SamplerDesc> samplerIn(const bfr_sampler_desc& desc, bfr
     return sampler;
 }
 
-// value as a Format, Undefined included; nothing when it is not one BFR has.
-std::optional<bfr::rhi::Format> formatIn(bfr_format value, const char* what, bfr::core::Message& error) {
-    using namespace bfr::rhi;
-    const auto number = static_cast<std::int64_t>(value);
-    if (number == static_cast<std::int64_t>(Format::Undefined)) {
-        return Format::Undefined;
-    }
-    const auto* found = std::ranges::find_if(kFormats, [number](Format known) {
-        return static_cast<std::int64_t>(known) == number;
-    });
-    if (found == kFormats.end()) {
-        error.format("{} {} is not one BFR has", what, number);
-        return std::nullopt;
-    }
-    return *found;
-}
-
-// A mask member, whose 0 asks for every bit.
-std::uint32_t maskIn(std::uint32_t mask) {
-    return mask == 0 ? BFR_MASK_ALL : mask;
-}
-
 bfr::rhi::ShaderCode shaderIn(const bfr_shader_code& code) {
     return {.code = {reinterpret_cast<const std::byte*>(code.code), code.code_size},
             .entryPoint = {code.entry_point.data, code.entry_point.length}};
@@ -459,8 +470,8 @@ std::optional<bfr::rhi::StencilFace> stencilFaceIn(const bfr_stencil_face& face,
                        .pass = *pass,
                        .depthFail = *depthFail,
                        .compare = *compare,
-                       .readMask = maskIn(face.read_mask),
-                       .writeMask = maskIn(face.write_mask)};
+                       .readMask = face.read_mask,
+                       .writeMask = face.write_mask};
 }
 
 std::optional<bfr::rhi::BlendState> blendIn(const bfr_blend_state& blend, bfr::core::Message& error) {
@@ -481,7 +492,7 @@ std::optional<bfr::rhi::BlendState> blendIn(const bfr_blend_state& blend, bfr::c
                       .srcAlpha = *srcAlpha,
                       .dstAlpha = *dstAlpha,
                       .alphaOp = *alphaOp,
-                      .writeMask = maskIn(blend.write_mask)};
+                      .writeMask = blend.write_mask};
 }
 
 // The graphics pipeline desc asks for. Nothing when a value is not one BFR
@@ -641,7 +652,9 @@ std::optional<bfr::rhi::RenderingDesc> renderingIn(const bfr_rendering_desc& des
         rendering.colorAttachments.at(i) = {.texture = fromC(attachment.texture),
                                             .loadOp = *loadOp,
                                             .storeOp = *storeOp,
-                                            .clearColor = std::to_array(attachment.clear_color)};
+                                            .clearColor = std::to_array(attachment.clear_color),
+                                            .clearInteger = attachment.clear_integer != BFR_FALSE,
+                                            .clearColorInteger = std::to_array(attachment.clear_color_integer)};
     }
     const auto depthLoad = enumIn(desc.depth_stencil.load_op, LoadOp::DontCare, "load op", error);
     const auto depthStore = enumIn(desc.depth_stencil.store_op, StoreOp::DontCare, "store op", error);
@@ -688,7 +701,7 @@ std::optional<NativeWindow> windowIn(const bfr_window& window, bfr::core::Messag
         return std::nullopt;
     }
 #if defined(_WIN32)
-    return bfr::core::window::Win32{.instance = nullptr, .window = window.window};
+    return bfr::core::window::Win32{.instance = window.display, .window = window.window};
 #elif defined(__APPLE__)
     return bfr::core::window::Metal{.layer = window.window};
 #else
@@ -812,7 +825,7 @@ bfr_caps_info toC(const bfr::rhi::Adapter& adapter, bfr_backend backend) {
 }
 
 bfr_caps_limits toC(const bfr::rhi::Limits& limits) {
-    return {
+    bfr_caps_limits out{
         .max_texture_1d = limits.maxTexture1d,
         .max_texture_2d = limits.maxTexture2d,
         .max_texture_3d = limits.maxTexture3d,
@@ -845,8 +858,8 @@ bfr_caps_limits toC(const bfr::rhi::Limits& limits) {
         .max_sampler_anisotropy = limits.maxSamplerAnisotropy,
         .max_sampler_lod_bias = limits.maxSamplerLodBias,
         .max_custom_border_color_samplers = limits.maxCustomBorderColorSamplers,
-        .min_shading_rate_tile = limits.minShadingRateTile,
-        .max_shading_rate_tile = limits.maxShadingRateTile,
+        .min_shading_rate_tile = {},
+        .max_shading_rate_tile = {},
         .min_uniform_buffer_alignment = limits.minUniformBufferAlignment,
         .min_storage_buffer_alignment = limits.minStorageBufferAlignment,
         .min_texel_buffer_alignment = limits.minTexelBufferAlignment,
@@ -856,6 +869,9 @@ bfr_caps_limits toC(const bfr::rhi::Limits& limits) {
         .buffer_texture_granularity = limits.bufferTextureGranularity,
         .timestamp_period = limits.timestampPeriod,
     };
+    std::ranges::copy(limits.minShadingRateTile, std::begin(out.min_shading_rate_tile));
+    std::ranges::copy(limits.maxShadingRateTile, std::begin(out.max_shading_rate_tile));
+    return out;
 }
 
 bfr_caps_bindless toC(const bfr::rhi::BindlessLimits& bindless) {
@@ -994,6 +1010,15 @@ bfr_caps_memory toC(const bfr::rhi::Memory& memory) {
     return out;
 }
 
+bfr_queue_levels toC(const bfr::rhi::QueueLevels& levels) {
+    return {
+        .normal = toC(levels.normal),
+        .low = toC(levels.low),
+        .high = toC(levels.high),
+        .realtime = toC(levels.realtime),
+    };
+}
+
 bfr_caps_queues toC(const bfr::rhi::Queues& queues) {
     return {
         .graphics = queues.graphics,
@@ -1002,6 +1027,10 @@ bfr_caps_queues toC(const bfr::rhi::Queues& queues) {
         .graphics_timestamp_bits = queues.graphicsTimestampBits,
         .compute_timestamp_bits = queues.computeTimestampBits,
         .copy_timestamp_bits = queues.copyTimestampBits,
+        .ranks = queues.ranks,
+        .graphics_levels = toC(queues.graphicsLevels),
+        .compute_levels = toC(queues.computeLevels),
+        .copy_levels = toC(queues.copyLevels),
     };
 }
 
@@ -1128,13 +1157,23 @@ bfr_result bfr_create_instance(const bfr_instance_desc* desc, bfr_instance** ins
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "backend {} is not one BFR has",
                         static_cast<std::int64_t>(desc->backend));
         }
-        const auto least = severityFrom(desc->min_severity);
-        if (!least) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "min_severity {} is not a severity",
-                        static_cast<std::int64_t>(desc->min_severity));
+        if ((desc->application_name.data == nullptr && desc->application_name.length != 0) ||
+            (desc->engine_name.data == nullptr && desc->engine_name.length != 0)) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT,
+                        "application_name or engine_name is null but its length is not 0");
         }
-        bfr::rhi::InstanceDesc rhiDesc{.backend = *backend};
+        bfr::rhi::InstanceDesc rhiDesc{.backend = *backend,
+                                       .applicationName = {desc->application_name.data, desc->application_name.length},
+                                       .applicationVersion = desc->application_version,
+                                       .engineName = {desc->engine_name.data, desc->engine_name.length},
+                                       .engineVersion = desc->engine_version};
+        // The severity is read only with a callback, which is all it filters.
         if (desc->message_callback != nullptr) {
+            const auto least = severityFrom(desc->min_severity);
+            if (!least) {
+                return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "min_severity {} is not a severity",
+                            static_cast<std::int64_t>(desc->min_severity));
+            }
             rhiDesc.logger = {[callback = desc->message_callback,
                                userData = desc->message_user_data](Severity severity, std::string_view message) {
                                   callback(static_cast<bfr_message_severity>(severity),
@@ -1186,16 +1225,31 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instance, desc and device must not be null");
         }
         *device = nullptr;
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_device_desc takes no chained structs");
+        }
         bfr::core::Message error;
         const auto window = windowIn(desc->window, error);
         if (!window) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
-        // 0 asks for the default, which bfr.h names.
+        const auto graphics = queuesIn(desc->graphics_queues, desc->graphics_queue_count, "graphics_queues", error);
+        if (!graphics) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto compute = queuesIn(desc->compute_queues, desc->compute_queue_count, "compute_queues", error);
+        if (!compute) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto copy = queuesIn(desc->copy_queues, desc->copy_queue_count, "copy_queues", error);
+        if (!copy) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
         auto created =
             instance->instance->createDevice(desc->adapter, *window,
-                                             {.compute = desc->compute_queues,
-                                              .copy = desc->copy_queues,
+                                             {.graphics = *graphics,
+                                              .compute = *compute,
+                                              .copy = *copy,
                                               .maxCommandLists = desc->max_command_lists,
                                               .maxCommandPools = desc->max_command_pools,
                                               .maxSwapchains = desc->max_swapchains,
@@ -1224,6 +1278,9 @@ bfr_result bfr_create_swapchain(bfr_device* device, const bfr_swapchain_desc* de
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and swapchain must not be null");
         }
         *swapchain = {};
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_swapchain_desc takes no chained structs");
+        }
         bfr::core::Message error;
         const auto window = windowIn(desc->window, error);
         if (!window) {
@@ -1273,23 +1330,31 @@ void bfr_destroy_swapchain(bfr_device* device, bfr_swapchain swapchain) {
     });
 }
 
-bfr_result bfr_acquire(bfr_device* device, bfr_swapchain swapchain) {
+bfr_result bfr_acquire(bfr_device* device, bfr_swapchain swapchain, uint64_t timeout_ns, bfr_swapchain_status* status) {
     return guarded([&] {
-        if (device == nullptr) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        if (device == nullptr || status == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and status must not be null");
         }
-        const auto acquired = device->device->acquire(fromC(swapchain));
-        return acquired ? BFR_RESULT_SUCCESS : fail(acquired.error());
+        const auto acquired = device->device->acquire(fromC(swapchain), timeout_ns);
+        if (!acquired) {
+            return fail(acquired.error());
+        }
+        *status = static_cast<bfr_swapchain_status>(*acquired);
+        return BFR_RESULT_SUCCESS;
     });
 }
 
-bfr_result bfr_present(bfr_device* device, bfr_swapchain swapchain) {
+bfr_result bfr_present(bfr_device* device, bfr_swapchain swapchain, bfr_swapchain_status* status) {
     return guarded([&] {
-        if (device == nullptr) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        if (device == nullptr || status == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and status must not be null");
         }
         const auto presented = device->device->present(fromC(swapchain));
-        return presented ? BFR_RESULT_SUCCESS : fail(presented.error());
+        if (!presented) {
+            return fail(presented.error());
+        }
+        *status = static_cast<bfr_swapchain_status>(*presented);
+        return BFR_RESULT_SUCCESS;
     });
 }
 
@@ -1402,6 +1467,27 @@ bfr_result bfr_set_scissor(bfr_device* device, bfr_command_list command_list, co
                                                                           .y = scissor->y,
                                                                           .width = scissor->width,
                                                                           .height = scissor->height});
+        return set ? BFR_RESULT_SUCCESS : fail(set.error());
+    });
+}
+
+bfr_result bfr_set_blend_constants(bfr_device* device, bfr_command_list command_list, float red, float green,
+                                   float blue, float alpha) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto set = device->device->setBlendConstants(fromC(command_list), {red, green, blue, alpha});
+        return set ? BFR_RESULT_SUCCESS : fail(set.error());
+    });
+}
+
+bfr_result bfr_set_stencil_reference(bfr_device* device, bfr_command_list command_list, uint32_t reference) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto set = device->device->setStencilReference(fromC(command_list), reference);
         return set ? BFR_RESULT_SUCCESS : fail(set.error());
     });
 }
@@ -1618,12 +1704,12 @@ bfr_result bfr_submit(bfr_device* device, const bfr_submit_desc* desc, bfr_token
     });
 }
 
-bfr_result bfr_wait(bfr_device* device, const bfr_token* token) {
+bfr_result bfr_wait(bfr_device* device, const bfr_token* token, uint64_t timeout_ns) {
     return guarded([&] {
         if (device == nullptr || token == nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and token must not be null");
         }
-        const auto waited = device->device->wait(fromC(*token));
+        const auto waited = device->device->wait(fromC(*token), timeout_ns);
         return waited ? BFR_RESULT_SUCCESS : fail(waited.error());
     });
 }

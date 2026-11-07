@@ -32,10 +32,10 @@ class RenderTests(unittest.TestCase):
         self.assertIn("// An array of count elements.\n    const uint32_t* items;", self.header)
         self.assertIn("// device: May be null.\nBFR_API void bfr_destroy_device(bfr_device* device);", self.header)
 
-    def test_constants_are_unsigned_macros_and_a_default_is_documented(self) -> None:
+    def test_constants_are_unsigned_macros_and_a_default_is_not_a_c_rule(self) -> None:
         header = render(Api(with_default(copy.deepcopy(MINIMAL))))
         self.assertIn("// What an alignment of 0 means.\n#define BFR_DEFAULT_ALIGNMENT 16u", header)
-        self.assertIn("// Bytes to align to. 0 is BFR_DEFAULT_ALIGNMENT.\n    uint32_t alignment;", header)
+        self.assertIn("// Bytes to align to.\n    uint32_t alignment;", header)
 
     def test_callbacks_are_function_pointers(self) -> None:
         self.assertIn("typedef void (*bfr_log)(bfr_string text, void* user_data);", self.header)

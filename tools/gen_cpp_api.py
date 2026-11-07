@@ -368,6 +368,15 @@ def initializer(fields: list[str]) -> list[str]:
     return ["    return {"] + [f"        {field}," for field in fields] + ["    };"]
 
 
+def count_check(span: str, what: str) -> list[str]:
+    """Refuses span when its size has no room in the C API's uint32_t count."""
+    return [
+        f"    if (!std::in_range<uint32_t>({span}.size())) {{",
+        f'        return std::unexpected(detail::tooMany("{what} holds more elements than a uint32_t counts"));',
+        "    }",
+    ]
+
+
 def failure_check(call: str) -> list[str]:
     return [
         f"    if (const bfr_result result = {call}; result < 0) {{",
@@ -526,6 +535,12 @@ class Renderer:
             "/// The error for result, with the calling thread's message for it.",
             "inline Error failure(bfr_result result) {",
             "    return {.code = static_cast<Result>(result), .message = lastError()};",
+            "}",
+            "",
+            "/// The error for a span of more elements than the C API's uint32_t count holds, which is",
+            "/// refused rather than cut short.",
+            "inline Error tooMany(std::string_view what) {",
+            "    return {.code = Result::ErrorInvalidArgument, .message = Message{what}};",
             "}",
         )
         for name, callback in api.callbacks.items():
@@ -785,6 +800,9 @@ class Renderer:
         for param in method.inputs:
             kind, name = param["type"], camel(param["name"])
             if param.get("array"):
+                if function.get("returns") is None:
+                    raise SpecError(f"{method.function}: an array is refused through the result, which it has not")
+                self.emit(*count_check(name, name))
                 args.append(f"reinterpret_cast<const {c_type(kind)}*>({name}.data())")
                 counts[param["array"]] = f"static_cast<uint32_t>({name}.size())"
                 continue
@@ -794,6 +812,11 @@ class Renderer:
             if param.get("pointer") != "in":
                 args.append(to_c(api, kind, name))
                 continue
+            for array in self.plan.arrays_of(kind):
+                if function.get("returns") is None:
+                    raise SpecError(f"{method.function}: an array is refused through the result, which it has not")
+                member = f"{name}.{camel(array['name'])}"
+                self.emit(*count_check(member, member))
             extra = []
             if self.plan.is_extensible(kind):
                 self.emit("    const detail::Chain<decltype(detail::toC(extensions))...> chain{"

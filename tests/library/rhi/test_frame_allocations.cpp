@@ -134,9 +134,9 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
                 return result.has_value();
             };
             for (int frame = 0; frame < kFrames && failed.call == nullptr; ++frame) {
-                check("wait", device->wait(last));
+                check("wait", device->wait(last, kTestWait));
                 check("resetCommandPool", device->resetCommandPool(*pool));
-                check("acquire", device->acquire(*swapchain));
+                check("acquire", device->acquire(*swapchain, kTestWait));
                 std::array<CommandListHandle, kListsPerFrame> lists{};
                 for (std::size_t index = 0; index < lists.size(); ++index) {
                     const auto commands = device->beginCommands(*pool);
@@ -175,7 +175,7 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
                 }
                 check("poll", device->poll(last));
             }
-            check("wait", device->wait(last));
+            check("wait", device->wait(last, kTestWait));
             allocations = counter.allocations();
             frees = counter.frees();
         }
@@ -217,7 +217,7 @@ TEST_CASE("Device allocates nothing when a frame-path call fails frame after fra
         {
             const bfr::test::AllocationCounter counter;
             for (int frame = 0; frame < kFrames; ++frame) {
-                const auto acquired = device->acquire(*swapchain);
+                const auto acquired = device->acquire(*swapchain, kTestWait);
                 refused += !acquired.has_value() && acquired.error().code == bfr::core::ErrorCode::RhiOutOfDate ? 1 : 0;
             }
             allocations = counter.allocations();

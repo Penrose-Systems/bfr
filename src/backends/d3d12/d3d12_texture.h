@@ -33,6 +33,21 @@ struct D3D12Texture {
     TextureSlotsHeld slots;
 };
 
+/// What a rendering's attachment covers of a resource: mip 0 of each of its
+/// layers and planes. A swapchain's image has one of each.
+struct D3D12Target {
+    ID3D12Resource* resource = nullptr;
+    std::uint32_t mipLevels = 1;
+    std::uint32_t layers = 1;
+    std::uint32_t planes = 1;
+};
+
+/// What an attachment of texture covers.
+[[nodiscard]] D3D12Target targetOf(const D3D12Texture& texture);
+
+/// Records on list the discard of what target covers, and nothing of its other mips.
+void discardTarget(ID3D12GraphicsCommandList* list, const D3D12Target& target);
+
 /// A texture as desc says, in the default heap, made in the legacy COMMON
 /// state, which enhanced barriers read as layout COMMON, with its target view
 /// on device when rendering writes it, holding the slots given. Fails with

@@ -12,16 +12,26 @@
 #include <QuartzCore/QuartzCore.hpp>
 #include <TargetConditionals.h>
 
+#include <cstdint>
 #include <string>
 
 namespace bfr::rhi::metal {
 
-/// Why device is below the floor, empty when it meets it: Apple GPU family 7
-/// or later, with Metal 4.
+/// Why device is below the floor, empty when it meets it: Metal 4, by
+/// Metal's own answer.
 [[nodiscard]] std::string belowFloor(MTL::Device* device);
 
-/// What device is and does, from what Metal answers about it. A field Metal
-/// has no call for is 0 or false.
+/// Whether device has 64-bit integer atomics, on buffers and on RG32Uint and
+/// RG32Sint textures. Metal has no call for it; Godot and The Forge give it
+/// to Apple9, and to Apple8 on a Mac.
+[[nodiscard]] bool has64BitAtomics(MTL::Device* device);
+
+/// Each sample count device renders at, as bits whose values are the counts.
+[[nodiscard]] std::uint32_t sampleCountsOf(MTL::Device* device);
+
+/// What device is and does, from what Metal answers about it. Where Metal has
+/// no call, a field is what BFR builds on it (queues, one viewport, render
+/// state) or what Metal's documentation gives; any other is 0 or false.
 [[nodiscard]] Caps readCaps(MTL::Device* device);
 
 } // namespace bfr::rhi::metal

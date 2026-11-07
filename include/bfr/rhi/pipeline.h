@@ -23,9 +23,6 @@ using PipelineHandle = core::Handle<Pipeline>;
 /// The most color targets a graphics pipeline renders to.
 inline constexpr std::uint32_t kMaxColorTargets = BFR_MAX_COLOR_TARGETS;
 
-/// Bytes of push constants every pipeline's shaders read.
-inline constexpr std::uint32_t kPushConstantsSize = BFR_PUSH_CONSTANTS_SIZE;
-
 /// Dimensions of a workgroup.
 inline constexpr std::size_t kWorkgroupDimensions = 3;
 
@@ -136,7 +133,8 @@ struct RasterState {
     /// Clamps depth to the viewport's range instead of clipping to it.
     bool depthClamp = false;
     /// Added to each fragment's depth, in units of the depth format's
-    /// smallest step.
+    /// smallest step. D3D12 takes whole numbers only, so there a fraction
+    /// fails with RhiInvalidCall.
     float depthBias = 0;
     /// Added to each fragment's depth, times its depth slope.
     float depthBiasSlope = 0;
@@ -151,8 +149,8 @@ struct StencilFace {
     StencilOp pass = StencilOp::Keep;
     StencilOp depthFail = StencilOp::Keep;
     CompareOp compare = CompareOp::Always;
-    std::uint32_t readMask = BFR_MASK_ALL;
-    std::uint32_t writeMask = BFR_MASK_ALL;
+    std::uint32_t readMask = 0;
+    std::uint32_t writeMask = 0;
 };
 
 /// How a graphics pipeline tests depth and stencil. Off by default; the
@@ -172,9 +170,9 @@ inline constexpr std::uint32_t kWriteGreen = 1U << 1U;
 inline constexpr std::uint32_t kWriteBlue = 1U << 2U;
 inline constexpr std::uint32_t kWriteAlpha = 1U << 3U;
 
-/// How a graphics pipeline blends a fragment into one color target. Off by
-/// default: the fragment's color replaces the target's. writeMask holds the
-/// kWrite bits of the channels written.
+/// How a graphics pipeline blends a fragment into one color target. With
+/// enable false the fragment's color replaces the target's, in the channels
+/// writeMask names: the kWrite bits, 0 for none; bits above 3 are ignored.
 struct BlendState {
     bool enable = false;
     BlendFactor srcColor = BlendFactor::Zero;
@@ -183,7 +181,7 @@ struct BlendState {
     BlendFactor srcAlpha = BlendFactor::Zero;
     BlendFactor dstAlpha = BlendFactor::Zero;
     BlendOp alphaOp = BlendOp::Add;
-    std::uint32_t writeMask = BFR_MASK_ALL;
+    std::uint32_t writeMask = 0;
 };
 
 /// One color target a graphics pipeline renders to.
@@ -207,7 +205,7 @@ struct GraphicsPipelineDesc {
     /// Undefined is no depth-stencil target.
     Format depthStencilFormat = Format::Undefined;
     /// Samples per pixel of every target; 1 is no multisampling.
-    std::uint32_t samples = 1;
+    std::uint32_t samples = 0;
     /// The fragment's alpha sets how many samples it covers.
     bool alphaToCoverage = false;
 };

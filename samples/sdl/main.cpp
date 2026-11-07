@@ -28,7 +28,8 @@ bfr::Window nativeWindow(SDL_Window* window, SDL_MetalView& metalView) {
     const char* name = SDL_GetCurrentVideoDriver();
     const std::string_view driver = name != nullptr ? name : "";
     if (driver == "windows") {
-        return {.window = SDL_GetPointerProperty(properties, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr)};
+        return {.window = SDL_GetPointerProperty(properties, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr),
+                .display = SDL_GetPointerProperty(properties, SDL_PROP_WINDOW_WIN32_INSTANCE_POINTER, nullptr)};
     }
     if (driver == "x11") {
         // An X11 window is a number, which BFR takes as a pointer.

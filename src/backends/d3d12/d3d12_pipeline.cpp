@@ -15,6 +15,7 @@
 
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -28,12 +29,10 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
-constexpr std::uint32_t kRootParameterCount = 3;
 constexpr std::uint32_t kResourceRangeCount = 3;
 constexpr std::uint32_t kBaseRegister = 0;
 constexpr std::uint32_t kUnbounded = std::numeric_limits<std::uint32_t>::max();
 constexpr std::uint32_t kTableStart = 0;
-constexpr std::uint32_t kDwordBytes = 4;
 // The descriptors are written while the GPU may read the table, as every
 // bindless table is.
 constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kTableFlags = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE |
@@ -220,7 +219,8 @@ D3D12_RENDER_TARGET_BLEND_DESC blendFor(const BlendState& blend) {
 
 } // namespace
 
-core::Result<D3D12BindlessLayout> createD3D12BindlessLayout(ID3D12Device& device, const DeviceDesc& desc) {
+core::Result<D3D12BindlessLayout> createD3D12BindlessLayout(ID3D12Device& device, const DeviceDesc& desc,
+                                                            std::uint32_t viewHeapSize) {
     D3D12BindlessLayout layout;
     layout.storageTextures = desc.maxBindlessTextures;
     layout.storageBuffers = desc.maxBindlessTextures + desc.maxBindlessStorageTextures;
@@ -237,7 +237,7 @@ core::Result<D3D12BindlessLayout> createD3D12BindlessLayout(ID3D12Device& device
     parameters.at(kPushConstantsParameter).ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     parameters.at(kPushConstantsParameter).Constants = {.ShaderRegister = kBaseRegister,
                                                         .RegisterSpace = kPushConstantsSpace,
-                                                        .Num32BitValues = kPushConstantsSize / kDwordBytes};
+                                                        .Num32BitValues = kPushConstantValues};
     parameters.at(kPushConstantsParameter).ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     parameters.at(kResourceTableParameter).ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     parameters.at(kResourceTableParameter).DescriptorTable = {.NumDescriptorRanges = kResourceRangeCount,
@@ -272,11 +272,11 @@ core::Result<D3D12BindlessLayout> createD3D12BindlessLayout(ID3D12Device& device
     // beyond each table's.
     const std::uint64_t resourceCount = std::uint64_t{desc.maxBindlessTextures} + desc.maxBindlessStorageTextures +
                                         desc.maxBindlessStorageBuffers;
-    if (resourceCount > D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_2) {
+    if (resourceCount > viewHeapSize) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              "the bindless tables hold {} textures, storage textures and storage buffers together; "
-                             "a shader-visible heap holds at most {}",
-                             resourceCount, D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_2);
+                             "the device's shader-visible heap holds at most {}",
+                             resourceCount, viewHeapSize);
     }
     // Tables of 0 slots are none, so a heap with no descriptors is not made.
     if (resourceCount != 0) {
@@ -304,7 +304,7 @@ core::Result<D3D12Pipeline> createD3D12ComputePipeline(ID3D12Device& device, ID3
                                                  .NodeMask = 0,
                                                  .CachedPSO = {},
                                                  .Flags = D3D12_PIPELINE_STATE_FLAG_NONE};
-    D3D12Pipeline pipeline{.state = nullptr, .compute = true, .workgroupSize = desc.workgroupSize};
+    D3D12Pipeline pipeline{.state = nullptr, .compute = true, .topology = TopologyClass::Triangle};
     if (const HRESULT result = device.CreateComputePipelineState(&info, IID_PPV_ARGS(&pipeline.state));
         FAILED(result)) {
         return failure(core::ErrorCode::RhiDeviceFailed,
@@ -317,8 +317,23 @@ core::Result<D3D12Pipeline> createD3D12GraphicsPipeline(ID3D12Device& device, ID
                                                         const GraphicsPipelineDesc& desc) {
     const StencilFace& front = desc.depthStencil.front;
     const StencilFace& back = desc.depthStencil.back;
-    if (desc.depthStencil.stencilTest && (front.readMask != back.readMask || front.writeMask != back.writeMask)) {
+    // Only the masks' low 8 bits count, so only they need be the same.
+    const bool sameMasks = (front.readMask & kStencilMaskBits) == (back.readMask & kStencilMaskBits) &&
+                           (front.writeMask & kStencilMaskBits) == (back.writeMask & kStencilMaskBits);
+    if (desc.depthStencil.stencilTest && !sameMasks) {
         return core::failure(core::ErrorCode::RhiUnsupported, "the adapter masks both stencil faces the same way");
+    }
+    // D3D12_RASTERIZER_DESC holds the bias as an INT, so a fraction, or a
+    // value past an INT, would be cut off. D3D12_RASTERIZER_DESC1 holds it as
+    // a FLOAT, but only in a pipeline state stream (a RASTERIZER1 subobject),
+    // on devices whose Options16 DynamicDepthBiasSupported is true
+    // (d3dx12_pipeline_state_stream.h). Moving to it would take that call and
+    // a caps feature for it; until then a fraction is refused.
+    const auto depthBias = static_cast<double>(desc.raster.depthBias);
+    if (std::trunc(depthBias) != depthBias || depthBias < std::numeric_limits<INT>::min() ||
+        depthBias > std::numeric_limits<INT>::max()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "depth bias {} is not a whole number, which D3D12's rasterizer state holds", depthBias);
     }
     D3D12_GRAPHICS_PIPELINE_STATE_DESC info{};
     info.pRootSignature = &rootSignature;
@@ -339,7 +354,7 @@ core::Result<D3D12Pipeline> createD3D12GraphicsPipeline(ID3D12Device& device, ID
                             .CullMode = cullFor(desc.raster.cull),
                             .FrontCounterClockwise = desc.raster.frontFace == FrontFace::CounterClockwise ? TRUE
                                                                                                           : FALSE,
-                            .DepthBias = static_cast<INT>(desc.raster.depthBias),
+                            .DepthBias = static_cast<INT>(depthBias),
                             .DepthBiasClamp = desc.raster.depthBiasClamp,
                             .SlopeScaledDepthBias = desc.raster.depthBiasSlope,
                             .DepthClipEnable = desc.raster.depthClamp ? FALSE : TRUE,
@@ -365,7 +380,7 @@ core::Result<D3D12Pipeline> createD3D12GraphicsPipeline(ID3D12Device& device, ID
         info.DSVFormat = dxgiFormatsFor(desc.depthStencilFormat).depth;
     }
     info.SampleDesc = {.Count = desc.samples, .Quality = 0};
-    D3D12Pipeline pipeline{.state = nullptr, .compute = false, .topology = desc.topology, .workgroupSize = {}};
+    D3D12Pipeline pipeline{.state = nullptr, .compute = false, .topology = desc.topology};
     if (const HRESULT result = device.CreateGraphicsPipelineState(&info, IID_PPV_ARGS(&pipeline.state));
         FAILED(result)) {
         return failure(core::ErrorCode::RhiDeviceFailed,
@@ -385,9 +400,6 @@ core::Result<D3D12Pipeline*> D3D12Device::pipelineFor(PipelineHandle pipeline) {
 }
 
 core::Result<PipelineHandle> D3D12Device::createComputePipeline(const ComputePipelineDesc& desc) {
-    if (auto checked = checkComputePipelineDesc(desc); !checked) {
-        return std::unexpected(std::move(checked.error()));
-    }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
     collectBuffers();
     auto made = createD3D12ComputePipeline(*device_.Get(), *layout_.rootSignature.Get(), desc);

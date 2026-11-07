@@ -9,9 +9,9 @@
 
 namespace bfr::rhi::vulkan {
 
-std::optional<QueueFamilies> chooseQueueFamilies(std::span<const VkQueueFamilyProperties> families,
-                                                 std::span<const VkBool32> presents) {
-    // Without a surface, every family counts as presenting, so graphics presents.
+QueueFamilies chooseQueueFamilies(std::span<const VkQueueFamilyProperties> families,
+                                  std::span<const VkBool32> presents) {
+    // Without a surface, every family counts as presenting.
     const auto presentsTo = [presents](std::uint32_t index) {
         return presents.empty() || presents[index] == VK_TRUE;
     };
@@ -35,18 +35,39 @@ std::optional<QueueFamilies> chooseQueueFamilies(std::span<const VkQueueFamilyPr
                               .or_else([&first] { return first(VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT, 0); })
                               .or_else([&first] { return first(VK_QUEUE_GRAPHICS_BIT, 0, kPresenting); })
                               .or_else([&first] { return first(VK_QUEUE_GRAPHICS_BIT, 0); });
-    if (!graphics) {
-        return std::nullopt;
-    }
-    const std::uint32_t compute = first(VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT).value_or(*graphics);
+    // Each kind takes a family that presents where one of its kind does, so
+    // a window can be presented to from its queues.
+    // Without a family that computes but not graphics, compute is the graphics
+    // family, whose queues are graphics', so the adapter has no compute queue.
+    const auto compute = first(VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT, kPresenting)
+                             .or_else([&first] { return first(VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT); })
+                             .or_else([graphics] { return graphics; });
     // Without a transfer-only family, every family left that transfers and
     // lacks graphics runs compute, so the compute family is the first of them.
-    // It transfers even when it doesn't report the transfer bit.
+    // A compute or graphics family transfers even when it doesn't report the
+    // transfer bit.
+    const auto transfer = first(VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT, kPresenting)
+                              .or_else([&first] {
+                                  return first(VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT);
+                              })
+                              .or_else([compute] { return compute; })
+                              .or_else([graphics] { return graphics; })
+                              .or_else([&first] { return first(VK_QUEUE_TRANSFER_BIT, 0); });
     return QueueFamilies{
-        .graphics = *graphics,
+        .graphics = graphics,
         .compute = compute,
-        .transfer = first(VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT).value_or(compute),
-        .present = presentsTo(*graphics) ? graphics : first(0, 0, kPresenting),
+        .transfer = transfer,
+    };
+}
+
+QueueCounts countQueues(const QueueFamilies& chosen, std::span<const VkQueueFamilyProperties> families) {
+    const auto count = [families](std::optional<std::uint32_t> family, bool shared) {
+        return !family || shared ? 0 : families[*family].queueCount;
+    };
+    return {
+        .graphics = count(chosen.graphics, false),
+        .compute = count(chosen.compute, chosen.compute == chosen.graphics),
+        .copy = count(chosen.transfer, chosen.transfer == chosen.graphics || chosen.transfer == chosen.compute),
     };
 }
 

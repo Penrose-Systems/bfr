@@ -2,6 +2,7 @@
 // Compiled only, never run.
 #include "bfr.hpp"
 
+#include <array>
 #include <string_view>
 
 namespace {
@@ -21,7 +22,8 @@ namespace {
     }
     const auto adapters = instance->adapters();
     const bfr::Window headlessWindow{.system = bfr::WindowSystem::Headless};
-    auto device = instance->createDevice({.adapter = 0, .window = headlessWindow});
+    constexpr std::array<bfr::QueueDesc, 1> kOneQueue{};
+    auto device = instance->createDevice({.adapter = 0, .window = headlessWindow, .graphicsQueues = kOneQueue});
     if (!adapters || !device) {
         return false;
     }

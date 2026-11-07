@@ -5,6 +5,7 @@
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/texture.h"
 #include "core/slot_chains.h"
+#include "rhi/device_limits.h"
 
 #include <cstdint>
 
@@ -23,7 +24,7 @@ struct TextureSlotsHeld {
 class BindlessSlots {
 public:
     explicit BindlessSlots(const DeviceDesc& desc)
-        : desc_(desc),
+        : desc_(heldPart(desc)),
           textures_(desc.maxBindlessTextures),
           storageTextures_(desc.maxBindlessStorageTextures),
           storageBuffers_(desc.maxBindlessStorageBuffers),
@@ -88,12 +89,11 @@ public:
 
     void giveSampler(std::uint32_t slot) { samplers_.give(slot); }
 
-    /// held as the API reports it: 0 for a table the texture is not in.
+    /// held as the API reports it: kNoSlot, the chains' kEnd, for a table
+    /// the texture is not in.
     [[nodiscard]] static TextureSlots reported(const TextureSlotsHeld& held) {
-        const auto slotOf = [](std::uint32_t slot) {
-            return slot == core::SlotChains::kEnd ? 0 : slot;
-        };
-        return {.sampled = slotOf(held.sampled), .storage = slotOf(held.storage)};
+        static_assert(core::SlotChains::kEnd == kNoSlot);
+        return {.sampled = held.sampled, .storage = held.storage};
     }
 
     /// slot as bufferSlot reports it. Fails with RhiInvalidCall for kEnd: a

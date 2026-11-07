@@ -10,6 +10,8 @@
 #include "d3d12/d3d12_formats.h"
 #include "d3d12/d3d12_result.h"
 #include "rhi/bindless_slots.h"
+#include "rhi/copy_check.h"
+#include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
 
 #include <d3d12.h>
@@ -72,6 +74,36 @@ UINT subresourceOf(const D3D12Texture& texture, std::uint32_t mip, std::uint32_t
     return mip + (layer * texture.mipLevels) + (plane * texture.mipLevels * texture.layers);
 }
 
+} // namespace
+
+D3D12Target targetOf(const D3D12Texture& texture) {
+    constexpr std::uint32_t kDepthAndStencil = 2;
+    return {.resource = texture.resource.Get(),
+            .mipLevels = texture.mipLevels,
+            .layers = texture.layers,
+            .planes = planar(blockOf(texture.desc.format)) ? kDepthAndStencil : 1};
+}
+
+void discardTarget(ID3D12GraphicsCommandList* list, const D3D12Target& target) {
+    // With one mip, every subresource is mip 0's.
+    if (target.mipLevels == 1) {
+        list->DiscardResource(target.resource, nullptr);
+        return;
+    }
+    for (std::uint32_t plane = 0; plane < target.planes; ++plane) {
+        for (std::uint32_t layer = 0; layer < target.layers; ++layer) {
+            const D3D12_DISCARD_REGION region{.NumRects = 0,
+                                              .pRects = nullptr,
+                                              .FirstSubresource = (layer * target.mipLevels) +
+                                                                  (plane * target.mipLevels * target.layers),
+                                              .NumSubresources = 1};
+            list->DiscardResource(target.resource, &region);
+        }
+    }
+}
+
+namespace {
+
 // What a buffer holds of aspect: the texture's own format, or the plane's
 // format for a planar depth-stencil one (the d3dx12 format table's planes).
 DXGI_FORMAT footprintFormat(const D3D12Texture& texture, TextureAspect aspect) {
@@ -108,6 +140,18 @@ D3D12_TEXTURE_COPY_LOCATION bufferSide(ID3D12Resource* buffer, const D3D12Textur
                       .Depth = region.depth,
                       .RowPitch = static_cast<UINT>(region.bytesPerRow)}};
     return location;
+}
+
+// Fails with RhiInvalidCall when a region's bytes per row has no room in the
+// footprint's UINT RowPitch, before any region is recorded.
+core::Result<void> checkRowPitches(std::span<const BufferTextureCopy> regions) {
+    for (const BufferTextureCopy& region : regions) {
+        if (!std::in_range<UINT>(region.bytesPerRow)) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes per row is more than D3D12 takes",
+                                 region.bytesPerRow);
+        }
+    }
+    return {};
 }
 
 D3D12_TEXTURE_COPY_LOCATION textureSide(const D3D12Texture& texture, UINT subresource) {
@@ -180,6 +224,11 @@ core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3
                                               const TextureDesc& desc, const TextureSlotsHeld& slots) {
     const DxgiFormats formats = dxgiFormatsFor(desc.format);
     const bool slices = desc.dimension == TextureDimension::D3;
+    const std::uint32_t depthOrLayers = slices ? desc.depth : desc.layers;
+    if (!std::in_range<UINT16>(depthOrLayers) || !std::in_range<UINT16>(desc.mipLevels)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "{} {} and {} mip levels are more than D3D12 takes",
+                             depthOrLayers, slices ? "slices" : "layers", desc.mipLevels);
+    }
     // A depth texture shaders also read is made typeless, so its depth view
     // and its shader view are both views of it; its views name their formats.
     const bool depth = formats.depth != DXGI_FORMAT_UNKNOWN;
@@ -199,7 +248,7 @@ core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3
         .Alignment = 0,
         .Width = desc.width,
         .Height = desc.height,
-        .DepthOrArraySize = static_cast<UINT16>(slices ? desc.depth : desc.layers),
+        .DepthOrArraySize = static_cast<UINT16>(depthOrLayers),
         .MipLevels = static_cast<UINT16>(desc.mipLevels),
         .Format = texture.dxgi,
         .SampleDesc = {.Count = desc.samples, .Quality = 0},
@@ -214,6 +263,9 @@ core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3
         return failure(core::ErrorCode::RhiDeviceFailed,
                        {.call = "D3D12MA::Allocator::CreateResource", .result = result});
     }
+    // MipLevels 0 asks D3D12 for the whole chain, so its subresources are
+    // numbered by the levels it made.
+    texture.mipLevels = texture.resource->GetDesc().MipLevels;
     // The whole texture as a target, with the API's default view of it.
     if (desc.usage.colorAttachment || desc.usage.depthStencil) {
         auto heap = createTargetHeap(device, desc.usage.depthStencil ? D3D12_DESCRIPTOR_HEAP_TYPE_DSV
@@ -362,6 +414,9 @@ core::Result<D3D12Texture*> D3D12Device::textureFor(TextureHandle texture) {
 }
 
 core::Result<TextureHandle> D3D12Device::createTexture(const TextureDesc& desc) {
+    if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
     collectBuffers();
     auto slots = bindless_.takeTexture(desc);
@@ -429,6 +484,12 @@ core::Result<void> D3D12Device::copyBufferToTexture(CommandListHandle commandLis
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
+    if (auto checked = checkAspects((*to)->desc.format, regions); !checked) {
+        return checked;
+    }
+    if (auto checked = checkRowPitches(regions); !checked) {
+        return checked;
+    }
     const FormatBlock& block = blockOf((*to)->desc.format);
     for (const BufferTextureCopy& region : regions) {
         const D3D12_TEXTURE_COPY_LOCATION source = bufferSide((*from)->resource.Get(), **to, region);
@@ -457,6 +518,12 @@ core::Result<void> D3D12Device::copyTextureToBuffer(CommandListHandle commandLis
     auto to = bufferFor(buffer);
     if (!to) {
         return std::unexpected(std::move(to.error()));
+    }
+    if (auto checked = checkAspects((*from)->desc.format, regions); !checked) {
+        return checked;
+    }
+    if (auto checked = checkRowPitches(regions); !checked) {
+        return checked;
     }
     const FormatBlock& block = blockOf((*from)->desc.format);
     for (const BufferTextureCopy& region : regions) {

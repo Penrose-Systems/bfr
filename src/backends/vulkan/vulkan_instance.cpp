@@ -11,6 +11,7 @@
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "rhi/device_limits.h"
+#include "rhi/format_check.h"
 #include "vulkan/instance_table.h"
 #include "vulkan/queue_families.h"
 #include "vulkan/vulkan_caps.h"
@@ -70,9 +71,6 @@ core::Result<std::uint32_t> loaderVersion() {
     return version;
 }
 
-// The device extensions every listed adapter needs.
-constexpr std::array kFloorExtensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-
 // The device extensions adapter lists, or the call that failed.
 std::expected<std::vector<VkExtensionProperties>, VulkanFailure> deviceExtensions(const InstanceTable& vk,
                                                                                   VkPhysicalDevice adapter) {
@@ -91,41 +89,74 @@ std::vector<VkQueueFamilyProperties> queueFamilies(const InstanceTable& vk, VkPh
     return families;
 }
 
-// The queues to open on each family: one on the graphics and present
-// families, and the counts asked for on the compute and transfer families.
-// Vulkan takes one create info per family, pointing at as many priorities.
+// VK_QUEUE_GLOBAL_PRIORITY_MEDIUM is the level queues have when none is set,
+// as Normal is.
+VkQueueGlobalPriorityKHR vulkanLevel(QueueLevel level) {
+    switch (level) {
+        case QueueLevel::Normal:
+            return VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR;
+        case QueueLevel::Low:
+            return VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR;
+        case QueueLevel::High:
+            return VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR;
+        case QueueLevel::Realtime:
+            return VK_QUEUE_GLOBAL_PRIORITY_REALTIME_KHR;
+    }
+    return VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR;
+}
+
+// The queues to open: one create info for each kind asked for, on its family,
+// pointing at its queues' ranks, and with the kind's level where the device
+// has VK_KHR_global_priority. No two kinds share a family: countQueues gives
+// a kind none on a family an earlier kind takes. The arrays are sized before
+// they are filled, so the pointers into them stay.
 struct QueueCreateInfos {
     std::vector<VkDeviceQueueCreateInfo> infos;
-    std::vector<float> priorities;
+    std::vector<VkDeviceQueueGlobalPriorityCreateInfoKHR> levels;
+    std::vector<float> ranks;
 };
 
-QueueCreateInfos queueCreateInfos(const QueueFamilies& families, std::uint32_t present, const DeviceDesc& wanted) {
+// Fails with RhiUnsupported when a kind's queues ask for different levels,
+// which Vulkan sets per family, or for a level other than normal on a device
+// with no VK_KHR_global_priority to set it.
+core::Result<QueueCreateInfos> queueCreateInfos(const QueueFamilies& families, const DeviceDesc& wanted,
+                                                bool hasLevels) {
+    if (!hasLevels) {
+        if (auto checked = checkNormalLevels(wanted, "the device has no VK_KHR_global_priority to set it"); !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+    }
+    constexpr std::size_t kKinds = 3;
     QueueCreateInfos queues;
-    const auto add = [&queues](std::uint32_t family, std::uint32_t count) {
-        if (count == 0) {
-            return;
+    queues.infos.reserve(kKinds);
+    queues.levels.reserve(kKinds);
+    queues.ranks.reserve(wanted.graphics.size() + wanted.compute.size() + wanted.copy.size());
+    // A kind with no family has no queues: createDevice refuses asking for any.
+    for (const auto& [family, kind] :
+         {std::pair{families.graphics, wanted.graphics}, std::pair{families.compute, wanted.compute},
+          std::pair{families.transfer, wanted.copy}}) {
+        if (kind.empty() || !family) {
+            continue;
         }
-        if (auto found = std::ranges::find(queues.infos, family, &VkDeviceQueueCreateInfo::queueFamilyIndex);
-            found != queues.infos.end()) {
-            found->queueCount = std::max(found->queueCount, count);
-            return;
+        const QueueLevel level = kind.front().level;
+        if (!std::ranges::all_of(kind, [level](const QueueDesc& queue) { return queue.level == level; })) {
+            return core::failure(core::ErrorCode::RhiUnsupported,
+                                 "Vulkan sets one level for all of a kind's queues; family {} was asked for several",
+                                 *family);
         }
+        const std::size_t first = queues.ranks.size();
+        std::ranges::transform(kind, std::back_inserter(queues.ranks), &QueueDesc::rank);
         VkDeviceQueueCreateInfo& queue = queues.infos.emplace_back();
         queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        queue.queueFamilyIndex = family;
-        queue.queueCount = count;
-    };
-    add(families.graphics, 1);
-    add(present, 1);
-    add(families.compute, wanted.compute);
-    add(families.transfer, wanted.copy);
-    std::uint32_t most = 1;
-    for (const VkDeviceQueueCreateInfo& queue : queues.infos) {
-        most = std::max(most, queue.queueCount);
-    }
-    queues.priorities.assign(most, 1.0F);
-    for (VkDeviceQueueCreateInfo& queue : queues.infos) {
-        queue.pQueuePriorities = queues.priorities.data();
+        queue.queueFamilyIndex = *family;
+        queue.queueCount = static_cast<std::uint32_t>(kind.size());
+        queue.pQueuePriorities = std::span{queues.ranks}.subspan(first).data();
+        if (hasLevels) {
+            VkDeviceQueueGlobalPriorityCreateInfoKHR& global = queues.levels.emplace_back();
+            global.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR;
+            global.globalPriority = vulkanLevel(level);
+            queue.pNext = &global;
+        }
     }
     return queues;
 }
@@ -140,32 +171,13 @@ std::string familyList(std::span<const VkDeviceQueueCreateInfo> queues) {
     return core::text::join(families, ", ");
 }
 
-// Why the adapter is below the floor, empty when it meets it. extensions are
-// the device extensions it lists.
-std::string belowFloor(const InstanceTable& vk, VkPhysicalDevice adapter, const VkPhysicalDeviceProperties& properties,
-                       std::span<const VkExtensionProperties> extensions) {
+// Why the adapter is below the floor, empty when it meets it.
+std::string belowFloor(const InstanceTable& vk, VkPhysicalDevice adapter,
+                       const VkPhysicalDeviceProperties& properties) {
     if (properties.apiVersion < kFloorVersion) {
         return std::format("Vulkan {}, needs {}", versionName(properties.apiVersion), versionName(kFloorVersion));
     }
-    const auto families = queueFamilies(vk, adapter);
-    const auto noFamilyRuns = [&families](VkQueueFlags operation) {
-        return std::ranges::none_of(families, [operation](const VkQueueFamilyProperties& family) {
-            return (family.queueFlags & operation) != 0;
-        });
-    };
-    if (noFamilyRuns(VK_QUEUE_GRAPHICS_BIT)) {
-        return "no queue family runs graphics";
-    }
-    if (noFamilyRuns(VK_QUEUE_COMPUTE_BIT)) {
-        return "no queue family runs compute";
-    }
-    std::vector<std::string> missing;
-    for (const char* required : kFloorExtensions) {
-        if (!lists(extensions, required)) {
-            missing.emplace_back(required);
-        }
-    }
-    std::ranges::move(missingFloorFeatures(vk, adapter), std::back_inserter(missing));
+    std::vector<std::string> missing = missingFloorFeatures(vk, adapter);
     return missing.empty() ? std::string{} : "lacks " + core::text::join(missing, ", ");
 }
 
@@ -242,44 +254,6 @@ std::expected<std::optional<VkLayerProperties>, VulkanFailure> findLayer(std::st
             }
             return *found;
         });
-}
-
-// Whether the loader, or layer when given, provides extension, or the call
-// that failed.
-std::expected<bool, VulkanFailure> hasExtension(const char* layer, std::string_view extension) {
-    return listAll<VkExtensionProperties>("vkEnumerateInstanceExtensionProperties",
-                                          [layer](std::uint32_t* count, VkExtensionProperties* extensions) {
-                                              return vkEnumerateInstanceExtensionProperties(layer, count, extensions);
-                                          })
-        .transform(
-            [extension](const std::vector<VkExtensionProperties>& extensions) { return lists(extensions, extension); });
-}
-
-// Validation needs the layer and VK_EXT_debug_utils, which the loader or the
-// layer provides. Checked before the instance exists, so a missing piece is
-// reported as such, not as a failed vkCreateInstance.
-core::Result<void> checkValidation(const core::Logger& logger) {
-    const auto found = findLayer(kValidationLayer);
-    if (!found) {
-        return failure(core::ErrorCode::RhiValidationUnavailable, found.error());
-    }
-    // Named, so clang-tidy sees the check before the access.
-    const std::optional<VkLayerProperties>& layer = *found;
-    if (!layer) {
-        return core::failure(core::ErrorCode::RhiValidationUnavailable, "{} is not installed", kValidationLayer);
-    }
-    BFR_LOG_INFO(logger, "{} {}", kValidationLayer, versionName(layer->specVersion));
-    for (const char* provider : std::to_array<const char*>({nullptr, kValidationLayer})) {
-        const auto provided = hasExtension(provider, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-        if (!provided) {
-            return failure(core::ErrorCode::RhiValidationUnavailable, provided.error());
-        }
-        if (*provided) {
-            return {};
-        }
-    }
-    return core::failure(core::ErrorCode::RhiValidationUnavailable, "{} is not available",
-                         VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 }
 
 core::Severity severityOf(VkDebugUtilsMessageSeverityFlagBitsEXT severity) {
@@ -374,15 +348,9 @@ core::Result<std::unique_ptr<VulkanInstance>> VulkanInstance::create(const Insta
     }
     BFR_LOG_INFO(desc.logger, "Vulkan loader {}", versionName(*loader));
 
-    if (config.validation) {
-        if (auto available = checkValidation(desc.logger); !available) {
-            return std::unexpected(std::move(available.error()));
-        }
-    }
-
     auto rhi = std::make_unique<VulkanInstance>(config, desc.logger);
     rhi->loaderVersion_ = *loader;
-    if (auto created = rhi->createInstance(); !created) {
+    if (auto created = rhi->createInstance(desc); !created) {
         return std::unexpected(std::move(created.error()));
     }
     if (auto listed = rhi->listAdapters(); !listed) {
@@ -420,9 +388,6 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
         return std::unexpected(std::move(checked.error()));
     }
     const Adapter& listed = adapters_[adapter];
-    if (auto checked = checkBindlessLimits(wanted, listed.caps.bindless); !checked) {
-        return std::unexpected(std::move(checked.error()));
-    }
     VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
     const auto properties = queueFamilies(vk_, physicalDevice);
     const auto presenting = presentingFamilies(adapter, properties.size(), presentTo);
@@ -430,74 +395,67 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
         return std::unexpected(presenting.error());
     }
     const auto families = chooseQueueFamilies(properties, *presenting);
-    if (!families) {
-        return core::failure(core::ErrorCode::RhiDeviceFailed, "{} has no graphics queue", listed.name);
+    const QueueCounts has = countQueues(families, properties);
+    if (has.graphics < wanted.graphics.size()) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "{} has {} graphics queues; {} were asked for",
+                             listed.name, has.graphics, wanted.graphics.size());
     }
-    if (!families->present) {
-        return core::failure(core::ErrorCode::RhiPresentUnsupported, "no queue family on {} presents to the window",
-                             listed.name);
+    if (has.compute < wanted.compute.size()) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "{} has {} compute queues; {} were asked for",
+                             listed.name, has.compute, wanted.compute.size());
     }
-    if (wanted.compute != 0) {
-        const std::uint32_t has = families->compute == families->graphics ? 0
-                                                                          : properties[families->compute].queueCount;
-        if (has < wanted.compute) {
-            return core::failure(core::ErrorCode::RhiUnsupported, "{} has {} compute queues; {} were asked for",
-                                 listed.name, has, wanted.compute);
-        }
+    if (has.copy < wanted.copy.size()) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "{} has {} copy queues; {} were asked for", listed.name,
+                             has.copy, wanted.copy.size());
     }
-    if (wanted.copy != 0) {
-        const bool dedicated = families->transfer != families->graphics && families->transfer != families->compute;
-        const std::uint32_t has = dedicated ? properties[families->transfer].queueCount : 0;
-        if (has < wanted.copy) {
-            return core::failure(core::ErrorCode::RhiUnsupported, "{} has {} copy queues; {} were asked for",
-                                 listed.name, has, wanted.copy);
-        }
+    // With a window, a queue the device opens must present to it.
+    const auto opens = [](std::optional<std::uint32_t> family, std::span<const QueueDesc> kind) {
+        return family && !kind.empty();
+    };
+    if (!presenting->empty() && !std::ranges::any_of(std::array{std::pair{families.graphics, wanted.graphics},
+                                                                std::pair{families.compute, wanted.compute},
+                                                                std::pair{families.transfer, wanted.copy}},
+                                                     [&](const auto& kind) {
+                                                         return opens(kind.first, kind.second) &&
+                                                                (*presenting)[*kind.first] == VK_TRUE;
+                                                     })) {
+        return core::failure(core::ErrorCode::RhiPresentUnsupported,
+                             "no queue the device opens on {} presents to the window", listed.name);
     }
     const auto available = deviceExtensions(vk_, physicalDevice);
     if (!available) {
         return core::failure(codeFor(core::ErrorCode::RhiDeviceFailed, available.error().result), "{} on {}: {}",
                              available.error().call, listed.name, string_VkResult(available.error().result));
     }
-    std::vector<const char*> extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-    if (lists(*available, kPortabilitySubset)) {
-        extensions.push_back(kPortabilitySubset);
+    // Presenting needs it; a device without it computes and renders offscreen.
+    const bool swapchains = lists(*available, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    std::vector<const char*> extensions;
+    if (swapchains) {
+        extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     }
 
-    // The optional sampler features, each turned on when the caps report it,
-    // so the caps say what the device has. Samplers that use one pass through
-    // either way; validation reports a feature that is off.
-    const Features& reported = listed.caps.features;
-    const SamplerFeatures sampler{.anisotropy = reported.samplerAnisotropy,
-                                  .minmax = reported.samplerMinmax,
-                                  .mirrorClampToEdge = reported.samplerMirrorClampToEdge,
-                                  .customBorderColor = reported.samplerCustomBorderColor};
-    if (sampler.customBorderColor) {
-        extensions.push_back(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
-    }
+    // Every feature the adapter reports, read as its caps were, so the caps
+    // say what the device has; but robust access, which changes what an
+    // out-of-bounds access does and costs speed, stays off.
+    DeviceFeatures features(vk_, physicalDevice, *available);
+    features.core.features.robustBufferAccess = VK_FALSE;
+    features.vulkan13.robustImageAccess = VK_FALSE;
+    extensions.insert(extensions.end(), features.enabledExtensions.begin(), features.enabledExtensions.end());
 
-    const auto queues = queueCreateInfos(*families, *families->present, wanted);
-    const DeviceFeatures features(sampler);
-    // The optional 1.0 features a pipeline's state may need, each turned on
-    // when the adapter has it; the device refuses state that needs one it lacks.
-    VkPhysicalDeviceFeatures2 has{};
-    has.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    vk_.vkGetPhysicalDeviceFeatures2(physicalDevice, &has);
-    VkPhysicalDeviceFeatures enabled{};
-    enabled.fillModeNonSolid = has.features.fillModeNonSolid;
-    enabled.depthClamp = has.features.depthClamp;
-    enabled.depthBiasClamp = has.features.depthBiasClamp;
-    enabled.independentBlend = has.features.independentBlend;
-    enabled.samplerAnisotropy = sampler.anisotropy ? VK_TRUE : VK_FALSE;
-    const RasterFeatures raster{.fillModeNonSolid = enabled.fillModeNonSolid == VK_TRUE,
-                                .depthClamp = enabled.depthClamp == VK_TRUE,
-                                .depthBiasClamp = enabled.depthBiasClamp == VK_TRUE,
-                                .independentBlend = enabled.independentBlend == VK_TRUE};
+    const auto queues = queueCreateInfos(families, wanted, lists(*available, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME));
+    if (!queues) {
+        return std::unexpected(queues.error());
+    }
+    // VUID-VkDeviceCreateInfo-None-10778.
+    if (queues->infos.empty() && features.maintenance9.maintenance9 != VK_TRUE) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "{} has no maintenance9, which Vulkan needs to open a device with no queues", listed.name);
+    }
     VkDeviceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    info.pNext = &features.head();
-    info.pEnabledFeatures = &enabled;
-    info.queueCreateInfoCount = static_cast<std::uint32_t>(queues.infos.size());
-    info.pQueueCreateInfos = queues.infos.data();
+    info.pNext = &features.core;
+    info.queueCreateInfoCount = static_cast<std::uint32_t>(queues->infos.size());
+    info.pQueueCreateInfos = queues->infos.data();
     info.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
     info.ppEnabledExtensionNames = extensions.data();
 
@@ -507,9 +465,10 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
         return core::failure(codeFor(core::ErrorCode::RhiDeviceFailed, result), "vkCreateDevice on {}: {}", listed.name,
                              string_VkResult(result));
     }
-    BFR_LOG_INFO(logger(), "device on {}, queue families {}, extensions: {}", listed.name, familyList(queues.infos),
+    BFR_LOG_INFO(logger(), "device on {}, queue families {}, extensions: {}", listed.name, familyList(queues->infos),
                  core::text::join(extensions, ", "));
-    auto made = VulkanDevice::create(*this, physicalDevice, device, *families, wanted, hasBudget_[adapter], raster);
+    auto made = VulkanDevice::create(*this, physicalDevice, device, families, wanted, hasBudget_[adapter], swapchains,
+                                     listed.caps.limits.maxPushConstantsSize);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }
@@ -519,6 +478,9 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
 core::Result<FormatCaps> VulkanInstance::formatCaps(std::size_t adapter, Format format) const {
     if (auto listed = checkAdapter(adapter); !listed) {
         return std::unexpected(std::move(listed.error()));
+    }
+    if (auto checked = checkFormat(format); !checked) {
+        return std::unexpected(std::move(checked.error()));
     }
     return readFormatCaps(vk_, physicalDevices_[adapter], format);
 }
@@ -613,10 +575,16 @@ bool VulkanInstance::presentQueryCrashes(VkPhysicalDevice adapter, const VulkanS
            driverProperties(vk_, adapter).driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY;
 }
 
-core::Result<void> VulkanInstance::createInstance() {
+core::Result<void> VulkanInstance::createInstance(const InstanceDesc& desc) {
+    // VkApplicationInfo takes null-terminated names; null is none.
+    const std::string applicationName{desc.applicationName};
+    const std::string engineName{desc.engineName};
     VkApplicationInfo application{};
     application.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    application.pEngineName = "BFR";
+    application.pApplicationName = applicationName.empty() ? nullptr : applicationName.c_str();
+    application.applicationVersion = desc.applicationVersion;
+    application.pEngineName = engineName.empty() ? nullptr : engineName.c_str();
+    application.engineVersion = desc.engineVersion;
     application.apiVersion = kInstanceVersion;
 
     VkInstanceCreateInfo info{};
@@ -652,17 +620,25 @@ core::Result<void> VulkanInstance::createInstance() {
     const VkResult result = vkCreateInstance(&info, nullptr, &handle);
     messages_.reasons = nullptr;
     if (result != VK_SUCCESS) {
-        // Validation is the only layer the Instance enables, so a layer that is
-        // listed yet fails to load is validation.
-        const core::ErrorCode code = result == VK_ERROR_LAYER_NOT_PRESENT
-                                         ? core::ErrorCode::RhiValidationUnavailable
-                                         : codeFor(core::ErrorCode::RhiInstanceFailed, result);
+        // Validation is the only layer the Instance enables, and
+        // VK_EXT_debug_utils the only extension it enables without finding it
+        // listed, so either one missing is validation unavailable.
+        const bool validationMissing = result == VK_ERROR_LAYER_NOT_PRESENT ||
+                                       (config().validation && result == VK_ERROR_EXTENSION_NOT_PRESENT);
+        const core::ErrorCode code = validationMissing ? core::ErrorCode::RhiValidationUnavailable
+                                                       : codeFor(core::ErrorCode::RhiInstanceFailed, result);
         return core::failure(code,
                              core::error::withReasons(std::format("vkCreateInstance: {}", string_VkResult(result)),
                                                       reasons));
     }
     instance_ = handle;
     extensions_ = std::move(extensions);
+    if (config().validation) {
+        // For the log only: the loader has already loaded the layer.
+        if (const auto layer = findLayer(kValidationLayer); layer && *layer) {
+            BFR_LOG_INFO(logger(), "{} {}", kValidationLayer, versionName((*layer)->specVersion));
+        }
+    }
     vk_ = loadInstanceTable(instance_);
     BFR_LOG_INFO(logger(), "Vulkan instance {}, validation {}", versionName(kInstanceVersion),
                  config().validation ? "on" : "off");
@@ -704,7 +680,7 @@ core::Result<void> VulkanInstance::listAdapters() {
             rejected.push_back(std::format("{}: {}", properties.deviceName, why));
             continue;
         }
-        const std::string reason = belowFloor(vk_, device, properties, *extensions);
+        const std::string reason = belowFloor(vk_, device, properties);
         BFR_LOG_INFO(logger(), "adapter {}: {}", describe(vk_, device, properties),
                      reason.empty() ? std::string{"listed"} : "below the floor, " + reason);
         if (!reason.empty()) {

@@ -1,6 +1,6 @@
 #pragma once
 
-// What D3D12 says about formats and about a DXGI swapchain as a surface.
+// What D3D12 says about formats, and the formats a DXGI swapchain presents in.
 
 #include "bfr/core/error.h"
 #include "bfr/rhi/caps.h"
@@ -10,7 +10,7 @@
 #include <dxgi1_6.h>
 
 #include <cstdint>
-#include <span>
+#include <vector>
 
 namespace bfr::rhi::d3d12 {
 
@@ -32,23 +32,23 @@ struct DxgiFormats {
 /// format DXGI lacks. Fails with RhiQueryFailed when the device won't say.
 [[nodiscard]] core::Result<FormatCaps> formatCapsFor(ID3D12Device* device, Format format);
 
-/// What DXGI says a swapchain may be: at most DXGI_MAX_SWAP_CHAIN_BUFFERS
-/// images, and presenting at once when it allows tearing. DXGI has no call for
-/// the rest.
-[[nodiscard]] SwapchainCaps surfaceCapsFor(bool tearing);
-
-/// The formats and color spaces a DXGI swapchain presents in: none, since DXGI
-/// has no call that lists them.
-[[nodiscard]] std::span<const SwapchainFormat> swapchainFormats();
-
 /// How a swapchain is made to present format in colorSpace.
 struct DxgiSwapchainFormat {
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
     DXGI_COLOR_SPACE_TYPE colorSpace = DXGI_COLOR_SPACE_RESERVED;
 };
 
+/// The formats and color spaces swapchainFormatFor has a setting for, of
+/// those device says it displays (FORMAT_SUPPORT1_DISPLAY). DXGI has no call
+/// that lists them. Fails with RhiQueryFailed when the query fails.
+[[nodiscard]] core::Result<std::vector<SwapchainFormat>> swapchainFormats(ID3D12Device* device);
+
 /// How DXGI is asked to present format in colorSpace; unset for a pair it has
 /// no setting for.
 [[nodiscard]] DxgiSwapchainFormat swapchainFormatFor(Format format, ColorSpace colorSpace);
+
+/// The format of a swapchain DXGI made in format; Undefined for one no
+/// swapchainFormats entry is made in.
+[[nodiscard]] Format swapchainFormatOf(DXGI_FORMAT format);
 
 } // namespace bfr::rhi::d3d12

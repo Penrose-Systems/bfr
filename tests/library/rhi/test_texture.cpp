@@ -49,6 +49,8 @@ constexpr std::uint32_t kRegionHeight = 4;
 constexpr std::uint32_t kInset = 4;
 
 constexpr TextureUsage kCopies{.copySrc = true, .copyDst = true};
+// A number Format has no value for.
+constexpr auto kNoSuchFormat = static_cast<Format>(0xffff);
 
 // An Instance and a device on its first adapter, presenting nowhere.
 struct TextureDevice {
@@ -278,7 +280,7 @@ TEST_CASE("Device copies texels from a buffer into a texture, to another texture
         const auto token = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
         INFO(failureOf(token));
         REQUIRE(token.has_value());
-        REQUIRE(device.wait(*token).has_value());
+        REQUIRE(device.wait(*token, kTestWait).has_value());
 
         const auto read = device.mapBuffer(readback);
         REQUIRE(read.has_value());
@@ -384,7 +386,7 @@ TEST_CASE("Device copies the depth and the stencil of a texture, each whole, fro
         const auto token = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
         INFO(failureOf(token));
         REQUIRE(token.has_value());
-        REQUIRE(device.wait(*token).has_value());
+        REQUIRE(device.wait(*token, kTestWait).has_value());
 
         const auto read = device.mapBuffer(readback);
         REQUIRE(read.has_value());
@@ -457,6 +459,70 @@ TEST_CASE("Device fails texture calls with RhiInvalidHandle for a texture or lis
         CHECK(device.destroyCommandList(*list).has_value());
         CHECK(device.textureBarrier(*list, texture, TextureLayout::Undefined, TextureLayout::CopyDst).error().code ==
               ErrorCode::RhiInvalidHandle);
+        CHECK(device.destroyCommandPool(*pool).has_value());
+        CHECK(device.destroyBuffer(buffer).has_value());
+        CHECK(device.destroyTexture(texture).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device refuses a texture or a format query of a format BFR does not have", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const TextureDevice made{recordingInto(backend, messages)};
+        const Format format = GENERATE(Format::Undefined, kNoSuchFormat);
+        const TextureDesc desc{.dimension = TextureDimension::D2,
+                               .format = format,
+                               .width = kWidth,
+                               .height = kHeight,
+                               .depth = 1,
+                               .layers = 1,
+                               .mipLevels = 1,
+                               .samples = 1,
+                               .usage = kCopies};
+
+        CHECK(made.device->createTexture(desc).error().code == ErrorCode::RhiInvalidCall);
+        CHECK(made.instance->formatCaps(0, format).error().code == ErrorCode::RhiInvalidCall);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device refuses a buffer copy of an aspect the texture's format has none of", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const TextureDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const TextureHandle texture = created(device, {.dimension = TextureDimension::D2,
+                                                       .format = Format::Rgba8Unorm,
+                                                       .width = kWidth,
+                                                       .height = kHeight,
+                                                       .depth = 1,
+                                                       .layers = 1,
+                                                       .mipLevels = 1,
+                                                       .samples = 1,
+                                                       .usage = kCopies});
+        const BufferHandle buffer = created(device, BufferDesc{.size = std::uint64_t{kWidth} * kHeight * kRgba8Bytes,
+                                                               .memory = BufferMemory::Upload,
+                                                               .usage = {.copySrc = true, .copyDst = true}});
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+        const TextureAspect aspect = GENERATE(TextureAspect::Depth, TextureAspect::Stencil);
+        const BufferTextureCopy region{.bytesPerRow = std::uint64_t{kWidth} * kRgba8Bytes,
+                                       .rowsPerImage = kHeight,
+                                       .aspect = aspect,
+                                       .width = kWidth,
+                                       .height = kHeight,
+                                       .depth = 1};
+
+        CHECK(device.copyBufferToTexture(*list, buffer, texture, std::span{&region, 1}).error().code ==
+              ErrorCode::RhiInvalidCall);
+        CHECK(device.copyTextureToBuffer(*list, texture, buffer, std::span{&region, 1}).error().code ==
+              ErrorCode::RhiInvalidCall);
+        CHECK(device.destroyCommandList(*list).has_value());
         CHECK(device.destroyCommandPool(*pool).has_value());
         CHECK(device.destroyBuffer(buffer).has_value());
         CHECK(device.destroyTexture(texture).has_value());

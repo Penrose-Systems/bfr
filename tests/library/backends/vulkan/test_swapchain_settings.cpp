@@ -41,6 +41,7 @@ TEST_CASE("Vulkan swapchain settings name the request in Vulkan's terms", "[vulk
                                                             {.imageCount = 2,
                                                              .presentMode = PresentMode::Immediate,
                                                              .format = Format::Rgba8Unorm,
+                                                             .colorSpace = ColorSpace::Srgb,
                                                              .alphaMode = AlphaMode::Premultiplied});
 
     CHECK(settings.format.format == VK_FORMAT_R8G8B8A8_UNORM);
