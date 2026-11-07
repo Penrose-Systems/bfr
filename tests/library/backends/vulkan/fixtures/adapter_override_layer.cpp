@@ -11,7 +11,6 @@
 // - BFR_ADAPTER_LOD_BIAS: the adapter's VK_KHR_portability_subset features
 //   report samplerMipLodBias as this, 0 or 1; the driver underneath has no
 //   such struct to fill.
-// - BFR_ADAPTER_NO_COMPUTE: no queue family reports compute.
 // - BFR_ADAPTER_NO_GRAPHICS: no queue family reports graphics.
 // - BFR_ADAPTER_SEPARATE_PRESENT: the adapter also lists a queue family that
 //   does nothing but present, the only one that presents; vkCreateDevice drops
@@ -349,9 +348,6 @@ std::vector<VkQueueFamilyProperties> reportedFamilies(VkPhysicalDevice device) {
                                     .minImageTransferGranularity = {.width = 1, .height = 1, .depth = 1}});
     }
     VkQueueFlags hidden = 0;
-    if (std::getenv("BFR_ADAPTER_NO_COMPUTE") != nullptr) {
-        hidden |= VK_QUEUE_COMPUTE_BIT;
-    }
     if (std::getenv("BFR_ADAPTER_NO_GRAPHICS") != nullptr) {
         hidden |= VK_QUEUE_GRAPHICS_BIT;
     }

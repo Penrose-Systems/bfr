@@ -3,19 +3,25 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
+#include "bfr/rhi/sparse.h"
 #include "core/slot_chains.h"
 #include "metal/metal_device.h"
+#include "metal/metal_sparse.h"
 #include "metal/metal_texture.h"
 #include "metal/metal_util.h"
 #include "rhi/bindless_slots.h"
 #include "rhi/buffer_check.h"
+#include "rhi/enum_check.h"
 
 #include <Metal/Metal.hpp>
+#include <Metal/MTL4CommandQueue.hpp>
 #include <Metal/MTL4ComputeCommandEncoder.hpp>
 #include <Metal/MTLAllocation.hpp>
 #include <Metal/MTLBuffer.hpp>
 #include <Metal/MTLGPUAddress.hpp>
 #include <Metal/MTLResidencySet.hpp>
+#include <Metal/MTLResource.hpp>
+#include <Metal/MTLResourceStateCommandEncoder.hpp>
 
 #include <atomic>
 #include <cstddef>
@@ -23,7 +29,9 @@
 #include <expected>
 #include <format>
 #include <mutex>
+#include <optional>
 #include <span>
+#include <tuple>
 #include <utility>
 
 namespace bfr::rhi::metal {
@@ -63,7 +71,27 @@ Resident::Resident(Resident&& other) noexcept
 
 core::Result<MetalBuffer> createMetalBuffer(MTL::Device& device, const BufferDesc& desc,
                                             Ref<MTL::ResidencySet> residency) {
-    Ref<MTL::Buffer> buffer = adopt(device.newBuffer(desc.size, optionsFor(desc.memory)));
+    std::optional<MTL::SparsePageSize> page;
+    std::uint64_t tileBytes = 0;
+    if (desc.sparse) {
+        if (desc.memory != BufferMemory::Device) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 "a sparse buffer's memory is the sparse memory mapped into it, so it is device");
+        }
+        // MTLBuffer.hpp and MTLDevice.hpp:408 have no aliased sparse buffer.
+        if (desc.sparseAliased) {
+            return core::failure(core::ErrorCode::RhiUnsupported, "Metal has no aliased sparse buffer");
+        }
+        auto found = pageSizeFor(device, desc.tileBytes);
+        if (!found) {
+            return std::unexpected(std::move(found.error()));
+        }
+        page = *found;
+        tileBytes = device.sparseTileSizeInBytes(*page);
+    }
+    // A sparse buffer is made at its page size, with no memory of its own.
+    Ref<MTL::Buffer> buffer = adopt(page ? device.newBuffer(desc.size, optionsFor(desc.memory), *page)
+                                         : device.newBuffer(desc.size, optionsFor(desc.memory)));
     if (!buffer) {
         return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no buffer of {} bytes", desc.size);
     }
@@ -76,6 +104,8 @@ core::Result<MetalBuffer> createMetalBuffer(MTL::Device& device, const BufferDes
                        .memory = desc.memory,
                        .mapped = mapped,
                        .slot = core::SlotChains::kEnd,
+                       .page = page,
+                       .tileBytes = tileBytes,
                        .resident = std::move(resident)};
 }
 
@@ -100,6 +130,7 @@ void MetalDevice::collectBuffers() {
     textures_.collect(completed, [this](const MetalTexture& texture) { bindless_.giveTexture(texture.slots); });
     samplers_.collect(completed, [this](const MetalSampler& sampler) { bindless_.giveSampler(sampler.slot); });
     timestampPools_.collect(completed);
+    sparseMemories_.collect(completed);
     pipelines_.collect(completed);
     residency_->commit();
 }
@@ -201,6 +232,57 @@ core::Result<void> MetalDevice::destroyBuffer(BufferHandle buffer) {
     }
     collectBuffers();
     return {};
+}
+
+core::Result<BufferTiling> MetalDevice::bufferTiling(BufferHandle buffer) {
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    if (!(*found)->page) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the buffer is not sparse");
+    }
+    return BufferTiling{.tileBytes = (*found)->tileBytes};
+}
+
+// Ranges and heap offsets in bytes: tiles times the buffer's tile bytes. The
+// header (MTL4CommandQueue.hpp:82-87) names no unit, so bytes are unverified.
+core::Result<const MTL::Buffer*> MetalDevice::addBufferMappings(MetalQueue& queue, const TileMappingDesc& desc,
+                                                                const MetalSparseMemory* memory) {
+    if (desc.buffer.isNull()) {
+        if (!desc.bufferRegions.empty()) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "buffer regions were given with no buffer");
+        }
+        return nullptr;
+    }
+    auto found = bufferFor(desc.buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    const MetalBuffer& buffer = **found;
+    if (!buffer.page) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the buffer is not sparse");
+    }
+    if (memory != nullptr) {
+        if (auto fits = checkPageFits(*buffer.page, memory->page); !fits) {
+            return std::unexpected(std::move(fits.error()));
+        }
+    }
+    for (const BufferTileRegion& region : desc.bufferRegions) {
+        if (auto checked = checkKnown(region.mapping, "tile mapping"); !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        const bool maps = region.mapping == TileMapping::Map;
+        if (maps && memory == nullptr) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "a region maps, but no memory was given");
+        }
+        // The buffer's regions are at most maxTileMappings, which the array holds.
+        std::ignore = queue.bufferMappings.push(MTL4::UpdateSparseBufferMappingOperation{
+            .mode = maps ? MTL::SparseTextureMappingModeMap : MTL::SparseTextureMappingModeUnmap,
+            .bufferRange = NS::Range::Make(region.tile * buffer.tileBytes, region.tiles * buffer.tileBytes),
+            .heapOffset = maps ? region.memoryTile * buffer.tileBytes : 0});
+    }
+    return buffer.buffer.get();
 }
 
 } // namespace bfr::rhi::metal

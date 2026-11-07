@@ -4,17 +4,22 @@
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/format.h"
+#include "bfr/rhi/sparse.h"
 #include "bfr/rhi/texture.h"
 #include "core/slot_chains.h"
 #include "rhi/bindless_slots.h"
 #include "rhi/copy_check.h"
 #include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
+#include "rhi/tile_extent.h"
+#include "vulkan/instance_table.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_buffer.h"
 #include "vulkan/vulkan_caps.h"
 #include "vulkan/vulkan_device.h"
+#include "vulkan/vulkan_instance.h"
 #include "vulkan/vulkan_result.h"
+#include "vulkan/vulkan_sparse.h"
 
 #include <vulkan/vulkan_core.h>
 
@@ -24,6 +29,7 @@
 #include <cstdint>
 #include <expected>
 #include <format>
+#include <memory>
 #include <span>
 #include <utility>
 
@@ -146,11 +152,35 @@ core::Result<VkBufferImageCopy> copyFor(const BufferTextureCopy& region, Format 
                              .imageExtent = {.width = region.width, .height = region.height, .depth = region.depth}};
 }
 
+// The create flags of a sparse resource: bound tile by tile, partly
+// resident, and aliased where asked.
+VkImageCreateFlags sparseFlags(const TextureDesc& desc) {
+    if (!desc.sparse) {
+        return 0;
+    }
+    return VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT |
+           (desc.sparseAliased ? VkImageCreateFlags{VK_IMAGE_CREATE_SPARSE_ALIASED_BIT} : 0U);
+}
+
+// What Vulkan says of a sparse image's tiles, each aspect's requirements up to
+// the most an image has.
+VulkanSparseTiling sparseTilingOf(const VolkDeviceTable& table, VkDevice device, VkImage image) {
+    VkMemoryRequirements requirements{};
+    table.vkGetImageMemoryRequirements(device, image, &requirements);
+    VulkanSparseTiling tiling{.tileBytes = requirements.alignment, .memoryTypes = requirements.memoryTypeBits};
+    std::uint32_t count = 0;
+    table.vkGetImageSparseMemoryRequirements(device, image, &count, nullptr);
+    tiling.count = std::min(count, kMaxSparseAspects);
+    table.vkGetImageSparseMemoryRequirements(device, image, &tiling.count, tiling.aspects.data());
+    return tiling;
+}
+
 } // namespace
 
 VulkanTexture::VulkanTexture(const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator, VkImage image,
                              VmaAllocation allocation, VkImageView view, VkImageView shaderView,
-                             const TextureDesc& desc, VkImageAspectFlags aspects, TextureSlotsHeld slots)
+                             const TextureDesc& desc, VkImageAspectFlags aspects, TextureSlotsHeld slots,
+                             const VulkanSparseTiling& sparse)
     : table_(&table),
       device_(device),
       allocator_(allocator),
@@ -161,7 +191,10 @@ VulkanTexture::VulkanTexture(const VolkDeviceTable& table, VkDevice device, VmaA
       format_(desc.format),
       extent_{.width = desc.width, .height = desc.height},
       aspects_(aspects),
-      slots_(slots) {}
+      slots_(slots),
+      sparse_(desc.sparse),
+      size_{.width = desc.width, .height = desc.height, .depth = desc.depth},
+      tiling_(sparse) {}
 
 VulkanTexture::VulkanTexture(VulkanTexture&& other) noexcept
     : table_(other.table_),
@@ -174,7 +207,10 @@ VulkanTexture::VulkanTexture(VulkanTexture&& other) noexcept
       format_(other.format_),
       extent_(other.extent_),
       aspects_(other.aspects_),
-      slots_(other.slots_) {}
+      slots_(other.slots_),
+      sparse_(other.sparse_),
+      size_(other.size_),
+      tiling_(other.tiling_) {}
 
 VulkanTexture::~VulkanTexture() {
     if (shaderView_ != VK_NULL_HANDLE && shaderView_ != view_) {
@@ -191,10 +227,15 @@ VulkanTexture::~VulkanTexture() {
 core::Result<VulkanTexture> createVulkanTexture(const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator,
                                                 const TextureDesc& desc, std::span<const std::uint32_t> families,
                                                 const TextureSlotsHeld& slots) {
+    if (desc.sparse && desc.tileBytes != 0) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "Vulkan sets a sparse texture's tile size itself; tileBytes is 0");
+    }
     VkImageCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    info.flags = desc.dimension == TextureDimension::Cube ? VkImageCreateFlags{VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT}
-                                                          : 0U;
+    info.flags = (desc.dimension == TextureDimension::Cube ? VkImageCreateFlags{VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT}
+                                                           : 0U) |
+                 sparseFlags(desc);
     info.imageType = typeFor(desc.dimension);
     info.format = vulkanFormat(desc.format);
     info.extent = {.width = desc.width, .height = desc.height, .depth = desc.depth};
@@ -212,13 +253,23 @@ core::Result<VulkanTexture> createVulkanTexture(const VolkDeviceTable& table, Vk
     else {
         info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     }
-    VmaAllocationCreateInfo allocation{};
-    allocation.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
     VkImage image = VK_NULL_HANDLE;
     VmaAllocation made = VK_NULL_HANDLE;
-    if (const VkResult result = vmaCreateImage(allocator, &info, &allocation, &image, &made, nullptr);
-        result != VK_SUCCESS) {
-        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vmaCreateImage", .result = result});
+    VulkanSparseTiling sparse;
+    if (desc.sparse) {
+        // Memory is mapped into it tile by tile, so none is placed now.
+        if (const VkResult result = table.vkCreateImage(device, &info, nullptr, &image); result != VK_SUCCESS) {
+            return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateImage", .result = result});
+        }
+        sparse = sparseTilingOf(table, device, image);
+    }
+    else {
+        VmaAllocationCreateInfo allocation{};
+        allocation.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        if (const VkResult result = vmaCreateImage(allocator, &info, &allocation, &image, &made, nullptr);
+            result != VK_SUCCESS) {
+            return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vmaCreateImage", .result = result});
+        }
     }
     const VkImageAspectFlags aspects = aspectsOf(desc.format);
     // A view only where a use reads through one: the tables and attachments.
@@ -226,7 +277,7 @@ core::Result<VulkanTexture> createVulkanTexture(const VolkDeviceTable& table, Vk
     VkImageView view = VK_NULL_HANDLE;
     VkImageView shaderView = VK_NULL_HANDLE;
     if (!desc.usage.sampled && !desc.usage.storage && !desc.usage.colorAttachment && !desc.usage.depthStencil) {
-        return VulkanTexture{table, device, allocator, image, made, view, shaderView, desc, aspects, slots};
+        return VulkanTexture{table, device, allocator, image, made, view, shaderView, desc, aspects, slots, sparse};
     }
     const auto createView = [&](VkImageAspectFlags viewAspects, VkImageView& out) -> core::Result<void> {
         VkImageViewCreateInfo viewInfo{};
@@ -259,7 +310,7 @@ core::Result<VulkanTexture> createVulkanTexture(const VolkDeviceTable& table, Vk
             return std::unexpected(std::move(created.error()));
         }
     }
-    return VulkanTexture{table, device, allocator, image, made, view, shaderView, desc, aspects, slots};
+    return VulkanTexture{table, device, allocator, image, made, view, shaderView, desc, aspects, slots, sparse};
 }
 
 // The device's texture calls, beside the textures they make.
@@ -481,6 +532,174 @@ core::Result<void> VulkanDevice::copyTexture(CommandListHandle commandList, Text
                                .extent = {.width = region.width, .height = region.height, .depth = region.depth}};
         table_.vkCmdCopyImage((*list)->buffer, (*from)->image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, (*to)->image(),
                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    }
+    return {};
+}
+
+namespace {
+
+// The sparse requirements of tiling's aspect, null where it has none.
+const VkSparseImageMemoryRequirements* requirementsOf(const VulkanSparseTiling& tiling, TextureAspect aspect) {
+    const VkImageAspectFlags wanted = aspectFor(aspect);
+    const auto aspects = std::span{tiling.aspects}.first(tiling.count);
+    const auto found = std::ranges::find_if(aspects, [wanted](const VkSparseImageMemoryRequirements& entry) {
+        return (entry.formatProperties.aspectMask & wanted) != 0;
+    });
+    return found != aspects.end() ? std::to_address(found) : nullptr;
+}
+
+} // namespace
+
+core::Result<TextureTiling> VulkanDevice::textureTiling(TextureHandle texture, TextureAspect aspect) {
+    if (auto checked = checkKnown(aspect, "texture aspect"); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    auto found = textureFor(texture);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    if (!(*found)->sparse()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the texture is not sparse");
+    }
+    const VulkanSparseTiling& tiling = (*found)->tiling();
+    const VkSparseImageMemoryRequirements* requirements = requirementsOf(tiling, aspect);
+    if (requirements == nullptr) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the texture has no sparse aspect {}",
+                             std::to_underlying(aspect));
+    }
+    const VkExtent3D& shape = requirements->formatProperties.imageGranularity;
+    return TextureTiling{
+        .tileBytes = tiling.tileBytes,
+        .shape = {.width = shape.width, .height = shape.height, .depth = shape.depth},
+        .firstTailMip = requirements->imageMipTailFirstLod,
+        .tailBytes = requirements->imageMipTailSize,
+        .tailStride = requirements->imageMipTailStride,
+        .singleTail = (requirements->formatProperties.flags & VK_SPARSE_IMAGE_FORMAT_SINGLE_MIPTAIL_BIT) != 0,
+    };
+}
+
+core::Result<SparseFormat> VulkanDevice::sparseFormat(const SparseFormatDesc& desc) const {
+    if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (desc.tileBytes != 0) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "Vulkan sets tile sizes itself; tileBytes is 0");
+    }
+    VkPhysicalDeviceSparseImageFormatInfo2 info{};
+    info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SPARSE_IMAGE_FORMAT_INFO_2;
+    info.format = vulkanFormat(desc.format);
+    info.type = typeFor(desc.dimension);
+    info.samples = static_cast<VkSampleCountFlagBits>(desc.samples);
+    info.usage = usageFor(desc.usage);
+    info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    std::array<VkSparseImageFormatProperties2, kMaxSparseAspects> properties{};
+    for (VkSparseImageFormatProperties2& entry : properties) {
+        entry.sType = VK_STRUCTURE_TYPE_SPARSE_IMAGE_FORMAT_PROPERTIES_2;
+    }
+    const InstanceTable& vk = instance_->instanceTable();
+    std::uint32_t count = 0;
+    vk.vkGetPhysicalDeviceSparseImageFormatProperties2(adapter_, &info, &count, nullptr);
+    count = std::min(count, kMaxSparseAspects);
+    vk.vkGetPhysicalDeviceSparseImageFormatProperties2(adapter_, &info, &count, properties.data());
+    const VkImageAspectFlags wanted = aspectFor(desc.aspect);
+    const auto listed = std::span{properties}.first(count);
+    const auto found = std::ranges::find_if(listed, [wanted](const VkSparseImageFormatProperties2& entry) {
+        return (entry.properties.aspectMask & wanted) != 0;
+    });
+    // Vulkan lists nothing for a texture it can't make sparse.
+    if (found == listed.end()) {
+        return SparseFormat{};
+    }
+    const VkExtent3D& shape = found->properties.imageGranularity;
+    return SparseFormat{
+        .supported = true,
+        .shape = {.width = shape.width, .height = shape.height, .depth = shape.depth},
+        .singleTail = (found->properties.flags & VK_SPARSE_IMAGE_FORMAT_SINGLE_MIPTAIL_BIT) != 0,
+        .alignedMipSize = (found->properties.flags & VK_SPARSE_IMAGE_FORMAT_ALIGNED_MIP_SIZE_BIT) != 0,
+    };
+}
+
+core::Result<void> VulkanDevice::addTextureBinds(VulkanQueue& queue, const TileMappingDesc& desc,
+                                                 const VulkanSparseMemory* memory) {
+    if (desc.texture.isNull()) {
+        if (!desc.textureRegions.empty()) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "texture regions were given with no texture");
+        }
+        return {};
+    }
+    auto found = textureFor(desc.texture);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    const VulkanTexture& texture = **found;
+    if (!texture.sparse()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the texture is not sparse");
+    }
+    const VulkanSparseTiling& tiling = texture.tiling();
+    if (memory != nullptr && (tiling.memoryTypes & (1U << memory->type())) == 0) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "the memory's type is not one the texture takes");
+    }
+    for (const TextureTileRegion& region : desc.textureRegions) {
+        if (auto checked = checkKnown(region.mapping, "tile mapping"); !checked) {
+            return checked;
+        }
+        if (auto checked = checkKnown(region.aspect, "texture aspect"); !checked) {
+            return checked;
+        }
+        const bool maps = region.mapping == TileMapping::Map;
+        if (maps && memory == nullptr) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "a region maps, but no memory was given");
+        }
+        const VkSparseImageMemoryRequirements* requirements = requirementsOf(tiling, region.aspect);
+        if (requirements == nullptr) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "the texture has no sparse aspect {}",
+                                 std::to_underlying(region.aspect));
+        }
+        const VkDeviceMemory bound = maps ? memory->memory() : VK_NULL_HANDLE;
+        const VkDeviceSize boundOffset = maps ? memory->offset() + region.memoryTile * tiling.tileBytes : 0;
+        if (region.mipLevel >= requirements->imageMipTailFirstLod) {
+            const bool single = (requirements->formatProperties.flags & VK_SPARSE_IMAGE_FORMAT_SINGLE_MIPTAIL_BIT) != 0;
+            if (single && region.layer != 0) {
+                return core::failure(core::ErrorCode::RhiUnsupported,
+                                     "every layer of the texture shares one tail, mapped at layer 0");
+            }
+            const VkDeviceSize layerTail = single ? 0 : region.layer * requirements->imageMipTailStride;
+            // The texture's regions are at most maxTileMappings, which the array holds.
+            std::ignore = queue.tailBinds.push(VkSparseMemoryBind{.resourceOffset = requirements->imageMipTailOffset +
+                                                                                    layerTail +
+                                                                                    region.tailTile * tiling.tileBytes,
+                                                                  .size = region.tailTiles * tiling.tileBytes,
+                                                                  .memory = bound,
+                                                                  .memoryOffset = boundOffset,
+                                                                  .flags = 0});
+            continue;
+        }
+        // Vulkan binds in texels: whole tiles, or to the mip level's edge.
+        const VkExtent3D& shape = requirements->formatProperties.imageGranularity;
+        const VkExtent3D size = texture.size();
+        const std::uint32_t levelWidth = levelSize(size.width, region.mipLevel);
+        const std::uint32_t levelHeight = levelSize(size.height, region.mipLevel);
+        const std::uint32_t levelDepth = levelSize(size.depth, region.mipLevel);
+        const std::uint32_t x = region.x * shape.width;
+        const std::uint32_t y = region.y * shape.height;
+        const std::uint32_t z = region.z * shape.depth;
+        if (!std::in_range<std::int32_t>(x) || !std::in_range<std::int32_t>(y) || !std::in_range<std::int32_t>(z)) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "tile {}, {}, {} is past what Vulkan takes", region.x,
+                                 region.y, region.z);
+        }
+        std::ignore = queue.imageBinds.push(
+            VkSparseImageMemoryBind{.subresource = {.aspectMask = aspectFor(region.aspect),
+                                                    .mipLevel = region.mipLevel,
+                                                    .arrayLayer = region.layer},
+                                    .offset = {.x = static_cast<std::int32_t>(x),
+                                               .y = static_cast<std::int32_t>(y),
+                                               .z = static_cast<std::int32_t>(z)},
+                                    .extent = {.width = extentWithin(region.width * shape.width, x, levelWidth),
+                                               .height = extentWithin(region.height * shape.height, y, levelHeight),
+                                               .depth = extentWithin(region.depth * shape.depth, z, levelDepth)},
+                                    .memory = bound,
+                                    .memoryOffset = boundOffset,
+                                    .flags = 0});
     }
     return {};
 }

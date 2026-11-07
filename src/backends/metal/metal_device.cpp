@@ -115,6 +115,7 @@ MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Devi
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
       samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
       timestampPools_("timestamp pools", desc.maxTimestampPools, desc.maxTimestampPools, rhi.logger()),
+      sparseMemories_("sparse memories", desc.maxSparseMemories, desc.maxSparseMemories, rhi.logger()),
       bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
@@ -131,11 +132,13 @@ core::Result<void> MetalDevice::open(const DeviceDesc& desc) {
     const auto open = [this, &desc](QueueType type) -> core::Result<void> {
         auto queue = std::make_unique<MetalQueue>();
         queue->type = type;
-        // A submit's arrays, made now at the device's maximums. Every pool
-        // may be destroyed before the GPU is done with it.
+        // A submit's and a tile mapping's arrays, made now at the device's
+        // maximums. Every pool may be destroyed before the GPU is done with it.
         queue->buffers = core::FixedVector<const MTL4::CommandBuffer*>{desc.maxCommandLists};
         queue->chains = core::FixedVector<MetalSwapchain*>{desc.maxSwapchains};
         queue->retired = core::FixedVector<MetalRetiredPool>{desc.maxCommandPools};
+        queue->textureMappings = core::FixedVector<MTL4::UpdateSparseTextureMappingOperation>{desc.maxTileMappings};
+        queue->bufferMappings = core::FixedVector<MTL4::UpdateSparseBufferMappingOperation>{desc.maxTileMappings};
         MTL4::CommandQueue* native = device_->newMTL4CommandQueue();
         if (native == nullptr) {
             return deviceFailed("command queue");
@@ -212,6 +215,10 @@ MetalDevice::~MetalDevice() {
         BFR_LOG_WARN(instance_->logger(), "{} textures were left when the device went", textures_.size());
     }
     textures_.clear();
+    if (sparseMemories_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} sparse memories were left when the device went", sparseMemories_.size());
+    }
+    sparseMemories_.clear();
     if (samplers_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} samplers were left when the device went", samplers_.size());
     }

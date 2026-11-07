@@ -3,32 +3,41 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
+#include "bfr/rhi/sparse.h"
 #include "bfr/rhi/texture.h"
 #include "core/slot_chains.h"
 #include "metal/metal_buffer.h"
 #include "metal/metal_device.h"
 #include "metal/metal_formats.h"
+#include "metal/metal_sparse.h"
 #include "metal/metal_util.h"
 #include "rhi/bindless_slots.h"
 #include "rhi/copy_check.h"
 #include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
+#include "rhi/tile_extent.h"
 
 #include <Foundation/NSTypes.hpp>
+#include <Metal/MTL4CommandQueue.hpp>
 #include <Metal/MTL4ComputeCommandEncoder.hpp>
 #include <Metal/MTLBlitCommandEncoder.hpp>
 #include <Metal/MTLDevice.hpp>
 #include <Metal/MTLResidencySet.hpp>
 #include <Metal/MTLResource.hpp>
+#include <Metal/MTLResourceStateCommandEncoder.hpp>
 #include <Metal/MTLTexture.hpp>
 #include <Metal/MTLTypes.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <expected>
 #include <format>
+#include <limits>
 #include <mutex>
+#include <optional>
 #include <span>
+#include <tuple>
 #include <utility>
 
 namespace bfr::rhi::metal {
@@ -82,6 +91,31 @@ NS::UInteger bytesPerImage(const FormatBlock& block, const BufferTextureCopy& re
     return region.depth > 1 ? region.bytesPerRow * blocksOver(region.rowsPerImage, block.height) : 0;
 }
 
+// What Metal says of a sparse texture's tiles at page: the page's bytes and
+// the tile's shape from the device (MTLDevice.hpp:537-539), and its tail from
+// the texture (MTLTexture.hpp:233, 289). Metal gives no tail stride and says
+// nothing of layers sharing one tail. Fails with RhiUnsupported for a shape or
+// first tail mip past what TextureTiling holds. That the shape is in texels
+// is unverified: the header names no unit.
+core::Result<TextureTiling> tilingOf(MTL::Device& device, const MTL::Texture& texture, MTL::SparsePageSize page) {
+    const MTL::Size shape = device.sparseTileSize(texture.textureType(), texture.pixelFormat(), texture.sampleCount(),
+                                                  page);
+    const NS::UInteger firstTail = texture.firstMipmapInTail();
+    if (!std::in_range<std::uint32_t>(shape.width) || !std::in_range<std::uint32_t>(shape.height) ||
+        !std::in_range<std::uint32_t>(shape.depth) || !std::in_range<std::uint32_t>(firstTail)) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "Metal's tile shape or first tail mip is past what BFR holds, 32 bits");
+    }
+    return TextureTiling{.tileBytes = device.sparseTileSizeInBytes(page),
+                         .shape = {.width = static_cast<std::uint32_t>(shape.width),
+                                   .height = static_cast<std::uint32_t>(shape.height),
+                                   .depth = static_cast<std::uint32_t>(shape.depth)},
+                         .firstTailMip = static_cast<std::uint32_t>(firstTail),
+                         .tailBytes = texture.tailSizeInBytes(),
+                         .tailStride = 0,
+                         .singleTail = false};
+}
+
 } // namespace
 
 core::Result<MetalTexture> createMetalTexture(MTL::Device& device, const TextureDesc& desc,
@@ -102,15 +136,40 @@ core::Result<MetalTexture> createMetalTexture(MTL::Device& device, const Texture
     descriptor->setSampleCount(desc.samples);
     descriptor->setStorageMode(MTL::StorageModePrivate);
     descriptor->setUsage(usageFor(desc.usage));
+    std::optional<MTL::SparsePageSize> page;
+    if (desc.sparse) {
+        // MTLTexture.hpp has no aliased sparse texture.
+        if (desc.sparseAliased) {
+            return core::failure(core::ErrorCode::RhiUnsupported, "Metal has no aliased sparse texture");
+        }
+        auto found = pageSizeFor(device, desc.tileBytes);
+        if (!found) {
+            return std::unexpected(std::move(found.error()));
+        }
+        page = *found;
+        // Made at its page size, with no memory of its own (MTLTexture.hpp:158).
+        descriptor->setPlacementSparsePageSize(*page);
+    }
     Ref<MTL::Texture> texture = adopt(device.newTexture(descriptor.get()));
     if (!texture) {
         return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no texture");
+    }
+    TextureTiling tiling;
+    if (page) {
+        auto read = tilingOf(device, *texture.get(), *page);
+        if (!read) {
+            return std::unexpected(std::move(read.error()));
+        }
+        tiling = *read;
     }
     Resident resident{std::move(residency), texture.get()};
     return MetalTexture{.texture = std::move(texture),
                         .format = desc.format,
                         .width = desc.width,
                         .height = desc.height,
+                        .depth = desc.depth,
+                        .page = page,
+                        .tiling = tiling,
                         .slots = {},
                         .resident = std::move(resident)};
 }
@@ -296,6 +355,118 @@ core::Result<void> MetalDevice::copyTexture(CommandListHandle commandList, Textu
     }
     encoder->endEncoding();
     return {};
+}
+
+namespace {
+
+// Metal's tiling takes no aspect (sparseTileSize, MTLDevice.hpp:537), so BFR
+// names it by the texture's color or depth aspect; it gives none of a stencil
+// aspect alone.
+core::Result<void> checkSparseAspect(Format format, TextureAspect aspect) {
+    if (auto checked = checkAspect(format, aspect); !checked) {
+        return checked;
+    }
+    if (aspect == TextureAspect::Stencil) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "Metal gives no tiling of a stencil aspect");
+    }
+    return {};
+}
+
+} // namespace
+
+core::Result<TextureTiling> MetalDevice::textureTiling(TextureHandle texture, TextureAspect aspect) {
+    auto found = textureFor(texture);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    if (!(*found)->page) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the texture is not sparse");
+    }
+    if (auto checked = checkSparseAspect((*found)->format, aspect); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    return (*found)->tiling;
+}
+
+// Metal has no query of whether a texture can be made sparse, and
+// sparseTileSize (MTLDevice.hpp:537) wants a texture type SparseFormatDesc
+// can't name, having no layers to tell an array from one texture, and has no
+// way to fail; so nothing is given.
+core::Result<SparseFormat> MetalDevice::sparseFormat(const SparseFormatDesc& desc) const {
+    if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto page = pageSizeFor(*device_.get(), desc.tileBytes); !page) {
+        return std::unexpected(std::move(page.error()));
+    }
+    return SparseFormat{};
+}
+
+// A region in texels: its tiles times the tile's shape, clamped to the mip
+// level's edge, at the level and slice it names. The heap offset is in bytes,
+// tiles times the texture's tile bytes. The header (MTL4CommandQueue.hpp:63-70)
+// names neither unit, and Metal has both pixel and tile regions
+// (MTLDevice.hpp:333-335), so texels and bytes are both unverified. The tail is refused: Metal 4's op
+// takes a region, with no offset into the tail.
+core::Result<const MTL::Texture*> MetalDevice::addTextureMappings(MetalQueue& queue, const TileMappingDesc& desc,
+                                                                  const MetalSparseMemory* memory) {
+    if (desc.texture.isNull()) {
+        if (!desc.textureRegions.empty()) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "texture regions were given with no texture");
+        }
+        return nullptr;
+    }
+    auto found = textureFor(desc.texture);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    const MetalTexture& texture = **found;
+    if (!texture.page) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the texture is not sparse");
+    }
+    if (memory != nullptr) {
+        if (auto fits = checkPageFits(*texture.page, memory->page); !fits) {
+            return std::unexpected(std::move(fits.error()));
+        }
+    }
+    const TextureTiling& tiling = texture.tiling;
+    for (const TextureTileRegion& region : desc.textureRegions) {
+        if (auto checked = checkKnown(region.mapping, "tile mapping"); !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        if (auto checked = checkSparseAspect(texture.format, region.aspect); !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        const bool maps = region.mapping == TileMapping::Map;
+        if (maps && memory == nullptr) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "a region maps, but no memory was given");
+        }
+        if (region.mipLevel >= tiling.firstTailMip) {
+            return core::failure(core::ErrorCode::RhiUnsupported,
+                                 "mip level {} is in the tail, which Metal 4's mapping op has no offset into",
+                                 region.mipLevel);
+        }
+        const NS::UInteger x = NS::UInteger{region.x} * tiling.shape.width;
+        const NS::UInteger y = NS::UInteger{region.y} * tiling.shape.height;
+        const NS::UInteger z = NS::UInteger{region.z} * tiling.shape.depth;
+        const MTL::Region pixels =
+            MTL::Region::Make3D(x, y, z,
+                                extentWithin(NS::UInteger{region.width} * tiling.shape.width, x,
+                                             NS::UInteger{levelSize(texture.width, region.mipLevel)}),
+                                extentWithin(NS::UInteger{region.height} * tiling.shape.height, y,
+                                             NS::UInteger{levelSize(texture.height, region.mipLevel)}),
+                                extentWithin(NS::UInteger{region.depth} * tiling.shape.depth, z,
+                                             NS::UInteger{levelSize(texture.depth, region.mipLevel)}));
+        // The texture's regions are at most maxTileMappings, which the array holds.
+        std::ignore = queue.textureMappings.push(
+            MTL4::UpdateSparseTextureMappingOperation{.mode = maps ? MTL::SparseTextureMappingModeMap
+                                                                   : MTL::SparseTextureMappingModeUnmap,
+                                                      .textureRegion = pixels,
+                                                      .textureLevel = region.mipLevel,
+                                                      .textureSlice = region.layer,
+                                                      .heapOffset = maps ? region.memoryTile * tiling.tileBytes : 0});
+    }
+    return texture.texture.get();
 }
 
 } // namespace bfr::rhi::metal

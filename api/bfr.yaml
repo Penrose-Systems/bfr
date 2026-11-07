@@ -298,6 +298,12 @@ enums:
       matches: {value: 0, doc: It said nothing more than that the call succeeded.}
       suboptimal: {value: 1, doc: "It no longer matches its window exactly but still presents; Vulkan's VK_SUBOPTIMAL_KHR. bfr_resize_swapchain makes it match, when the caller chooses."}
 
+  tile_mapping:
+    doc: What a tile mapping does to its region.
+    values:
+      map: {value: 0, doc: "Maps the region to the memory's tiles."}
+      unmap: {value: 1, doc: Leaves the region with no memory; memory_tile is unused.}
+
   call:
     doc: >-
       Each call that call timings count. The device's are named after the
@@ -361,6 +367,12 @@ enums:
       instance_format_caps: {value: 54}
       instance_swapchain_caps: {value: 55}
       instance_swapchain_formats: {value: 56}
+      create_sparse_memory: {value: 57}
+      destroy_sparse_memory: {value: 58}
+      texture_tiling: {value: 59}
+      buffer_tiling: {value: 60}
+      sparse_format: {value: 61}
+      update_tile_mappings: {value: 62}
 
   timestamp_stage:
     doc: >-
@@ -658,6 +670,11 @@ handles:
     destroy: destroy_timestamp_pool
     doc: GPU timestamps that command lists write and resolve into a buffer.
 
+  sparse_memory:
+    parent: device
+    destroy: destroy_sparse_memory
+    doc: Device memory that sparse textures' and buffers' tiles are mapped into by bfr_update_tile_mappings.
+
 callbacks:
   message_callback:
     doc: >-
@@ -806,6 +823,15 @@ structs:
       - name: max_timestamp_pools
         type: u32
         doc: Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool fails with error_limit_reached.
+      - name: max_sparse_memories
+        type: u32
+        doc: Sparse memories the device holds at once, 0 for none; past it, bfr_create_sparse_memory fails with error_limit_reached.
+      - name: max_tile_mappings
+        type: u32
+        doc: >-
+          The most texture regions and the most buffer regions one bfr_update_tile_mappings takes; room
+          for them is made with the device, so mapping never allocates. More fails with
+          error_invalid_argument. 0 is none.
 
   swapchain_desc:
     doc: How to create a swapchain.
@@ -948,6 +974,9 @@ structs:
       - {name: size, type: u64, doc: Bytes.}
       - {name: memory, type: buffer_memory, doc: 0 is device.}
       - {name: usage, type: buffer_usage}
+      - {name: sparse, type: bool, doc: "Made with no memory: bfr_update_tile_mappings maps sparse memory's tiles into it, as bfr_caps_sparse says. memory is device."}
+      - {name: sparse_aliased, type: bool, doc: "Its tiles may be mapped to memory other sparse resources' tiles are mapped to, where bfr_caps_sparse.aliased."}
+      - {name: tile_bytes, type: u32, doc: "One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty; only when sparse."}
 
   buffer_copy:
     doc: One range copied from a source buffer to a destination buffer.
@@ -982,6 +1011,9 @@ structs:
       - {name: mip_levels, type: u32}
       - {name: samples, type: u32, doc: Samples per texel; 1 unless rendering multisamples it.}
       - {name: usage, type: texture_usage}
+      - {name: sparse, type: bool, doc: "Made with no memory: bfr_update_tile_mappings maps sparse memory's tiles into it, as bfr_caps_sparse and bfr_get_sparse_format say."}
+      - {name: sparse_aliased, type: bool, doc: "Its tiles may be mapped to memory other sparse resources' tiles are mapped to, where bfr_caps_sparse.aliased."}
+      - {name: tile_bytes, type: u32, doc: "One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty; only when sparse."}
 
   timestamp_pool_desc:
     doc: How to create a timestamp pool.
@@ -1223,6 +1255,112 @@ structs:
         doc: The GPU passes these before it runs the lists.
       - {name: wait_count, type: u32}
 
+  sparse_memory_desc:
+    doc: >-
+      How to create sparse memory, for the tiles of resources like texture
+      and buffer, either of which may be null but not both: Vulkan takes the
+      memory's type from their requirements, and D3D12, where
+      bfr_caps_sparse.mixed_resources is false, the one kind of resource its
+      heap holds. A resource mapped to it later must take what they took, as
+      each backend says.
+    members:
+      - {name: size, type: u64, doc: Bytes.}
+      - {name: tile_bytes, type: u32, doc: "One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty."}
+      - {name: texture, type: texture}
+      - {name: buffer, type: buffer}
+
+  tile_shape:
+    doc: A tile's size, in texels.
+    members:
+      - {name: width, type: u32}
+      - {name: height, type: u32}
+      - {name: depth, type: u32}
+
+  texture_tiling:
+    doc: >-
+      How one aspect of a sparse texture is cut into tiles, as the backend
+      says. Mip levels from first_tail_mip on are its tail, mapped as tiles of
+      tail_bytes rather than by region.
+    members:
+      - {name: tile_bytes, type: u64, doc: Bytes in one tile.}
+      - {name: shape, type: tile_shape}
+      - {name: first_tail_mip, type: u32}
+      - {name: tail_bytes, type: u64, doc: Bytes of one layer's tail.}
+      - {name: tail_stride, type: u64, doc: "Bytes between the starts of two layers' tails; 0 where the backend gives none."}
+      - {name: single_tail, type: bool, doc: "Every layer shares one tail, mapped at layer 0."}
+
+  buffer_tiling:
+    doc: How a sparse buffer is cut into tiles.
+    members:
+      - {name: tile_bytes, type: u64, doc: Bytes in one tile.}
+
+  sparse_format_desc:
+    doc: The texture a bfr_get_sparse_format call asks about, as bfr_texture_desc would make it.
+    members:
+      - {name: format, type: format}
+      - {name: dimension, type: texture_dimension}
+      - {name: samples, type: u32}
+      - {name: usage, type: texture_usage}
+      - {name: aspect, type: texture_aspect}
+      - {name: tile_bytes, type: u32, doc: As bfr_texture_desc.tile_bytes.}
+
+  sparse_format:
+    doc: Whether a sparse texture of a format can be made, and its tiles' shape.
+    members:
+      - {name: supported, type: bool}
+      - {name: shape, type: tile_shape}
+      - {name: single_tail, type: bool, doc: Every layer shares one tail.}
+      - {name: aligned_mip_size, type: bool, doc: Every mip level not a whole number of tiles is in the tail.}
+
+  texture_tile_region:
+    doc: >-
+      One region of a sparse texture mapped to memory or unmapped. Below the
+      tail the region is x, y, z, width, height and depth, in tiles of the mip
+      level; from bfr_texture_tiling.first_tail_mip on, it is tail_tiles tiles
+      from tail_tile in the layer's tail. memory_tile is where in memory, in
+      the texture's tiles.
+    members:
+      - {name: mapping, type: tile_mapping, doc: 0 is map.}
+      - {name: aspect, type: texture_aspect}
+      - {name: mip_level, type: u32}
+      - {name: layer, type: u32}
+      - {name: x, type: u32}
+      - {name: y, type: u32}
+      - {name: z, type: u32}
+      - {name: width, type: u32}
+      - {name: height, type: u32}
+      - {name: depth, type: u32}
+      - {name: tail_tile, type: u64}
+      - {name: tail_tiles, type: u64}
+      - {name: memory_tile, type: u64}
+
+  buffer_tile_region:
+    doc: >-
+      tiles tiles of a sparse buffer from tile mapped to memory from
+      memory_tile, or unmapped, in the buffer's tiles.
+    members:
+      - {name: mapping, type: tile_mapping, doc: 0 is map.}
+      - {name: tile, type: u64}
+      - {name: tiles, type: u64}
+      - {name: memory_tile, type: u64}
+
+  tile_mapping_desc:
+    doc: >-
+      What bfr_update_tile_mappings sends to one queue: texture_regions of
+      texture and buffer_regions of buffer mapped to memory or unmapped.
+    extensible: true
+    members:
+      - {name: queue, type: u32, doc: "The queue to map on, numbered as bfr_device_desc says."}
+      - {name: waits, type: token, array: wait_count, pointer: in, optional: true, doc: Tokens the GPU passes before it maps.}
+      - {name: wait_count, type: u32}
+      - {name: memory, type: sparse_memory, doc: Null when every region unmaps.}
+      - {name: texture, type: texture, doc: Null for none.}
+      - {name: texture_regions, type: texture_tile_region, array: texture_region_count, pointer: in, optional: true}
+      - {name: texture_region_count, type: u32}
+      - {name: buffer, type: buffer, doc: Null for none.}
+      - {name: buffer_regions, type: buffer_tile_region, array: buffer_region_count, pointer: in, optional: true}
+      - {name: buffer_region_count, type: u32}
+
   swapchain_query:
     doc: Which window to ask about.
     extensible: true
@@ -1394,9 +1532,6 @@ structs:
       - {name: timestamps_on_all_queues, type: bool, doc: Every graphics and compute queue writes timestamps.}
       - {name: pipeline_statistics, type: bool}
       - {name: occlusion_query_precise, type: bool}
-      - {name: sparse_binding, type: bool}
-      - {name: sparse_textures, type: bool, doc: Partly resident 2D textures.}
-      - {name: sparse_buffers, type: bool, doc: Partly resident buffers.}
 
   memory_heap:
     doc: One pool of memory.
@@ -1454,6 +1589,9 @@ structs:
       - {name: graphics_levels, type: queue_levels, doc: Levels a graphics queue takes; none set where the backend has no setting.}
       - {name: compute_levels, type: queue_levels}
       - {name: copy_levels, type: queue_levels}
+      - {name: graphics_sparse, type: bool, doc: Graphics queues run bfr_update_tile_mappings.}
+      - {name: compute_sparse, type: bool}
+      - {name: copy_sparse, type: bool}
 
   timestamp_stages:
     doc: The bfr_timestamp_stage values a timestamp write takes; each true where the backend says so.
@@ -1484,6 +1622,35 @@ structs:
       - {name: entry_bytes, type: u32, doc: What one timestamp takes in a buffer bfr_resolve_timestamps writes.}
       - {name: host_clocks, type: host_clocks, doc: The clocks bfr_calibrate_timestamps reads.}
 
+  caps_sparse:
+    doc: >-
+      What the adapter's sparse resources are; each true where the backend
+      says so, or its documentation where it has no query, as each backend
+      names.
+    members:
+      - {name: binding, type: bool, doc: Resources made with sparse take tiles at all.}
+      - {name: buffers, type: bool}
+      - {name: textures_2d, type: bool}
+      - {name: textures_3d, type: bool}
+      - {name: samples_2, type: bool, doc: Sparse 2D textures with 2 samples.}
+      - {name: samples_4, type: bool}
+      - {name: samples_8, type: bool}
+      - {name: samples_16, type: bool}
+      - {name: aliased, type: bool, doc: Resources made with sparse_aliased share memory's tiles.}
+      - {name: standard_2d_shape, type: bool, doc: 2D textures' tiles have the standard shapes.}
+      - {name: standard_2d_multisample_shape, type: bool}
+      - {name: standard_3d_shape, type: bool}
+      - {name: aligned_mip_size, type: bool, doc: Every mip level not a whole number of tiles is in the tail.}
+      - {name: non_resident_strict, type: bool, doc: Reads of an unmapped tile give 0 and writes to one are dropped.}
+      - {name: shader_residency, type: bool, doc: Shaders ask whether what they read was mapped.}
+      - {name: mixed_resources, type: bool, doc: One sparse memory holds textures' and buffers' tiles together.}
+      - {name: layer_tails, type: bool, doc: Tail mappings take a layer other than 0.}
+      - {name: address_space_bytes, type: u64, doc: "Bytes of sparse resources a device holds, where the backend counts them so."}
+      - {name: address_bits_per_resource, type: u32, doc: "Bits of a resource's GPU addresses, where the backend counts them so."}
+      - {name: address_bits_per_process, type: u32}
+      - {name: tile_byte_count, type: u32}
+      - {name: tile_bytes, type: u32, fixed: 3, doc: "The first tile_byte_count are the tile sizes, in bytes, a sparse resource is made with; none where the backend sets them itself, and bfr_texture_tiling and bfr_buffer_tiling say what they are. 3 is Metal's sparse page sizes."}
+
   caps:
     doc: Everything about an adapter that stays the same while it runs.
     members:
@@ -1497,6 +1664,7 @@ structs:
       - {name: memory, type: caps_memory}
       - {name: queues, type: caps_queues}
       - {name: timestamps, type: caps_timestamps}
+      - {name: sparse, type: caps_sparse}
 
   format_caps:
     doc: What an adapter does with one format.
@@ -2297,6 +2465,81 @@ functions:
       - {name: queue, type: u32}
       - {name: clock, type: host_clock}
       - {name: timestamps, type: calibrated_timestamps, pointer: out}
+
+  create_sparse_memory:
+    doc: >-
+      Creates desc's size bytes of device memory for the tiles of the sparse
+      resources desc names. Not for the frame path. Fails with
+      error_invalid_argument for a resource that is not sparse or a size of 0,
+      error_unsupported for a tile_bytes the backend doesn't take or resources
+      the backend can't hold in one memory, error_limit_reached at the
+      device's max_sparse_memories, error_out_of_memory when the backend says
+      memory ran out, and error_device_failed when it refuses.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: sparse_memory_desc, pointer: in}
+      - {name: memory, type: sparse_memory, pointer: out}
+
+  destroy_sparse_memory:
+    doc: >-
+      Destroys sparse memory once the GPU has passed every submit and mapping
+      made before the call; the handle is invalid at once. Tiles still mapped
+      to it read as unmapped ones do after. Not for the frame path. A handle
+      that is already destroyed does nothing.
+    params:
+      - {name: device, type: device}
+      - {name: memory, type: sparse_memory}
+
+  get_texture_tiling:
+    doc: >-
+      Writes how aspect of a sparse texture is cut into tiles. Fails with
+      error_invalid_argument when the texture is not sparse or has no such
+      aspect, and error_unsupported where the backend gives no tiling for it.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: texture, type: texture}
+      - {name: aspect, type: texture_aspect}
+      - {name: tiling, type: texture_tiling, pointer: out}
+
+  get_buffer_tiling:
+    doc: Writes how a sparse buffer is cut into tiles. Fails with error_invalid_argument when it is not sparse.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: buffer, type: buffer}
+      - {name: tiling, type: buffer_tiling, pointer: out}
+
+  get_sparse_format:
+    doc: >-
+      Writes whether a sparse texture as desc says can be made, and its tiles'
+      shape, as the backend says. Fails with error_invalid_argument for an
+      enum value BFR does not have, and error_unsupported for a tile_bytes the
+      backend doesn't take.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: sparse_format_desc, pointer: in}
+      - {name: format, type: sparse_format, pointer: out}
+
+  update_tile_mappings:
+    doc: >-
+      Maps desc's regions of its sparse texture and buffer to its memory, or
+      unmaps them, on desc's queue once the GPU has passed the waits, and
+      writes the token the mappings' completion signals; work that uses them
+      waits on it. Calls on one queue must not overlap, bfr_submit included.
+      Fails with error_invalid_argument for a queue the device does not have,
+      a resource that is not sparse, a region that maps with no memory, or
+      more than max_tile_mappings regions of either kind, error_unsupported
+      for a queue whose kind bfr_caps_queues says maps no tiles, memory the
+      resource can't be mapped to, or a region the backend has no form for,
+      and error_device_failed when the backend refuses.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: tile_mapping_desc, pointer: in}
+      - {name: token, type: token, pointer: out, optional: true}
 
   get_call_timings:
     doc: >-

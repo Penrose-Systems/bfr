@@ -8,6 +8,7 @@
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/sampler.h"
+#include "bfr/rhi/sparse.h"
 #include "bfr/rhi/swapchain.h"
 #include "bfr/rhi/texture.h"
 #include "bfr/rhi/timestamp.h"
@@ -389,6 +390,51 @@ public:
     /// doesn't list, and RhiDeviceFailed when the API refuses.
     [[nodiscard]] virtual core::Result<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue,
                                                                                  HostClock clock) const = 0;
+
+    /// Device memory of desc.size bytes, for the tiles of sparse resources
+    /// like those desc names. Cold. Fails with RhiInvalidCall for a resource
+    /// that is not sparse, none, or a size of 0, RhiInvalidHandle for one that
+    /// is gone, RhiUnsupported for a tileBytes the backend doesn't take or
+    /// resources the backend can't hold in one memory, RhiLimitReached at
+    /// maxSparseMemories, RhiOutOfMemory when the API says memory ran out,
+    /// and RhiDeviceFailed when it refuses.
+    [[nodiscard]] virtual core::Result<SparseMemoryHandle> createSparseMemory(const SparseMemoryDesc& desc) = 0;
+
+    /// Destroys the memory once the GPU has passed every submit and mapping
+    /// made before the call; the handle is invalid at once. Tiles still mapped
+    /// to it read as unmapped ones do after. Cold. A null handle does nothing.
+    /// Fails with RhiInvalidHandle when it is already destroyed.
+    [[nodiscard]] virtual core::Result<void> destroySparseMemory(SparseMemoryHandle memory) = 0;
+
+    /// How aspect of a sparse texture is cut into tiles. Fails with
+    /// RhiInvalidHandle when the texture is gone, RhiInvalidCall when it is
+    /// not sparse or has no such aspect, and RhiUnsupported where the backend
+    /// gives no tiling for it.
+    [[nodiscard]] virtual core::Result<TextureTiling> textureTiling(TextureHandle texture, TextureAspect aspect) = 0;
+
+    /// How a sparse buffer is cut into tiles. Fails with RhiInvalidHandle
+    /// when the buffer is gone and RhiInvalidCall when it is not sparse.
+    [[nodiscard]] virtual core::Result<BufferTiling> bufferTiling(BufferHandle buffer) = 0;
+
+    /// Whether a sparse texture as desc says can be made, and its tiles'
+    /// shape, as the backend says. Fails with RhiInvalidCall for an enum
+    /// value BFR doesn't have, and RhiUnsupported for a tileBytes the backend
+    /// doesn't take.
+    [[nodiscard]] virtual core::Result<SparseFormat> sparseFormat(const SparseFormatDesc& desc) const = 0;
+
+    /// Maps desc's regions of its sparse texture and buffer to its memory, or
+    /// unmaps them, on desc.queue once the GPU has passed the waits, and
+    /// returns the token the mappings' completion signals; work that uses
+    /// them waits on it. Calls for one queue must not overlap, submit
+    /// included. Fails with RhiInvalidCall for a queue the device does not
+    /// have, a resource that is not sparse, a region that maps with no
+    /// memory, an enum value BFR doesn't have, or more than maxTileMappings
+    /// regions of either kind, RhiUnsupported for a queue whose kind
+    /// Caps::queues says maps no tiles, memory the resource can't be mapped
+    /// to, or a region the backend has no form for, as each backend says,
+    /// RhiInvalidHandle for a resource or memory that is gone, and
+    /// RhiDeviceFailed when the API refuses.
+    [[nodiscard]] virtual core::Result<Token> updateTileMappings(const TileMappingDesc& desc) = 0;
 
     /// The CPU time spent in each of the device's calls since it was made,
     /// written to timings by Call, as many as it holds. Fails with

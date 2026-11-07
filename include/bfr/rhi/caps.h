@@ -169,9 +169,6 @@ struct Features {
     bool timestampsOnAllQueues = false;
     bool pipelineStatistics = false;
     bool occlusionQueryPrecise = false;
-    bool sparseBinding = false;
-    bool sparseTextures = false;
-    bool sparseBuffers = false;
 };
 
 struct MemoryHeap {
@@ -220,6 +217,10 @@ struct Queues {
     QueueLevels graphicsLevels;
     QueueLevels computeLevels;
     QueueLevels copyLevels;
+    /// Whether each kind of queue runs Device::updateTileMappings.
+    bool graphicsSparse = false;
+    bool computeSparse = false;
+    bool copySparse = false;
 };
 
 /// The TimestampStage values a timestamp write takes; each true where the
@@ -258,6 +259,50 @@ struct Timestamps {
     HostClocks hostClocks;
 };
 
+/// What the adapter's sparse resources are; each true where the backend says
+/// so, or its documentation where it has no query, as each backend names.
+struct Sparse {
+    /// Resources made with sparse take tiles at all.
+    bool binding = false;
+    bool buffers = false;
+    bool textures2D = false;
+    bool textures3D = false;
+    /// Sparse 2D textures with 2, 4, 8 and 16 samples.
+    bool samples2 = false;
+    bool samples4 = false;
+    bool samples8 = false;
+    bool samples16 = false;
+    /// Resources made with sparseAliased share memory's tiles.
+    bool aliased = false;
+    /// Tiles have the standard shapes, for 2D, multisampled 2D and 3D textures.
+    bool standard2DShape = false;
+    bool standard2DMultisampleShape = false;
+    bool standard3DShape = false;
+    /// Every mip level not a whole number of tiles is in the tail.
+    bool alignedMipSize = false;
+    /// Reads of an unmapped tile give 0 and writes to one are dropped.
+    bool nonResidentStrict = false;
+    /// Shaders ask whether what they read was mapped.
+    bool shaderResidency = false;
+    /// One SparseMemory holds textures' and buffers' tiles together.
+    bool mixedResources = false;
+    /// Tail mappings take a layer other than 0.
+    bool layerTails = false;
+    /// Bytes of sparse resources a device holds, where the backend counts them so.
+    std::uint64_t addressSpaceBytes = 0;
+    /// Bits of a resource's and of the process's GPU addresses, where the
+    /// backend counts them so.
+    std::uint32_t addressBitsPerResource = 0;
+    std::uint32_t addressBitsPerProcess = 0;
+    /// The tile sizes, in bytes, a sparse resource is made with; empty where
+    /// the backend sets them itself, and TextureTiling and BufferTiling say
+    /// what they are. At most kMaxSparseTileSizes.
+    std::vector<std::uint32_t> tileBytes;
+};
+
+/// The most tile sizes a backend offers: Metal's three sparse page sizes.
+inline constexpr std::size_t kMaxSparseTileSizes = 3;
+
 /// Everything about an adapter that stays the same while it runs.
 struct Caps {
     AdapterInfo info;
@@ -270,6 +315,7 @@ struct Caps {
     Memory memory;
     Queues queues;
     Timestamps timestamps;
+    Sparse sparse;
 };
 
 struct FormatCaps {

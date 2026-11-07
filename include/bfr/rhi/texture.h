@@ -88,6 +88,14 @@ struct TextureDesc {
     std::uint32_t mipLevels = 0;
     std::uint32_t samples = 0;
     TextureUsage usage;
+    /// Made with no memory: tiles of SparseMemory are mapped into it by
+    /// Device::updateTileMappings, as Caps::sparse and Device::sparseFormat say.
+    bool sparse = false;
+    /// Its tiles may be mapped to memory other sparse resources' tiles are
+    /// mapped to, where Sparse::aliased.
+    bool sparseAliased = false;
+    /// One of Sparse::tileBytes, or 0 where that list is empty; only when sparse.
+    std::uint32_t tileBytes = 0;
 };
 
 /// One region copied between a buffer and one layer and mip level of a

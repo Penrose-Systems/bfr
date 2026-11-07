@@ -38,6 +38,7 @@ constexpr std::uint16_t kRfcmb = kRf | kColor | kMsaa | kBlend;
 constexpr std::uint16_t kAll = kRfcmb | kWrite;
 constexpr std::uint16_t kDrm = kDepth | kRead | kMsaa;
 constexpr std::uint16_t kDrfm = kDrm | kFilter;
+constexpr std::uint16_t kDrf = kDepth | kRf;
 
 // A format rendered to without multisampling renders at one sample, where the
 // device says it takes one.
@@ -55,7 +56,7 @@ struct MetalFormat {
 // (no three-channel 32-bit formats, no 64-bit ones, and none named as
 // Bgra4Unorm is). Every
 // compressed format is read and filtered. Godot's base table gives
-// Depth24Unorm_Stencil8 nothing, and no row for a device that has it.
+// Depth24Unorm_Stencil8 nothing; formatCapsFor asks the device for it.
 constexpr std::array kMetalFormats{
     MetalFormat{.format = Format::R8Unorm, .metal = MTL::PixelFormatR8Unorm, .caps = kAll},
     MetalFormat{.format = Format::R8Snorm, .metal = MTL::PixelFormatR8Snorm, .caps = kAll},
@@ -258,6 +259,13 @@ FormatCaps formatCapsFor(MTL::Device* device, Format format) {
     }
     if (format == Format::Rgb9e5Float && TARGET_OS_SIMULATOR != 0) {
         caps &= static_cast<std::uint16_t>(~kColor);
+    }
+
+    // Godot never gives Depth24Unorm_Stencil8 anything (:779, :1012). The Forge
+    // samples it linearly and renders to it where the device says it has it
+    // (Common_3/Graphics/Metal/MetalCapBuilder.h:440-443).
+    if (format == Format::D24UnormS8Uint && device->isDepth24Stencil8PixelFormatSupported()) {
+        caps = kDrf;
     }
 
     const auto has = [caps](std::uint16_t bit) {

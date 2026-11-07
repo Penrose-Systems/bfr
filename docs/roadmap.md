@@ -11,10 +11,9 @@ Done: instance and adapters, device, swapchain and present, command pools and
 lists, clear, submit and wait, buffers (create, map, destroy), buffer copies,
 textures and texture copies, shaders and pipelines, draws and dispatches,
 samplers, timings (GPU timestamps, tick rates, CPU-GPU calibration, CPU time
-in each call).
+in each call), sparse and tiled resources (partly resident textures and
+buffers, sparse memory, tile mapping, sparse caps).
 
-7. Sparse and tiled resources: partly resident textures and buffers, tile
-   mapping, and every sparse cap each backend reports.
 8. Indirect draws and dispatches; exact topologies.
 9. Depth-stencil and multisampled attachments in use; resolves.
 10. Compute and copy queues in use: cross-queue waits.
@@ -24,4 +23,4 @@ in each call).
     resources, formatted buffer views, variable rate shading, HDR and
     present timing, and whatever each backend's caps turn up as we go.
 
-Next: 7.
+Next: 8.

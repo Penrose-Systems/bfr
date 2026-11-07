@@ -42,6 +42,14 @@ struct BufferDesc {
     std::uint64_t size = 0;
     BufferMemory memory = BufferMemory::Device;
     BufferUsage usage;
+    /// Made with no memory: tiles of SparseMemory are mapped into it by
+    /// Device::updateTileMappings, as Caps::sparse says. memory is Device.
+    bool sparse = false;
+    /// Its tiles may be mapped to memory other sparse resources' tiles are
+    /// mapped to, where Sparse::aliased.
+    bool sparseAliased = false;
+    /// One of Sparse::tileBytes, or 0 where that list is empty; only when sparse.
+    std::uint32_t tileBytes = 0;
 };
 
 /// One range copied from a source buffer to a destination buffer, in bytes.

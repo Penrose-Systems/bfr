@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bfr/core/error.h"
+#include "bfr/rhi/sparse.h"
 #include "bfr/rhi/texture.h"
 #include "metal/metal_buffer.h"
 #include "metal/metal_util.h"
@@ -8,15 +9,23 @@
 
 #include <Metal/Metal.hpp>
 
+#include <cstdint>
+#include <optional>
+
 namespace bfr::rhi::metal {
 
 /// A Metal texture, released when the last Ref to it goes, and resident while
-/// it lives, as a buffer is.
+/// it lives, as a buffer is. A sparse one has the page size it was made with,
+/// and tiling, what Metal said of its tiles once it was made, so mapping reads
+/// nothing back.
 struct MetalTexture {
     Ref<MTL::Texture> texture;
     Format format = Format::R8Unorm;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
+    std::uint32_t depth = 0;
+    std::optional<MTL::SparsePageSize> page;
+    TextureTiling tiling;
     /// Its places in the tables, which the device gives back when the texture
     /// is collected.
     TextureSlotsHeld slots;
@@ -24,9 +33,11 @@ struct MetalTexture {
     Resident resident;
 };
 
-/// A texture on device as desc says, in private storage, added to residency,
-/// which the caller commits under its lock. Fails with RhiDeviceFailed when
-/// Metal gives no texture.
+/// A texture on device as desc says, in private storage, with no memory when
+/// it is sparse, added to residency, which the caller commits under its lock.
+/// Fails with RhiUnsupported for sparseAliased, which Metal has no form for, a
+/// tileBytes no page size has, or a tile shape or first tail mip past 32
+/// bits, and RhiDeviceFailed when Metal gives no texture.
 [[nodiscard]] core::Result<MetalTexture> createMetalTexture(MTL::Device& device, const TextureDesc& desc,
                                                             Ref<MTL::ResidencySet> residency);
 

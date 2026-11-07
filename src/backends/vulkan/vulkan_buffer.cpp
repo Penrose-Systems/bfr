@@ -3,12 +3,15 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
+#include "bfr/rhi/sparse.h"
 #include "core/slot_chains.h"
 #include "rhi/buffer_check.h"
+#include "rhi/enum_check.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_result.h"
 #include "vulkan/vulkan_sampler.h"
+#include "vulkan/vulkan_sparse.h"
 #include "vulkan/vulkan_texture.h"
 
 #include <vulkan/vulkan_core.h>
@@ -84,13 +87,27 @@ VulkanBuffer::VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, VmaAllocatio
                            std::span<std::byte> mapped, std::uint32_t slot)
     : allocator_(allocator), buffer_(buffer), allocation_(allocation), memory_(memory), mapped_(mapped), slot_(slot) {}
 
+VulkanBuffer::VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, std::uint32_t slot,
+                           const VkMemoryRequirements& sparse)
+    : allocator_(allocator),
+      buffer_(buffer),
+      allocation_(VK_NULL_HANDLE),
+      memory_(BufferMemory::Device),
+      slot_(slot),
+      sparse_(true),
+      tileBytes_(sparse.alignment),
+      memoryTypes_(sparse.memoryTypeBits) {}
+
 VulkanBuffer::VulkanBuffer(VulkanBuffer&& other) noexcept
     : allocator_(other.allocator_),
       buffer_(std::exchange(other.buffer_, VK_NULL_HANDLE)),
       allocation_(std::exchange(other.allocation_, VK_NULL_HANDLE)),
       memory_(other.memory_),
       mapped_(std::exchange(other.mapped_, {})),
-      slot_(other.slot_) {}
+      slot_(other.slot_),
+      sparse_(other.sparse_),
+      tileBytes_(other.tileBytes_),
+      memoryTypes_(other.memoryTypes_) {}
 
 VulkanBuffer::~VulkanBuffer() {
     if (buffer_ != VK_NULL_HANDLE) {
@@ -98,8 +115,17 @@ VulkanBuffer::~VulkanBuffer() {
     }
 }
 
-core::Result<VulkanBuffer> createVulkanBuffer(VmaAllocator allocator, const BufferDesc& desc,
-                                              std::span<const std::uint32_t> families, std::uint32_t slot) {
+core::Result<VulkanBuffer> createVulkanBuffer(const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator,
+                                              const BufferDesc& desc, std::span<const std::uint32_t> families,
+                                              std::uint32_t slot) {
+    if (desc.sparse && desc.memory != BufferMemory::Device) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "a sparse buffer's memory is the sparse memory mapped into it, so it is device");
+    }
+    if (desc.sparse && desc.tileBytes != 0) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "Vulkan sets a sparse buffer's tile size itself; tileBytes is 0");
+    }
     VkBufferCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     info.size = desc.size;
@@ -111,6 +137,19 @@ core::Result<VulkanBuffer> createVulkanBuffer(VmaAllocator allocator, const Buff
     }
     else {
         info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
+    if (desc.sparse) {
+        // Bound tile by tile, partly resident, and aliased where asked; no
+        // memory is placed now.
+        info.flags = VK_BUFFER_CREATE_SPARSE_BINDING_BIT | VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT |
+                     (desc.sparseAliased ? VkBufferCreateFlags{VK_BUFFER_CREATE_SPARSE_ALIASED_BIT} : 0U);
+        VkBuffer buffer = VK_NULL_HANDLE;
+        if (const VkResult result = table.vkCreateBuffer(device, &info, nullptr, &buffer); result != VK_SUCCESS) {
+            return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateBuffer", .result = result});
+        }
+        VkMemoryRequirements requirements{};
+        table.vkGetBufferMemoryRequirements(device, buffer, &requirements);
+        return VulkanBuffer{allocator, buffer, slot, requirements};
     }
     VmaAllocationCreateInfo allocation{};
     const MemoryProperties properties = propertiesFor(desc.memory);
@@ -155,6 +194,7 @@ void VulkanDevice::collectBuffers() {
     textures_.collect(completed, [this](const VulkanTexture& texture) { bindless_.giveTexture(texture.slots()); });
     samplers_.collect(completed, [this](const VulkanSampler& sampler) { bindless_.giveSampler(sampler.slot()); });
     timestampPools_.collect(completed);
+    sparseMemories_.collect(completed);
     pipelines_.collect(completed);
 }
 
@@ -169,7 +209,7 @@ core::Result<BufferHandle> VulkanDevice::createBuffer(const BufferDesc& desc) {
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
     }
-    auto made = createVulkanBuffer(allocator_, desc, families_, *slot);
+    auto made = createVulkanBuffer(table_, device_, allocator_, desc, families_, *slot);
     if (!made) {
         bindless_.giveBuffer(*slot);
         return std::unexpected(std::move(made.error()));
@@ -242,6 +282,55 @@ core::Result<void> VulkanDevice::destroyBuffer(BufferHandle buffer) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the buffer handle is stale");
     }
     collectBuffers();
+    return {};
+}
+
+core::Result<BufferTiling> VulkanDevice::bufferTiling(BufferHandle buffer) {
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    if (!(*found)->sparse()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the buffer is not sparse");
+    }
+    return BufferTiling{.tileBytes = (*found)->tileBytes()};
+}
+
+core::Result<void> VulkanDevice::addBufferBinds(VulkanQueue& queue, const TileMappingDesc& desc,
+                                                const VulkanSparseMemory* memory) {
+    if (desc.buffer.isNull()) {
+        if (!desc.bufferRegions.empty()) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "buffer regions were given with no buffer");
+        }
+        return {};
+    }
+    auto found = bufferFor(desc.buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    const VulkanBuffer& buffer = **found;
+    if (!buffer.sparse()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the buffer is not sparse");
+    }
+    if (memory != nullptr && (buffer.memoryTypes() & (1U << memory->type())) == 0) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "the memory's type is not one the buffer takes");
+    }
+    for (const BufferTileRegion& region : desc.bufferRegions) {
+        if (auto checked = checkKnown(region.mapping, "tile mapping"); !checked) {
+            return checked;
+        }
+        const bool maps = region.mapping == TileMapping::Map;
+        if (maps && memory == nullptr) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "a region maps, but no memory was given");
+        }
+        // The buffer's regions are at most maxTileMappings, which the array holds.
+        std::ignore = queue.bufferBinds.push(
+            VkSparseMemoryBind{.resourceOffset = region.tile * buffer.tileBytes(),
+                               .size = region.tiles * buffer.tileBytes(),
+                               .memory = maps ? memory->memory() : VK_NULL_HANDLE,
+                               .memoryOffset = maps ? memory->offset() + region.memoryTile * buffer.tileBytes() : 0,
+                               .flags = 0});
+    }
     return {};
 }
 

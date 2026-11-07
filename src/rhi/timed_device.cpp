@@ -288,6 +288,30 @@ core::Result<CalibratedTimestamps> TimedDevice::calibrateTimestamps(std::uint32_
     return counters_.time(Call::CalibrateTimestamps, [&] { return device_->calibrateTimestamps(queue, clock); });
 }
 
+core::Result<SparseMemoryHandle> TimedDevice::createSparseMemory(const SparseMemoryDesc& desc) {
+    return counters_.time(Call::CreateSparseMemory, [&] { return device_->createSparseMemory(desc); });
+}
+
+core::Result<void> TimedDevice::destroySparseMemory(SparseMemoryHandle memory) {
+    return counters_.time(Call::DestroySparseMemory, [&] { return device_->destroySparseMemory(memory); });
+}
+
+core::Result<TextureTiling> TimedDevice::textureTiling(TextureHandle texture, TextureAspect aspect) {
+    return counters_.time(Call::TextureTiling, [&] { return device_->textureTiling(texture, aspect); });
+}
+
+core::Result<BufferTiling> TimedDevice::bufferTiling(BufferHandle buffer) {
+    return counters_.time(Call::BufferTiling, [&] { return device_->bufferTiling(buffer); });
+}
+
+core::Result<SparseFormat> TimedDevice::sparseFormat(const SparseFormatDesc& desc) const {
+    return counters_.time(Call::SparseFormat, [&] { return device_->sparseFormat(desc); });
+}
+
+core::Result<Token> TimedDevice::updateTileMappings(const TileMappingDesc& desc) {
+    return counters_.time(Call::UpdateTileMappings, [&] { return device_->updateTileMappings(desc); });
+}
+
 core::Result<void> TimedDevice::callTimings(std::span<CallTiming> timings) const {
     counters_.write(timings);
     return {};

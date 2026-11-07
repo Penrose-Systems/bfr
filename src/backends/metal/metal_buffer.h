@@ -7,6 +7,8 @@
 #include <Metal/Metal.hpp>
 
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <span>
 
 namespace bfr::rhi::metal {
@@ -32,7 +34,8 @@ private:
 
 /// A Metal buffer, released when the last Ref to it goes, and resident while
 /// it lives. mapped is where the CPU reaches upload and readback memory,
-/// empty for device memory.
+/// empty for device memory. A sparse one has the page size it was made with,
+/// and tileBytes, what Metal says that page's tiles are.
 struct MetalBuffer {
     Ref<MTL::Buffer> buffer;
     BufferMemory memory = BufferMemory::Device;
@@ -40,13 +43,17 @@ struct MetalBuffer {
     /// Its place in the storage buffer table, kEnd without storage usage; the
     /// device gives it back when the buffer is collected.
     std::uint32_t slot = 0;
+    std::optional<MTL::SparsePageSize> page;
+    std::uint64_t tileBytes = 0;
     // Declared after buffer, so it leaves the set before it is released.
     Resident resident;
 };
 
-/// A buffer on device as desc says, added to residency, which the caller
-/// commits under its lock. Fails with RhiDeviceFailed when Metal gives no
-/// buffer.
+/// A buffer on device as desc says, with no memory when it is sparse, added
+/// to residency, which the caller commits under its lock. Fails with
+/// RhiInvalidCall for a sparse buffer not in device memory, RhiUnsupported for
+/// sparseAliased, which Metal has no form for, or a tileBytes no page size
+/// has, and RhiDeviceFailed when Metal gives no buffer.
 [[nodiscard]] core::Result<MetalBuffer> createMetalBuffer(MTL::Device& device, const BufferDesc& desc,
                                                           Ref<MTL::ResidencySet> residency);
 

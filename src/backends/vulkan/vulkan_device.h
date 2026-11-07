@@ -18,6 +18,7 @@
 #include "vulkan/vulkan_buffer.h"
 #include "vulkan/vulkan_pipeline.h"
 #include "vulkan/vulkan_sampler.h"
+#include "vulkan/vulkan_sparse.h"
 #include "vulkan/vulkan_swapchain.h"
 #include "vulkan/vulkan_texture.h"
 #include "vulkan/vulkan_timestamp.h"
@@ -93,6 +94,8 @@ struct VulkanRetiredPool {
 struct VulkanQueue {
     QueueType type = QueueType::Graphics;
     std::uint32_t family = 0;
+    /// The family reports VK_QUEUE_SPARSE_BINDING_BIT.
+    bool sparse = false;
     VkQueue queue = VK_NULL_HANDLE;
     VkSemaphore timeline = VK_NULL_HANDLE;
     std::atomic<std::uint64_t> submitted{0};
@@ -104,6 +107,13 @@ struct VulkanQueue {
     std::vector<std::uint64_t> waitValues;
     core::FixedVector<VulkanRetiredPool> retired;
     std::atomic<std::uint32_t> retiredCount{0};
+    // A tile mapping's binds and waits, made as a submit's arrays are, at the
+    // device's maximums of regions and queues.
+    core::FixedVector<VkSparseImageMemoryBind> imageBinds;
+    core::FixedVector<VkSparseMemoryBind> tailBinds;
+    core::FixedVector<VkSparseMemoryBind> bufferBinds;
+    core::FixedVector<VkSemaphore> waitSemaphores;
+    core::FixedVector<std::uint64_t> waitSemaphoreValues;
     std::mutex lock;
 };
 
@@ -223,6 +233,12 @@ public:
     [[nodiscard]] core::Result<TimestampRate> timestampRate(std::uint32_t queue) const override;
     [[nodiscard]] core::Result<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue,
                                                                          HostClock clock) const override;
+    [[nodiscard]] core::Result<SparseMemoryHandle> createSparseMemory(const SparseMemoryDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroySparseMemory(SparseMemoryHandle memory) override;
+    [[nodiscard]] core::Result<TextureTiling> textureTiling(TextureHandle texture, TextureAspect aspect) override;
+    [[nodiscard]] core::Result<BufferTiling> bufferTiling(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<SparseFormat> sparseFormat(const SparseFormatDesc& desc) const override;
+    [[nodiscard]] core::Result<Token> updateTileMappings(const TileMappingDesc& desc) override;
 
 private:
     [[nodiscard]] core::Result<void> openQueues(const QueueFamilies& families, const DeviceDesc& desc);
@@ -248,6 +264,12 @@ private:
     [[nodiscard]] core::Result<VulkanBuffer*> bufferFor(BufferHandle buffer);
     [[nodiscard]] core::Result<VulkanTexture*> textureFor(TextureHandle texture);
     [[nodiscard]] core::Result<VulkanPipeline*> pipelineFor(PipelineHandle pipeline);
+    [[nodiscard]] core::Result<VulkanSparseMemory*> sparseMemoryFor(SparseMemoryHandle memory);
+    // The binds of desc's texture and buffer regions into queue's arrays.
+    [[nodiscard]] core::Result<void> addTextureBinds(VulkanQueue& queue, const TileMappingDesc& desc,
+                                                     const VulkanSparseMemory* memory);
+    [[nodiscard]] core::Result<void> addBufferBinds(VulkanQueue& queue, const TileMappingDesc& desc,
+                                                    const VulkanSparseMemory* memory);
 
     VulkanInstance* instance_;
     VkPhysicalDevice adapter_;
@@ -287,6 +309,7 @@ private:
     // Every sampler holds a slot, so the pool is made at the table's size.
     core::Pool<VulkanSampler, Sampler> samplers_;
     core::Pool<VulkanTimestampPool, TimestampPool> timestampPools_;
+    core::Pool<VulkanSparseMemory, SparseMemory> sparseMemories_;
     BindlessSlots bindless_;
     // Declared before pipelines_, which are made on it, so it outlives them.
     VulkanBindlessLayout layout_;

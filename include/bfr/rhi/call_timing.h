@@ -67,10 +67,17 @@ enum class Call : std::uint32_t {
     InstanceFormatCaps = 54,
     InstanceSwapchainCaps = 55,
     InstanceSwapchainFormats = 56,
+    // Device calls added after the instance's.
+    CreateSparseMemory = 57,
+    DestroySparseMemory = 58,
+    TextureTiling = 59,
+    BufferTiling = 60,
+    SparseFormat = 61,
+    UpdateTileMappings = 62,
 };
 
 /// How many values Call has.
-inline constexpr std::size_t kCallCount = 57;
+inline constexpr std::size_t kCallCount = 63;
 
 /// The CPU time one kind of call has taken, read from std::chrono::steady_clock
 /// around each call: how many there were, their nanoseconds in all, and the

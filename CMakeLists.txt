@@ -134,6 +134,7 @@ if(BFR_BACKEND_VULKAN)
         src/backends/vulkan/vulkan_instance.cpp
         src/backends/vulkan/vulkan_pipeline.cpp
         src/backends/vulkan/vulkan_sampler.cpp
+        src/backends/vulkan/vulkan_sparse.cpp
         src/backends/vulkan/vulkan_timestamp.cpp
         src/backends/vulkan/vulkan_commands.cpp
         src/backends/vulkan/vulkan_surface.cpp
@@ -188,6 +189,7 @@ if(BFR_BACKEND_D3D12)
         src/backends/d3d12/d3d12_commands.cpp
         src/backends/d3d12/d3d12_swapchain.cpp
         src/backends/d3d12/d3d12_sampler.cpp
+        src/backends/d3d12/d3d12_sparse.cpp
         src/backends/d3d12/d3d12_timestamp.cpp
         src/backends/d3d12/d3d12_texture.cpp)
     # The Windows headers define macros, min and max among them, that would
@@ -214,6 +216,7 @@ if(BFR_BACKEND_METAL)
         src/backends/metal/metal_commands.cpp
         src/backends/metal/metal_swapchain.cpp
         src/backends/metal/metal_sampler.cpp
+        src/backends/metal/metal_sparse.cpp
         src/backends/metal/metal_timestamp.cpp
         src/backends/metal/metal_texture.cpp)
     target_include_directories(bfr_objects SYSTEM PRIVATE ${BFR_METAL_CPP_INCLUDE_DIR})

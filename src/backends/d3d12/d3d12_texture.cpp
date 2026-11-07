@@ -3,12 +3,15 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
+#include "bfr/rhi/format.h"
+#include "bfr/rhi/sparse.h"
 #include "bfr/rhi/texture.h"
 #include "core/slot_chains.h"
 #include "d3d12/d3d12_buffer.h"
 #include "d3d12/d3d12_device.h"
 #include "d3d12/d3d12_formats.h"
 #include "d3d12/d3d12_result.h"
+#include "d3d12/d3d12_sparse.h"
 #include "rhi/bindless_slots.h"
 #include "rhi/copy_check.h"
 #include "rhi/enum_check.h"
@@ -59,6 +62,15 @@ D3D12_RESOURCE_FLAGS flagsFor(const TextureUsage& usage) {
         flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
     }
     return flags;
+}
+
+// The one kind of resource a ResourceHeapTier 1 heap holds that a texture of
+// usage is: D3D12_HEAP_FLAG_DENY_RT_DS_TEXTURES (d3d12.h) denies resources
+// made with ALLOW_RENDER_TARGET or ALLOW_DEPTH_STENCIL, which flagsFor sets
+// for these usages.
+D3D12_HEAP_FLAGS tileHeapOf(const TextureUsage& usage) {
+    return usage.colorAttachment || usage.depthStencil ? D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES
+                                                       : D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES;
 }
 
 // Depth-stencil formats keep depth and stencil in planes 0 and 1.
@@ -222,6 +234,10 @@ D3D12_DEPTH_STENCIL_VIEW_DESC depthViewFor(const D3D12Texture& texture, DXGI_FOR
 
 core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3D12Device& device,
                                               const TextureDesc& desc, const TextureSlotsHeld& slots) {
+    if (desc.sparse && desc.tileBytes != D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "D3D12's tiles are {} bytes; tileBytes is {}",
+                             D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES, desc.tileBytes);
+    }
     const DxgiFormats formats = dxgiFormatsFor(desc.format);
     const bool slices = desc.dimension == TextureDimension::D3;
     const std::uint32_t depthOrLayers = slices ? desc.depth : desc.layers;
@@ -242,7 +258,11 @@ core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3
                          .mipLevels = desc.mipLevels,
                          .layers = slices ? 1 : desc.layers,
                          .samples = desc.samples,
-                         .slots = slots};
+                         .slots = slots,
+                         .sparse = desc.sparse,
+                         .tileShape = {},
+                         .packedMips = {},
+                         .tileHeap = tileHeapOf(desc.usage)};
     const D3D12_RESOURCE_DESC resource{
         .Dimension = dimensionFor(desc.dimension),
         .Alignment = 0,
@@ -252,16 +272,35 @@ core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3
         .MipLevels = static_cast<UINT16>(desc.mipLevels),
         .Format = texture.dxgi,
         .SampleDesc = {.Count = desc.samples, .Quality = 0},
-        .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        // A reserved resource's layout is the one its tiles are mapped in.
+        .Layout = desc.sparse ? D3D12_TEXTURE_LAYOUT_64KB_UNDEFINED_SWIZZLE : D3D12_TEXTURE_LAYOUT_UNKNOWN,
         .Flags = flagsFor(desc.usage),
     };
-    D3D12MA::ALLOCATION_DESC allocation{};
-    allocation.HeapType = D3D12_HEAP_TYPE_DEFAULT;
-    if (const HRESULT result = allocator.CreateResource(&allocation, &resource, D3D12_RESOURCE_STATE_COMMON, nullptr,
-                                                        &texture.allocation, IID_PPV_ARGS(&texture.resource));
-        FAILED(result)) {
-        return failure(core::ErrorCode::RhiDeviceFailed,
-                       {.call = "D3D12MA::Allocator::CreateResource", .result = result});
+    if (desc.sparse) {
+        // Heaps' tiles are mapped into it, so no memory is placed now.
+        // sparseAliased needs no D3D12 flag: any reserved resource's tiles may
+        // be mapped to heap tiles others are mapped to.
+        if (const HRESULT result = device.CreateReservedResource(&resource, D3D12_RESOURCE_STATE_COMMON, nullptr,
+                                                                 IID_PPV_ARGS(&texture.resource));
+            FAILED(result)) {
+            return failure(core::ErrorCode::RhiDeviceFailed,
+                           {.call = "ID3D12Device::CreateReservedResource", .result = result});
+        }
+        UINT tiles = 0;
+        UINT subresourceTilings = 0;
+        device.GetResourceTiling(texture.resource.Get(), &tiles, &texture.packedMips, &texture.tileShape,
+                                 &subresourceTilings, 0, nullptr);
+    }
+    else {
+        D3D12MA::ALLOCATION_DESC allocation{};
+        allocation.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+        if (const HRESULT result = allocator.CreateResource(&allocation, &resource, D3D12_RESOURCE_STATE_COMMON,
+                                                            nullptr, &texture.allocation,
+                                                            IID_PPV_ARGS(&texture.resource));
+            FAILED(result)) {
+            return failure(core::ErrorCode::RhiDeviceFailed,
+                           {.call = "D3D12MA::Allocator::CreateResource", .result = result});
+        }
     }
     // MipLevels 0 asks D3D12 for the whole chain, so its subresources are
     // numbered by the levels it made.
@@ -575,6 +614,183 @@ core::Result<void> D3D12Device::copyTexture(CommandListHandle commandList, Textu
         }
     }
     return {};
+}
+
+namespace {
+
+// Fails with RhiInvalidCall when format has no aspect, and RhiUnsupported for
+// its stencil: GetResourceTiling gives one tile shape and one packed mip count
+// for the whole resource, and Diligent maps a tiled texture's plane 0 alone
+// (D3DTileMappingHelper.hpp, CalcSubresource with plane 0), so D3D12 is not
+// shown to tile a stencil plane apart.
+core::Result<void> checkTileAspect(Format format, TextureAspect aspect) {
+    if (auto checked = checkAspect(format, aspect); !checked) {
+        return checked;
+    }
+    if (aspect == TextureAspect::Stencil) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "D3D12 gives no tiling of a stencil plane alone");
+    }
+    return {};
+}
+
+} // namespace
+
+core::Result<TextureTiling> D3D12Device::textureTiling(TextureHandle texture, TextureAspect aspect) {
+    if (auto checked = checkKnown(aspect, "texture aspect"); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    auto found = textureFor(texture);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    const D3D12Texture& tiled = **found;
+    if (!tiled.sparse) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the texture is not sparse");
+    }
+    if (auto checked = checkTileAspect(tiled.desc.format, aspect); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    // GetResourceTiling's answer when the texture was made: its packed mips
+    // (D3D12_PACKED_MIP_INFO) are its tail. Each layer has a tail of its own
+    // (Diligent's TextureD3D12Impl.cpp, InitSparseProperties), mapped by its
+    // subresource; D3D12 reports no stride between them, which Diligent
+    // derives itself (:743).
+    return TextureTiling{
+        .tileBytes = D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES,
+        .shape = {.width = tiled.tileShape.WidthInTexels,
+                  .height = tiled.tileShape.HeightInTexels,
+                  .depth = tiled.tileShape.DepthInTexels},
+        .firstTailMip = tiled.packedMips.NumStandardMips,
+        .tailBytes = std::uint64_t{tiled.packedMips.NumTilesForPackedMips} * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES,
+        .tailStride = 0,
+        .singleTail = false,
+    };
+}
+
+core::Result<SparseFormat> D3D12Device::sparseFormat(const SparseFormatDesc& desc) const {
+    if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (desc.tileBytes != D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "D3D12's tiles are {} bytes; tileBytes is {}",
+                             D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES, desc.tileBytes);
+    }
+    // What D3D12 tiles: the aspect textureTiling gives, of a 2D or cube
+    // texture, or a 3D one where the tier has them (sparseOf). It tiles no 1D
+    // texture: Sparse has no such cap, and Diligent refuses one and takes a
+    // cube as 2D (RenderDeviceBase.cpp, CheckSparseTextureFormatSupport).
+    const FormatBlock& block = blockOf(desc.format);
+    const bool aspect = desc.aspect == TextureAspect::Color
+                            ? block.bytes != 0
+                            : desc.aspect == TextureAspect::Depth && block.depthBytes != 0;
+    const bool dimension = desc.dimension == TextureDimension::D3
+                               ? sparse_.textures3D
+                               : desc.dimension != TextureDimension::D1 && sparse_.textures2D;
+    // A depth texture is asked of as its depth format, as formatCapsFor asks.
+    const DxgiFormats formats = dxgiFormatsFor(desc.format);
+    const DXGI_FORMAT dxgi = formats.depth != DXGI_FORMAT_UNKNOWN ? formats.depth : formats.texture;
+    if (!aspect || !dimension || dxgi == DXGI_FORMAT_UNKNOWN) {
+        return SparseFormat{};
+    }
+    auto tiled = tiledFor(device_.Get(), dxgi, desc.samples);
+    if (!tiled) {
+        return std::unexpected(std::move(tiled.error()));
+    }
+    if (!*tiled) {
+        return SparseFormat{};
+    }
+    // Each layer has a tail of its own, as textureTiling says, and D3D12 has
+    // no aligned mip size to report.
+    return SparseFormat{.supported = true,
+                        .shape = standardTileShape(desc.format, desc.dimension, desc.samples),
+                        .singleTail = false,
+                        .alignedMipSize = false};
+}
+
+core::Result<ID3D12Resource*> D3D12Device::addTextureTiles(D3D12TileMappings& tiles, const TileMappingDesc& desc,
+                                                           const D3D12SparseMemory* memory) {
+    tiles.clear();
+    if (desc.texture.isNull()) {
+        if (!desc.textureRegions.empty()) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "texture regions were given with no texture");
+        }
+        return nullptr;
+    }
+    auto found = textureFor(desc.texture);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    const D3D12Texture& texture = **found;
+    if (!texture.sparse) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the texture is not sparse");
+    }
+    if (memory != nullptr && !memory->takes(texture.tileHeap)) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "on ResourceHeapTier 1 a heap holds one kind of resource, and the memory's is not the "
+                             "texture's");
+    }
+    const FormatBlock& block = blockOf(texture.desc.format);
+    const std::uint32_t firstTail = texture.packedMips.NumStandardMips;
+    for (const TextureTileRegion& region : desc.textureRegions) {
+        if (auto checked = checkKnown(region.mapping, "tile mapping"); !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        if (auto checked = checkTileAspect(texture.desc.format, region.aspect); !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        const bool maps = region.mapping == TileMapping::Map;
+        if (maps && memory == nullptr) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "a region maps, but no memory was given");
+        }
+        // D3D12 numbers subresources in one run, so a mip or layer past the
+        // texture's would name another of its subresources.
+        if (region.mipLevel >= texture.mipLevels || region.layer >= texture.layers) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 "mip level {} of layer {} is past the texture's {} mip levels and {} layers",
+                                 region.mipLevel, region.layer, texture.mipLevels, texture.layers);
+        }
+        const std::uint32_t plane = planeOf(block, region.aspect);
+        D3D12_TILED_RESOURCE_COORDINATE coordinate{};
+        D3D12_TILE_REGION_SIZE size{};
+        if (region.mipLevel >= firstTail) {
+            // The layer's first packed mip names its tail, and X is a tile in
+            // it, as Diligent maps one (D3DTileMappingHelper.hpp:90, 111-123).
+            if (!std::in_range<UINT>(region.tailTile) || !std::in_range<UINT>(region.tailTiles)) {
+                return core::failure(core::ErrorCode::RhiInvalidCall,
+                                     "{} tail tiles from tile {} are past what D3D12 takes", region.tailTiles,
+                                     region.tailTile);
+            }
+            coordinate = {.X = static_cast<UINT>(region.tailTile),
+                          .Y = 0,
+                          .Z = 0,
+                          .Subresource = subresourceOf(texture, firstTail, region.layer, plane)};
+            size = {
+                .NumTiles = static_cast<UINT>(region.tailTiles), .UseBox = FALSE, .Width = 0, .Height = 0, .Depth = 0};
+        }
+        else {
+            // A box of tiles in the mip level, whose Height and Depth are UINT16s.
+            const std::uint64_t count = std::uint64_t{region.width} * region.height * region.depth;
+            if (!std::in_range<UINT16>(region.height) || !std::in_range<UINT16>(region.depth) ||
+                !std::in_range<UINT>(count)) {
+                return core::failure(core::ErrorCode::RhiInvalidCall,
+                                     "a box of {} by {} by {} tiles is past what D3D12 takes", region.width,
+                                     region.height, region.depth);
+            }
+            coordinate = {.X = region.x,
+                          .Y = region.y,
+                          .Z = region.z,
+                          .Subresource = subresourceOf(texture, region.mipLevel, region.layer, plane)};
+            size = {.NumTiles = static_cast<UINT>(count),
+                    .UseBox = TRUE,
+                    .Width = region.width,
+                    .Height = static_cast<UINT16>(region.height),
+                    .Depth = static_cast<UINT16>(region.depth)};
+        }
+        if (auto added = tiles.add(coordinate, size, maps, region.memoryTile); !added) {
+            return std::unexpected(std::move(added.error()));
+        }
+    }
+    return texture.resource.Get();
 }
 
 } // namespace bfr::rhi::d3d12

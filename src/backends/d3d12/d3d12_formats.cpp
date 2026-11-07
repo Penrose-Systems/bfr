@@ -3,7 +3,10 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/format.h"
+#include "bfr/rhi/sparse.h"
+#include "bfr/rhi/texture.h"
 #include "d3d12/d3d12_result.h"
+#include "rhi/format_blocks.h"
 
 #include <d3d12.h>
 #include <dxgicommon.h>
@@ -12,8 +15,11 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -217,6 +223,110 @@ core::Result<FormatCaps> formatCapsFor(ID3D12Device* device, Format format) {
         }
     }
     return caps;
+}
+
+core::Result<bool> tiledFor(ID3D12Device* device, DXGI_FORMAT format, std::uint32_t samples) {
+    const auto support = supportOf(device, format);
+    if (!support) {
+        return std::unexpected(support.error());
+    }
+    if (!has(support->support2, D3D12_FORMAT_SUPPORT2_TILED)) {
+        return false;
+    }
+    if (samples <= 1) {
+        return true;
+    }
+    // A count the device won't take is not tiled, whatever the reason, as
+    // sampleCountsFor reads it.
+    D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS levels{.Format = format,
+                                                         .SampleCount = samples,
+                                                         .Flags = D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_TILED_RESOURCE,
+                                                         .NumQualityLevels = 0};
+    return SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS, &levels, sizeof(levels))) &&
+           levels.NumQualityLevels != 0;
+}
+
+namespace {
+
+// D3D12 has no query for a tile's shape short of a resource to ask
+// GetResourceTiling of, so these are the standard 64KB tile shapes, in
+// texels, of Microsoft's tiled resources documentation ("Texture2D and
+// Texture2DArray subresource tiling" and "Texture3D subresource tiling"), as
+// Diligent's GraphicsAccessories.cpp GetStandardSparseTextureProperties
+// reproduces them. Each row is by bytes per element: 1, 2, 4, 8 and 16.
+constexpr std::uint32_t kLargestElement = 16;
+constexpr std::size_t kElementSizes = std::countr_zero(kLargestElement) + 1;
+using ShapeRow = std::array<TileShape, kElementSizes>;
+
+constexpr ShapeRow kStandard2D{
+    TileShape{.width = 256, .height = 256, .depth = 1}, TileShape{.width = 256, .height = 128, .depth = 1},
+    TileShape{.width = 128, .height = 128, .depth = 1}, TileShape{.width = 128, .height = 64, .depth = 1},
+    TileShape{.width = 64, .height = 64, .depth = 1},
+};
+
+constexpr ShapeRow kStandard3D{
+    TileShape{.width = 64, .height = 32, .depth = 32}, TileShape{.width = 32, .height = 32, .depth = 32},
+    TileShape{.width = 32, .height = 32, .depth = 16}, TileShape{.width = 32, .height = 16, .depth = 16},
+    TileShape{.width = 16, .height = 16, .depth = 16},
+};
+
+// Multisampled 2D, one row for each of 2, 4, 8 and 16 samples.
+constexpr std::uint32_t kMostSamples = 16;
+constexpr std::array<ShapeRow, std::countr_zero(kMostSamples)> kStandardMultisample{
+    ShapeRow{TileShape{.width = 128, .height = 256, .depth = 1}, TileShape{.width = 128, .height = 128, .depth = 1},
+             TileShape{.width = 64, .height = 128, .depth = 1}, TileShape{.width = 64, .height = 64, .depth = 1},
+             TileShape{.width = 32, .height = 64, .depth = 1}},
+    ShapeRow{TileShape{.width = 128, .height = 128, .depth = 1}, TileShape{.width = 128, .height = 64, .depth = 1},
+             TileShape{.width = 64, .height = 64, .depth = 1}, TileShape{.width = 64, .height = 32, .depth = 1},
+             TileShape{.width = 32, .height = 32, .depth = 1}},
+    ShapeRow{TileShape{.width = 64, .height = 128, .depth = 1}, TileShape{.width = 64, .height = 64, .depth = 1},
+             TileShape{.width = 32, .height = 64, .depth = 1}, TileShape{.width = 32, .height = 32, .depth = 1},
+             TileShape{.width = 16, .height = 32, .depth = 1}},
+    ShapeRow{TileShape{.width = 64, .height = 64, .depth = 1}, TileShape{.width = 64, .height = 32, .depth = 1},
+             TileShape{.width = 32, .height = 32, .depth = 1}, TileShape{.width = 32, .height = 16, .depth = 1},
+             TileShape{.width = 16, .height = 16, .depth = 1}},
+};
+
+// Where a format's element is in a row: a block of a compressed format,
+// whose 2D shape is its blocks' (the 2D table's BC rows). D16Unorm and
+// D32Float are DXGI's 16- and 32-bit depth formats, which their depthBytes
+// are; a depth format with stencil is two planes, which the tables don't
+// cover, so it has none.
+std::optional<std::size_t> elementOf(const FormatBlock& block) {
+    const std::uint32_t bytes = block.bytes != 0 ? block.bytes : (block.stencilBytes == 0 ? block.depthBytes : 0);
+    if (!std::has_single_bit(bytes) || bytes > kLargestElement) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(std::countr_zero(bytes));
+}
+
+} // namespace
+
+TileShape standardTileShape(Format format, TextureDimension dimension, std::uint32_t samples) {
+    const FormatBlock& block = blockOf(format);
+    const auto element = elementOf(block);
+    if (!element) {
+        return {};
+    }
+    const bool compressed = block.width != 1 || block.height != 1;
+    switch (dimension) {
+        case TextureDimension::D2:
+        case TextureDimension::Cube:
+            if (samples > 1) {
+                if (compressed || !std::has_single_bit(samples) || samples > kMostSamples) {
+                    return {};
+                }
+                return kStandardMultisample[static_cast<std::size_t>(std::countr_zero(samples)) - 1][*element];
+            }
+            return {.width = kStandard2D[*element].width * block.width,
+                    .height = kStandard2D[*element].height * block.height,
+                    .depth = 1};
+        case TextureDimension::D3:
+            return compressed || samples > 1 ? TileShape{} : kStandard3D[*element];
+        case TextureDimension::D1:
+            return {};
+    }
+    return {};
 }
 
 core::Result<std::vector<SwapchainFormat>> swapchainFormats(ID3D12Device* device) {

@@ -634,6 +634,23 @@ enum class SwapchainStatus : std::int32_t {
     return {};
 }
 
+/// What a tile mapping does to its region.
+enum class TileMapping : std::int32_t {
+    /// Maps the region to the memory's tiles.
+    Map = BFR_TILE_MAPPING_MAP,
+    /// Leaves the region with no memory; memory_tile is unused.
+    Unmap = BFR_TILE_MAPPING_UNMAP,
+};
+
+/// value's name in bfr.yaml; empty for a value TileMapping doesn't have.
+[[nodiscard]] constexpr std::string_view name(TileMapping value) {
+    switch (value) {
+    case TileMapping::Map: return "map";
+    case TileMapping::Unmap: return "unmap";
+    }
+    return {};
+}
+
 /// Each call that call timings count. The device's are named after the C++ rhi Device's calls,
 /// which the C functions of the same names pass to; instance_ ones after the Instance's.
 enum class Call : std::int32_t {
@@ -694,6 +711,12 @@ enum class Call : std::int32_t {
     InstanceFormatCaps = BFR_CALL_INSTANCE_FORMAT_CAPS,
     InstanceSwapchainCaps = BFR_CALL_INSTANCE_SWAPCHAIN_CAPS,
     InstanceSwapchainFormats = BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS,
+    CreateSparseMemory = BFR_CALL_CREATE_SPARSE_MEMORY,
+    DestroySparseMemory = BFR_CALL_DESTROY_SPARSE_MEMORY,
+    TextureTiling = BFR_CALL_TEXTURE_TILING,
+    BufferTiling = BFR_CALL_BUFFER_TILING,
+    SparseFormat = BFR_CALL_SPARSE_FORMAT,
+    UpdateTileMappings = BFR_CALL_UPDATE_TILE_MAPPINGS,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -756,6 +779,12 @@ enum class Call : std::int32_t {
     case Call::InstanceFormatCaps: return "instance_format_caps";
     case Call::InstanceSwapchainCaps: return "instance_swapchain_caps";
     case Call::InstanceSwapchainFormats: return "instance_swapchain_formats";
+    case Call::CreateSparseMemory: return "create_sparse_memory";
+    case Call::DestroySparseMemory: return "destroy_sparse_memory";
+    case Call::TextureTiling: return "texture_tiling";
+    case Call::BufferTiling: return "buffer_tiling";
+    case Call::SparseFormat: return "sparse_format";
+    case Call::UpdateTileMappings: return "update_tile_mappings";
     }
     return {};
 }
@@ -1331,6 +1360,8 @@ class Sampler;
 
 class TimestampPool;
 
+class SparseMemory;
+
 /// How to create an instance.
 struct InstanceDesc {
     Backend backend{};
@@ -1432,6 +1463,13 @@ struct DeviceDesc {
     /// Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool
     /// fails with error_limit_reached.
     std::uint32_t maxTimestampPools{};
+    /// Sparse memories the device holds at once, 0 for none; past it, bfr_create_sparse_memory
+    /// fails with error_limit_reached.
+    std::uint32_t maxSparseMemories{};
+    /// The most texture regions and the most buffer regions one bfr_update_tile_mappings takes;
+    /// room for them is made with the device, so mapping never allocates. More fails with
+    /// error_invalid_argument. 0 is none.
+    std::uint32_t maxTileMappings{};
 };
 
 /// How to create a swapchain.
@@ -1570,6 +1608,14 @@ struct BufferDesc {
     /// 0 is device.
     BufferMemory memory{};
     BufferUsage usage{};
+    /// Made with no memory: bfr_update_tile_mappings maps sparse memory's tiles into it, as
+    /// bfr_caps_sparse says. memory is device.
+    bool sparse{};
+    /// Its tiles may be mapped to memory other sparse resources' tiles are mapped to, where
+    /// bfr_caps_sparse.aliased.
+    bool sparseAliased{};
+    /// One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty; only when sparse.
+    std::uint32_t tileBytes{};
 };
 
 /// One range copied from a source buffer to a destination buffer.
@@ -1620,6 +1666,14 @@ struct TextureDesc {
     /// Samples per texel; 1 unless rendering multisamples it.
     std::uint32_t samples{};
     TextureUsage usage{};
+    /// Made with no memory: bfr_update_tile_mappings maps sparse memory's tiles into it, as
+    /// bfr_caps_sparse and bfr_get_sparse_format say.
+    bool sparse{};
+    /// Its tiles may be mapped to memory other sparse resources' tiles are mapped to, where
+    /// bfr_caps_sparse.aliased.
+    bool sparseAliased{};
+    /// One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty; only when sparse.
+    std::uint32_t tileBytes{};
 };
 
 /// How to create a timestamp pool.
@@ -1903,6 +1957,137 @@ struct SubmitDesc {
     std::span<const Token> waits{};
 };
 
+/// How to create sparse memory, for the tiles of resources like texture and buffer, either of which
+/// may be null but not both: Vulkan takes the memory's type from their requirements, and D3D12,
+/// where bfr_caps_sparse.mixed_resources is false, the one kind of resource its heap holds. A
+/// resource mapped to it later must take what they took, as each backend says.
+struct SparseMemoryDesc {
+    /// Bytes.
+    std::uint64_t size{};
+    /// One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty.
+    std::uint32_t tileBytes{};
+    const Texture* texture{};
+    const Buffer* buffer{};
+};
+
+/// A tile's size, in texels.
+struct TileShape {
+    std::uint32_t width{};
+    std::uint32_t height{};
+    std::uint32_t depth{};
+};
+
+/// How one aspect of a sparse texture is cut into tiles, as the backend says. Mip levels from
+/// first_tail_mip on are its tail, mapped as tiles of tail_bytes rather than by region.
+struct TextureTiling {
+    /// Bytes in one tile.
+    std::uint64_t tileBytes{};
+    TileShape shape{};
+    std::uint32_t firstTailMip{};
+    /// Bytes of one layer's tail.
+    std::uint64_t tailBytes{};
+    /// Bytes between the starts of two layers' tails; 0 where the backend gives none.
+    std::uint64_t tailStride{};
+    /// Every layer shares one tail, mapped at layer 0.
+    bool singleTail{};
+};
+
+/// How a sparse buffer is cut into tiles.
+struct BufferTiling {
+    /// Bytes in one tile.
+    std::uint64_t tileBytes{};
+};
+
+/// The texture a bfr_get_sparse_format call asks about, as bfr_texture_desc would make it.
+struct SparseFormatDesc {
+    Format format{};
+    TextureDimension dimension{};
+    std::uint32_t samples{};
+    TextureUsage usage{};
+    TextureAspect aspect{};
+    /// As bfr_texture_desc.tile_bytes.
+    std::uint32_t tileBytes{};
+};
+
+/// Whether a sparse texture of a format can be made, and its tiles' shape.
+struct SparseFormat {
+    bool supported{};
+    TileShape shape{};
+    /// Every layer shares one tail.
+    bool singleTail{};
+    /// Every mip level not a whole number of tiles is in the tail.
+    bool alignedMipSize{};
+};
+
+/// One region of a sparse texture mapped to memory or unmapped. Below the tail the region is x, y,
+/// z, width, height and depth, in tiles of the mip level; from bfr_texture_tiling.first_tail_mip
+/// on, it is tail_tiles tiles from tail_tile in the layer's tail. memory_tile is where in memory,
+/// in the texture's tiles.
+struct TextureTileRegion {
+    /// 0 is map.
+    TileMapping mapping{};
+    TextureAspect aspect{};
+    std::uint32_t mipLevel{};
+    std::uint32_t layer{};
+    std::uint32_t x{};
+    std::uint32_t y{};
+    std::uint32_t z{};
+    std::uint32_t width{};
+    std::uint32_t height{};
+    std::uint32_t depth{};
+    std::uint64_t tailTile{};
+    std::uint64_t tailTiles{};
+    std::uint64_t memoryTile{};
+};
+static_assert(sizeof(TextureTileRegion) == sizeof(bfr_texture_tile_region) && alignof(TextureTileRegion) == alignof(bfr_texture_tile_region) &&
+              std::is_standard_layout_v<TextureTileRegion> && std::is_trivially_copyable_v<TextureTileRegion>);
+static_assert(offsetof(TextureTileRegion, mapping) == offsetof(bfr_texture_tile_region, mapping));
+static_assert(offsetof(TextureTileRegion, aspect) == offsetof(bfr_texture_tile_region, aspect));
+static_assert(offsetof(TextureTileRegion, mipLevel) == offsetof(bfr_texture_tile_region, mip_level));
+static_assert(offsetof(TextureTileRegion, layer) == offsetof(bfr_texture_tile_region, layer));
+static_assert(offsetof(TextureTileRegion, x) == offsetof(bfr_texture_tile_region, x));
+static_assert(offsetof(TextureTileRegion, y) == offsetof(bfr_texture_tile_region, y));
+static_assert(offsetof(TextureTileRegion, z) == offsetof(bfr_texture_tile_region, z));
+static_assert(offsetof(TextureTileRegion, width) == offsetof(bfr_texture_tile_region, width));
+static_assert(offsetof(TextureTileRegion, height) == offsetof(bfr_texture_tile_region, height));
+static_assert(offsetof(TextureTileRegion, depth) == offsetof(bfr_texture_tile_region, depth));
+static_assert(offsetof(TextureTileRegion, tailTile) == offsetof(bfr_texture_tile_region, tail_tile));
+static_assert(offsetof(TextureTileRegion, tailTiles) == offsetof(bfr_texture_tile_region, tail_tiles));
+static_assert(offsetof(TextureTileRegion, memoryTile) == offsetof(bfr_texture_tile_region, memory_tile));
+
+/// tiles tiles of a sparse buffer from tile mapped to memory from memory_tile, or unmapped, in the
+/// buffer's tiles.
+struct BufferTileRegion {
+    /// 0 is map.
+    TileMapping mapping{};
+    std::uint64_t tile{};
+    std::uint64_t tiles{};
+    std::uint64_t memoryTile{};
+};
+static_assert(sizeof(BufferTileRegion) == sizeof(bfr_buffer_tile_region) && alignof(BufferTileRegion) == alignof(bfr_buffer_tile_region) &&
+              std::is_standard_layout_v<BufferTileRegion> && std::is_trivially_copyable_v<BufferTileRegion>);
+static_assert(offsetof(BufferTileRegion, mapping) == offsetof(bfr_buffer_tile_region, mapping));
+static_assert(offsetof(BufferTileRegion, tile) == offsetof(bfr_buffer_tile_region, tile));
+static_assert(offsetof(BufferTileRegion, tiles) == offsetof(bfr_buffer_tile_region, tiles));
+static_assert(offsetof(BufferTileRegion, memoryTile) == offsetof(bfr_buffer_tile_region, memory_tile));
+
+/// What bfr_update_tile_mappings sends to one queue: texture_regions of texture and buffer_regions
+/// of buffer mapped to memory or unmapped.
+struct TileMappingDesc {
+    /// The queue to map on, numbered as bfr_device_desc says.
+    std::uint32_t queue{};
+    /// Tokens the GPU passes before it maps.
+    std::span<const Token> waits{};
+    /// Null when every region unmaps.
+    const SparseMemory* memory{};
+    /// Null for none.
+    const Texture* texture{};
+    std::span<const TextureTileRegion> textureRegions{};
+    /// Null for none.
+    const Buffer* buffer{};
+    std::span<const BufferTileRegion> bufferRegions{};
+};
+
 /// Which window to ask about.
 struct SwapchainQuery {
     Window window{};
@@ -2151,11 +2336,6 @@ struct CapsFeatures {
     bool timestampsOnAllQueues{};
     bool pipelineStatistics{};
     bool occlusionQueryPrecise{};
-    bool sparseBinding{};
-    /// Partly resident 2D textures.
-    bool sparseTextures{};
-    /// Partly resident buffers.
-    bool sparseBuffers{};
 };
 
 /// One pool of memory.
@@ -2225,6 +2405,10 @@ struct CapsQueues {
     QueueLevels graphicsLevels{};
     QueueLevels computeLevels{};
     QueueLevels copyLevels{};
+    /// Graphics queues run bfr_update_tile_mappings.
+    bool graphicsSparse{};
+    bool computeSparse{};
+    bool copySparse{};
 };
 
 /// The bfr_timestamp_stage values a timestamp write takes; each true where the backend says so.
@@ -2264,6 +2448,47 @@ struct CapsTimestamps {
     HostClocks hostClocks{};
 };
 
+/// What the adapter's sparse resources are; each true where the backend says so, or its
+/// documentation where it has no query, as each backend names.
+struct CapsSparse {
+    /// Resources made with sparse take tiles at all.
+    bool binding{};
+    bool buffers{};
+    bool textures2d{};
+    bool textures3d{};
+    /// Sparse 2D textures with 2 samples.
+    bool samples2{};
+    bool samples4{};
+    bool samples8{};
+    bool samples16{};
+    /// Resources made with sparse_aliased share memory's tiles.
+    bool aliased{};
+    /// 2D textures' tiles have the standard shapes.
+    bool standard2dShape{};
+    bool standard2dMultisampleShape{};
+    bool standard3dShape{};
+    /// Every mip level not a whole number of tiles is in the tail.
+    bool alignedMipSize{};
+    /// Reads of an unmapped tile give 0 and writes to one are dropped.
+    bool nonResidentStrict{};
+    /// Shaders ask whether what they read was mapped.
+    bool shaderResidency{};
+    /// One sparse memory holds textures' and buffers' tiles together.
+    bool mixedResources{};
+    /// Tail mappings take a layer other than 0.
+    bool layerTails{};
+    /// Bytes of sparse resources a device holds, where the backend counts them so.
+    std::uint64_t addressSpaceBytes{};
+    /// Bits of a resource's GPU addresses, where the backend counts them so.
+    std::uint32_t addressBitsPerResource{};
+    std::uint32_t addressBitsPerProcess{};
+    std::uint32_t tileByteCount{};
+    /// The first tile_byte_count are the tile sizes, in bytes, a sparse resource is made with; none
+    /// where the backend sets them itself, and bfr_texture_tiling and bfr_buffer_tiling say what
+    /// they are. 3 is Metal's sparse page sizes.
+    std::array<std::uint32_t, 3> tileBytes{};
+};
+
 /// Everything about an adapter that stays the same while it runs.
 struct Caps {
     CapsInfo info{};
@@ -2276,6 +2501,7 @@ struct Caps {
     CapsMemory memory{};
     CapsQueues queues{};
     CapsTimestamps timestamps{};
+    CapsSparse sparse{};
 };
 
 /// What an adapter does with one format.
@@ -2422,6 +2648,8 @@ inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
         .max_bindless_storage_buffers = value.maxBindlessStorageBuffers,
         .max_bindless_samplers = value.maxBindlessSamplers,
         .max_timestamp_pools = value.maxTimestampPools,
+        .max_sparse_memories = value.maxSparseMemories,
+        .max_tile_mappings = value.maxTileMappings,
     };
 }
 
@@ -2479,6 +2707,9 @@ inline bfr_buffer_desc toC(const BufferDesc& value, const bfr_chain* next) {
         .size = value.size,
         .memory = static_cast<bfr_buffer_memory>(value.memory),
         .usage = toC(value.usage),
+        .sparse = value.sparse ? BFR_TRUE : BFR_FALSE,
+        .sparse_aliased = value.sparseAliased ? BFR_TRUE : BFR_FALSE,
+        .tile_bytes = value.tileBytes,
     };
 }
 
@@ -2509,6 +2740,9 @@ inline bfr_texture_desc toC(const TextureDesc& value, const bfr_chain* next) {
         .mip_levels = value.mipLevels,
         .samples = value.samples,
         .usage = toC(value.usage),
+        .sparse = value.sparse ? BFR_TRUE : BFR_FALSE,
+        .sparse_aliased = value.sparseAliased ? BFR_TRUE : BFR_FALSE,
+        .tile_bytes = value.tileBytes,
     };
 }
 
@@ -2661,6 +2895,44 @@ inline bfr_token toC(const Token& value) {
     return {.queue = value.queue, .value = value.value};
 }
 
+inline bfr_sparse_format_desc toC(const SparseFormatDesc& value) {
+    return {
+        .format = static_cast<bfr_format>(value.format),
+        .dimension = static_cast<bfr_texture_dimension>(value.dimension),
+        .samples = value.samples,
+        .usage = toC(value.usage),
+        .aspect = static_cast<bfr_texture_aspect>(value.aspect),
+        .tile_bytes = value.tileBytes,
+    };
+}
+
+inline bfr_texture_tile_region toC(const TextureTileRegion& value) {
+    return {
+        .mapping = static_cast<bfr_tile_mapping>(value.mapping),
+        .aspect = static_cast<bfr_texture_aspect>(value.aspect),
+        .mip_level = value.mipLevel,
+        .layer = value.layer,
+        .x = value.x,
+        .y = value.y,
+        .z = value.z,
+        .width = value.width,
+        .height = value.height,
+        .depth = value.depth,
+        .tail_tile = value.tailTile,
+        .tail_tiles = value.tailTiles,
+        .memory_tile = value.memoryTile,
+    };
+}
+
+inline bfr_buffer_tile_region toC(const BufferTileRegion& value) {
+    return {
+        .mapping = static_cast<bfr_tile_mapping>(value.mapping),
+        .tile = value.tile,
+        .tiles = value.tiles,
+        .memory_tile = value.memoryTile,
+    };
+}
+
 inline bfr_swapchain_query toC(const SwapchainQuery& value, const bfr_chain* next) {
     return {.next = next, .window = toC(value.window)};
 }
@@ -2707,6 +2979,34 @@ inline TextureSlots fromC(const bfr_texture_slots& value) {
 
 inline Token fromC(const bfr_token& value) {
     return {.queue = value.queue, .value = value.value};
+}
+
+inline TileShape fromC(const bfr_tile_shape& value) {
+    return {.width = value.width, .height = value.height, .depth = value.depth};
+}
+
+inline TextureTiling fromC(const bfr_texture_tiling& value) {
+    return {
+        .tileBytes = value.tile_bytes,
+        .shape = fromC(value.shape),
+        .firstTailMip = value.first_tail_mip,
+        .tailBytes = value.tail_bytes,
+        .tailStride = value.tail_stride,
+        .singleTail = value.single_tail != BFR_FALSE,
+    };
+}
+
+inline BufferTiling fromC(const bfr_buffer_tiling& value) {
+    return {.tileBytes = value.tile_bytes};
+}
+
+inline SparseFormat fromC(const bfr_sparse_format& value) {
+    return {
+        .supported = value.supported != BFR_FALSE,
+        .shape = fromC(value.shape),
+        .singleTail = value.single_tail != BFR_FALSE,
+        .alignedMipSize = value.aligned_mip_size != BFR_FALSE,
+    };
 }
 
 inline CapsInfo fromC(const bfr_caps_info& value) {
@@ -2877,9 +3177,6 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .timestampsOnAllQueues = value.timestamps_on_all_queues != BFR_FALSE,
         .pipelineStatistics = value.pipeline_statistics != BFR_FALSE,
         .occlusionQueryPrecise = value.occlusion_query_precise != BFR_FALSE,
-        .sparseBinding = value.sparse_binding != BFR_FALSE,
-        .sparseTextures = value.sparse_textures != BFR_FALSE,
-        .sparseBuffers = value.sparse_buffers != BFR_FALSE,
     };
 }
 
@@ -2933,6 +3230,9 @@ inline CapsQueues fromC(const bfr_caps_queues& value) {
         .graphicsLevels = fromC(value.graphics_levels),
         .computeLevels = fromC(value.compute_levels),
         .copyLevels = fromC(value.copy_levels),
+        .graphicsSparse = value.graphics_sparse != BFR_FALSE,
+        .computeSparse = value.compute_sparse != BFR_FALSE,
+        .copySparse = value.copy_sparse != BFR_FALSE,
     };
 }
 
@@ -2968,6 +3268,33 @@ inline CapsTimestamps fromC(const bfr_caps_timestamps& value) {
     };
 }
 
+inline CapsSparse fromC(const bfr_caps_sparse& value) {
+    return {
+        .binding = value.binding != BFR_FALSE,
+        .buffers = value.buffers != BFR_FALSE,
+        .textures2d = value.textures_2d != BFR_FALSE,
+        .textures3d = value.textures_3d != BFR_FALSE,
+        .samples2 = value.samples_2 != BFR_FALSE,
+        .samples4 = value.samples_4 != BFR_FALSE,
+        .samples8 = value.samples_8 != BFR_FALSE,
+        .samples16 = value.samples_16 != BFR_FALSE,
+        .aliased = value.aliased != BFR_FALSE,
+        .standard2dShape = value.standard_2d_shape != BFR_FALSE,
+        .standard2dMultisampleShape = value.standard_2d_multisample_shape != BFR_FALSE,
+        .standard3dShape = value.standard_3d_shape != BFR_FALSE,
+        .alignedMipSize = value.aligned_mip_size != BFR_FALSE,
+        .nonResidentStrict = value.non_resident_strict != BFR_FALSE,
+        .shaderResidency = value.shader_residency != BFR_FALSE,
+        .mixedResources = value.mixed_resources != BFR_FALSE,
+        .layerTails = value.layer_tails != BFR_FALSE,
+        .addressSpaceBytes = value.address_space_bytes,
+        .addressBitsPerResource = value.address_bits_per_resource,
+        .addressBitsPerProcess = value.address_bits_per_process,
+        .tileByteCount = value.tile_byte_count,
+        .tileBytes = std::to_array(value.tile_bytes),
+    };
+}
+
 inline Caps fromC(const bfr_caps& value) {
     return {
         .info = fromC(value.info),
@@ -2980,6 +3307,7 @@ inline Caps fromC(const bfr_caps& value) {
         .memory = fromC(value.memory),
         .queues = fromC(value.queues),
         .timestamps = fromC(value.timestamps),
+        .sparse = fromC(value.sparse),
     };
 }
 
@@ -3119,8 +3447,8 @@ public:
     Device() = default;
     /// Destroys a device once the GPU has finished with it, with every handle it still owns. Null
     /// does nothing. A Device with Buffer or CommandList or CommandPool or Pipeline or Sampler or
-    /// Swapchain or Texture or TimestampPool objects left lives on until the last of them is
-    /// destroyed, so they may be destroyed in any order.
+    /// SparseMemory or Swapchain or Texture or TimestampPool objects left lives on until the last
+    /// of them is destroyed, so they may be destroyed in any order.
     ~Device() = default;
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
@@ -3323,6 +3651,29 @@ public:
     /// error_unsupported for a clock bfr_caps_timestamps.host_clocks does not list.
     [[nodiscard]] Expected<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue, HostClock clock) const;
 
+    /// Creates desc's size bytes of device memory for the tiles of the sparse resources desc names.
+    /// Not for the frame path. Fails with error_invalid_argument for a resource that is not sparse
+    /// or a size of 0, error_unsupported for a tile_bytes the backend doesn't take or resources the
+    /// backend can't hold in one memory, error_limit_reached at the device's max_sparse_memories,
+    /// error_out_of_memory when the backend says memory ran out, and error_device_failed when it
+    /// refuses.
+    [[nodiscard]] Expected<SparseMemory> createSparseMemory(const SparseMemoryDesc& desc) const;
+
+    /// Writes whether a sparse texture as desc says can be made, and its tiles' shape, as the
+    /// backend says. Fails with error_invalid_argument for an enum value BFR does not have, and
+    /// error_unsupported for a tile_bytes the backend doesn't take.
+    [[nodiscard]] Expected<SparseFormat> sparseFormat(const SparseFormatDesc& desc) const;
+
+    /// Maps desc's regions of its sparse texture and buffer to its memory, or unmaps them, on
+    /// desc's queue once the GPU has passed the waits, and writes the token the mappings'
+    /// completion signals; work that uses them waits on it. Calls on one queue must not overlap,
+    /// bfr_submit included. Fails with error_invalid_argument for a queue the device does not have,
+    /// a resource that is not sparse, a region that maps with no memory, or more than
+    /// max_tile_mappings regions of either kind, error_unsupported for a queue whose kind
+    /// bfr_caps_queues says maps no tiles, memory the resource can't be mapped to, or a region the
+    /// backend has no form for, and error_device_failed when the backend refuses.
+    [[nodiscard]] Expected<Token> updateTileMappings(const TileMappingDesc& desc) const;
+
     /// Lists the CPU time spent in each of the device's calls since it was made, indexed by
     /// bfr_call.
     [[nodiscard]] Expected<std::vector<CallTiming>> callTimings() const;
@@ -3498,6 +3849,10 @@ public:
     /// usage.
     [[nodiscard]] Expected<std::uint32_t> bufferSlot();
 
+    /// Writes how a sparse buffer is cut into tiles. Fails with error_invalid_argument when it is
+    /// not sparse.
+    [[nodiscard]] Expected<BufferTiling> bufferTiling();
+
 private:
     Buffer(bfr_device* device, bfr_buffer buffer, detail::KeepAlive keepAlive) : device_(device), buffer_(buffer), keepAlive_(std::move(keepAlive)) {}
     friend class Device;
@@ -3536,6 +3891,11 @@ public:
 
     /// Writes where the texture is in the bindless tables bfr_pipeline states.
     [[nodiscard]] Expected<TextureSlots> textureSlots();
+
+    /// Writes how aspect of a sparse texture is cut into tiles. Fails with error_invalid_argument
+    /// when the texture is not sparse or has no such aspect, and error_unsupported where the
+    /// backend gives no tiling for it.
+    [[nodiscard]] Expected<TextureTiling> textureTiling(TextureAspect aspect);
 
 private:
     Texture(bfr_device* device, bfr_texture texture, detail::KeepAlive keepAlive) : device_(device), texture_(texture), keepAlive_(std::move(keepAlive)) {}
@@ -3674,6 +4034,43 @@ private:
     detail::KeepAlive keepAlive_;
 };
 
+/// Device memory that sparse textures' and buffers' tiles are mapped into by
+/// bfr_update_tile_mappings.
+class SparseMemory {
+public:
+    /// Owns nothing, as a moved-from SparseMemory does.
+    SparseMemory() = default;
+    /// Destroys sparse memory once the GPU has passed every submit and mapping made before the
+    /// call; the handle is invalid at once. Tiles still mapped to it read as unmapped ones do
+    /// after. Not for the frame path. A handle that is already destroyed does nothing.
+    ~SparseMemory() { bfr_destroy_sparse_memory(device_, sparseMemory_); }
+    SparseMemory(const SparseMemory&) = delete;
+    SparseMemory& operator=(const SparseMemory&) = delete;
+    SparseMemory(SparseMemory&& other) noexcept : device_(std::exchange(other.device_, nullptr)), sparseMemory_(std::exchange(other.sparseMemory_, {})), keepAlive_(std::move(other.keepAlive_)) {}
+    SparseMemory& operator=(SparseMemory&& other) noexcept {
+        if (this != &other) {
+            bfr_destroy_sparse_memory(device_, sparseMemory_);
+            device_ = std::exchange(other.device_, nullptr);
+            sparseMemory_ = std::exchange(other.sparseMemory_, {});
+            keepAlive_ = std::move(other.keepAlive_);
+        }
+        return *this;
+    }
+
+    /// The C value, for calls bfr.hpp does not wrap; this still owns it.
+    [[nodiscard]] bfr_sparse_memory get() const { return sparseMemory_; }
+    [[nodiscard]] explicit operator bool() const { return sparseMemory_.bits != 0; }
+
+private:
+    SparseMemory(bfr_device* device, bfr_sparse_memory sparseMemory, detail::KeepAlive keepAlive) : device_(device), sparseMemory_(sparseMemory), keepAlive_(std::move(keepAlive)) {}
+    friend class Device;
+
+    bfr_device* device_ = nullptr;
+    bfr_sparse_memory sparseMemory_{};
+    // Keeps the Device that made this alive until this is destroyed.
+    detail::KeepAlive keepAlive_;
+};
+
 namespace detail {
 
 inline bfr_color_attachment toC(const ColorAttachment& value) {
@@ -3714,6 +4111,31 @@ inline bfr_submit_desc toC(const SubmitDesc& value, const bfr_chain* next) {
         .command_list_count = static_cast<uint32_t>(value.commandLists.size()),
         .waits = reinterpret_cast<const bfr_token*>(value.waits.data()),
         .wait_count = static_cast<uint32_t>(value.waits.size()),
+    };
+}
+
+inline bfr_sparse_memory_desc toC(const SparseMemoryDesc& value) {
+    return {
+        .size = value.size,
+        .tile_bytes = value.tileBytes,
+        .texture = value.texture != nullptr ? value.texture->get() : bfr_texture{},
+        .buffer = value.buffer != nullptr ? value.buffer->get() : bfr_buffer{},
+    };
+}
+
+inline bfr_tile_mapping_desc toC(const TileMappingDesc& value, const bfr_chain* next) {
+    return {
+        .next = next,
+        .queue = value.queue,
+        .waits = reinterpret_cast<const bfr_token*>(value.waits.data()),
+        .wait_count = static_cast<uint32_t>(value.waits.size()),
+        .memory = value.memory != nullptr ? value.memory->get() : bfr_sparse_memory{},
+        .texture = value.texture != nullptr ? value.texture->get() : bfr_texture{},
+        .texture_regions = reinterpret_cast<const bfr_texture_tile_region*>(value.textureRegions.data()),
+        .texture_region_count = static_cast<uint32_t>(value.textureRegions.size()),
+        .buffer = value.buffer != nullptr ? value.buffer->get() : bfr_buffer{},
+        .buffer_regions = reinterpret_cast<const bfr_buffer_tile_region*>(value.bufferRegions.data()),
+        .buffer_region_count = static_cast<uint32_t>(value.bufferRegions.size()),
     };
 }
 
@@ -4166,6 +4588,42 @@ inline Expected<CalibratedTimestamps> Device::calibrateTimestamps(std::uint32_t 
     return detail::fromC(timestamps);
 }
 
+inline Expected<SparseMemory> Device::createSparseMemory(const SparseMemoryDesc& desc) const {
+    const bfr_sparse_memory_desc cDesc = detail::toC(desc);
+    bfr_sparse_memory memory{};
+    if (const bfr_result result = bfr_create_sparse_memory(device_, &cDesc, &memory); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return SparseMemory{device_, memory, keepAlive_};
+}
+
+inline Expected<SparseFormat> Device::sparseFormat(const SparseFormatDesc& desc) const {
+    const bfr_sparse_format_desc cDesc = detail::toC(desc);
+    bfr_sparse_format format{};
+    if (const bfr_result result = bfr_get_sparse_format(device_, &cDesc, &format); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(format);
+}
+
+inline Expected<Token> Device::updateTileMappings(const TileMappingDesc& desc) const {
+    if (!std::in_range<uint32_t>(desc.waits.size())) {
+        return std::unexpected(detail::tooMany("desc.waits holds more elements than a uint32_t counts"));
+    }
+    if (!std::in_range<uint32_t>(desc.textureRegions.size())) {
+        return std::unexpected(detail::tooMany("desc.textureRegions holds more elements than a uint32_t counts"));
+    }
+    if (!std::in_range<uint32_t>(desc.bufferRegions.size())) {
+        return std::unexpected(detail::tooMany("desc.bufferRegions holds more elements than a uint32_t counts"));
+    }
+    const bfr_tile_mapping_desc cDesc = detail::toC(desc, nullptr);
+    bfr_token token{};
+    if (const bfr_result result = bfr_update_tile_mappings(device_, &cDesc, &token); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(token);
+}
+
 inline Expected<std::vector<CallTiming>> Device::callTimings() const {
     std::vector<bfr_call_timing> timingsC;
     std::uint32_t count = 0;
@@ -4247,12 +4705,28 @@ inline Expected<std::uint32_t> Buffer::bufferSlot() {
     return slot;
 }
 
+inline Expected<BufferTiling> Buffer::bufferTiling() {
+    bfr_buffer_tiling tiling{};
+    if (const bfr_result result = bfr_get_buffer_tiling(device_, buffer_, &tiling); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(tiling);
+}
+
 inline Expected<TextureSlots> Texture::textureSlots() {
     bfr_texture_slots slots{};
     if (const bfr_result result = bfr_get_texture_slots(device_, texture_, &slots); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return detail::fromC(slots);
+}
+
+inline Expected<TextureTiling> Texture::textureTiling(TextureAspect aspect) {
+    bfr_texture_tiling tiling{};
+    if (const bfr_result result = bfr_get_texture_tiling(device_, texture_, static_cast<bfr_texture_aspect>(aspect), &tiling); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(tiling);
 }
 
 inline Expected<std::uint32_t> Sampler::samplerSlot() {

@@ -2,17 +2,20 @@
 
 #include "bfr/rhi/caps.h"
 #include "metal/metal_pipeline.h"
+#include "metal/metal_sparse.h"
 #include "metal/metal_util.h"
 
 #include <Foundation/NSError.hpp>
 #include <Metal/MTL4Counters.hpp>
 #include <Metal/MTLDevice.hpp>
+#include <Metal/MTLResource.hpp>
 #include <Metal/MTLTypes.hpp>
 
 #include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <utility>
 
 namespace bfr::rhi::metal {
 
@@ -106,8 +109,8 @@ void addSamplerFeatures(MTL::Device* device, Features& features) {
 
 // Which compressed pixel formats the device samples. Metal answers BC; for the
 // rest the Metal Feature Set Tables name the families: ETC2, EAC and ASTC LDR
-// from Apple2, ASTC HDR from Apple6 (Godot's Metal driver, pixel_formats.cpp,
-// gates HDR on Apple6 too).
+// from Apple2, as The Forge gates them (MetalCapBuilder.h:128, 197-234), and
+// ASTC HDR from Apple6, as Godot gates it (pixel_formats.cpp:968).
 void addCompressionFeatures(MTL::Device* device, Features& features) {
     features.compressionBc = device->supportsBCTextureCompression();
     features.compressionEtc2 = device->supportsFamily(MTL::GPUFamilyApple2);
@@ -117,7 +120,9 @@ void addCompressionFeatures(MTL::Device* device, Features& features) {
 
 // Render state Metal has no call for: a triangle fill mode and depth clip
 // mode on every render encoder, and blending set per color attachment, on the
-// Apple7 and later families Metal 4 runs on.
+// Metal 4 devices belowFloor lets through. Godot sets the first two from its
+// pipeline with no device check (rendering_device_driver_metal.cpp:2094-2095),
+// and The Forge all three (MetalRenderer.mm:1369-1396, 3497).
 void addRenderFeatures(Features& features) {
     features.wireframe = true;
     features.depthClamp = true;
@@ -140,7 +145,9 @@ Features featuresOf(MTL::Device* device) {
 // BFR opens as many graphics, compute and copy queues as DeviceDesc asks,
 // each an MTL4CommandQueue. Metal has no call for how many a
 // device has and states no limit, so createDevice takes any count. Metal has
-// no queue priority, so there are no ranks or levels.
+// no queue priority, so there are no ranks or levels. Tile mappings are
+// calls on every MTL4CommandQueue (MTL4CommandQueue.hpp:144-146), and Metal
+// has no device query to gate them on, as D3D12 gates its on the tiled tier.
 Queues queuesOf() {
     return {.graphics = 0,
             .compute = 0,
@@ -151,7 +158,27 @@ Queues queuesOf() {
             .ranks = 0,
             .graphicsLevels = {},
             .computeLevels = {},
-            .copyLevels = {}};
+            .copyLevels = {},
+            .graphicsSparse = true,
+            .computeSparse = true,
+            .copySparse = true};
+}
+
+// Metal has no device query for sparse support: the tiers are only on
+// resources once made (MTLTexture.hpp:285, MTLBuffer.hpp:62), and no local
+// source names the families that have it, so every bool stays false. The page sizes' bytes are a device query
+// (MTLDevice.hpp:539). A page size it gives 0 bytes for is not listed, as 0
+// is what a resource takes where the list is empty, nor one past 32 bits,
+// which tileBytes can't name.
+Sparse sparseOf(MTL::Device* device) {
+    Sparse sparse;
+    for (const MTL::SparsePageSize page : kSparsePageSizes) {
+        if (const NS::UInteger bytes = device->sparseTileSizeInBytes(page);
+            bytes != 0 && std::in_range<std::uint32_t>(bytes)) {
+            sparse.tileBytes.push_back(static_cast<std::uint32_t>(bytes));
+        }
+    }
+    return sparse;
 }
 
 // The one pool of memory Metal has for a device to use.
@@ -234,6 +261,7 @@ Caps readCaps(MTL::Device* device) {
     caps.memory = memoryOf(device);
     caps.queues = queuesOf();
     caps.timestamps = timestampsOf(device);
+    caps.sparse = sparseOf(device);
     return caps;
 }
 

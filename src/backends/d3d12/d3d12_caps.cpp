@@ -141,10 +141,6 @@ void addBasicFeatures(ID3D12Device* device, Features& features) {
         features.logicOp = options.OutputMergerLogicOp != FALSE;
         features.conservativeRaster = options.ConservativeRasterizationTier !=
                                       D3D12_CONSERVATIVE_RASTERIZATION_TIER_NOT_SUPPORTED;
-        const bool tiled = options.TiledResourcesTier != D3D12_TILED_RESOURCES_TIER_NOT_SUPPORTED;
-        features.sparseBinding = tiled;
-        features.sparseTextures = tiled;
-        features.sparseBuffers = tiled;
     }
     D3D12_FEATURE_DATA_D3D12_OPTIONS1 options1{};
     if (query(device, D3D12_FEATURE_D3D12_OPTIONS1, options1)) {
@@ -299,18 +295,59 @@ QueueLevels levelsOf(ID3D12Device* device, D3D12_COMMAND_LIST_TYPE type) {
 // D3D12 has no count of queues: CreateCommandQueue makes as many of each type
 // as asked. D3D12Device::open makes as many graphics, compute and copy queues
 // as DeviceDesc asks, so any count it holds is taken. It doesn't rank a
-// device's queues.
-Queues queuesOf(ID3D12Device* device) {
+// device's queues. D3D12 has no query for which queues map tiles:
+// UpdateTileMappings is an ID3D12CommandQueue call, so every kind maps them
+// where the device has tiled resources (sparse.binding), as Diligent marks
+// every queue (EngineFactoryD3D12.cpp, COMMAND_QUEUE_TYPE_SPARSE_BINDING).
+Queues queuesOf(ID3D12Device* device, const Sparse& sparse) {
     return {.graphics = 0,
             .compute = 0,
             .copy = 0,
             .ranks = 0,
             .graphicsLevels = levelsOf(device, D3D12_COMMAND_LIST_TYPE_DIRECT),
             .computeLevels = levelsOf(device, D3D12_COMMAND_LIST_TYPE_COMPUTE),
-            .copyLevels = levelsOf(device, D3D12_COMMAND_LIST_TYPE_COPY)};
+            .copyLevels = levelsOf(device, D3D12_COMMAND_LIST_TYPE_COPY),
+            .graphicsSparse = sparse.binding,
+            .computeSparse = sparse.binding,
+            .copySparse = sparse.binding};
 }
 
 } // namespace
+
+Sparse sparseOf(ID3D12Device* device) {
+    D3D12_FEATURE_DATA_D3D12_OPTIONS options{};
+    if (!query(device, D3D12_FEATURE_D3D12_OPTIONS, options) ||
+        options.TiledResourcesTier == D3D12_TILED_RESOURCES_TIER_NOT_SUPPORTED) {
+        return {};
+    }
+    const bool tier2 = options.TiledResourcesTier >= D3D12_TILED_RESOURCES_TIER_2;
+    const bool tier3 = options.TiledResourcesTier >= D3D12_TILED_RESOURCES_TIER_3;
+    D3D12_FEATURE_DATA_GPU_VIRTUAL_ADDRESS_SUPPORT address{};
+    static_cast<void>(query(device, D3D12_FEATURE_GPU_VIRTUAL_ADDRESS_SUPPORT, address));
+    return {
+        .binding = true,
+        .buffers = true,
+        .textures2D = true,
+        .textures3D = tier3,
+        .samples2 = false,
+        .samples4 = true,
+        .samples8 = false,
+        .samples16 = false,
+        .aliased = true,
+        .standard2DShape = true,
+        .standard2DMultisampleShape = true,
+        .standard3DShape = tier3,
+        .alignedMipSize = false,
+        .nonResidentStrict = tier2,
+        .shaderResidency = tier2,
+        .mixedResources = options.ResourceHeapTier >= D3D12_RESOURCE_HEAP_TIER_2,
+        .layerTails = false,
+        .addressSpaceBytes = 0,
+        .addressBitsPerResource = address.MaxGPUVirtualAddressBitsPerResource,
+        .addressBitsPerProcess = address.MaxGPUVirtualAddressBitsPerProcess,
+        .tileBytes = {D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES},
+    };
+}
 
 SamplerFeatures samplerFeaturesOf(ID3D12Device* device) {
     SamplerFeatures sampler;
@@ -423,7 +460,8 @@ Caps readCaps(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
     caps.compute = computeOf(device);
     caps.features = featuresOf(device, sampler);
     caps.memory = memoryOf(desc, device);
-    caps.queues = queuesOf(device);
+    caps.sparse = sparseOf(device);
+    caps.queues = queuesOf(device, caps.sparse);
     caps.timestamps = timestampsOf(device);
     return caps;
 }

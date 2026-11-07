@@ -42,6 +42,7 @@ InstanceTable loadInstanceTable(VkInstance instance) {
     BFR_LOAD(vkGetPhysicalDeviceMemoryProperties2);
     BFR_LOAD(vkGetPhysicalDeviceQueueFamilyProperties);
     BFR_LOAD(vkGetPhysicalDeviceQueueFamilyProperties2);
+    BFR_LOAD(vkGetPhysicalDeviceSparseImageFormatProperties2);
     BFR_LOAD(vkGetPhysicalDeviceCalibrateableTimeDomainsKHR);
     if (table.vkGetPhysicalDeviceCalibrateableTimeDomainsKHR == nullptr) {
         table.vkGetPhysicalDeviceCalibrateableTimeDomainsKHR =

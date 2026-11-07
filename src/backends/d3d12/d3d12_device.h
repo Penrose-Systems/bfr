@@ -7,6 +7,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
+#include "bfr/rhi/sparse.h"
 #include "bfr/rhi/swapchain.h"
 #include "core/fixed_vector.h"
 #include "core/slot_chains.h"
@@ -14,6 +15,7 @@
 #include "d3d12/d3d12_buffer.h"
 #include "d3d12/d3d12_pipeline.h"
 #include "d3d12/d3d12_sampler.h"
+#include "d3d12/d3d12_sparse.h"
 #include "d3d12/d3d12_swapchain.h"
 #include "d3d12/d3d12_texture.h"
 #include "d3d12/d3d12_timestamp.h"
@@ -72,15 +74,17 @@ struct D3D12RetiredPool {
 };
 
 /// One of the device's queues: its ID3D12CommandQueue and the list type it
-/// takes, the fence each submit signals the next value of with the event waits
-/// use, the value last submitted, the arrays a submit is built in, and the
-/// pools destroyed while the GPU may still run their lists. Used by one thread
+/// takes, the fence each submit and tile mapping signals the next value of
+/// with the event waits use, the value last submitted, the arrays a submit
+/// and a tile mapping are built in, and the pools destroyed while the GPU may
+/// still run their lists. Used by one thread
 /// at a time under lock, which present shares; submitted is read from any
 /// thread.
 ///
-/// Why the arrays: submit runs every frame, so it fills these in place rather
-/// than building vectors. They are made with the queue, when the device is
-/// created, sized from the device's maximums, so no submit touches the heap.
+/// Why the arrays: submit and updateTileMappings run every frame, so they
+/// fill these in place rather than building vectors. They are made with the
+/// queue, when the device is created, sized from the device's maximums, so
+/// neither touches the heap.
 struct D3D12Queue {
     QueueType type = QueueType::Graphics;
     D3D12_COMMAND_LIST_TYPE listType = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -94,6 +98,8 @@ struct D3D12Queue {
     core::FixedVector<D3D12Swapchain*> chains;
     core::FixedVector<D3D12RetiredPool> retired;
     std::atomic<std::uint32_t> retiredCount{0};
+    D3D12TileMappings textureTiles;
+    D3D12TileMappings bufferTiles;
     std::mutex lock;
 };
 
@@ -210,12 +216,22 @@ public:
     [[nodiscard]] core::Result<TimestampRate> timestampRate(std::uint32_t queue) const override;
     [[nodiscard]] core::Result<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue,
                                                                          HostClock clock) const override;
+    [[nodiscard]] core::Result<SparseMemoryHandle> createSparseMemory(const SparseMemoryDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroySparseMemory(SparseMemoryHandle memory) override;
+    [[nodiscard]] core::Result<TextureTiling> textureTiling(TextureHandle texture, TextureAspect aspect) override;
+    [[nodiscard]] core::Result<BufferTiling> bufferTiling(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<SparseFormat> sparseFormat(const SparseFormatDesc& desc) const override;
+    [[nodiscard]] core::Result<Token> updateTileMappings(const TileMappingDesc& desc) override;
 
 private:
     [[nodiscard]] core::Result<void> open(const DeviceDesc& desc);
     [[nodiscard]] core::Result<void> waitFor(D3D12Queue& queue, std::uint64_t value, std::uint64_t timeoutNs);
     [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
     [[nodiscard]] core::Result<void> checkToken(Token token) const;
+    // Has queue wait on each token's fence, and signal its fence's next value,
+    // value, marking it submitted; as submit and updateTileMappings do both.
+    [[nodiscard]] core::Result<void> waitOn(D3D12Queue& queue, std::span<const Token> waits);
+    [[nodiscard]] core::Result<void> signal(D3D12Queue& queue, std::uint64_t value);
     // Releases the retired pools the GPU is done with and frees their slots.
     // Runs on the frame path: it releases API objects and moves indices,
     // nothing more.
@@ -225,8 +241,9 @@ private:
     // Ends a list that was submitted or discarded; its slot waits for the
     // pool's reset.
     void end(CommandListHandle commandList);
-    // Destroys the buffers, textures, samplers and pipelines retired under submission
-    // IDs every queue has passed.
+    // Destroys the buffers, textures, samplers, timestamp pools, sparse
+    // memories and pipelines retired under submission IDs every queue has
+    // passed.
     void collectBuffers();
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
@@ -237,6 +254,13 @@ private:
     [[nodiscard]] core::Result<D3D12Buffer*> bufferFor(BufferHandle buffer);
     [[nodiscard]] core::Result<D3D12Texture*> textureFor(TextureHandle texture);
     [[nodiscard]] core::Result<D3D12Pipeline*> pipelineFor(PipelineHandle pipeline);
+    [[nodiscard]] core::Result<D3D12SparseMemory*> sparseMemoryFor(SparseMemoryHandle memory);
+    // desc's texture and buffer regions in tiles, each checked; the resource
+    // they map, null when desc has none.
+    [[nodiscard]] core::Result<ID3D12Resource*> addTextureTiles(D3D12TileMappings& tiles, const TileMappingDesc& desc,
+                                                                const D3D12SparseMemory* memory);
+    [[nodiscard]] core::Result<ID3D12Resource*> addBufferTiles(D3D12TileMappings& tiles, const TileMappingDesc& desc,
+                                                               const D3D12SparseMemory* memory);
     // The barrier barrier() records, ordering every resource on the list's queue.
     [[nodiscard]] core::Result<D3D12_GLOBAL_BARRIER> fullBarrierFor(const D3D12CommandList& list);
 
@@ -248,6 +272,8 @@ private:
     Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter_;
     std::size_t heapCount_;
     DeviceDesc desc_;
+    // The adapter's sparse caps, which mapping and heaps follow.
+    Sparse sparse_;
     std::vector<std::unique_ptr<D3D12Queue>> queues_;
     core::Pool<D3D12Swapchain, Swapchain> swapchains_;
     core::Pool<D3D12CommandPool, CommandPool> commandPools_;
@@ -272,6 +298,7 @@ private:
     // Every sampler holds a slot, so the pool is made at the table's size.
     core::Pool<D3D12Sampler, Sampler> samplers_;
     core::Pool<D3D12TimestampPool, TimestampPool> timestampPools_;
+    core::Pool<D3D12SparseMemory, SparseMemory> sparseMemories_;
     BindlessSlots bindless_;
     // Declared before pipelines_, which are made on it, so it outlives them.
     D3D12BindlessLayout layout_;

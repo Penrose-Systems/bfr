@@ -162,16 +162,24 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
       samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
       timestampPools_("timestamp pools", desc.maxTimestampPools, desc.maxTimestampPools, rhi.logger()),
+      sparseMemories_("sparse memories", desc.maxSparseMemories, desc.maxSparseMemories, rhi.logger()),
       bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
 }
 
 core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const DeviceDesc& desc) {
-    const auto open = [this](QueueType type, std::uint32_t family, std::uint32_t index) -> core::Result<void> {
+    const InstanceTable& vk = instance_->instanceTable();
+    std::uint32_t familyCount = 0;
+    vk.vkGetPhysicalDeviceQueueFamilyProperties(adapter_, &familyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> properties(familyCount);
+    vk.vkGetPhysicalDeviceQueueFamilyProperties(adapter_, &familyCount, properties.data());
+    const auto open = [this, &properties](QueueType type, std::uint32_t family,
+                                          std::uint32_t index) -> core::Result<void> {
         auto queue = std::make_unique<VulkanQueue>();
         queue->type = type;
         queue->family = family;
+        queue->sparse = (properties[family].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) != 0;
         table_.vkGetDeviceQueue(device_, family, index, &queue->queue);
         VkSemaphoreTypeCreateInfo timeline{};
         timeline.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
@@ -212,6 +220,11 @@ core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const
         queue->chains = core::FixedVector<VulkanSwapchain*>{desc.maxSwapchains};
         queue->waitValues.resize(queues_.size());
         queue->retired = core::FixedVector<VulkanRetiredPool>{desc.maxCommandPools};
+        queue->imageBinds = core::FixedVector<VkSparseImageMemoryBind>{desc.maxTileMappings};
+        queue->tailBinds = core::FixedVector<VkSparseMemoryBind>{desc.maxTileMappings};
+        queue->bufferBinds = core::FixedVector<VkSparseMemoryBind>{desc.maxTileMappings};
+        queue->waitSemaphores = core::FixedVector<VkSemaphore>{queues_.size()};
+        queue->waitSemaphoreValues = core::FixedVector<std::uint64_t>{queues_.size()};
         if (std::ranges::find(families_, queue->family) == families_.end()) {
             families_.push_back(queue->family);
         }
@@ -951,6 +964,9 @@ void VulkanDevice::warnLeftovers() const {
     if (pipelines_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} pipelines were left when the device went", pipelines_.size());
     }
+    if (sparseMemories_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} sparse memories were left when the device went", sparseMemories_.size());
+    }
 }
 
 VulkanDevice::~VulkanDevice() {
@@ -971,6 +987,7 @@ VulkanDevice::~VulkanDevice() {
     // and every pipeline goes before the layout it was made on.
     buffers_.clear();
     textures_.clear();
+    sparseMemories_.clear();
     samplers_.clear();
     timestampPools_.clear();
     pipelines_.clear();

@@ -6,6 +6,7 @@
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/sampler.h"
+#include "bfr/rhi/sparse.h"
 #include "bfr/rhi/swapchain.h"
 #include "bfr/rhi/texture.h"
 #include "bfr/rhi/timestamp.h"
@@ -97,6 +98,9 @@ constexpr std::pair<TimestampGranularity, TimestampGranularity> rangeOf(Timestam
 constexpr std::pair<HostClock, HostClock> rangeOf(HostClock /*unused*/) {
     return {HostClock::Monotonic, HostClock::PerformanceCounter};
 }
+constexpr std::pair<TileMapping, TileMapping> rangeOf(TileMapping /*unused*/) {
+    return {TileMapping::Map, TileMapping::Unmap};
+}
 
 /// Fails with RhiInvalidCall when value is not one its enum has, such as a
 /// number cast to it; what names it in the message. Every backend's switch
@@ -124,6 +128,18 @@ template <class Enum>
 /// Fails with RhiInvalidCall when desc's memory is not one BufferMemory has.
 [[nodiscard]] inline core::Result<void> checkEnums(const BufferDesc& desc) {
     return checkKnown(desc.memory, "buffer memory");
+}
+
+/// Fails with RhiInvalidCall when desc's dimension, aspect or format is not
+/// one BFR has.
+[[nodiscard]] inline core::Result<void> checkEnums(const SparseFormatDesc& desc) {
+    if (auto checked = checkKnown(desc.dimension, "texture dimension"); !checked) {
+        return checked;
+    }
+    if (auto checked = checkKnown(desc.aspect, "texture aspect"); !checked) {
+        return checked;
+    }
+    return checkFormat(desc.format);
 }
 
 /// Fails with RhiInvalidCall when desc's dimension or format is not one BFR has.

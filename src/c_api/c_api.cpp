@@ -14,6 +14,7 @@
 #include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/rhi_config.h"
 #include "bfr/rhi/sampler.h"
+#include "bfr/rhi/sparse.h"
 #include "bfr/rhi/swapchain.h"
 #include "bfr/rhi/texture.h"
 
@@ -279,7 +280,10 @@ std::optional<bfr::rhi::BufferDesc> bufferIn(const bfr_buffer_desc& desc, bfr::c
                                 .uniform = desc.usage.uniform != BFR_FALSE,
                                 .storage = desc.usage.storage != BFR_FALSE,
                                 .index = desc.usage.index != BFR_FALSE,
-                                .indirect = desc.usage.indirect != BFR_FALSE}};
+                                .indirect = desc.usage.indirect != BFR_FALSE},
+                      .sparse = desc.sparse != BFR_FALSE,
+                      .sparseAliased = desc.sparse_aliased != BFR_FALSE,
+                      .tileBytes = desc.tile_bytes};
     switch (desc.memory) {
         case BFR_BUFFER_MEMORY_DEVICE:
             buffer.memory = BufferMemory::Device;
@@ -340,7 +344,10 @@ std::optional<bfr::rhi::TextureDesc> textureIn(const bfr_texture_desc& desc, bfr
                                  .sampled = desc.usage.sampled != BFR_FALSE,
                                  .storage = desc.usage.storage != BFR_FALSE,
                                  .colorAttachment = desc.usage.color_attachment != BFR_FALSE,
-                                 .depthStencil = desc.usage.depth_stencil != BFR_FALSE}};
+                                 .depthStencil = desc.usage.depth_stencil != BFR_FALSE},
+                       .sparse = desc.sparse != BFR_FALSE,
+                       .sparseAliased = desc.sparse_aliased != BFR_FALSE,
+                       .tileBytes = desc.tile_bytes};
 }
 
 bfr_pipeline toC(bfr::rhi::PipelineHandle handle) {
@@ -406,11 +413,54 @@ bfr::rhi::TimestampPoolHandle fromC(bfr_timestamp_pool handle) {
     return bfr::rhi::TimestampPoolHandle::fromBits(handle.bits);
 }
 
+bfr_sparse_memory toC(bfr::rhi::SparseMemoryHandle handle) {
+    return {.bits = handle.bits};
+}
+
+bfr::rhi::SparseMemoryHandle fromC(bfr_sparse_memory handle) {
+    return bfr::rhi::SparseMemoryHandle::fromBits(handle.bits);
+}
+
+bfr_tile_shape toC(const bfr::rhi::TileShape& shape) {
+    return {.width = shape.width, .height = shape.height, .depth = shape.depth};
+}
+
+static_assert(static_cast<int>(bfr::rhi::TileMapping::Unmap) == BFR_TILE_MAPPING_UNMAP);
+
+// bfr_update_tile_mappings reads the caller's regions as the rhi types, in
+// place, so a mapping copies and allocates nothing; each backend checks their
+// enums.
+static_assert(sizeof(bfr_texture_tile_region) == sizeof(bfr::rhi::TextureTileRegion) &&
+              alignof(bfr_texture_tile_region) == alignof(bfr::rhi::TextureTileRegion) &&
+              std::is_standard_layout_v<bfr::rhi::TextureTileRegion> &&
+              std::is_trivially_copyable_v<bfr::rhi::TextureTileRegion> &&
+              offsetof(bfr_texture_tile_region, mapping) == offsetof(bfr::rhi::TextureTileRegion, mapping) &&
+              offsetof(bfr_texture_tile_region, aspect) == offsetof(bfr::rhi::TextureTileRegion, aspect) &&
+              offsetof(bfr_texture_tile_region, mip_level) == offsetof(bfr::rhi::TextureTileRegion, mipLevel) &&
+              offsetof(bfr_texture_tile_region, layer) == offsetof(bfr::rhi::TextureTileRegion, layer) &&
+              offsetof(bfr_texture_tile_region, x) == offsetof(bfr::rhi::TextureTileRegion, x) &&
+              offsetof(bfr_texture_tile_region, y) == offsetof(bfr::rhi::TextureTileRegion, y) &&
+              offsetof(bfr_texture_tile_region, z) == offsetof(bfr::rhi::TextureTileRegion, z) &&
+              offsetof(bfr_texture_tile_region, width) == offsetof(bfr::rhi::TextureTileRegion, width) &&
+              offsetof(bfr_texture_tile_region, height) == offsetof(bfr::rhi::TextureTileRegion, height) &&
+              offsetof(bfr_texture_tile_region, depth) == offsetof(bfr::rhi::TextureTileRegion, depth) &&
+              offsetof(bfr_texture_tile_region, tail_tile) == offsetof(bfr::rhi::TextureTileRegion, tailTile) &&
+              offsetof(bfr_texture_tile_region, tail_tiles) == offsetof(bfr::rhi::TextureTileRegion, tailTiles) &&
+              offsetof(bfr_texture_tile_region, memory_tile) == offsetof(bfr::rhi::TextureTileRegion, memoryTile));
+static_assert(sizeof(bfr_buffer_tile_region) == sizeof(bfr::rhi::BufferTileRegion) &&
+              alignof(bfr_buffer_tile_region) == alignof(bfr::rhi::BufferTileRegion) &&
+              std::is_standard_layout_v<bfr::rhi::BufferTileRegion> &&
+              std::is_trivially_copyable_v<bfr::rhi::BufferTileRegion> &&
+              offsetof(bfr_buffer_tile_region, mapping) == offsetof(bfr::rhi::BufferTileRegion, mapping) &&
+              offsetof(bfr_buffer_tile_region, tile) == offsetof(bfr::rhi::BufferTileRegion, tile) &&
+              offsetof(bfr_buffer_tile_region, tiles) == offsetof(bfr::rhi::BufferTileRegion, tiles) &&
+              offsetof(bfr_buffer_tile_region, memory_tile) == offsetof(bfr::rhi::BufferTileRegion, memoryTile));
+
 static_assert(static_cast<int>(bfr::rhi::TimestampStage::Copy) == BFR_TIMESTAMP_STAGE_COPY);
 static_assert(static_cast<int>(bfr::rhi::TimestampGranularity::Precise) == BFR_TIMESTAMP_GRANULARITY_PRECISE);
 static_assert(static_cast<int>(bfr::rhi::HostClock::PerformanceCounter) == BFR_HOST_CLOCK_PERFORMANCE_COUNTER);
 static_assert(static_cast<int>(bfr::rhi::Call::InstanceSwapchainFormats) == BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS);
-static_assert(bfr::rhi::kCallCount == BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS + 1);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_UPDATE_TILE_MAPPINGS + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
@@ -994,9 +1044,6 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .timestamps_on_all_queues = toC(features.timestampsOnAllQueues),
         .pipeline_statistics = toC(features.pipelineStatistics),
         .occlusion_query_precise = toC(features.occlusionQueryPrecise),
-        .sparse_binding = toC(features.sparseBinding),
-        .sparse_textures = toC(features.sparseTextures),
-        .sparse_buffers = toC(features.sparseBuffers),
     };
 }
 
@@ -1082,7 +1129,42 @@ bfr_caps_queues toC(const bfr::rhi::Queues& queues) {
         .graphics_levels = toC(queues.graphicsLevels),
         .compute_levels = toC(queues.computeLevels),
         .copy_levels = toC(queues.copyLevels),
+        .graphics_sparse = toC(queues.graphicsSparse),
+        .compute_sparse = toC(queues.computeSparse),
+        .copy_sparse = toC(queues.copySparse),
     };
+}
+
+bfr_caps_sparse toC(const bfr::rhi::Sparse& sparse) {
+    bfr_caps_sparse out{
+        .binding = toC(sparse.binding),
+        .buffers = toC(sparse.buffers),
+        .textures_2d = toC(sparse.textures2D),
+        .textures_3d = toC(sparse.textures3D),
+        .samples_2 = toC(sparse.samples2),
+        .samples_4 = toC(sparse.samples4),
+        .samples_8 = toC(sparse.samples8),
+        .samples_16 = toC(sparse.samples16),
+        .aliased = toC(sparse.aliased),
+        .standard_2d_shape = toC(sparse.standard2DShape),
+        .standard_2d_multisample_shape = toC(sparse.standard2DMultisampleShape),
+        .standard_3d_shape = toC(sparse.standard3DShape),
+        .aligned_mip_size = toC(sparse.alignedMipSize),
+        .non_resident_strict = toC(sparse.nonResidentStrict),
+        .shader_residency = toC(sparse.shaderResidency),
+        .mixed_resources = toC(sparse.mixedResources),
+        .layer_tails = toC(sparse.layerTails),
+        .address_space_bytes = sparse.addressSpaceBytes,
+        .address_bits_per_resource = sparse.addressBitsPerResource,
+        .address_bits_per_process = sparse.addressBitsPerProcess,
+        .tile_byte_count = 0,
+        .tile_bytes = {},
+    };
+    // Each backend lists at most kMaxSparseTileSizes.
+    const std::size_t count = std::min(sparse.tileBytes.size(), bfr::rhi::kMaxSparseTileSizes);
+    std::ranges::copy_n(sparse.tileBytes.begin(), static_cast<std::ptrdiff_t>(count), std::begin(out.tile_bytes));
+    out.tile_byte_count = static_cast<std::uint32_t>(count);
+    return out;
 }
 
 bfr_format_caps toC(const bfr::rhi::FormatCaps& caps) {
@@ -1309,7 +1391,9 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
                                               .maxBindlessStorageTextures = desc->max_bindless_storage_textures,
                                               .maxBindlessStorageBuffers = desc->max_bindless_storage_buffers,
                                               .maxBindlessSamplers = desc->max_bindless_samplers,
-                                              .maxTimestampPools = desc->max_timestamp_pools});
+                                              .maxTimestampPools = desc->max_timestamp_pools,
+                                              .maxSparseMemories = desc->max_sparse_memories,
+                                              .maxTileMappings = desc->max_tile_mappings});
         if (!created) {
             return fail(created.error());
         }
@@ -1815,6 +1899,7 @@ bfr_result bfr_get_caps(bfr_instance* instance, uint32_t adapter, bfr_caps* caps
             .memory = toC(found.memory),
             .queues = toC(found.queues),
             .timestamps = toC(found.timestamps),
+            .sparse = toC(found.sparse),
         };
         return BFR_RESULT_SUCCESS;
     });
@@ -2250,6 +2335,163 @@ bfr_result bfr_calibrate_timestamps(bfr_device* device, uint32_t queue, bfr_host
                        .host = taken->host,
                        .max_deviation_ns = taken->maxDeviationNs,
                        .deviation_given = toC(taken->deviationGiven)};
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_create_sparse_memory(bfr_device* device, const bfr_sparse_memory_desc* desc, bfr_sparse_memory* memory) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr || memory == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and memory must not be null");
+        }
+        *memory = {};
+        const auto created = device->device->createSparseMemory({.size = desc->size,
+                                                                 .tileBytes = desc->tile_bytes,
+                                                                 .texture = fromC(desc->texture),
+                                                                 .buffer = fromC(desc->buffer)});
+        if (!created) {
+            return fail(created.error());
+        }
+        *memory = toC(*created);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+void bfr_destroy_sparse_memory(bfr_device* device, bfr_sparse_memory memory) {
+    quietly([&] {
+        if (device == nullptr) {
+            return;
+        }
+        if (const auto destroyed = device->device->destroySparseMemory(fromC(memory)); !destroyed) {
+            lastError() = destroyed.error().message;
+        }
+    });
+}
+
+bfr_result bfr_get_texture_tiling(bfr_device* device, bfr_texture texture, bfr_texture_aspect aspect,
+                                  bfr_texture_tiling* tiling) {
+    return guarded([&] {
+        if (device == nullptr || tiling == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and tiling must not be null");
+        }
+        *tiling = {};
+        bfr::core::Message error;
+        const auto read = enumIn(aspect, bfr::rhi::TextureAspect::Stencil, "texture aspect", error);
+        if (!read) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto found = device->device->textureTiling(fromC(texture), *read);
+        if (!found) {
+            return fail(found.error());
+        }
+        *tiling = {.tile_bytes = found->tileBytes,
+                   .shape = toC(found->shape),
+                   .first_tail_mip = found->firstTailMip,
+                   .tail_bytes = found->tailBytes,
+                   .tail_stride = found->tailStride,
+                   .single_tail = toC(found->singleTail)};
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_get_buffer_tiling(bfr_device* device, bfr_buffer buffer, bfr_buffer_tiling* tiling) {
+    return guarded([&] {
+        if (device == nullptr || tiling == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and tiling must not be null");
+        }
+        *tiling = {};
+        const auto found = device->device->bufferTiling(fromC(buffer));
+        if (!found) {
+            return fail(found.error());
+        }
+        *tiling = {.tile_bytes = found->tileBytes};
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_get_sparse_format(bfr_device* device, const bfr_sparse_format_desc* desc, bfr_sparse_format* format) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr || format == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and format must not be null");
+        }
+        *format = {};
+        // The texture the desc names, read as bfr_texture_desc reads its
+        // members, so its enums are checked the same way.
+        const bfr_texture_desc texture{.next = nullptr,
+                                       .dimension = desc->dimension,
+                                       .format = desc->format,
+                                       .width = 0,
+                                       .height = 0,
+                                       .depth = 0,
+                                       .layers = 0,
+                                       .mip_levels = 0,
+                                       .samples = desc->samples,
+                                       .usage = desc->usage,
+                                       .sparse = BFR_TRUE,
+                                       .sparse_aliased = BFR_FALSE,
+                                       .tile_bytes = desc->tile_bytes};
+        bfr::core::Message error;
+        const auto wanted = textureIn(texture, error);
+        if (!wanted) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto aspect = enumIn(desc->aspect, bfr::rhi::TextureAspect::Stencil, "texture aspect", error);
+        if (!aspect) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto found = device->device->sparseFormat({.format = wanted->format,
+                                                         .dimension = wanted->dimension,
+                                                         .samples = wanted->samples,
+                                                         .usage = wanted->usage,
+                                                         .aspect = *aspect,
+                                                         .tileBytes = wanted->tileBytes});
+        if (!found) {
+            return fail(found.error());
+        }
+        *format = {.supported = toC(found->supported),
+                   .shape = toC(found->shape),
+                   .single_tail = toC(found->singleTail),
+                   .aligned_mip_size = toC(found->alignedMipSize)};
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_update_tile_mappings(bfr_device* device, const bfr_tile_mapping_desc* desc, bfr_token* token) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and desc must not be null");
+        }
+        if (token != nullptr) {
+            *token = {};
+        }
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_tile_mapping_desc takes no chained structs");
+        }
+        if ((desc->wait_count != 0 && desc->waits == nullptr) ||
+            (desc->texture_region_count != 0 && desc->texture_regions == nullptr) ||
+            (desc->buffer_region_count != 0 && desc->buffer_regions == nullptr)) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "an array must not be null when its count is not 0");
+        }
+        // The caller's arrays, read in place as the rhi types; see the
+        // layout asserts above.
+        const bfr::rhi::TileMappingDesc mappingDesc{
+            .queue = desc->queue,
+            .waits = {reinterpret_cast<const bfr::rhi::Token*>(desc->waits), desc->wait_count},
+            .memory = fromC(desc->memory),
+            .texture = fromC(desc->texture),
+            .textureRegions = {reinterpret_cast<const bfr::rhi::TextureTileRegion*>(desc->texture_regions),
+                               desc->texture_region_count},
+            .buffer = fromC(desc->buffer),
+            .bufferRegions = {reinterpret_cast<const bfr::rhi::BufferTileRegion*>(desc->buffer_regions),
+                              desc->buffer_region_count},
+        };
+        const auto mapped = device->device->updateTileMappings(mappingDesc);
+        if (!mapped) {
+            return fail(mapped.error());
+        }
+        if (token != nullptr) {
+            *token = toC(*mapped);
+        }
         return BFR_RESULT_SUCCESS;
     });
 }

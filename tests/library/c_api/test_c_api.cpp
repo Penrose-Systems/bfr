@@ -132,7 +132,9 @@ struct HeadlessDevice {
                                        .max_bindless_storage_textures = kDeviceTableSlots,
                                        .max_bindless_storage_buffers = kDeviceTableSlots,
                                        .max_bindless_samplers = kDeviceSamplers,
-                                       .max_timestamp_pools = 1};
+                                       .max_timestamp_pools = 1,
+                                       .max_sparse_memories = 0,
+                                       .max_tile_mappings = 0};
             const bfr_result result = bfr_create_device(instance, &desc, &device);
             INFO(lastError());
             REQUIRE((result == BFR_RESULT_SUCCESS || result == BFR_RESULT_ERROR_PRESENT_UNSUPPORTED));
@@ -299,7 +301,9 @@ TEST_CASE("C API rejects a struct chained to a device or swapchain desc", "[c_ap
                                          .max_bindless_storage_textures = kDeviceTableSlots,
                                          .max_bindless_storage_buffers = kDeviceTableSlots,
                                          .max_bindless_samplers = kDeviceSamplers,
-                                         .max_timestamp_pools = 0};
+                                         .max_timestamp_pools = 0,
+                                         .max_sparse_memories = 0,
+                                         .max_tile_mappings = 0};
         bfr_device* stray = nullptr;
         CHECK(bfr_create_device(instance.instance, &deviceDesc, &stray) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
         CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("takes no chained structs"));
@@ -345,7 +349,9 @@ TEST_CASE("C API rejects a device desc's null queues with a count, and a queue l
                                          .max_bindless_storage_textures = 0,
                                          .max_bindless_storage_buffers = 0,
                                          .max_bindless_samplers = 0,
-                                         .max_timestamp_pools = 0};
+                                         .max_timestamp_pools = 0,
+                                         .max_sparse_memories = 0,
+                                         .max_tile_mappings = 0};
         bfr_device* device = nullptr;
         CHECK(bfr_create_device(instance.instance, &nullQueues, &device) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
         CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("graphics_queues is null"));
@@ -608,6 +614,64 @@ TEST_CASE("C API reports a destroyed swapchain as invalid and destroys it again 
     CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("stale"));
 }
 
+TEST_CASE("C API passes sparse calls through, and refuses what is not sparse or is past the device's room",
+          "[c_api][gpu]") {
+    constexpr std::uint64_t kSize = std::uint64_t{1} << 20U;
+    const bfr_backend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    const Instance instance{backend, messages};
+    const HeadlessDevice device{instance.instance};
+    bfr_buffer_desc desc{.next = nullptr,
+                         .size = kSize,
+                         .memory = BFR_BUFFER_MEMORY_DEVICE,
+                         .usage = {.copy_src = BFR_FALSE,
+                                   .copy_dst = BFR_TRUE,
+                                   .uniform = BFR_FALSE,
+                                   .storage = BFR_FALSE,
+                                   .index = BFR_FALSE,
+                                   .indirect = BFR_FALSE},
+                         .sparse = BFR_FALSE,
+                         .sparse_aliased = BFR_FALSE,
+                         .tile_bytes = 0};
+    bfr_buffer plain{};
+    REQUIRE(bfr_create_buffer(device.device, &desc, &plain) == BFR_RESULT_SUCCESS);
+    bfr_buffer_tiling tiling{};
+    CHECK(bfr_get_buffer_tiling(device.device, plain, &tiling) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    const bfr_sparse_memory_desc memoryDesc{.size = kSize, .tile_bytes = 0, .texture = {}, .buffer = plain};
+    bfr_sparse_memory memory{};
+    CHECK(bfr_create_sparse_memory(device.device, &memoryDesc, &memory) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(memory.bits == 0);
+    const bfr_tile_mapping_desc nullRegions{.next = nullptr,
+                                            .queue = 0,
+                                            .waits = nullptr,
+                                            .wait_count = 0,
+                                            .memory = {},
+                                            .texture = {},
+                                            .texture_regions = nullptr,
+                                            .texture_region_count = 0,
+                                            .buffer = plain,
+                                            .buffer_regions = nullptr,
+                                            .buffer_region_count = 1};
+    CHECK(bfr_update_tile_mappings(device.device, &nullRegions, nullptr) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    bfr_destroy_buffer(device.device, plain);
+
+    bfr_caps caps{};
+    REQUIRE(bfr_get_caps(instance.instance, 0, &caps) == BFR_RESULT_SUCCESS);
+    if (caps.sparse.buffers == BFR_FALSE) {
+        SKIP("the adapter makes no sparse buffers");
+    }
+    desc.sparse = BFR_TRUE;
+    desc.tile_bytes = caps.sparse.tile_byte_count != 0 ? caps.sparse.tile_bytes[0] : 0;
+    bfr_buffer sparse{};
+    REQUIRE(bfr_create_buffer(device.device, &desc, &sparse) == BFR_RESULT_SUCCESS);
+    CHECK(bfr_get_buffer_tiling(device.device, sparse, &tiling) == BFR_RESULT_SUCCESS);
+    CHECK(tiling.tile_bytes != 0);
+    // The test device holds no sparse memories.
+    const bfr_sparse_memory_desc held{.size = kSize, .tile_bytes = desc.tile_bytes, .texture = {}, .buffer = sparse};
+    CHECK(bfr_create_sparse_memory(device.device, &held, &memory) == BFR_RESULT_ERROR_LIMIT_REACHED);
+    bfr_destroy_buffer(device.device, sparse);
+}
+
 TEST_CASE("C API creates, maps and destroys a buffer, and refuses what it can't map", "[c_api][gpu]") {
     constexpr std::uint64_t kSize = 256;
     const bfr_backend backend = GENERATE(eachBackend());
@@ -622,7 +686,10 @@ TEST_CASE("C API creates, maps and destroys a buffer, and refuses what it can't 
                                    .uniform = BFR_FALSE,
                                    .storage = BFR_FALSE,
                                    .index = BFR_FALSE,
-                                   .indirect = BFR_FALSE}};
+                                   .indirect = BFR_FALSE},
+                         .sparse = BFR_FALSE,
+                         .sparse_aliased = BFR_FALSE,
+                         .tile_bytes = 0};
     bfr_buffer upload{};
     REQUIRE(bfr_create_buffer(device.device, &desc, &upload) == BFR_RESULT_SUCCESS);
     desc.memory = BFR_BUFFER_MEMORY_DEVICE;
@@ -769,7 +836,10 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, and refu
                                          .uniform = BFR_FALSE,
                                          .storage = BFR_TRUE,
                                          .index = BFR_FALSE,
-                                         .indirect = BFR_FALSE}};
+                                         .indirect = BFR_FALSE},
+                               .sparse = BFR_FALSE,
+                               .sparse_aliased = BFR_FALSE,
+                               .tile_bytes = 0};
     bfr_buffer target{};
     REQUIRE(bfr_create_buffer(device.device, &bufferDesc, &target) == BFR_RESULT_SUCCESS);
     bufferDesc.memory = BFR_BUFFER_MEMORY_READBACK;
@@ -848,7 +918,10 @@ TEST_CASE("C API renders to a texture with the viewport and scissor set, and ref
                                                  .sampled = BFR_FALSE,
                                                  .storage = BFR_FALSE,
                                                  .color_attachment = BFR_TRUE,
-                                                 .depth_stencil = BFR_FALSE}};
+                                                 .depth_stencil = BFR_FALSE},
+                                       .sparse = BFR_FALSE,
+                                       .sparse_aliased = BFR_FALSE,
+                                       .tile_bytes = 0};
     bfr_texture target{};
     REQUIRE(bfr_create_texture(device.device, &textureDesc, &target) == BFR_RESULT_SUCCESS);
     const bfr_command_pool_desc poolDesc{.next = nullptr, .queue = 0, .list_count = 1, .push_constant_updates = 0};
@@ -943,7 +1016,7 @@ TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call tim
 
     std::uint32_t count = 0;
     REQUIRE(bfr_get_call_timings(device.device, &count, nullptr) == BFR_RESULT_SUCCESS);
-    CHECK(count == BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS + 1);
+    CHECK(count == BFR_CALL_UPDATE_TILE_MAPPINGS + 1);
     std::vector<bfr_call_timing> timings(count);
     REQUIRE(bfr_get_call_timings(device.device, &count, timings.data()) == BFR_RESULT_SUCCESS);
     CHECK(timings.at(BFR_CALL_CREATE_TIMESTAMP_POOL).count == 2);

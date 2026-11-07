@@ -71,6 +71,7 @@ add_executable(bfr_tests
     rhi/test_draw.cpp
     rhi/test_present.cpp
     rhi/test_sampler.cpp
+    rhi/test_sparse.cpp
     rhi/test_timestamp.cpp
     rhi/test_swapchain.cpp
     rhi/test_texture.cpp)

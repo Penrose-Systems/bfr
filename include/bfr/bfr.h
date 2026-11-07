@@ -395,6 +395,15 @@ typedef enum bfr_swapchain_status {
     BFR_SWAPCHAIN_STATUS_FORCE32 = 0x7FFFFFFF
 } bfr_swapchain_status;
 
+// What a tile mapping does to its region.
+typedef enum bfr_tile_mapping {
+    // Maps the region to the memory's tiles.
+    BFR_TILE_MAPPING_MAP = 0,
+    // Leaves the region with no memory; memory_tile is unused.
+    BFR_TILE_MAPPING_UNMAP = 1,
+    BFR_TILE_MAPPING_FORCE32 = 0x7FFFFFFF
+} bfr_tile_mapping;
+
 // Each call that call timings count. The device's are named after the C++ rhi Device's calls, which
 // the C functions of the same names pass to; instance_ ones after the Instance's.
 typedef enum bfr_call {
@@ -455,6 +464,12 @@ typedef enum bfr_call {
     BFR_CALL_INSTANCE_FORMAT_CAPS = 54,
     BFR_CALL_INSTANCE_SWAPCHAIN_CAPS = 55,
     BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS = 56,
+    BFR_CALL_CREATE_SPARSE_MEMORY = 57,
+    BFR_CALL_DESTROY_SPARSE_MEMORY = 58,
+    BFR_CALL_TEXTURE_TILING = 59,
+    BFR_CALL_BUFFER_TILING = 60,
+    BFR_CALL_SPARSE_FORMAT = 61,
+    BFR_CALL_UPDATE_TILE_MAPPINGS = 62,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -845,6 +860,12 @@ typedef struct bfr_timestamp_pool {
     uint64_t bits;
 } bfr_timestamp_pool;
 
+// Device memory that sparse textures' and buffers' tiles are mapped into by
+// bfr_update_tile_mappings. A generational handle; 0 is never valid.
+typedef struct bfr_sparse_memory {
+    uint64_t bits;
+} bfr_sparse_memory;
+
 // Receives BFR's messages and validation's. Without one, BFR prints nothing. Called on any thread,
 // including threads BFR or the driver owns, until the instance and every device made from it are
 // destroyed.
@@ -964,6 +985,13 @@ typedef struct bfr_device_desc {
     // Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool
     // fails with error_limit_reached.
     uint32_t max_timestamp_pools;
+    // Sparse memories the device holds at once, 0 for none; past it, bfr_create_sparse_memory fails
+    // with error_limit_reached.
+    uint32_t max_sparse_memories;
+    // The most texture regions and the most buffer regions one bfr_update_tile_mappings takes; room
+    // for them is made with the device, so mapping never allocates. More fails with
+    // error_invalid_argument. 0 is none.
+    uint32_t max_tile_mappings;
 } bfr_device_desc;
 
 // How to create a swapchain.
@@ -1106,6 +1134,14 @@ typedef struct bfr_buffer_desc {
     // 0 is device.
     bfr_buffer_memory memory;
     bfr_buffer_usage usage;
+    // Made with no memory: bfr_update_tile_mappings maps sparse memory's tiles into it, as
+    // bfr_caps_sparse says. memory is device.
+    bfr_bool sparse;
+    // Its tiles may be mapped to memory other sparse resources' tiles are mapped to, where
+    // bfr_caps_sparse.aliased.
+    bfr_bool sparse_aliased;
+    // One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty; only when sparse.
+    uint32_t tile_bytes;
 } bfr_buffer_desc;
 
 // One range copied from a source buffer to a destination buffer.
@@ -1152,6 +1188,14 @@ typedef struct bfr_texture_desc {
     // Samples per texel; 1 unless rendering multisamples it.
     uint32_t samples;
     bfr_texture_usage usage;
+    // Made with no memory: bfr_update_tile_mappings maps sparse memory's tiles into it, as
+    // bfr_caps_sparse and bfr_get_sparse_format say.
+    bfr_bool sparse;
+    // Its tiles may be mapped to memory other sparse resources' tiles are mapped to, where
+    // bfr_caps_sparse.aliased.
+    bfr_bool sparse_aliased;
+    // One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty; only when sparse.
+    uint32_t tile_bytes;
 } bfr_texture_desc;
 
 // How to create a timestamp pool.
@@ -1411,6 +1455,122 @@ typedef struct bfr_submit_desc {
     uint32_t wait_count;
 } bfr_submit_desc;
 
+// How to create sparse memory, for the tiles of resources like texture and buffer, either of which
+// may be null but not both: Vulkan takes the memory's type from their requirements, and D3D12,
+// where bfr_caps_sparse.mixed_resources is false, the one kind of resource its heap holds. A
+// resource mapped to it later must take what they took, as each backend says.
+typedef struct bfr_sparse_memory_desc {
+    // Bytes.
+    uint64_t size;
+    // One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty.
+    uint32_t tile_bytes;
+    bfr_texture texture;
+    bfr_buffer buffer;
+} bfr_sparse_memory_desc;
+
+// A tile's size, in texels.
+typedef struct bfr_tile_shape {
+    uint32_t width;
+    uint32_t height;
+    uint32_t depth;
+} bfr_tile_shape;
+
+// How one aspect of a sparse texture is cut into tiles, as the backend says. Mip levels from
+// first_tail_mip on are its tail, mapped as tiles of tail_bytes rather than by region.
+typedef struct bfr_texture_tiling {
+    // Bytes in one tile.
+    uint64_t tile_bytes;
+    bfr_tile_shape shape;
+    uint32_t first_tail_mip;
+    // Bytes of one layer's tail.
+    uint64_t tail_bytes;
+    // Bytes between the starts of two layers' tails; 0 where the backend gives none.
+    uint64_t tail_stride;
+    // Every layer shares one tail, mapped at layer 0.
+    bfr_bool single_tail;
+} bfr_texture_tiling;
+
+// How a sparse buffer is cut into tiles.
+typedef struct bfr_buffer_tiling {
+    // Bytes in one tile.
+    uint64_t tile_bytes;
+} bfr_buffer_tiling;
+
+// The texture a bfr_get_sparse_format call asks about, as bfr_texture_desc would make it.
+typedef struct bfr_sparse_format_desc {
+    bfr_format format;
+    bfr_texture_dimension dimension;
+    uint32_t samples;
+    bfr_texture_usage usage;
+    bfr_texture_aspect aspect;
+    // As bfr_texture_desc.tile_bytes.
+    uint32_t tile_bytes;
+} bfr_sparse_format_desc;
+
+// Whether a sparse texture of a format can be made, and its tiles' shape.
+typedef struct bfr_sparse_format {
+    bfr_bool supported;
+    bfr_tile_shape shape;
+    // Every layer shares one tail.
+    bfr_bool single_tail;
+    // Every mip level not a whole number of tiles is in the tail.
+    bfr_bool aligned_mip_size;
+} bfr_sparse_format;
+
+// One region of a sparse texture mapped to memory or unmapped. Below the tail the region is x, y,
+// z, width, height and depth, in tiles of the mip level; from bfr_texture_tiling.first_tail_mip on,
+// it is tail_tiles tiles from tail_tile in the layer's tail. memory_tile is where in memory, in the
+// texture's tiles.
+typedef struct bfr_texture_tile_region {
+    // 0 is map.
+    bfr_tile_mapping mapping;
+    bfr_texture_aspect aspect;
+    uint32_t mip_level;
+    uint32_t layer;
+    uint32_t x;
+    uint32_t y;
+    uint32_t z;
+    uint32_t width;
+    uint32_t height;
+    uint32_t depth;
+    uint64_t tail_tile;
+    uint64_t tail_tiles;
+    uint64_t memory_tile;
+} bfr_texture_tile_region;
+
+// tiles tiles of a sparse buffer from tile mapped to memory from memory_tile, or unmapped, in the
+// buffer's tiles.
+typedef struct bfr_buffer_tile_region {
+    // 0 is map.
+    bfr_tile_mapping mapping;
+    uint64_t tile;
+    uint64_t tiles;
+    uint64_t memory_tile;
+} bfr_buffer_tile_region;
+
+// What bfr_update_tile_mappings sends to one queue: texture_regions of texture and buffer_regions
+// of buffer mapped to memory or unmapped.
+typedef struct bfr_tile_mapping_desc {
+    const bfr_chain* next;
+    // The queue to map on, numbered as bfr_device_desc says.
+    uint32_t queue;
+    // Tokens the GPU passes before it maps. An array of wait_count elements. May be null.
+    const bfr_token* waits;
+    uint32_t wait_count;
+    // Null when every region unmaps.
+    bfr_sparse_memory memory;
+    // Null for none.
+    bfr_texture texture;
+    // An array of texture_region_count elements. May be null.
+    const bfr_texture_tile_region* texture_regions;
+    uint32_t texture_region_count;
+    // Null for none.
+    bfr_buffer buffer;
+    // An array of buffer_region_count elements. May be null.
+    const bfr_buffer_tile_region* buffer_regions;
+    uint32_t buffer_region_count;
+} bfr_tile_mapping_desc;
+
 // Which window to ask about.
 typedef struct bfr_swapchain_query {
     const bfr_chain* next;
@@ -1662,11 +1822,6 @@ typedef struct bfr_caps_features {
     bfr_bool timestamps_on_all_queues;
     bfr_bool pipeline_statistics;
     bfr_bool occlusion_query_precise;
-    bfr_bool sparse_binding;
-    // Partly resident 2D textures.
-    bfr_bool sparse_textures;
-    // Partly resident buffers.
-    bfr_bool sparse_buffers;
 } bfr_caps_features;
 
 // One pool of memory.
@@ -1736,6 +1891,10 @@ typedef struct bfr_caps_queues {
     bfr_queue_levels graphics_levels;
     bfr_queue_levels compute_levels;
     bfr_queue_levels copy_levels;
+    // Graphics queues run bfr_update_tile_mappings.
+    bfr_bool graphics_sparse;
+    bfr_bool compute_sparse;
+    bfr_bool copy_sparse;
 } bfr_caps_queues;
 
 // The bfr_timestamp_stage values a timestamp write takes; each true where the backend says so.
@@ -1775,6 +1934,47 @@ typedef struct bfr_caps_timestamps {
     bfr_host_clocks host_clocks;
 } bfr_caps_timestamps;
 
+// What the adapter's sparse resources are; each true where the backend says so, or its
+// documentation where it has no query, as each backend names.
+typedef struct bfr_caps_sparse {
+    // Resources made with sparse take tiles at all.
+    bfr_bool binding;
+    bfr_bool buffers;
+    bfr_bool textures_2d;
+    bfr_bool textures_3d;
+    // Sparse 2D textures with 2 samples.
+    bfr_bool samples_2;
+    bfr_bool samples_4;
+    bfr_bool samples_8;
+    bfr_bool samples_16;
+    // Resources made with sparse_aliased share memory's tiles.
+    bfr_bool aliased;
+    // 2D textures' tiles have the standard shapes.
+    bfr_bool standard_2d_shape;
+    bfr_bool standard_2d_multisample_shape;
+    bfr_bool standard_3d_shape;
+    // Every mip level not a whole number of tiles is in the tail.
+    bfr_bool aligned_mip_size;
+    // Reads of an unmapped tile give 0 and writes to one are dropped.
+    bfr_bool non_resident_strict;
+    // Shaders ask whether what they read was mapped.
+    bfr_bool shader_residency;
+    // One sparse memory holds textures' and buffers' tiles together.
+    bfr_bool mixed_resources;
+    // Tail mappings take a layer other than 0.
+    bfr_bool layer_tails;
+    // Bytes of sparse resources a device holds, where the backend counts them so.
+    uint64_t address_space_bytes;
+    // Bits of a resource's GPU addresses, where the backend counts them so.
+    uint32_t address_bits_per_resource;
+    uint32_t address_bits_per_process;
+    uint32_t tile_byte_count;
+    // The first tile_byte_count are the tile sizes, in bytes, a sparse resource is made with; none
+    // where the backend sets them itself, and bfr_texture_tiling and bfr_buffer_tiling say what
+    // they are. 3 is Metal's sparse page sizes.
+    uint32_t tile_bytes[3];
+} bfr_caps_sparse;
+
 // Everything about an adapter that stays the same while it runs.
 typedef struct bfr_caps {
     bfr_caps_info info;
@@ -1787,6 +1987,7 @@ typedef struct bfr_caps {
     bfr_caps_memory memory;
     bfr_caps_queues queues;
     bfr_caps_timestamps timestamps;
+    bfr_caps_sparse sparse;
 } bfr_caps;
 
 // What an adapter does with one format.
@@ -2358,6 +2559,59 @@ BFR_API bfr_result bfr_calibrate_timestamps(
     uint32_t queue,
     bfr_host_clock clock,
     bfr_calibrated_timestamps* timestamps);
+
+// Creates desc's size bytes of device memory for the tiles of the sparse resources desc names. Not
+// for the frame path. Fails with error_invalid_argument for a resource that is not sparse or a size
+// of 0, error_unsupported for a tile_bytes the backend doesn't take or resources the backend can't
+// hold in one memory, error_limit_reached at the device's max_sparse_memories, error_out_of_memory
+// when the backend says memory ran out, and error_device_failed when it refuses.
+BFR_API bfr_result bfr_create_sparse_memory(
+    bfr_device* device,
+    const bfr_sparse_memory_desc* desc,
+    bfr_sparse_memory* memory);
+
+// Destroys sparse memory once the GPU has passed every submit and mapping made before the call; the
+// handle is invalid at once. Tiles still mapped to it read as unmapped ones do after. Not for the
+// frame path. A handle that is already destroyed does nothing.
+BFR_API void bfr_destroy_sparse_memory(bfr_device* device, bfr_sparse_memory memory);
+
+// Writes how aspect of a sparse texture is cut into tiles. Fails with error_invalid_argument when
+// the texture is not sparse or has no such aspect, and error_unsupported where the backend gives no
+// tiling for it.
+BFR_API bfr_result bfr_get_texture_tiling(
+    bfr_device* device,
+    bfr_texture texture,
+    bfr_texture_aspect aspect,
+    bfr_texture_tiling* tiling);
+
+// Writes how a sparse buffer is cut into tiles. Fails with error_invalid_argument when it is not
+// sparse.
+BFR_API bfr_result bfr_get_buffer_tiling(
+    bfr_device* device,
+    bfr_buffer buffer,
+    bfr_buffer_tiling* tiling);
+
+// Writes whether a sparse texture as desc says can be made, and its tiles' shape, as the backend
+// says. Fails with error_invalid_argument for an enum value BFR does not have, and
+// error_unsupported for a tile_bytes the backend doesn't take.
+BFR_API bfr_result bfr_get_sparse_format(
+    bfr_device* device,
+    const bfr_sparse_format_desc* desc,
+    bfr_sparse_format* format);
+
+// Maps desc's regions of its sparse texture and buffer to its memory, or unmaps them, on desc's
+// queue once the GPU has passed the waits, and writes the token the mappings' completion signals;
+// work that uses them waits on it. Calls on one queue must not overlap, bfr_submit included. Fails
+// with error_invalid_argument for a queue the device does not have, a resource that is not sparse,
+// a region that maps with no memory, or more than max_tile_mappings regions of either kind,
+// error_unsupported for a queue whose kind bfr_caps_queues says maps no tiles, memory the resource
+// can't be mapped to, or a region the backend has no form for, and error_device_failed when the
+// backend refuses.
+// token: May be null.
+BFR_API bfr_result bfr_update_tile_mappings(
+    bfr_device* device,
+    const bfr_tile_mapping_desc* desc,
+    bfr_token* token);
 
 // Lists the CPU time spent in each of the device's calls since it was made, indexed by bfr_call.
 // With timings null, writes how many there are to count. Otherwise writes up to count of them, sets

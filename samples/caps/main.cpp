@@ -210,7 +210,7 @@ void printShaders(const bfr::Caps& caps) {
 }
 
 // The optional features, split by whether the adapter has them.
-void printFeatures(const bfr::CapsFeatures& f) {
+void printFeatures(const bfr::CapsFeatures& f, const bfr::CapsSparse& sparse) {
     struct Named {
         bool has;
         std::string_view name;
@@ -257,9 +257,9 @@ void printFeatures(const bfr::CapsFeatures& f) {
         {.has = f.timestampsOnAllQueues, .name = "timestamps on every queue"},
         {.has = f.pipelineStatistics, .name = "pipeline statistics"},
         {.has = f.occlusionQueryPrecise, .name = "precise occlusion"},
-        {.has = f.sparseBinding, .name = "sparse binding"},
-        {.has = f.sparseTextures, .name = "sparse textures"},
-        {.has = f.sparseBuffers, .name = "sparse buffers"},
+        {.has = sparse.binding, .name = "sparse binding"},
+        {.has = sparse.textures2d, .name = "sparse textures"},
+        {.has = sparse.buffers, .name = "sparse buffers"},
     };
     std::vector<std::string> has;
     std::vector<std::string> lacks;
@@ -536,10 +536,7 @@ void printAllFeatures(const bfr::CapsFeatures& f) {
                        field("storageWriteWithoutFormat", f.storageWriteWithoutFormat),
                        field("timestampsOnAllQueues", f.timestampsOnAllQueues),
                        field("pipelineStatistics", f.pipelineStatistics),
-                       field("occlusionQueryPrecise", f.occlusionQueryPrecise),
-                       field("sparseBinding", f.sparseBinding),
-                       field("sparseTextures", f.sparseTextures),
-                       field("sparseBuffers", f.sparseBuffers)});
+                       field("occlusionQueryPrecise", f.occlusionQueryPrecise)});
 }
 
 void printAllMemory(const bfr::Caps& caps) {
@@ -570,6 +567,31 @@ void printAllMemory(const bfr::Caps& caps) {
                          field("granularity", t.granularity), field("entryBytes", t.entryBytes),
                          field("monotonic", t.hostClocks.monotonic), field("monotonicRaw", t.hostClocks.monotonicRaw),
                          field("performanceCounter", t.hostClocks.performanceCounter)});
+    const bfr::CapsSparse& s = caps.sparse;
+    group("sparse", {field("binding", s.binding),
+                     field("buffers", s.buffers),
+                     field("textures2d", s.textures2d),
+                     field("textures3d", s.textures3d),
+                     field("samples2", s.samples2),
+                     field("samples4", s.samples4),
+                     field("samples8", s.samples8),
+                     field("samples16", s.samples16),
+                     field("aliased", s.aliased),
+                     field("standard2dShape", s.standard2dShape),
+                     field("standard2dMultisampleShape", s.standard2dMultisampleShape),
+                     field("standard3dShape", s.standard3dShape),
+                     field("alignedMipSize", s.alignedMipSize),
+                     field("nonResidentStrict", s.nonResidentStrict),
+                     field("shaderResidency", s.shaderResidency),
+                     field("mixedResources", s.mixedResources),
+                     field("layerTails", s.layerTails),
+                     field("addressSpaceBytes", s.addressSpaceBytes),
+                     field("addressBitsPerResource", s.addressBitsPerResource),
+                     field("addressBitsPerProcess", s.addressBitsPerProcess),
+                     field("tileByteCount", s.tileByteCount),
+                     field("graphicsSparse", q.graphicsSparse),
+                     field("computeSparse", q.computeSparse),
+                     field("copySparse", q.copySparse)});
 }
 
 void printAll(const bfr::Caps& caps) {
@@ -590,7 +612,7 @@ void printAdapter(const bfr::Instance& instance, std::uint32_t adapter, const Op
     printMemory(caps->memory);
     printLimits(*caps);
     printShaders(*caps);
-    printFeatures(caps->features);
+    printFeatures(caps->features, caps->sparse);
     printFormats(instance, adapter, options);
     if (options.window) {
         printSurface(instance, adapter);

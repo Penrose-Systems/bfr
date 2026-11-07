@@ -3,12 +3,15 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
+#include "bfr/rhi/sparse.h"
 #include "core/slot_chains.h"
 #include "d3d12/d3d12_device.h"
 #include "d3d12/d3d12_result.h"
+#include "d3d12/d3d12_sparse.h"
 #include "d3d12/d3d12_texture.h"
 #include "rhi/bindless_slots.h"
 #include "rhi/buffer_check.h"
+#include "rhi/enum_check.h"
 
 #include <d3d12.h>
 #include <D3D12MemAlloc.h>
@@ -63,7 +66,16 @@ core::Result<ComPtr<D3D12MA::Allocator>> createAllocator(ID3D12Device* device, I
     return allocator;
 }
 
-core::Result<D3D12Buffer> createD3D12Buffer(D3D12MA::Allocator& allocator, const BufferDesc& desc, std::uint32_t slot) {
+core::Result<D3D12Buffer> createD3D12Buffer(D3D12MA::Allocator& allocator, ID3D12Device& device, const BufferDesc& desc,
+                                            std::uint32_t slot) {
+    if (desc.sparse && desc.memory != BufferMemory::Device) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "a sparse buffer's memory is the heaps mapped into it, so it is device");
+    }
+    if (desc.sparse && desc.tileBytes != D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "D3D12's tiles are {} bytes; tileBytes is {}",
+                             D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES, desc.tileBytes);
+    }
     const Placement placement = placementFor(desc.memory);
     const D3D12_RESOURCE_DESC resource{
         .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
@@ -77,10 +89,27 @@ core::Result<D3D12Buffer> createD3D12Buffer(D3D12MA::Allocator& allocator, const
         .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
         .Flags = desc.usage.storage ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE,
     };
+    D3D12Buffer buffer{.allocation = {},
+                       .resource = {},
+                       .memory = desc.memory,
+                       .size = desc.size,
+                       .mapped = {},
+                       .slot = slot,
+                       .sparse = desc.sparse};
+    if (desc.sparse) {
+        // Heaps' tiles are mapped into it, so no memory is placed now.
+        // sparseAliased needs no D3D12 flag: any reserved resource's tiles may
+        // be mapped to heap tiles others are mapped to.
+        if (const HRESULT result = device.CreateReservedResource(&resource, placement.state, nullptr,
+                                                                 IID_PPV_ARGS(&buffer.resource));
+            FAILED(result)) {
+            return failure(core::ErrorCode::RhiDeviceFailed,
+                           {.call = "ID3D12Device::CreateReservedResource", .result = result});
+        }
+        return buffer;
+    }
     D3D12MA::ALLOCATION_DESC allocation{};
     allocation.HeapType = placement.heap;
-    D3D12Buffer buffer{
-        .allocation = {}, .resource = {}, .memory = desc.memory, .size = desc.size, .mapped = {}, .slot = slot};
     if (const HRESULT result = allocator.CreateResource(&allocation, &resource, placement.state, nullptr,
                                                         &buffer.allocation, IID_PPV_ARGS(&buffer.resource));
         FAILED(result)) {
@@ -120,6 +149,7 @@ void D3D12Device::collectBuffers() {
     textures_.collect(completed, [this](const D3D12Texture& texture) { bindless_.giveTexture(texture.slots); });
     samplers_.collect(completed, [this](const D3D12Sampler& sampler) { bindless_.giveSampler(sampler.slot); });
     timestampPools_.collect(completed);
+    sparseMemories_.collect(completed);
     pipelines_.collect(completed);
 }
 
@@ -144,7 +174,7 @@ core::Result<BufferHandle> D3D12Device::createBuffer(const BufferDesc& desc) {
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
     }
-    auto made = createD3D12Buffer(*allocator_.Get(), desc, *slot);
+    auto made = createD3D12Buffer(*allocator_.Get(), *device_.Get(), desc, *slot);
     if (!made) {
         bindless_.giveBuffer(*slot);
         return std::unexpected(std::move(made.error()));
@@ -229,6 +259,66 @@ core::Result<void> D3D12Device::destroyBuffer(BufferHandle buffer) {
     }
     collectBuffers();
     return {};
+}
+
+// A buffer's tiles are D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES (d3d12.h),
+// the one size D3D12 has.
+core::Result<BufferTiling> D3D12Device::bufferTiling(BufferHandle buffer) {
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    if (!(*found)->sparse) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the buffer is not sparse");
+    }
+    return BufferTiling{.tileBytes = D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES};
+}
+
+core::Result<ID3D12Resource*> D3D12Device::addBufferTiles(D3D12TileMappings& tiles, const TileMappingDesc& desc,
+                                                          const D3D12SparseMemory* memory) {
+    tiles.clear();
+    if (desc.buffer.isNull()) {
+        if (!desc.bufferRegions.empty()) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "buffer regions were given with no buffer");
+        }
+        return nullptr;
+    }
+    auto found = bufferFor(desc.buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    if (!(*found)->sparse) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the buffer is not sparse");
+    }
+    if (memory != nullptr && !memory->takes(D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS)) {
+        return core::failure(
+            core::ErrorCode::RhiUnsupported,
+            "on ResourceHeapTier 1 a heap holds one kind of resource, and the memory's is not buffers");
+    }
+    for (const BufferTileRegion& region : desc.bufferRegions) {
+        if (auto checked = checkKnown(region.mapping, "tile mapping"); !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        const bool maps = region.mapping == TileMapping::Map;
+        if (maps && memory == nullptr) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "a region maps, but no memory was given");
+        }
+        if (!std::in_range<UINT>(region.tile) || !std::in_range<UINT>(region.tiles)) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "{} tiles from tile {} are past what D3D12 takes",
+                                 region.tiles, region.tile);
+        }
+        // A buffer is one subresource, its tiles counted along X.
+        const D3D12_TILED_RESOURCE_COORDINATE coordinate{.X = static_cast<UINT>(region.tile),
+                                                         .Y = 0,
+                                                         .Z = 0,
+                                                         .Subresource = 0};
+        const D3D12_TILE_REGION_SIZE size{
+            .NumTiles = static_cast<UINT>(region.tiles), .UseBox = FALSE, .Width = 0, .Height = 0, .Depth = 0};
+        if (auto added = tiles.add(coordinate, size, maps, region.memoryTile); !added) {
+            return std::unexpected(std::move(added.error()));
+        }
+    }
+    return (*found)->resource.Get();
 }
 
 } // namespace bfr::rhi::d3d12

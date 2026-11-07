@@ -93,6 +93,7 @@ core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rh
     auto made = std::make_unique<D3D12Device>(rhi, std::move(device), std::move(adapter), heapCount, desc);
     // A runtime without it answers E_NOINTERFACE and leaves device11_ null.
     static_cast<void>(made->device_.As(&made->device11_));
+    made->sparse_ = sparseOf(made->device_.Get());
     if (auto opened = made->open(desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
@@ -128,6 +129,7 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
       samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
       timestampPools_("timestamp pools", desc.maxTimestampPools, desc.maxTimestampPools, rhi.logger()),
+      sparseMemories_("sparse memories", desc.maxSparseMemories, desc.maxSparseMemories, rhi.logger()),
       bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
@@ -147,6 +149,8 @@ core::Result<void> D3D12Device::open(const DeviceDesc& desc) {
         queue->lists = core::FixedVector<ID3D12CommandList*>{desc.maxCommandLists};
         queue->chains = core::FixedVector<D3D12Swapchain*>{desc.maxSwapchains};
         queue->retired = core::FixedVector<D3D12RetiredPool>{desc.maxCommandPools};
+        queue->textureTiles = D3D12TileMappings{desc.maxTileMappings};
+        queue->bufferTiles = D3D12TileMappings{desc.maxTileMappings};
         const D3D12_COMMAND_QUEUE_DESC queueDesc{.Type = listType,
                                                  .Priority = *priority,
                                                  .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE,
@@ -218,10 +222,14 @@ D3D12Device::~D3D12Device() {
     if (pipelines_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} pipelines were left when the device went", pipelines_.size());
     }
+    if (sparseMemories_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} sparse memories were left when the device went", sparseMemories_.size());
+    }
     // Every buffer and texture gives its memory back before the allocator goes,
     // and every pipeline goes before the layout it was made on.
     buffers_.clear();
     textures_.clear();
+    sparseMemories_.clear();
     samplers_.clear();
     timestampPools_.clear();
     pipelines_.clear();
@@ -276,6 +284,23 @@ core::Result<void> D3D12Device::checkToken(Token token) const {
     if (auto checked = checkQueue(token.queue); !checked) {
         return checked;
     }
+    return {};
+}
+
+core::Result<void> D3D12Device::waitOn(D3D12Queue& queue, std::span<const Token> waits) {
+    for (const Token wait : waits) {
+        if (const HRESULT result = queue.queue->Wait(queues_[wait.queue]->fence.Get(), wait.value); FAILED(result)) {
+            return deviceFailed("ID3D12CommandQueue::Wait", result);
+        }
+    }
+    return {};
+}
+
+core::Result<void> D3D12Device::signal(D3D12Queue& queue, std::uint64_t value) {
+    if (const HRESULT result = queue.queue->Signal(queue.fence.Get(), value); FAILED(result)) {
+        return deviceFailed("ID3D12CommandQueue::Signal", result);
+    }
+    queue.submitted.store(value, std::memory_order_release);
     return {};
 }
 
@@ -1013,20 +1038,17 @@ core::Result<Token> D3D12Device::submit(const SubmitDesc& desc) {
         finish(false);
         return std::unexpected(std::move(closed.error()));
     }
-    for (const Token wait : desc.waits) {
-        if (const HRESULT result = queue.queue->Wait(queues_[wait.queue]->fence.Get(), wait.value); FAILED(result)) {
-            finish(false);
-            return std::unexpected(deviceFailed("ID3D12CommandQueue::Wait", result).error());
-        }
+    if (auto waited = waitOn(queue, desc.waits); !waited) {
+        finish(false);
+        return std::unexpected(std::move(waited.error()));
     }
     if (!queue.lists.empty()) {
         queue.queue->ExecuteCommandLists(static_cast<UINT>(queue.lists.size()), queue.lists.data());
     }
-    if (const HRESULT result = queue.queue->Signal(queue.fence.Get(), value); FAILED(result)) {
+    if (auto signalled = signal(queue, value); !signalled) {
         finish(false);
-        return std::unexpected(deviceFailed("ID3D12CommandQueue::Signal", result).error());
+        return std::unexpected(std::move(signalled.error()));
     }
-    queue.submitted.store(value, std::memory_order_release);
     finish(true);
     for (D3D12Swapchain* chain : queue.chains) {
         chain->setSubmitted({.queue = desc.queue, .value = value});

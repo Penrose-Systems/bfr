@@ -138,6 +138,12 @@ public:
     [[nodiscard]] core::Result<TimestampRate> timestampRate(std::uint32_t queue) const override;
     [[nodiscard]] core::Result<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue,
                                                                          HostClock clock) const override;
+    [[nodiscard]] core::Result<SparseMemoryHandle> createSparseMemory(const SparseMemoryDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroySparseMemory(SparseMemoryHandle memory) override;
+    [[nodiscard]] core::Result<TextureTiling> textureTiling(TextureHandle texture, TextureAspect aspect) override;
+    [[nodiscard]] core::Result<BufferTiling> bufferTiling(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<SparseFormat> sparseFormat(const SparseFormatDesc& desc) const override;
+    [[nodiscard]] core::Result<Token> updateTileMappings(const TileMappingDesc& desc) override;
     [[nodiscard]] core::Result<void> callTimings(std::span<CallTiming> timings) const override;
 
 private:

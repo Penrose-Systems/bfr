@@ -292,9 +292,42 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
         .timestampsOnAllQueues = on(properties.core.properties.limits.timestampComputeAndGraphics),
         .pipelineStatistics = on(core.pipelineStatisticsQuery),
         .occlusionQueryPrecise = on(core.occlusionQueryPrecise),
-        .sparseBinding = on(core.sparseBinding),
-        .sparseTextures = on(core.sparseResidencyImage2D),
-        .sparseBuffers = on(core.sparseResidencyBuffer),
+    };
+}
+
+// The sparse features and properties Vulkan reports. Vulkan has no heap
+// kinds: a resource maps to any VkDeviceMemory of a type in its
+// memoryTypeBits, so textures and buffers share one where binding is on. Each
+// layer's tail sits at imageMipTailOffset plus the layer's imageMipTailStride
+// (VkSparseImageMemoryRequirements), unless the format reports one tail for
+// all. Vulkan sets the tile sizes itself, so tileBytes is empty.
+Sparse sparseFrom(const DeviceFeatures& features, const PropertyQuery& properties) {
+    const VkPhysicalDeviceFeatures& core = features.core.features;
+    const VkPhysicalDeviceProperties& device = properties.core.properties;
+    const VkPhysicalDeviceSparseProperties& sparse = device.sparseProperties;
+    const bool binding = on(core.sparseBinding);
+    return {
+        .binding = binding,
+        .buffers = on(core.sparseResidencyBuffer),
+        .textures2D = on(core.sparseResidencyImage2D),
+        .textures3D = on(core.sparseResidencyImage3D),
+        .samples2 = on(core.sparseResidency2Samples),
+        .samples4 = on(core.sparseResidency4Samples),
+        .samples8 = on(core.sparseResidency8Samples),
+        .samples16 = on(core.sparseResidency16Samples),
+        .aliased = on(core.sparseResidencyAliased),
+        .standard2DShape = on(sparse.residencyStandard2DBlockShape),
+        .standard2DMultisampleShape = on(sparse.residencyStandard2DMultisampleBlockShape),
+        .standard3DShape = on(sparse.residencyStandard3DBlockShape),
+        .alignedMipSize = on(sparse.residencyAlignedMipSize),
+        .nonResidentStrict = on(sparse.residencyNonResidentStrict),
+        .shaderResidency = on(core.shaderResourceResidency),
+        .mixedResources = binding,
+        .layerTails = binding,
+        .addressSpaceBytes = device.limits.sparseAddressSpaceSize,
+        .addressBitsPerResource = 0,
+        .addressBitsPerProcess = 0,
+        .tileBytes = {},
     };
 }
 
@@ -386,6 +419,9 @@ Queues queuesFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<c
     const auto levels = [&listed, listsLevels](std::uint32_t queues, std::optional<std::uint32_t> family) {
         return queues == 0 || !listsLevels ? QueueLevels{} : levelsFrom(listed[*family]);
     };
+    const auto sparse = [&families](std::uint32_t queues, std::optional<std::uint32_t> family) {
+        return queues != 0 && (families[*family].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) != 0;
+    };
     return {
         .graphics = counts.graphics,
         .compute = counts.compute,
@@ -397,6 +433,9 @@ Queues queuesFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<c
         .graphicsLevels = levels(counts.graphics, chosen.graphics),
         .computeLevels = levels(counts.compute, chosen.compute),
         .copyLevels = levels(counts.copy, chosen.transfer),
+        .graphicsSparse = sparse(counts.graphics, chosen.graphics),
+        .computeSparse = sparse(counts.compute, chosen.compute),
+        .copySparse = sparse(counts.copy, chosen.transfer),
     };
 }
 
@@ -748,6 +787,7 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const
         .memory = memoryFrom(vk, adapter, properties.core.properties.deviceType),
         .queues = queuesFrom(vk, adapter, extensions, properties.core.properties.limits),
         .timestamps = {},
+        .sparse = sparseFrom(features, properties),
     };
     caps.timestamps = timestampsFrom(vk, adapter, extensions, caps.queues);
     if (reported.shadingRateTexture) {
