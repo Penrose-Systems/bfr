@@ -70,8 +70,9 @@ D3D12_SHADER_BYTECODE bytecodeFor(const ShaderCode& code) {
 }
 
 // The class of topology, which the PSO fixes; IASetPrimitiveTopology sets the
-// exact one. A fan is a triangle topology, as NVRHI's d3d12-graphics.cpp
-// classes it.
+// exact one. A fan is a triangle topology (D3D_PRIMITIVE_TOPOLOGY_TRIANGLEFAN
+// draws triangles, d3dcommon.h:134); NVRHI calls fans unsupported
+// (d3d12-constants.cpp:186-188).
 D3D12_PRIMITIVE_TOPOLOGY_TYPE topologyTypeFor(Topology topology) {
     switch (topology) {
         case Topology::PointList:

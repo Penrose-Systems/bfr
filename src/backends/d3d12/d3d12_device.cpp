@@ -136,16 +136,28 @@ core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rh
     }
     made->layout_ = std::move(*layout);
     for (std::size_t i = 0; i < desc.indirectStrides.size(); ++i) {
+        // A kind's signature only where the stride holds its arguments, so a
+        // packed stride of the smaller draw arguments makes no indexed one
+        // (NVRHI makes each at its own size, d3d12-device.cpp:299-307);
+        // Vulkan takes no smaller stride either. That D3D12 refuses one is
+        // not stated in d3d12.h.
         const std::uint32_t stride = desc.indirectStrides[i];
-        auto draw = createSignature(*made->device_.Get(), D3D12_INDIRECT_ARGUMENT_TYPE_DRAW, stride);
-        if (!draw) {
-            return std::unexpected(std::move(draw.error()));
+        D3D12DrawSignatures& signatures = made->drawSignatures_[i];
+        signatures.stride = stride;
+        if (stride >= sizeof(D3D12_DRAW_ARGUMENTS)) {
+            auto draw = createSignature(*made->device_.Get(), D3D12_INDIRECT_ARGUMENT_TYPE_DRAW, stride);
+            if (!draw) {
+                return std::unexpected(std::move(draw.error()));
+            }
+            signatures.draw = std::move(*draw);
         }
-        auto drawIndexed = createSignature(*made->device_.Get(), D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED, stride);
-        if (!drawIndexed) {
-            return std::unexpected(std::move(drawIndexed.error()));
+        if (stride >= sizeof(D3D12_DRAW_INDEXED_ARGUMENTS)) {
+            auto drawIndexed = createSignature(*made->device_.Get(), D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED, stride);
+            if (!drawIndexed) {
+                return std::unexpected(std::move(drawIndexed.error()));
+            }
+            signatures.drawIndexed = std::move(*drawIndexed);
         }
-        made->drawSignatures_[i] = {.stride = stride, .draw = std::move(*draw), .drawIndexed = std::move(*drawIndexed)};
     }
     auto dispatch = createSignature(*made->device_.Get(), D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH,
                                     sizeof(D3D12_DISPATCH_ARGUMENTS));

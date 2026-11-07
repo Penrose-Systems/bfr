@@ -120,8 +120,17 @@ struct D3D12CommandList {
     std::uint32_t rendered = core::SlotChains::kEnd;
 };
 
+/// What an indirect call reads: a draw's, an indexed draw's or a dispatch's
+/// arguments.
+enum class IndirectKind : std::uint8_t {
+    Draw,
+    DrawIndexed,
+    Dispatch
+};
+
 /// The command signatures of indirect draws and indexed draws at one of the
 /// strides DeviceDesc::indirectStrides lists: D3D12 fixes the stride in each.
+/// Null for a kind whose arguments the stride is smaller than.
 struct D3D12DrawSignatures {
     std::uint32_t stride = 0;
     Microsoft::WRL::ComPtr<ID3D12CommandSignature> draw;
@@ -290,14 +299,13 @@ private:
                                                                const D3D12SparseMemory* memory);
     // The barrier barrier() records, ordering every resource on the list's queue.
     [[nodiscard]] core::Result<D3D12_GLOBAL_BARRIER> fullBarrierFor(const D3D12CommandList& list);
-    // The draw signatures of stride; fails with RhiUnsupported when
-    // DeviceDesc::indirectStrides did not list it.
-    [[nodiscard]] core::Result<D3D12DrawSignatures*> drawSignaturesFor(std::uint32_t stride);
-    // Records ExecuteIndirect of signature on the list, reading buffer from
-    // offset, and the count countBuffer holds at countOffset when one is given.
-    [[nodiscard]] core::Result<void> executeIndirect(CommandListHandle commandList, ID3D12CommandSignature* signature,
-                                                     UINT maxCommandCount, BufferHandle buffer, std::uint64_t offset,
-                                                     std::optional<BufferHandle> countBuffer,
+    // Records ExecuteIndirect of kind's signature at stride, a dispatch's
+    // taking none, reading buffer from offset, and the count countBuffer
+    // holds at countOffset when one is given. Fails with RhiUnsupported for a
+    // stride the device made no signature of kind for.
+    [[nodiscard]] core::Result<void> executeIndirect(CommandListHandle commandList, IndirectKind kind,
+                                                     std::uint32_t stride, UINT maxCommandCount, BufferHandle buffer,
+                                                     std::uint64_t offset, std::optional<BufferHandle> countBuffer,
                                                      std::uint64_t countOffset);
 
     D3D12Instance* instance_;

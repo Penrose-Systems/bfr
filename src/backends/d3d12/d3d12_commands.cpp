@@ -226,17 +226,7 @@ core::Result<void> D3D12Device::dispatch(CommandListHandle commandList, std::uin
     return {};
 }
 
-core::Result<D3D12DrawSignatures*> D3D12Device::drawSignaturesFor(std::uint32_t stride) {
-    // A short array the caller sized; the stride comes with each call.
-    const auto found = std::ranges::find(drawSignatures_, stride, &D3D12DrawSignatures::stride);
-    if (found == drawSignatures_.end()) {
-        return core::failure(core::ErrorCode::RhiUnsupported,
-                             "stride {} is not in the DeviceDesc::indirectStrides the device was made with", stride);
-    }
-    return &*found;
-}
-
-core::Result<void> D3D12Device::executeIndirect(CommandListHandle commandList, ID3D12CommandSignature* signature,
+core::Result<void> D3D12Device::executeIndirect(CommandListHandle commandList, IndirectKind kind, std::uint32_t stride,
                                                 UINT maxCommandCount, BufferHandle buffer, std::uint64_t offset,
                                                 std::optional<BufferHandle> countBuffer, std::uint64_t countOffset) {
     auto list = commandListFor(commandList);
@@ -255,6 +245,20 @@ core::Result<void> D3D12Device::executeIndirect(CommandListHandle commandList, I
         }
         count = (*counted)->resource.Get();
     }
+    ID3D12CommandSignature* signature = dispatchSignature_.Get();
+    if (kind != IndirectKind::Dispatch) {
+        // A short array the caller sized; the stride comes with each call.
+        const auto signatures = std::ranges::find(drawSignatures_, stride, &D3D12DrawSignatures::stride);
+        signature = signatures == drawSignatures_.end() ? nullptr
+                    : kind == IndirectKind::Draw        ? signatures->draw.Get()
+                                                        : signatures->drawIndexed.Get();
+        if (signature == nullptr) {
+            return core::failure(core::ErrorCode::RhiUnsupported,
+                                 "the device has no signature of stride {} for these arguments: the stride is not in "
+                                 "DeviceDesc::indirectStrides, or is less than the arguments' size",
+                                 stride);
+        }
+    }
     (*list)->list->ExecuteIndirect(signature, maxCommandCount, (*found)->resource.Get(), offset, count, countOffset);
     return {};
 }
@@ -264,11 +268,7 @@ core::Result<void> D3D12Device::drawIndirect(CommandListHandle commandList, Buff
     if (auto checked = checkDrawCount(drawCount, multiDrawIndirect_); !checked) {
         return checked;
     }
-    auto signatures = drawSignaturesFor(stride);
-    if (!signatures) {
-        return std::unexpected(std::move(signatures.error()));
-    }
-    return executeIndirect(commandList, (*signatures)->draw.Get(), drawCount, buffer, offset, std::nullopt, 0);
+    return executeIndirect(commandList, IndirectKind::Draw, stride, drawCount, buffer, offset, std::nullopt, 0);
 }
 
 core::Result<void> D3D12Device::drawIndexedIndirect(CommandListHandle commandList, BufferHandle buffer,
@@ -277,11 +277,7 @@ core::Result<void> D3D12Device::drawIndexedIndirect(CommandListHandle commandLis
     if (auto checked = checkDrawCount(drawCount, multiDrawIndirect_); !checked) {
         return checked;
     }
-    auto signatures = drawSignaturesFor(stride);
-    if (!signatures) {
-        return std::unexpected(std::move(signatures.error()));
-    }
-    return executeIndirect(commandList, (*signatures)->drawIndexed.Get(), drawCount, buffer, offset, std::nullopt, 0);
+    return executeIndirect(commandList, IndirectKind::DrawIndexed, stride, drawCount, buffer, offset, std::nullopt, 0);
 }
 
 core::Result<void> D3D12Device::drawIndirectCount(CommandListHandle commandList, BufferHandle buffer,
@@ -291,11 +287,7 @@ core::Result<void> D3D12Device::drawIndirectCount(CommandListHandle commandList,
     if (auto checked = checkCountDraws(drawIndirectCount_); !checked) {
         return checked;
     }
-    auto signatures = drawSignaturesFor(stride);
-    if (!signatures) {
-        return std::unexpected(std::move(signatures.error()));
-    }
-    return executeIndirect(commandList, (*signatures)->draw.Get(), maxDrawCount, buffer, offset, countBuffer,
+    return executeIndirect(commandList, IndirectKind::Draw, stride, maxDrawCount, buffer, offset, countBuffer,
                            countOffset);
 }
 
@@ -306,17 +298,13 @@ core::Result<void> D3D12Device::drawIndexedIndirectCount(CommandListHandle comma
     if (auto checked = checkCountDraws(drawIndirectCount_); !checked) {
         return checked;
     }
-    auto signatures = drawSignaturesFor(stride);
-    if (!signatures) {
-        return std::unexpected(std::move(signatures.error()));
-    }
-    return executeIndirect(commandList, (*signatures)->drawIndexed.Get(), maxDrawCount, buffer, offset, countBuffer,
+    return executeIndirect(commandList, IndirectKind::DrawIndexed, stride, maxDrawCount, buffer, offset, countBuffer,
                            countOffset);
 }
 
 core::Result<void> D3D12Device::dispatchIndirect(CommandListHandle commandList, BufferHandle buffer,
                                                  std::uint64_t offset) {
-    return executeIndirect(commandList, dispatchSignature_.Get(), kOneDispatch, buffer, offset, std::nullopt, 0);
+    return executeIndirect(commandList, IndirectKind::Dispatch, 0, kOneDispatch, buffer, offset, std::nullopt, 0);
 }
 
 } // namespace bfr::rhi::d3d12

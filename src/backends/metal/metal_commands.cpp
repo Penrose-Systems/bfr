@@ -182,13 +182,13 @@ core::Result<void> MetalDevice::setTopology(CommandListHandle commandList, Topol
     if (auto checked = checkKnown(topology, "topology"); !checked) {
         return checked;
     }
-    auto primitive = primitiveFor(topology);
-    if (!primitive) {
-        return std::unexpected(std::move(primitive.error()));
-    }
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
+    }
+    auto primitive = primitiveFor(topology);
+    if (!primitive) {
+        return std::unexpected(std::move(primitive.error()));
     }
     (*list)->primitive = *primitive;
     return {};

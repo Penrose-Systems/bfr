@@ -3576,7 +3576,8 @@ public:
 
     /// Makes the draws after it assemble topology, which is of the bound graphics pipeline's kind,
     /// points, lines or triangles, as each backend requires, until the next bfr_bind_pipeline.
-    /// Fails with error_invalid_argument for a value BFR doesn't have.
+    /// Fails with error_invalid_argument for a value BFR doesn't have, and error_unsupported for a
+    /// topology the backend has no form for (Metal's fan).
     [[nodiscard]] Expected<void> setTopology(CommandList commandList, Topology topology) const;
 
     /// Sets the first size bytes of the push constants every shader reads, as bfr_pipeline states,
@@ -3707,6 +3708,7 @@ public:
     /// Creates a graphics pipeline, as desc says, before returning. Not for the frame path, as
     /// bfr_create_compute_pipeline is not. A target of format undefined is an unused one. Fails
     /// with error_invalid_argument for a desc with more than max_color_targets targets,
+    /// error_unsupported for a topology the backend has no form for (Metal's fan),
     /// error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
     /// backend refuses the code or the desc; the message carries what it said.
     [[nodiscard]] Expected<Pipeline> createGraphicsPipeline(const GraphicsPipelineDesc& desc) const;

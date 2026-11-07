@@ -153,8 +153,9 @@ public:
     /// Makes the draws after it assemble topology, which is of the bound
     /// graphics pipeline's kind, points, lines or triangles, as each backend
     /// requires. It lasts until the next bindPipeline. Fails with
-    /// RhiInvalidCall for a value BFR doesn't have, and RhiInvalidHandle when
-    /// the list is gone.
+    /// RhiInvalidCall for a value BFR doesn't have, RhiInvalidHandle when the
+    /// list is gone, and RhiUnsupported for a topology the backend has no
+    /// form for (Metal's fan).
     [[nodiscard]] virtual core::Result<void> setTopology(CommandListHandle commandList, Topology topology) = 0;
 
     /// Sets the first data.size() bytes of the push constants every shader
@@ -373,9 +374,10 @@ public:
     /// A graphics pipeline as desc says, made before returning. Cold, as
     /// createComputePipeline is. A target of format Undefined is an unused
     /// one. Fails with RhiInvalidCall for a desc with an enum value or format
-    /// BFR doesn't have or more than kMaxColorTargets targets, RhiLimitReached at the device's maximum, and
-    /// RhiDeviceFailed when the API refuses the code or the desc, with what it
-    /// said.
+    /// BFR doesn't have or more than kMaxColorTargets targets, RhiUnsupported
+    /// for a topology the backend has no form for (Metal's fan),
+    /// RhiLimitReached at the device's maximum, and RhiDeviceFailed when the
+    /// API refuses the code or the desc, with what it said.
     [[nodiscard]] virtual core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) = 0;
 
     /// Destroys the pipeline once the GPU has passed every submit made before
