@@ -42,6 +42,12 @@ InstanceTable loadInstanceTable(VkInstance instance) {
     BFR_LOAD(vkGetPhysicalDeviceMemoryProperties2);
     BFR_LOAD(vkGetPhysicalDeviceQueueFamilyProperties);
     BFR_LOAD(vkGetPhysicalDeviceQueueFamilyProperties2);
+    BFR_LOAD(vkGetPhysicalDeviceCalibrateableTimeDomainsKHR);
+    if (table.vkGetPhysicalDeviceCalibrateableTimeDomainsKHR == nullptr) {
+        table.vkGetPhysicalDeviceCalibrateableTimeDomainsKHR =
+            std::bit_cast<PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR>(
+                vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceCalibrateableTimeDomainsEXT"));
+    }
     BFR_LOAD(vkGetPhysicalDeviceSurfaceSupportKHR);
     BFR_LOAD(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
     BFR_LOAD(vkGetPhysicalDeviceSurfaceFormatsKHR);

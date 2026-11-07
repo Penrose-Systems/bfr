@@ -75,7 +75,6 @@ struct Limits {
     std::uint64_t copyRowPitchAlignment = 0;
     std::uint64_t nonCoherentAtomSize = 0;
     std::uint64_t bufferTextureGranularity = 0;
-    float timestampPeriod = 0;
 };
 
 struct BindlessLimits {
@@ -223,6 +222,42 @@ struct Queues {
     QueueLevels copyLevels;
 };
 
+/// The TimestampStage values a timestamp write takes; each true where the
+/// backend says so.
+struct TimestampStages {
+    bool end = false;
+    bool start = false;
+    bool vertex = false;
+    bool fragment = false;
+    bool compute = false;
+    bool copy = false;
+};
+
+/// The HostClock values calibrateTimestamps reads beside a GPU timestamp.
+struct HostClocks {
+    bool monotonic = false;
+    bool monotonicRaw = false;
+    bool performanceCounter = false;
+};
+
+/// What the adapter's GPU timestamps are. graphics, compute and copy say
+/// which kinds of queue write them. A write outside rendering takes the
+/// stages in outsideRendering, and one between beginRendering and
+/// endRendering those in insideRendering. granularity says the backend
+/// takes a TimestampGranularity; where it is false the value is unused.
+/// entryBytes is what one timestamp takes in a buffer resolveTimestamps
+/// writes, and hostClocks the clocks calibrateTimestamps reads.
+struct Timestamps {
+    bool graphics = false;
+    bool compute = false;
+    bool copy = false;
+    TimestampStages outsideRendering;
+    TimestampStages insideRendering;
+    bool granularity = false;
+    std::uint32_t entryBytes = 0;
+    HostClocks hostClocks;
+};
+
 /// Everything about an adapter that stays the same while it runs.
 struct Caps {
     AdapterInfo info;
@@ -234,6 +269,7 @@ struct Caps {
     Features features;
     Memory memory;
     Queues queues;
+    Timestamps timestamps;
 };
 
 struct FormatCaps {

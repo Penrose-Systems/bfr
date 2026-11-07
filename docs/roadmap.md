@@ -10,11 +10,9 @@ every backend.
 Done: instance and adapters, device, swapchain and present, command pools and
 lists, clear, submit and wait, buffers (create, map, destroy), buffer copies,
 textures and texture copies, shaders and pipelines, draws and dispatches,
-samplers.
+samplers, timings (GPU timestamps, tick rates, CPU-GPU calibration, CPU time
+in each call).
 
-6. Timings: everything the backends can time, requestable by the client. GPU
-   time per pass, draw, dispatch and copy; submit-to-complete, acquire and
-   present waits; CPU time inside each BFR call.
 7. Sparse and tiled resources: partly resident textures and buffers, tile
    mapping, and every sparse cap each backend reports.
 8. Indirect draws and dispatches; exact topologies.
@@ -26,4 +24,4 @@ samplers.
     resources, formatted buffer views, variable rate shading, HDR and
     present timing, and whatever each backend's caps turn up as we go.
 
-Next: 6.
+Next: 7.

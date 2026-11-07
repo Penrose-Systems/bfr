@@ -127,6 +127,7 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
       samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
+      timestampPools_("timestamp pools", desc.maxTimestampPools, desc.maxTimestampPools, rhi.logger()),
       bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
@@ -211,6 +212,9 @@ D3D12Device::~D3D12Device() {
     if (samplers_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} samplers were left when the device went", samplers_.size());
     }
+    if (timestampPools_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} timestamp pools were left when the device went", timestampPools_.size());
+    }
     if (pipelines_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} pipelines were left when the device went", pipelines_.size());
     }
@@ -219,6 +223,7 @@ D3D12Device::~D3D12Device() {
     buffers_.clear();
     textures_.clear();
     samplers_.clear();
+    timestampPools_.clear();
     pipelines_.clear();
     layout_ = {};
     allocator_.Reset();

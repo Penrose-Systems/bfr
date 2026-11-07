@@ -30,7 +30,8 @@ namespace bfr::rhi {
           std::pair{"maxSwapchains", desc.maxSwapchains}, std::pair{"maxBindlessTextures", desc.maxBindlessTextures},
           std::pair{"maxBindlessStorageTextures", desc.maxBindlessStorageTextures},
           std::pair{"maxBindlessStorageBuffers", desc.maxBindlessStorageBuffers},
-          std::pair{"maxBindlessSamplers", desc.maxBindlessSamplers}}) {
+          std::pair{"maxBindlessSamplers", desc.maxBindlessSamplers},
+          std::pair{"maxTimestampPools", desc.maxTimestampPools}}) {
         if (value > kMost) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "{} is {}; it is at most {}", name, value, kMost);
         }

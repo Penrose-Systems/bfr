@@ -433,6 +433,10 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     if (swapchains) {
         extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     }
+    // calibrateTimestamps needs it; the caps list no host clock without it.
+    if (const char* calibration = calibrationExtension(*available); calibration != nullptr) {
+        extensions.push_back(calibration);
+    }
 
     // Every feature the adapter reports, read as its caps were, so the caps
     // say what the device has; but robust access, which changes what an
@@ -467,8 +471,14 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     }
     BFR_LOG_INFO(logger(), "device on {}, queue families {}, extensions: {}", listed.name, familyList(queues->infos),
                  core::text::join(extensions, ", "));
-    auto made = VulkanDevice::create(*this, physicalDevice, device, families, wanted, hasBudget_[adapter], swapchains,
-                                     listed.caps.limits.maxPushConstantsSize);
+    VkPhysicalDeviceProperties adapterProperties{};
+    vk_.vkGetPhysicalDeviceProperties(physicalDevice, &adapterProperties);
+    auto made = VulkanDevice::create(*this, physicalDevice, device, families, wanted,
+                                     {.hasBudget = hasBudget_[adapter],
+                                      .hasSwapchain = swapchains,
+                                      .pushConstantsSize = listed.caps.limits.maxPushConstantsSize,
+                                      .timestampPeriod = adapterProperties.limits.timestampPeriod,
+                                      .hostClocks = listed.caps.timestamps.hostClocks});
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }

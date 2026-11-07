@@ -2,7 +2,10 @@
 
 #include "bfr/rhi/caps.h"
 #include "metal/metal_pipeline.h"
+#include "metal/metal_util.h"
 
+#include <Foundation/NSError.hpp>
+#include <Metal/MTL4Counters.hpp>
 #include <Metal/MTLDevice.hpp>
 #include <Metal/MTLTypes.hpp>
 
@@ -191,6 +194,36 @@ std::string belowFloor(MTL::Device* device) {
     return reasons;
 }
 
+namespace {
+
+// Metal 4 writes timestamps into a counter heap: between encoders through the
+// command buffer, which takes no stage and marks the end of the work before
+// it, and in rendering through the render encoder, after its vertex or
+// fragment stage and at a granularity. Any queue writes them, where the
+// device makes a timestamp heap. sampleTimestamps (MTLDevice.hpp) reads a CPU
+// clock that metal-cpp doesn't name, so no host clock is listed.
+Timestamps timestampsOf(MTL::Device* device) {
+    const AutoreleasePool pool;
+    const Ref<MTL4::CounterHeapDescriptor> descriptor = adopt(MTL4::CounterHeapDescriptor::alloc()->init());
+    descriptor->setType(MTL4::CounterHeapTypeTimestamp);
+    descriptor->setCount(1);
+    NS::Error* error = nullptr;
+    const Ref<MTL4::CounterHeap> heap = adopt(device->newCounterHeap(descriptor.get(), &error));
+    if (!heap) {
+        return {};
+    }
+    return {.graphics = true,
+            .compute = true,
+            .copy = true,
+            .outsideRendering = {.end = true},
+            .insideRendering = {.vertex = true, .fragment = true},
+            .granularity = true,
+            .entryBytes = clampTo32(device->sizeOfCounterHeapEntry(MTL4::CounterHeapTypeTimestamp)),
+            .hostClocks = {}};
+}
+
+} // namespace
+
 Caps readCaps(MTL::Device* device) {
     Caps caps;
     caps.info = infoOf(device);
@@ -200,6 +233,7 @@ Caps readCaps(MTL::Device* device) {
     caps.features = featuresOf(device);
     caps.memory = memoryOf(device);
     caps.queues = queuesOf();
+    caps.timestamps = timestampsOf(device);
     return caps;
 }
 

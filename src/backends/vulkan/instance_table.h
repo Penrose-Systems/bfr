@@ -28,6 +28,9 @@ struct InstanceTable {
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR vkGetPhysicalDeviceSurfaceCapabilitiesKHR = nullptr;
     PFN_vkGetPhysicalDeviceSurfaceFormatsKHR vkGetPhysicalDeviceSurfaceFormatsKHR = nullptr;
     PFN_vkGetPhysicalDeviceSurfacePresentModesKHR vkGetPhysicalDeviceSurfacePresentModesKHR = nullptr;
+    /// VK_KHR_calibrated_timestamps', or VK_EXT_calibrated_timestamps' where
+    /// the loader has only that; null where it has neither.
+    PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR vkGetPhysicalDeviceCalibrateableTimeDomainsKHR = nullptr;
 };
 
 /// Loads instance's functions into a table. An extension's functions are null

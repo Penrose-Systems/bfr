@@ -395,6 +395,108 @@ typedef enum bfr_swapchain_status {
     BFR_SWAPCHAIN_STATUS_FORCE32 = 0x7FFFFFFF
 } bfr_swapchain_status;
 
+// Each call that call timings count. The device's are named after the C++ rhi Device's calls, which
+// the C functions of the same names pass to; instance_ ones after the Instance's.
+typedef enum bfr_call {
+    BFR_CALL_CREATE_SWAPCHAIN = 0,
+    BFR_CALL_RESIZE_SWAPCHAIN = 1,
+    BFR_CALL_DESTROY_SWAPCHAIN = 2,
+    BFR_CALL_ACQUIRE = 3,
+    BFR_CALL_PRESENT = 4,
+    BFR_CALL_CREATE_COMMAND_POOL = 5,
+    BFR_CALL_RESET_COMMAND_POOL = 6,
+    BFR_CALL_DESTROY_COMMAND_POOL = 7,
+    BFR_CALL_BEGIN_COMMANDS = 8,
+    BFR_CALL_BEGIN_RENDERING = 9,
+    BFR_CALL_END_RENDERING = 10,
+    BFR_CALL_SET_VIEWPORT = 11,
+    BFR_CALL_SET_SCISSOR = 12,
+    BFR_CALL_SET_BLEND_CONSTANTS = 13,
+    BFR_CALL_SET_STENCIL_REFERENCE = 14,
+    BFR_CALL_BIND_PIPELINE = 15,
+    BFR_CALL_PUSH_CONSTANTS = 16,
+    BFR_CALL_BIND_INDEX_BUFFER = 17,
+    BFR_CALL_DRAW = 18,
+    BFR_CALL_DRAW_INDEXED = 19,
+    BFR_CALL_DISPATCH = 20,
+    BFR_CALL_COPY_BUFFER = 21,
+    BFR_CALL_BARRIER = 22,
+    BFR_CALL_TEXTURE_BARRIER = 23,
+    BFR_CALL_COPY_BUFFER_TO_TEXTURE = 24,
+    BFR_CALL_COPY_TEXTURE_TO_BUFFER = 25,
+    BFR_CALL_COPY_TEXTURE = 26,
+    BFR_CALL_SUBMIT = 27,
+    BFR_CALL_WAIT = 28,
+    BFR_CALL_POLL = 29,
+    BFR_CALL_DESTROY_COMMAND_LIST = 30,
+    BFR_CALL_CREATE_BUFFER = 31,
+    BFR_CALL_BUFFER_SLOT = 32,
+    BFR_CALL_MAP_BUFFER = 33,
+    BFR_CALL_DESTROY_BUFFER = 34,
+    BFR_CALL_CREATE_TEXTURE = 35,
+    BFR_CALL_TEXTURE_SLOTS = 36,
+    BFR_CALL_DESTROY_TEXTURE = 37,
+    BFR_CALL_CREATE_SAMPLER = 38,
+    BFR_CALL_SAMPLER_SLOT = 39,
+    BFR_CALL_DESTROY_SAMPLER = 40,
+    BFR_CALL_CREATE_COMPUTE_PIPELINE = 41,
+    BFR_CALL_CREATE_GRAPHICS_PIPELINE = 42,
+    BFR_CALL_DESTROY_PIPELINE = 43,
+    BFR_CALL_BUDGET = 44,
+    BFR_CALL_CREATE_TIMESTAMP_POOL = 45,
+    BFR_CALL_DESTROY_TIMESTAMP_POOL = 46,
+    BFR_CALL_RESET_TIMESTAMPS = 47,
+    BFR_CALL_WRITE_TIMESTAMP = 48,
+    BFR_CALL_RESOLVE_TIMESTAMPS = 49,
+    BFR_CALL_TIMESTAMP_RATE = 50,
+    BFR_CALL_CALIBRATE_TIMESTAMPS = 51,
+    BFR_CALL_INSTANCE_ADAPTERS = 52,
+    BFR_CALL_INSTANCE_CREATE_DEVICE = 53,
+    BFR_CALL_INSTANCE_FORMAT_CAPS = 54,
+    BFR_CALL_INSTANCE_SWAPCHAIN_CAPS = 55,
+    BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS = 56,
+    BFR_CALL_FORCE32 = 0x7FFFFFFF
+} bfr_call;
+
+// The point in a list's work a timestamp is written at. Which ones a backend takes, inside and
+// outside rendering, is in bfr_caps_timestamps.
+typedef enum bfr_timestamp_stage {
+    // Once all the work recorded before it is done.
+    BFR_TIMESTAMP_STAGE_END = 0,
+    // Once the work recorded before it has started.
+    BFR_TIMESTAMP_STAGE_START = 1,
+    // Once the vertex shading recorded before it is done.
+    BFR_TIMESTAMP_STAGE_VERTEX = 2,
+    // Once the fragment shading recorded before it is done.
+    BFR_TIMESTAMP_STAGE_FRAGMENT = 3,
+    // Once the compute shading recorded before it is done.
+    BFR_TIMESTAMP_STAGE_COMPUTE = 4,
+    // Once the copies recorded before it are done.
+    BFR_TIMESTAMP_STAGE_COPY = 5,
+    BFR_TIMESTAMP_STAGE_FORCE32 = 0x7FFFFFFF
+} bfr_timestamp_stage;
+
+// How exactly a timestamp marks its stage, where bfr_caps_timestamps.granularity says the backend
+// takes it.
+typedef enum bfr_timestamp_granularity {
+    // The backend may write it later than the stage ends, costing less.
+    BFR_TIMESTAMP_GRANULARITY_RELAXED = 0,
+    // As close to the stage's end as the backend can.
+    BFR_TIMESTAMP_GRANULARITY_PRECISE = 1,
+    BFR_TIMESTAMP_GRANULARITY_FORCE32 = 0x7FFFFFFF
+} bfr_timestamp_granularity;
+
+// A host clock a GPU timestamp can be read beside.
+typedef enum bfr_host_clock {
+    // CLOCK_MONOTONIC, which std::chrono::steady_clock reads on Linux.
+    BFR_HOST_CLOCK_MONOTONIC = 0,
+    // CLOCK_MONOTONIC_RAW.
+    BFR_HOST_CLOCK_MONOTONIC_RAW = 1,
+    // QueryPerformanceCounter, which std::chrono::steady_clock reads on Windows.
+    BFR_HOST_CLOCK_PERFORMANCE_COUNTER = 2,
+    BFR_HOST_CLOCK_FORCE32 = 0x7FFFFFFF
+} bfr_host_clock;
+
 // A queue's priority against every queue on the system, other processes' included. Which levels
 // each kind of queue takes is in bfr_caps_queues; one above normal may need privileges the process
 // lacks, and then fails as the backend says.
@@ -737,6 +839,12 @@ typedef struct bfr_sampler {
     uint64_t bits;
 } bfr_sampler;
 
+// GPU timestamps that command lists write and resolve into a buffer. A generational handle; 0 is
+// never valid.
+typedef struct bfr_timestamp_pool {
+    uint64_t bits;
+} bfr_timestamp_pool;
+
 // Receives BFR's messages and validation's. Without one, BFR prints nothing. Called on any thread,
 // including threads BFR or the driver owns, until the instance and every device made from it are
 // destroyed.
@@ -769,6 +877,10 @@ typedef struct bfr_instance_desc {
     bfr_string engine_name;
     // The engine's version, as application_version.
     uint32_t engine_version;
+    // Time the CPU spends in each call of the instance and its devices, which bfr_get_call_timings
+    // and bfr_get_instance_call_timings give. Off, it costs nothing; on, each call reads the clock
+    // twice.
+    bfr_bool call_timings;
 } bfr_instance_desc;
 
 // An adapter, as an instance lists it. Nothing is opened.
@@ -849,6 +961,9 @@ typedef struct bfr_device_desc {
     // Slots in the sampler table, passed as max_bindless_textures is;
     // bfr_caps_bindless.max_samplers says how many the adapter holds.
     uint32_t max_bindless_samplers;
+    // Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool
+    // fails with error_limit_reached.
+    uint32_t max_timestamp_pools;
 } bfr_device_desc;
 
 // How to create a swapchain.
@@ -1038,6 +1153,40 @@ typedef struct bfr_texture_desc {
     uint32_t samples;
     bfr_texture_usage usage;
 } bfr_texture_desc;
+
+// How to create a timestamp pool.
+typedef struct bfr_timestamp_pool_desc {
+    // The device's queue whose lists write it, numbered as bfr_device_desc says.
+    uint32_t queue;
+    // How many timestamps it holds.
+    uint32_t count;
+} bfr_timestamp_pool_desc;
+
+// How long a timestamp tick lasts, in the unit the backend gives: a period in nanoseconds or a
+// frequency in ticks per second. The other is 0.
+typedef struct bfr_timestamp_rate {
+    float period_ns;
+    uint64_t frequency;
+} bfr_timestamp_rate;
+
+// A GPU timestamp and a host clock's reading taken together, so GPU ticks can be placed on the
+// host's timeline.
+typedef struct bfr_calibrated_timestamps {
+    uint64_t gpu;
+    uint64_t host;
+    // How far apart the two readings may be, where deviation_given.
+    uint64_t max_deviation_ns;
+    // The backend gave max_deviation_ns.
+    bfr_bool deviation_given;
+} bfr_calibrated_timestamps;
+
+// The CPU time one kind of call has taken, read from std::chrono::steady_clock around each call:
+// how many there were, their nanoseconds in all, and the longest one's.
+typedef struct bfr_call_timing {
+    uint64_t count;
+    uint64_t total_ns;
+    uint64_t max_ns;
+} bfr_call_timing;
 
 // Where a texture is in the bindless tables bfr_pipeline states, from creation to destruction: the
 // index shaders use. A table the texture's usage does not set has no slot for it, and reads
@@ -1380,8 +1529,6 @@ typedef struct bfr_caps_limits {
     uint64_t non_coherent_atom_size;
     // Bytes apart a buffer and a texture in one allocation must be.
     uint64_t buffer_texture_granularity;
-    // Nanoseconds per timestamp tick.
-    float timestamp_period;
 } bfr_caps_limits;
 
 // How many of each resource the bindless tables can hold.
@@ -1591,6 +1738,43 @@ typedef struct bfr_caps_queues {
     bfr_queue_levels copy_levels;
 } bfr_caps_queues;
 
+// The bfr_timestamp_stage values a timestamp write takes; each true where the backend says so.
+typedef struct bfr_timestamp_stages {
+    bfr_bool end;
+    bfr_bool start;
+    bfr_bool vertex;
+    bfr_bool fragment;
+    bfr_bool compute;
+    bfr_bool copy;
+} bfr_timestamp_stages;
+
+// The bfr_host_clock values bfr_calibrate_timestamps reads beside a GPU timestamp.
+typedef struct bfr_host_clocks {
+    bfr_bool monotonic;
+    bfr_bool monotonic_raw;
+    bfr_bool performance_counter;
+} bfr_host_clocks;
+
+// What the adapter's GPU timestamps are.
+typedef struct bfr_caps_timestamps {
+    // Graphics queues write timestamps.
+    bfr_bool graphics;
+    // Compute queues write timestamps.
+    bfr_bool compute;
+    // Copy queues write timestamps.
+    bfr_bool copy;
+    // The stages a write outside rendering takes.
+    bfr_timestamp_stages outside_rendering;
+    // The stages a write between bfr_begin_rendering and bfr_end_rendering takes.
+    bfr_timestamp_stages inside_rendering;
+    // The backend takes a bfr_timestamp_granularity; where false the value is unused.
+    bfr_bool granularity;
+    // What one timestamp takes in a buffer bfr_resolve_timestamps writes.
+    uint32_t entry_bytes;
+    // The clocks bfr_calibrate_timestamps reads.
+    bfr_host_clocks host_clocks;
+} bfr_caps_timestamps;
+
 // Everything about an adapter that stays the same while it runs.
 typedef struct bfr_caps {
     bfr_caps_info info;
@@ -1602,6 +1786,7 @@ typedef struct bfr_caps {
     bfr_caps_features features;
     bfr_caps_memory memory;
     bfr_caps_queues queues;
+    bfr_caps_timestamps timestamps;
 } bfr_caps;
 
 // What an adapter does with one format.
@@ -2109,6 +2294,89 @@ BFR_API bfr_result bfr_create_graphics_pipeline(
 // frame path: it records the point the pipeline waits for and frees what the GPU is done with. A
 // handle that is already destroyed does nothing.
 BFR_API void bfr_destroy_pipeline(bfr_device* device, bfr_pipeline pipeline);
+
+// Creates a pool of desc's count GPU timestamps, written by lists on desc's queue. Not for the
+// frame path. Fails with error_invalid_argument when the device has no such queue,
+// error_limit_reached at the device's max_timestamp_pools, and error_device_failed when the backend
+// refuses.
+BFR_API bfr_result bfr_create_timestamp_pool(
+    bfr_device* device,
+    const bfr_timestamp_pool_desc* desc,
+    bfr_timestamp_pool* pool);
+
+// Destroys a timestamp pool once the GPU has finished with it; the handle is invalid at once. Not
+// for the frame path. A handle that is already destroyed does nothing.
+BFR_API void bfr_destroy_timestamp_pool(bfr_device* device, bfr_timestamp_pool pool);
+
+// Records a reset of count timestamps from first, which a backend that needs one before a timestamp
+// is written again is given; the others record nothing. Outside rendering.
+BFR_API bfr_result bfr_reset_timestamps(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_timestamp_pool pool,
+    uint32_t first,
+    uint32_t count);
+
+// Records the GPU's timestamp at stage into the pool's timestamp index, with granularity where the
+// backend takes one. Fails with error_invalid_argument for a stage or granularity BFR does not
+// have, and error_unsupported for a stage the backend has no setting for where the list is, as
+// bfr_caps_timestamps says.
+BFR_API bfr_result bfr_write_timestamp(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_timestamp_pool pool,
+    uint32_t index,
+    bfr_timestamp_stage stage,
+    bfr_timestamp_granularity granularity);
+
+// Records a copy of count timestamps from first into buffer at offset, as raw ticks of
+// bfr_caps_timestamps.entry_bytes each, once the GPU has written them. The buffer needs copy_dst
+// usage. Outside rendering; fails with error_invalid_argument inside it on a backend with nothing
+// to record it in there.
+// offset: Bytes into the buffer.
+BFR_API bfr_result bfr_resolve_timestamps(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_timestamp_pool pool,
+    uint32_t first,
+    uint32_t count,
+    bfr_buffer buffer,
+    uint64_t offset);
+
+// Writes how long a timestamp tick lasts on queue, as the backend gives it. Fails with
+// error_invalid_argument when the device has no such queue.
+BFR_API bfr_result bfr_get_timestamp_rate(
+    bfr_device* device,
+    uint32_t queue,
+    bfr_timestamp_rate* rate);
+
+// Writes a GPU timestamp on queue and clock's reading, taken together. Fails with
+// error_invalid_argument when the device has no such queue or clock is not one BFR has, and
+// error_unsupported for a clock bfr_caps_timestamps.host_clocks does not list.
+BFR_API bfr_result bfr_calibrate_timestamps(
+    bfr_device* device,
+    uint32_t queue,
+    bfr_host_clock clock,
+    bfr_calibrated_timestamps* timestamps);
+
+// Lists the CPU time spent in each of the device's calls since it was made, indexed by bfr_call.
+// With timings null, writes how many there are to count. Otherwise writes up to count of them, sets
+// count to how many it wrote, and returns incomplete if there were more. Fails with
+// error_invalid_argument when the instance's desc did not set call_timings.
+// timings: An array of count elements. May be null.
+BFR_API bfr_result bfr_get_call_timings(
+    bfr_device* device,
+    uint32_t* count,
+    bfr_call_timing* timings);
+
+// Lists the CPU time spent in each of the instance's own calls since it was made, indexed by
+// bfr_call, as bfr_get_call_timings lists a device's; its devices count theirs. Fails as
+// bfr_get_call_timings does.
+// timings: An array of count elements. May be null.
+BFR_API bfr_result bfr_get_instance_call_timings(
+    bfr_instance* instance,
+    uint32_t* count,
+    bfr_call_timing* timings);
 
 #ifdef __cplusplus
 }

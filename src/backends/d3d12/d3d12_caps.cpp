@@ -23,7 +23,6 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
-constexpr double kNanosecondsPerSecond = 1e9;
 // A feature level holds its major from bit 12 and its minor in the 4 bits from
 // bit 8: 0xc100 is 12_1.
 constexpr std::uint32_t kMajorShift = 12;
@@ -59,22 +58,6 @@ std::uint32_t featureLevelOf(ID3D12Device* device) {
     return static_cast<std::uint32_t>(data.MaxSupportedFeatureLevel);
 }
 
-// Nanoseconds a timestamp tick lasts, 0 when the device won't say. The
-// frequency belongs to a queue, so one is made for the asking.
-float timestampPeriodOf(ID3D12Device* device) {
-    const D3D12_COMMAND_QUEUE_DESC desc{.Type = D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                        .Priority = 0,
-                                        .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE,
-                                        .NodeMask = 0};
-    ComPtr<ID3D12CommandQueue> queue;
-    UINT64 frequency = 0;
-    if (FAILED(device->CreateCommandQueue(&desc, IID_PPV_ARGS(&queue))) ||
-        FAILED(queue->GetTimestampFrequency(&frequency)) || frequency == 0) {
-        return 0;
-    }
-    return static_cast<float>(kNanosecondsPerSecond / static_cast<double>(frequency));
-}
-
 AdapterInfo infoOf(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
     AdapterInfo info;
     info.vendorId = desc.VendorId;
@@ -90,7 +73,7 @@ AdapterInfo infoOf(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
 }
 
 // The limits d3d12.h defines are each the macro whose name says what it limits.
-Limits limitsOf(ID3D12Device* device, const D3D12_FEATURE_DATA_D3D12_OPTIONS6& options6) {
+Limits limitsOf(const D3D12_FEATURE_DATA_D3D12_OPTIONS6& options6) {
     Limits limits;
     limits.maxTexture1d = D3D12_REQ_TEXTURE1D_U_DIMENSION;
     limits.maxTexture2d = D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION;
@@ -113,7 +96,6 @@ Limits limitsOf(ID3D12Device* device, const D3D12_FEATURE_DATA_D3D12_OPTIONS6& o
         limits.minShadingRateTile = {tile, tile};
         limits.maxShadingRateTile = {tile, tile};
     }
-    limits.timestampPeriod = timestampPeriodOf(device);
     return limits;
 }
 
@@ -400,12 +382,36 @@ std::string nameOf(const DXGI_ADAPTER_DESC1& desc) {
     return name;
 }
 
+namespace {
+
+// D3D12 writes a timestamp with EndQuery, which takes no stage or
+// granularity and marks the end of the work before it, in rendering and out.
+// Direct and compute queues write them; a copy queue where OPTIONS3 says so,
+// into a COPY_QUEUE_TIMESTAMP heap (d3d12.h, D3D12_QUERY_HEAP_TYPE). Each
+// resolves as a UINT64. GetClockCalibration reads QueryPerformanceCounter.
+Timestamps timestampsOf(ID3D12Device* device) {
+    D3D12_FEATURE_DATA_D3D12_OPTIONS3 options3{};
+    const bool copy = query(device, D3D12_FEATURE_D3D12_OPTIONS3, options3) &&
+                      options3.CopyQueueTimestampQueriesSupported != FALSE;
+    constexpr TimestampStages kEnd{.end = true};
+    return {.graphics = true,
+            .compute = true,
+            .copy = copy,
+            .outsideRendering = kEnd,
+            .insideRendering = kEnd,
+            .granularity = false,
+            .entryBytes = sizeof(UINT64),
+            .hostClocks = {.performanceCounter = true}};
+}
+
+} // namespace
+
 Caps readCaps(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
     Caps caps;
     D3D12_FEATURE_DATA_D3D12_OPTIONS6 options6{};
     static_cast<void>(query(device, D3D12_FEATURE_D3D12_OPTIONS6, options6));
     caps.info = infoOf(desc, device);
-    caps.limits = limitsOf(device, options6);
+    caps.limits = limitsOf(options6);
     const SamplerFeatures sampler = samplerFeaturesOf(device);
     caps.bindless = bindlessOf(sampler);
     // D3D12 states no limit on samplers with a custom border colour, so any
@@ -418,6 +424,7 @@ Caps readCaps(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
     caps.features = featuresOf(device, sampler);
     caps.memory = memoryOf(desc, device);
     caps.queues = queuesOf(device);
+    caps.timestamps = timestampsOf(device);
     return caps;
 }
 

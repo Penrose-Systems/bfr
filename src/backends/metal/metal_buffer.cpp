@@ -99,6 +99,7 @@ void MetalDevice::collectBuffers() {
     buffers_.collect(completed, [this](const MetalBuffer& buffer) { bindless_.giveBuffer(buffer.slot); });
     textures_.collect(completed, [this](const MetalTexture& texture) { bindless_.giveTexture(texture.slots); });
     samplers_.collect(completed, [this](const MetalSampler& sampler) { bindless_.giveSampler(sampler.slot); });
+    timestampPools_.collect(completed);
     pipelines_.collect(completed);
     residency_->commit();
 }

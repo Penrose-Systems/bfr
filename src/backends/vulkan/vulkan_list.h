@@ -46,6 +46,18 @@ std::expected<void, VulkanFailure> listInto(std::vector<Item>& items, std::strin
     });
 }
 
+/// The calibrated timestamps extension extensions lists: the KHR one, or the
+/// EXT one it was promoted from where only that is listed; null for neither.
+[[nodiscard]] inline const char* calibrationExtension(std::span<const VkExtensionProperties> extensions) {
+    if (lists(extensions, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME)) {
+        return VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME;
+    }
+    if (lists(extensions, VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME)) {
+        return VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME;
+    }
+    return nullptr;
+}
+
 /// What listInto fills, in a new list.
 template <class Item, class Listing>
 std::expected<std::vector<Item>, VulkanFailure> listAll(std::string_view function, Listing listing) {

@@ -2,6 +2,7 @@
 
 #include "bfr/core/error.h"
 #include "bfr/rhi/rhi_config.h"
+#include "rhi/timed_device.h"
 #if BFR_HAS_D3D12
     #include "d3d12/d3d12_instance.h"
 #endif
@@ -18,6 +19,7 @@
 #include <format>
 #include <memory>
 #include <span>
+#include <utility>
 
 namespace bfr::rhi {
 
@@ -45,7 +47,9 @@ std::span<const Backend> backends() noexcept {
     return kBackends;
 }
 
-core::Result<std::unique_ptr<Instance>> Instance::create(const InstanceDesc& desc, const RhiConfig& config) {
+namespace {
+
+core::Result<std::unique_ptr<Instance>> createOn(const InstanceDesc& desc, const RhiConfig& config) {
     switch (desc.backend) {
 #if BFR_HAS_VULKAN
         case Backend::Vulkan:
@@ -70,6 +74,16 @@ core::Result<std::unique_ptr<Instance>> Instance::create(const InstanceDesc& des
     }
     return core::failure(core::ErrorCode::RhiBackendUnavailable, "backend {} is not one BFR has",
                          static_cast<std::uint32_t>(desc.backend));
+}
+
+} // namespace
+
+core::Result<std::unique_ptr<Instance>> Instance::create(const InstanceDesc& desc, const RhiConfig& config) {
+    auto made = createOn(desc, config);
+    if (!made || !desc.callTimings) {
+        return made;
+    }
+    return std::make_unique<TimedInstance>(std::move(*made), config);
 }
 
 } // namespace bfr::rhi

@@ -16,6 +16,7 @@
 #include "d3d12/d3d12_sampler.h"
 #include "d3d12/d3d12_swapchain.h"
 #include "d3d12/d3d12_texture.h"
+#include "d3d12/d3d12_timestamp.h"
 #include "rhi/bindless_slots.h"
 #include "rhi/command_check.h"
 
@@ -196,6 +197,19 @@ public:
     [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyPipeline(PipelineHandle pipeline) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
+    [[nodiscard]] core::Result<TimestampPoolHandle> createTimestampPool(const TimestampPoolDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroyTimestampPool(TimestampPoolHandle pool) override;
+    [[nodiscard]] core::Result<void> resetTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
+                                                     std::uint32_t first, std::uint32_t count) override;
+    [[nodiscard]] core::Result<void> writeTimestamp(CommandListHandle commandList, TimestampPoolHandle pool,
+                                                    std::uint32_t index, TimestampStage stage,
+                                                    TimestampGranularity granularity) override;
+    [[nodiscard]] core::Result<void> resolveTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
+                                                       std::uint32_t first, std::uint32_t count, BufferHandle buffer,
+                                                       std::uint64_t offset) override;
+    [[nodiscard]] core::Result<TimestampRate> timestampRate(std::uint32_t queue) const override;
+    [[nodiscard]] core::Result<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue,
+                                                                         HostClock clock) const override;
 
 private:
     [[nodiscard]] core::Result<void> open(const DeviceDesc& desc);
@@ -257,6 +271,7 @@ private:
     core::Pool<D3D12Texture, Texture> textures_;
     // Every sampler holds a slot, so the pool is made at the table's size.
     core::Pool<D3D12Sampler, Sampler> samplers_;
+    core::Pool<D3D12TimestampPool, TimestampPool> timestampPools_;
     BindlessSlots bindless_;
     // Declared before pipelines_, which are made on it, so it outlives them.
     D3D12BindlessLayout layout_;

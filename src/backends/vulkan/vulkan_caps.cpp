@@ -201,7 +201,6 @@ Limits limitsFrom(const PropertyQuery& properties, const DeviceFeatures& feature
         .copyRowPitchAlignment = core.optimalBufferCopyRowPitchAlignment,
         .nonCoherentAtomSize = core.nonCoherentAtomSize,
         .bufferTextureGranularity = core.bufferImageGranularity,
-        .timestampPeriod = core.timestampPeriod,
     };
 }
 
@@ -688,6 +687,52 @@ RayTracingLimits rayTracingFrom(const PropertyQuery& properties, const Features&
     return limits;
 }
 
+// The host clocks vkGetCalibratedTimestampsKHR reads beside the device's,
+// none without the extension.
+HostClocks hostClocksFrom(const InstanceTable& vk, VkPhysicalDevice adapter,
+                          std::span<const VkExtensionProperties> extensions) {
+    HostClocks clocks;
+    if (calibrationExtension(extensions) == nullptr || vk.vkGetPhysicalDeviceCalibrateableTimeDomainsKHR == nullptr) {
+        return clocks;
+    }
+    const auto domains = listAll<VkTimeDomainKHR>("vkGetPhysicalDeviceCalibrateableTimeDomainsKHR",
+                                                  [&vk, adapter](std::uint32_t* count, VkTimeDomainKHR* items) {
+                                                      return vk.vkGetPhysicalDeviceCalibrateableTimeDomainsKHR(adapter,
+                                                                                                               count,
+                                                                                                               items);
+                                                  });
+    if (!domains) {
+        return clocks;
+    }
+    const auto has = [&domains](VkTimeDomainKHR domain) {
+        return std::ranges::contains(*domains, domain);
+    };
+    // A host clock is only read beside the device's.
+    if (has(VK_TIME_DOMAIN_DEVICE_KHR)) {
+        clocks = {.monotonic = has(VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR),
+                  .monotonicRaw = has(VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR),
+                  .performanceCounter = has(VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_KHR)};
+    }
+    return clocks;
+}
+
+// Vulkan writes a timestamp at every stage, in rendering and out of it, on a
+// queue whose family has valid timestamp bits; it takes no granularity. A
+// VK_QUERY_RESULT_64_BIT copy writes each as a uint64_t.
+Timestamps timestampsFrom(const InstanceTable& vk, VkPhysicalDevice adapter,
+                          std::span<const VkExtensionProperties> extensions, const Queues& queues) {
+    constexpr TimestampStages kEvery{
+        .end = true, .start = true, .vertex = true, .fragment = true, .compute = true, .copy = true};
+    return {.graphics = queues.graphicsTimestampBits != 0,
+            .compute = queues.computeTimestampBits != 0,
+            .copy = queues.copyTimestampBits != 0,
+            .outsideRendering = kEvery,
+            .insideRendering = kEvery,
+            .granularity = false,
+            .entryBytes = sizeof(std::uint64_t),
+            .hostClocks = hostClocksFrom(vk, adapter, extensions)};
+}
+
 Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const VkExtensionProperties> extensions) {
     const DeviceFeatures features(vk, adapter, extensions);
     const PropertyQuery properties(vk, adapter, extensions);
@@ -702,7 +747,9 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const
         .features = reported,
         .memory = memoryFrom(vk, adapter, properties.core.properties.deviceType),
         .queues = queuesFrom(vk, adapter, extensions, properties.core.properties.limits),
+        .timestamps = {},
     };
+    caps.timestamps = timestampsFrom(vk, adapter, extensions, caps.queues);
     if (reported.shadingRateTexture) {
         const VkExtent2D& smallest = properties.shadingRate.minFragmentShadingRateAttachmentTexelSize;
         const VkExtent2D& largest = properties.shadingRate.maxFragmentShadingRateAttachmentTexelSize;

@@ -298,6 +298,95 @@ enums:
       matches: {value: 0, doc: It said nothing more than that the call succeeded.}
       suboptimal: {value: 1, doc: "It no longer matches its window exactly but still presents; Vulkan's VK_SUBOPTIMAL_KHR. bfr_resize_swapchain makes it match, when the caller chooses."}
 
+  call:
+    doc: >-
+      Each call that call timings count. The device's are named after the
+      C++ rhi Device's calls, which the C functions of the same names pass to;
+      instance_ ones after the Instance's.
+    values:
+      create_swapchain: {value: 0}
+      resize_swapchain: {value: 1}
+      destroy_swapchain: {value: 2}
+      acquire: {value: 3}
+      present: {value: 4}
+      create_command_pool: {value: 5}
+      reset_command_pool: {value: 6}
+      destroy_command_pool: {value: 7}
+      begin_commands: {value: 8}
+      begin_rendering: {value: 9}
+      end_rendering: {value: 10}
+      set_viewport: {value: 11}
+      set_scissor: {value: 12}
+      set_blend_constants: {value: 13}
+      set_stencil_reference: {value: 14}
+      bind_pipeline: {value: 15}
+      push_constants: {value: 16}
+      bind_index_buffer: {value: 17}
+      draw: {value: 18}
+      draw_indexed: {value: 19}
+      dispatch: {value: 20}
+      copy_buffer: {value: 21}
+      barrier: {value: 22}
+      texture_barrier: {value: 23}
+      copy_buffer_to_texture: {value: 24}
+      copy_texture_to_buffer: {value: 25}
+      copy_texture: {value: 26}
+      submit: {value: 27}
+      wait: {value: 28}
+      poll: {value: 29}
+      destroy_command_list: {value: 30}
+      create_buffer: {value: 31}
+      buffer_slot: {value: 32}
+      map_buffer: {value: 33}
+      destroy_buffer: {value: 34}
+      create_texture: {value: 35}
+      texture_slots: {value: 36}
+      destroy_texture: {value: 37}
+      create_sampler: {value: 38}
+      sampler_slot: {value: 39}
+      destroy_sampler: {value: 40}
+      create_compute_pipeline: {value: 41}
+      create_graphics_pipeline: {value: 42}
+      destroy_pipeline: {value: 43}
+      budget: {value: 44}
+      create_timestamp_pool: {value: 45}
+      destroy_timestamp_pool: {value: 46}
+      reset_timestamps: {value: 47}
+      write_timestamp: {value: 48}
+      resolve_timestamps: {value: 49}
+      timestamp_rate: {value: 50}
+      calibrate_timestamps: {value: 51}
+      instance_adapters: {value: 52}
+      instance_create_device: {value: 53}
+      instance_format_caps: {value: 54}
+      instance_swapchain_caps: {value: 55}
+      instance_swapchain_formats: {value: 56}
+
+  timestamp_stage:
+    doc: >-
+      The point in a list's work a timestamp is written at. Which ones a
+      backend takes, inside and outside rendering, is in bfr_caps_timestamps.
+    values:
+      end: {value: 0, doc: Once all the work recorded before it is done.}
+      start: {value: 1, doc: Once the work recorded before it has started.}
+      vertex: {value: 2, doc: Once the vertex shading recorded before it is done.}
+      fragment: {value: 3, doc: Once the fragment shading recorded before it is done.}
+      compute: {value: 4, doc: Once the compute shading recorded before it is done.}
+      copy: {value: 5, doc: Once the copies recorded before it are done.}
+
+  timestamp_granularity:
+    doc: How exactly a timestamp marks its stage, where bfr_caps_timestamps.granularity says the backend takes it.
+    values:
+      relaxed: {value: 0, doc: "The backend may write it later than the stage ends, costing less."}
+      precise: {value: 1, doc: As close to the stage's end as the backend can.}
+
+  host_clock:
+    doc: A host clock a GPU timestamp can be read beside.
+    values:
+      monotonic: {value: 0, doc: "CLOCK_MONOTONIC, which std::chrono::steady_clock reads on Linux."}
+      monotonic_raw: {value: 1, doc: CLOCK_MONOTONIC_RAW.}
+      performance_counter: {value: 2, doc: "QueryPerformanceCounter, which std::chrono::steady_clock reads on Windows."}
+
   queue_level:
     doc: >-
       A queue's priority against every queue on the system, other processes'
@@ -564,6 +653,11 @@ handles:
     destroy: destroy_sampler
     doc: How shaders read a texture through the sampler table, as its bfr_sampler_desc says.
 
+  timestamp_pool:
+    parent: device
+    destroy: destroy_timestamp_pool
+    doc: GPU timestamps that command lists write and resolve into a buffer.
+
 callbacks:
   message_callback:
     doc: >-
@@ -599,6 +693,12 @@ structs:
       - {name: application_version, type: u32, doc: "The application's version, passed as given where the backend takes one."}
       - {name: engine_name, type: string, doc: "The engine's name, as application_name."}
       - {name: engine_version, type: u32, doc: "The engine's version, as application_version."}
+      - name: call_timings
+        type: bool
+        doc: >-
+          Time the CPU spends in each call of the instance and its devices, which
+          bfr_get_call_timings and bfr_get_instance_call_timings give. Off, it costs
+          nothing; on, each call reads the clock twice.
 
   adapter_info:
     doc: An adapter, as an instance lists it. Nothing is opened.
@@ -703,6 +803,9 @@ structs:
       - name: max_bindless_samplers
         type: u32
         doc: Slots in the sampler table, passed as max_bindless_textures is; bfr_caps_bindless.max_samplers says how many the adapter holds.
+      - name: max_timestamp_pools
+        type: u32
+        doc: Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool fails with error_limit_reached.
 
   swapchain_desc:
     doc: How to create a swapchain.
@@ -879,6 +982,40 @@ structs:
       - {name: mip_levels, type: u32}
       - {name: samples, type: u32, doc: Samples per texel; 1 unless rendering multisamples it.}
       - {name: usage, type: texture_usage}
+
+  timestamp_pool_desc:
+    doc: How to create a timestamp pool.
+    members:
+      - {name: queue, type: u32, doc: "The device's queue whose lists write it, numbered as bfr_device_desc says."}
+      - {name: count, type: u32, doc: How many timestamps it holds.}
+
+  timestamp_rate:
+    doc: >-
+      How long a timestamp tick lasts, in the unit the backend gives: a period
+      in nanoseconds or a frequency in ticks per second. The other is 0.
+    members:
+      - {name: period_ns, type: f32}
+      - {name: frequency, type: u64}
+
+  calibrated_timestamps:
+    doc: >-
+      A GPU timestamp and a host clock's reading taken together, so GPU ticks
+      can be placed on the host's timeline.
+    members:
+      - {name: gpu, type: u64}
+      - {name: host, type: u64}
+      - {name: max_deviation_ns, type: u64, doc: "How far apart the two readings may be, where deviation_given."}
+      - {name: deviation_given, type: bool, doc: The backend gave max_deviation_ns.}
+
+  call_timing:
+    doc: >-
+      The CPU time one kind of call has taken, read from std::chrono::steady_clock
+      around each call: how many there were, their nanoseconds in all, and the
+      longest one's.
+    members:
+      - {name: count, type: u64}
+      - {name: total_ns, type: u64}
+      - {name: max_ns, type: u64}
 
   texture_slots:
     doc: >-
@@ -1156,7 +1293,6 @@ structs:
       - {name: copy_row_pitch_alignment, type: u64, doc: Best alignment in bytes of a row in a texture copy.}
       - {name: non_coherent_atom_size, type: u64, doc: Granularity in bytes of flushing memory the CPU writes without coherence.}
       - {name: buffer_texture_granularity, type: u64, doc: Bytes apart a buffer and a texture in one allocation must be.}
-      - {name: timestamp_period, type: f32, doc: Nanoseconds per timestamp tick.}
 
   caps_bindless:
     doc: How many of each resource the bindless tables can hold.
@@ -1319,6 +1455,35 @@ structs:
       - {name: compute_levels, type: queue_levels}
       - {name: copy_levels, type: queue_levels}
 
+  timestamp_stages:
+    doc: The bfr_timestamp_stage values a timestamp write takes; each true where the backend says so.
+    members:
+      - {name: end, type: bool}
+      - {name: start, type: bool}
+      - {name: vertex, type: bool}
+      - {name: fragment, type: bool}
+      - {name: compute, type: bool}
+      - {name: copy, type: bool}
+
+  host_clocks:
+    doc: The bfr_host_clock values bfr_calibrate_timestamps reads beside a GPU timestamp.
+    members:
+      - {name: monotonic, type: bool}
+      - {name: monotonic_raw, type: bool}
+      - {name: performance_counter, type: bool}
+
+  caps_timestamps:
+    doc: What the adapter's GPU timestamps are.
+    members:
+      - {name: graphics, type: bool, doc: Graphics queues write timestamps.}
+      - {name: compute, type: bool, doc: Compute queues write timestamps.}
+      - {name: copy, type: bool, doc: Copy queues write timestamps.}
+      - {name: outside_rendering, type: timestamp_stages, doc: The stages a write outside rendering takes.}
+      - {name: inside_rendering, type: timestamp_stages, doc: The stages a write between bfr_begin_rendering and bfr_end_rendering takes.}
+      - {name: granularity, type: bool, doc: The backend takes a bfr_timestamp_granularity; where false the value is unused.}
+      - {name: entry_bytes, type: u32, doc: What one timestamp takes in a buffer bfr_resolve_timestamps writes.}
+      - {name: host_clocks, type: host_clocks, doc: The clocks bfr_calibrate_timestamps reads.}
+
   caps:
     doc: Everything about an adapter that stays the same while it runs.
     members:
@@ -1331,6 +1496,7 @@ structs:
       - {name: features, type: caps_features}
       - {name: memory, type: caps_memory}
       - {name: queues, type: caps_queues}
+      - {name: timestamps, type: caps_timestamps}
 
   format_caps:
     doc: What an adapter does with one format.
@@ -2041,3 +2207,118 @@ functions:
     params:
       - {name: device, type: device}
       - {name: pipeline, type: pipeline}
+
+  create_timestamp_pool:
+    doc: >-
+      Creates a pool of desc's count GPU timestamps, written by lists on
+      desc's queue. Not for the frame path. Fails with error_invalid_argument
+      when the device has no such queue, error_limit_reached at the device's
+      max_timestamp_pools, and error_device_failed when the backend refuses.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: timestamp_pool_desc, pointer: in}
+      - {name: pool, type: timestamp_pool, pointer: out}
+
+  destroy_timestamp_pool:
+    doc: >-
+      Destroys a timestamp pool once the GPU has finished with it; the handle
+      is invalid at once. Not for the frame path. A handle that is already
+      destroyed does nothing.
+    params:
+      - {name: device, type: device}
+      - {name: pool, type: timestamp_pool}
+
+  reset_timestamps:
+    doc: >-
+      Records a reset of count timestamps from first, which a backend that
+      needs one before a timestamp is written again is given; the others
+      record nothing. Outside rendering.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: pool, type: timestamp_pool}
+      - {name: first, type: u32}
+      - {name: count, type: u32}
+
+  write_timestamp:
+    doc: >-
+      Records the GPU's timestamp at stage into the pool's timestamp index,
+      with granularity where the backend takes one. Fails with
+      error_invalid_argument for a stage or granularity BFR does not have,
+      and error_unsupported for a stage the backend has no setting for where
+      the list is, as bfr_caps_timestamps says.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: pool, type: timestamp_pool}
+      - {name: index, type: u32}
+      - {name: stage, type: timestamp_stage}
+      - {name: granularity, type: timestamp_granularity}
+
+  resolve_timestamps:
+    doc: >-
+      Records a copy of count timestamps from first into buffer at offset, as
+      raw ticks of bfr_caps_timestamps.entry_bytes each, once the GPU has
+      written them. The buffer needs copy_dst usage. Outside rendering; fails
+      with error_invalid_argument inside it on a backend with nothing to
+      record it in there.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: pool, type: timestamp_pool}
+      - {name: first, type: u32}
+      - {name: count, type: u32}
+      - {name: buffer, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into the buffer.}
+
+  get_timestamp_rate:
+    doc: >-
+      Writes how long a timestamp tick lasts on queue, as the backend gives
+      it. Fails with error_invalid_argument when the device has no such queue.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: queue, type: u32}
+      - {name: rate, type: timestamp_rate, pointer: out}
+
+  calibrate_timestamps:
+    doc: >-
+      Writes a GPU timestamp on queue and clock's reading, taken together.
+      Fails with error_invalid_argument when the device has no such queue or
+      clock is not one BFR has, and error_unsupported for a clock
+      bfr_caps_timestamps.host_clocks does not list.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: queue, type: u32}
+      - {name: clock, type: host_clock}
+      - {name: timestamps, type: calibrated_timestamps, pointer: out}
+
+  get_call_timings:
+    doc: >-
+      Lists the CPU time spent in each of the device's calls since it was
+      made, indexed by bfr_call. With timings null, writes how many there are
+      to count. Otherwise writes up to count of them, sets count to how many
+      it wrote, and returns incomplete if there were more. Fails with
+      error_invalid_argument when the instance's desc did not set
+      call_timings.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: count, type: u32, pointer: inout}
+      - {name: timings, type: call_timing, array: count, pointer: out, optional: true}
+
+  get_instance_call_timings:
+    doc: >-
+      Lists the CPU time spent in each of the instance's own calls since it
+      was made, indexed by bfr_call, as bfr_get_call_timings lists a
+      device's; its devices count theirs. Fails as bfr_get_call_timings does.
+    returns: result
+    params:
+      - {name: instance, type: instance}
+      - {name: count, type: u32, pointer: inout}
+      - {name: timings, type: call_timing, array: count, pointer: out, optional: true}

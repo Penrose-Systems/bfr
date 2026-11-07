@@ -16,6 +16,7 @@
 #include "metal/metal_sampler.h"
 #include "metal/metal_swapchain.h"
 #include "metal/metal_texture.h"
+#include "metal/metal_timestamp.h"
 #include "metal/metal_util.h"
 #include "rhi/bindless_slots.h"
 #include "rhi/command_check.h"
@@ -215,6 +216,19 @@ public:
     [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyPipeline(PipelineHandle pipeline) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
+    [[nodiscard]] core::Result<TimestampPoolHandle> createTimestampPool(const TimestampPoolDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroyTimestampPool(TimestampPoolHandle pool) override;
+    [[nodiscard]] core::Result<void> resetTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
+                                                     std::uint32_t first, std::uint32_t count) override;
+    [[nodiscard]] core::Result<void> writeTimestamp(CommandListHandle commandList, TimestampPoolHandle pool,
+                                                    std::uint32_t index, TimestampStage stage,
+                                                    TimestampGranularity granularity) override;
+    [[nodiscard]] core::Result<void> resolveTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
+                                                       std::uint32_t first, std::uint32_t count, BufferHandle buffer,
+                                                       std::uint64_t offset) override;
+    [[nodiscard]] core::Result<TimestampRate> timestampRate(std::uint32_t queue) const override;
+    [[nodiscard]] core::Result<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue,
+                                                                         HostClock clock) const override;
 
 private:
     [[nodiscard]] core::Result<void> open(const DeviceDesc& desc);
@@ -277,6 +291,7 @@ private:
     core::Pool<MetalTexture, Texture> textures_;
     // Every sampler holds a slot, so the pool is made at the table's size.
     core::Pool<MetalSampler, Sampler> samplers_;
+    core::Pool<MetalTimestampPool, TimestampPool> timestampPools_;
     BindlessSlots bindless_;
     // The tables leave the residency set as the buffers do, under its lock.
     // Optional only because they are made after the device, in open.

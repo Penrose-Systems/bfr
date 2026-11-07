@@ -43,6 +43,7 @@ inline constexpr std::uint32_t kTestPools = 16;
 inline constexpr std::uint32_t kTestSwapchains = 4;
 inline constexpr std::uint32_t kTestTableSlots = 256;
 inline constexpr std::uint32_t kTestSamplers = 16;
+inline constexpr std::uint32_t kTestTimestampPools = 4;
 // Queues at rank 0 and level normal, as many as a test opens.
 inline constexpr std::array<QueueDesc, 4> kTestQueues{};
 // The longest wait there is, so a slow GPU never fails a test.
@@ -56,7 +57,8 @@ inline constexpr DeviceDesc kTestDevice{.graphics = std::span{kTestQueues}.first
                                         .maxBindlessTextures = kTestTableSlots,
                                         .maxBindlessStorageTextures = kTestTableSlots,
                                         .maxBindlessStorageBuffers = kTestTableSlots,
-                                        .maxBindlessSamplers = kTestSamplers};
+                                        .maxBindlessSamplers = kTestSamplers,
+                                        .maxTimestampPools = kTestTimestampPools};
 
 /// kTestDevice with change made to it.
 template <class Change>

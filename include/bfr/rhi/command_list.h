@@ -79,6 +79,7 @@ struct DeviceDesc {
     std::uint32_t maxBindlessStorageTextures = 0;
     std::uint32_t maxBindlessStorageBuffers = 0;
     std::uint32_t maxBindlessSamplers = 0;
+    std::uint32_t maxTimestampPools = 0;
 };
 
 /// How to create a command pool: the queue its lists record for, how many

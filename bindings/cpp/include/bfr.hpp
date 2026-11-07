@@ -634,6 +634,200 @@ enum class SwapchainStatus : std::int32_t {
     return {};
 }
 
+/// Each call that call timings count. The device's are named after the C++ rhi Device's calls,
+/// which the C functions of the same names pass to; instance_ ones after the Instance's.
+enum class Call : std::int32_t {
+    CreateSwapchain = BFR_CALL_CREATE_SWAPCHAIN,
+    ResizeSwapchain = BFR_CALL_RESIZE_SWAPCHAIN,
+    DestroySwapchain = BFR_CALL_DESTROY_SWAPCHAIN,
+    Acquire = BFR_CALL_ACQUIRE,
+    Present = BFR_CALL_PRESENT,
+    CreateCommandPool = BFR_CALL_CREATE_COMMAND_POOL,
+    ResetCommandPool = BFR_CALL_RESET_COMMAND_POOL,
+    DestroyCommandPool = BFR_CALL_DESTROY_COMMAND_POOL,
+    BeginCommands = BFR_CALL_BEGIN_COMMANDS,
+    BeginRendering = BFR_CALL_BEGIN_RENDERING,
+    EndRendering = BFR_CALL_END_RENDERING,
+    SetViewport = BFR_CALL_SET_VIEWPORT,
+    SetScissor = BFR_CALL_SET_SCISSOR,
+    SetBlendConstants = BFR_CALL_SET_BLEND_CONSTANTS,
+    SetStencilReference = BFR_CALL_SET_STENCIL_REFERENCE,
+    BindPipeline = BFR_CALL_BIND_PIPELINE,
+    PushConstants = BFR_CALL_PUSH_CONSTANTS,
+    BindIndexBuffer = BFR_CALL_BIND_INDEX_BUFFER,
+    Draw = BFR_CALL_DRAW,
+    DrawIndexed = BFR_CALL_DRAW_INDEXED,
+    Dispatch = BFR_CALL_DISPATCH,
+    CopyBuffer = BFR_CALL_COPY_BUFFER,
+    Barrier = BFR_CALL_BARRIER,
+    TextureBarrier = BFR_CALL_TEXTURE_BARRIER,
+    CopyBufferToTexture = BFR_CALL_COPY_BUFFER_TO_TEXTURE,
+    CopyTextureToBuffer = BFR_CALL_COPY_TEXTURE_TO_BUFFER,
+    CopyTexture = BFR_CALL_COPY_TEXTURE,
+    Submit = BFR_CALL_SUBMIT,
+    Wait = BFR_CALL_WAIT,
+    Poll = BFR_CALL_POLL,
+    DestroyCommandList = BFR_CALL_DESTROY_COMMAND_LIST,
+    CreateBuffer = BFR_CALL_CREATE_BUFFER,
+    BufferSlot = BFR_CALL_BUFFER_SLOT,
+    MapBuffer = BFR_CALL_MAP_BUFFER,
+    DestroyBuffer = BFR_CALL_DESTROY_BUFFER,
+    CreateTexture = BFR_CALL_CREATE_TEXTURE,
+    TextureSlots = BFR_CALL_TEXTURE_SLOTS,
+    DestroyTexture = BFR_CALL_DESTROY_TEXTURE,
+    CreateSampler = BFR_CALL_CREATE_SAMPLER,
+    SamplerSlot = BFR_CALL_SAMPLER_SLOT,
+    DestroySampler = BFR_CALL_DESTROY_SAMPLER,
+    CreateComputePipeline = BFR_CALL_CREATE_COMPUTE_PIPELINE,
+    CreateGraphicsPipeline = BFR_CALL_CREATE_GRAPHICS_PIPELINE,
+    DestroyPipeline = BFR_CALL_DESTROY_PIPELINE,
+    Budget = BFR_CALL_BUDGET,
+    CreateTimestampPool = BFR_CALL_CREATE_TIMESTAMP_POOL,
+    DestroyTimestampPool = BFR_CALL_DESTROY_TIMESTAMP_POOL,
+    ResetTimestamps = BFR_CALL_RESET_TIMESTAMPS,
+    WriteTimestamp = BFR_CALL_WRITE_TIMESTAMP,
+    ResolveTimestamps = BFR_CALL_RESOLVE_TIMESTAMPS,
+    TimestampRate = BFR_CALL_TIMESTAMP_RATE,
+    CalibrateTimestamps = BFR_CALL_CALIBRATE_TIMESTAMPS,
+    InstanceAdapters = BFR_CALL_INSTANCE_ADAPTERS,
+    InstanceCreateDevice = BFR_CALL_INSTANCE_CREATE_DEVICE,
+    InstanceFormatCaps = BFR_CALL_INSTANCE_FORMAT_CAPS,
+    InstanceSwapchainCaps = BFR_CALL_INSTANCE_SWAPCHAIN_CAPS,
+    InstanceSwapchainFormats = BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS,
+};
+
+/// value's name in bfr.yaml; empty for a value Call doesn't have.
+[[nodiscard]] constexpr std::string_view name(Call value) {
+    switch (value) {
+    case Call::CreateSwapchain: return "create_swapchain";
+    case Call::ResizeSwapchain: return "resize_swapchain";
+    case Call::DestroySwapchain: return "destroy_swapchain";
+    case Call::Acquire: return "acquire";
+    case Call::Present: return "present";
+    case Call::CreateCommandPool: return "create_command_pool";
+    case Call::ResetCommandPool: return "reset_command_pool";
+    case Call::DestroyCommandPool: return "destroy_command_pool";
+    case Call::BeginCommands: return "begin_commands";
+    case Call::BeginRendering: return "begin_rendering";
+    case Call::EndRendering: return "end_rendering";
+    case Call::SetViewport: return "set_viewport";
+    case Call::SetScissor: return "set_scissor";
+    case Call::SetBlendConstants: return "set_blend_constants";
+    case Call::SetStencilReference: return "set_stencil_reference";
+    case Call::BindPipeline: return "bind_pipeline";
+    case Call::PushConstants: return "push_constants";
+    case Call::BindIndexBuffer: return "bind_index_buffer";
+    case Call::Draw: return "draw";
+    case Call::DrawIndexed: return "draw_indexed";
+    case Call::Dispatch: return "dispatch";
+    case Call::CopyBuffer: return "copy_buffer";
+    case Call::Barrier: return "barrier";
+    case Call::TextureBarrier: return "texture_barrier";
+    case Call::CopyBufferToTexture: return "copy_buffer_to_texture";
+    case Call::CopyTextureToBuffer: return "copy_texture_to_buffer";
+    case Call::CopyTexture: return "copy_texture";
+    case Call::Submit: return "submit";
+    case Call::Wait: return "wait";
+    case Call::Poll: return "poll";
+    case Call::DestroyCommandList: return "destroy_command_list";
+    case Call::CreateBuffer: return "create_buffer";
+    case Call::BufferSlot: return "buffer_slot";
+    case Call::MapBuffer: return "map_buffer";
+    case Call::DestroyBuffer: return "destroy_buffer";
+    case Call::CreateTexture: return "create_texture";
+    case Call::TextureSlots: return "texture_slots";
+    case Call::DestroyTexture: return "destroy_texture";
+    case Call::CreateSampler: return "create_sampler";
+    case Call::SamplerSlot: return "sampler_slot";
+    case Call::DestroySampler: return "destroy_sampler";
+    case Call::CreateComputePipeline: return "create_compute_pipeline";
+    case Call::CreateGraphicsPipeline: return "create_graphics_pipeline";
+    case Call::DestroyPipeline: return "destroy_pipeline";
+    case Call::Budget: return "budget";
+    case Call::CreateTimestampPool: return "create_timestamp_pool";
+    case Call::DestroyTimestampPool: return "destroy_timestamp_pool";
+    case Call::ResetTimestamps: return "reset_timestamps";
+    case Call::WriteTimestamp: return "write_timestamp";
+    case Call::ResolveTimestamps: return "resolve_timestamps";
+    case Call::TimestampRate: return "timestamp_rate";
+    case Call::CalibrateTimestamps: return "calibrate_timestamps";
+    case Call::InstanceAdapters: return "instance_adapters";
+    case Call::InstanceCreateDevice: return "instance_create_device";
+    case Call::InstanceFormatCaps: return "instance_format_caps";
+    case Call::InstanceSwapchainCaps: return "instance_swapchain_caps";
+    case Call::InstanceSwapchainFormats: return "instance_swapchain_formats";
+    }
+    return {};
+}
+
+/// The point in a list's work a timestamp is written at. Which ones a backend takes, inside and
+/// outside rendering, is in bfr_caps_timestamps.
+enum class TimestampStage : std::int32_t {
+    /// Once all the work recorded before it is done.
+    End = BFR_TIMESTAMP_STAGE_END,
+    /// Once the work recorded before it has started.
+    Start = BFR_TIMESTAMP_STAGE_START,
+    /// Once the vertex shading recorded before it is done.
+    Vertex = BFR_TIMESTAMP_STAGE_VERTEX,
+    /// Once the fragment shading recorded before it is done.
+    Fragment = BFR_TIMESTAMP_STAGE_FRAGMENT,
+    /// Once the compute shading recorded before it is done.
+    Compute = BFR_TIMESTAMP_STAGE_COMPUTE,
+    /// Once the copies recorded before it are done.
+    Copy = BFR_TIMESTAMP_STAGE_COPY,
+};
+
+/// value's name in bfr.yaml; empty for a value TimestampStage doesn't have.
+[[nodiscard]] constexpr std::string_view name(TimestampStage value) {
+    switch (value) {
+    case TimestampStage::End: return "end";
+    case TimestampStage::Start: return "start";
+    case TimestampStage::Vertex: return "vertex";
+    case TimestampStage::Fragment: return "fragment";
+    case TimestampStage::Compute: return "compute";
+    case TimestampStage::Copy: return "copy";
+    }
+    return {};
+}
+
+/// How exactly a timestamp marks its stage, where bfr_caps_timestamps.granularity says the backend
+/// takes it.
+enum class TimestampGranularity : std::int32_t {
+    /// The backend may write it later than the stage ends, costing less.
+    Relaxed = BFR_TIMESTAMP_GRANULARITY_RELAXED,
+    /// As close to the stage's end as the backend can.
+    Precise = BFR_TIMESTAMP_GRANULARITY_PRECISE,
+};
+
+/// value's name in bfr.yaml; empty for a value TimestampGranularity doesn't have.
+[[nodiscard]] constexpr std::string_view name(TimestampGranularity value) {
+    switch (value) {
+    case TimestampGranularity::Relaxed: return "relaxed";
+    case TimestampGranularity::Precise: return "precise";
+    }
+    return {};
+}
+
+/// A host clock a GPU timestamp can be read beside.
+enum class HostClock : std::int32_t {
+    /// CLOCK_MONOTONIC, which std::chrono::steady_clock reads on Linux.
+    Monotonic = BFR_HOST_CLOCK_MONOTONIC,
+    /// CLOCK_MONOTONIC_RAW.
+    MonotonicRaw = BFR_HOST_CLOCK_MONOTONIC_RAW,
+    /// QueryPerformanceCounter, which std::chrono::steady_clock reads on Windows.
+    PerformanceCounter = BFR_HOST_CLOCK_PERFORMANCE_COUNTER,
+};
+
+/// value's name in bfr.yaml; empty for a value HostClock doesn't have.
+[[nodiscard]] constexpr std::string_view name(HostClock value) {
+    switch (value) {
+    case HostClock::Monotonic: return "monotonic";
+    case HostClock::MonotonicRaw: return "monotonic_raw";
+    case HostClock::PerformanceCounter: return "performance_counter";
+    }
+    return {};
+}
+
 /// A queue's priority against every queue on the system, other processes' included. Which levels
 /// each kind of queue takes is in bfr_caps_queues; one above normal may need privileges the process
 /// lacks, and then fails as the backend says.
@@ -1135,6 +1329,8 @@ class Pipeline;
 
 class Sampler;
 
+class TimestampPool;
+
 /// How to create an instance.
 struct InstanceDesc {
     Backend backend{};
@@ -1153,6 +1349,10 @@ struct InstanceDesc {
     std::string_view engineName{};
     /// The engine's version, as application_version.
     std::uint32_t engineVersion{};
+    /// Time the CPU spends in each call of the instance and its devices, which bfr_get_call_timings
+    /// and bfr_get_instance_call_timings give. Off, it costs nothing; on, each call reads the clock
+    /// twice.
+    bool callTimings{};
 };
 
 /// An adapter, as an instance lists it. Nothing is opened.
@@ -1229,6 +1429,9 @@ struct DeviceDesc {
     /// Slots in the sampler table, passed as max_bindless_textures is;
     /// bfr_caps_bindless.max_samplers says how many the adapter holds.
     std::uint32_t maxBindlessSamplers{};
+    /// Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool
+    /// fails with error_limit_reached.
+    std::uint32_t maxTimestampPools{};
 };
 
 /// How to create a swapchain.
@@ -1417,6 +1620,40 @@ struct TextureDesc {
     /// Samples per texel; 1 unless rendering multisamples it.
     std::uint32_t samples{};
     TextureUsage usage{};
+};
+
+/// How to create a timestamp pool.
+struct TimestampPoolDesc {
+    /// The device's queue whose lists write it, numbered as bfr_device_desc says.
+    std::uint32_t queue{};
+    /// How many timestamps it holds.
+    std::uint32_t count{};
+};
+
+/// How long a timestamp tick lasts, in the unit the backend gives: a period in nanoseconds or a
+/// frequency in ticks per second. The other is 0.
+struct TimestampRate {
+    float periodNs{};
+    std::uint64_t frequency{};
+};
+
+/// A GPU timestamp and a host clock's reading taken together, so GPU ticks can be placed on the
+/// host's timeline.
+struct CalibratedTimestamps {
+    std::uint64_t gpu{};
+    std::uint64_t host{};
+    /// How far apart the two readings may be, where deviation_given.
+    std::uint64_t maxDeviationNs{};
+    /// The backend gave max_deviation_ns.
+    bool deviationGiven{};
+};
+
+/// The CPU time one kind of call has taken, read from std::chrono::steady_clock around each call:
+/// how many there were, their nanoseconds in all, and the longest one's.
+struct CallTiming {
+    std::uint64_t count{};
+    std::uint64_t totalNs{};
+    std::uint64_t maxNs{};
 };
 
 /// Where a texture is in the bindless tables bfr_pipeline states, from creation to destruction: the
@@ -1781,8 +2018,6 @@ struct CapsLimits {
     std::uint64_t nonCoherentAtomSize{};
     /// Bytes apart a buffer and a texture in one allocation must be.
     std::uint64_t bufferTextureGranularity{};
-    /// Nanoseconds per timestamp tick.
-    float timestampPeriod{};
 };
 
 /// How many of each resource the bindless tables can hold.
@@ -1992,6 +2227,43 @@ struct CapsQueues {
     QueueLevels copyLevels{};
 };
 
+/// The bfr_timestamp_stage values a timestamp write takes; each true where the backend says so.
+struct TimestampStages {
+    bool end{};
+    bool start{};
+    bool vertex{};
+    bool fragment{};
+    bool compute{};
+    bool copy{};
+};
+
+/// The bfr_host_clock values bfr_calibrate_timestamps reads beside a GPU timestamp.
+struct HostClocks {
+    bool monotonic{};
+    bool monotonicRaw{};
+    bool performanceCounter{};
+};
+
+/// What the adapter's GPU timestamps are.
+struct CapsTimestamps {
+    /// Graphics queues write timestamps.
+    bool graphics{};
+    /// Compute queues write timestamps.
+    bool compute{};
+    /// Copy queues write timestamps.
+    bool copy{};
+    /// The stages a write outside rendering takes.
+    TimestampStages outsideRendering{};
+    /// The stages a write between bfr_begin_rendering and bfr_end_rendering takes.
+    TimestampStages insideRendering{};
+    /// The backend takes a bfr_timestamp_granularity; where false the value is unused.
+    bool granularity{};
+    /// What one timestamp takes in a buffer bfr_resolve_timestamps writes.
+    std::uint32_t entryBytes{};
+    /// The clocks bfr_calibrate_timestamps reads.
+    HostClocks hostClocks{};
+};
+
 /// Everything about an adapter that stays the same while it runs.
 struct Caps {
     CapsInfo info{};
@@ -2003,6 +2275,7 @@ struct Caps {
     CapsFeatures features{};
     CapsMemory memory{};
     CapsQueues queues{};
+    CapsTimestamps timestamps{};
 };
 
 /// What an adapter does with one format.
@@ -2114,6 +2387,7 @@ inline bfr_instance_desc toC(const InstanceDesc& value, const bfr_chain* next, M
         .application_version = value.applicationVersion,
         .engine_name = detail::toC(value.engineName),
         .engine_version = value.engineVersion,
+        .call_timings = value.callTimings ? BFR_TRUE : BFR_FALSE,
     };
 }
 
@@ -2147,6 +2421,7 @@ inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
         .max_bindless_storage_textures = value.maxBindlessStorageTextures,
         .max_bindless_storage_buffers = value.maxBindlessStorageBuffers,
         .max_bindless_samplers = value.maxBindlessSamplers,
+        .max_timestamp_pools = value.maxTimestampPools,
     };
 }
 
@@ -2235,6 +2510,10 @@ inline bfr_texture_desc toC(const TextureDesc& value, const bfr_chain* next) {
         .samples = value.samples,
         .usage = toC(value.usage),
     };
+}
+
+inline bfr_timestamp_pool_desc toC(const TimestampPoolDesc& value) {
+    return {.queue = value.queue, .count = value.count};
 }
 
 inline bfr_buffer_texture_copy toC(const BufferTextureCopy& value) {
@@ -2405,6 +2684,23 @@ inline SwapchainImages fromC(const bfr_swapchain_images& value) {
     };
 }
 
+inline TimestampRate fromC(const bfr_timestamp_rate& value) {
+    return {.periodNs = value.period_ns, .frequency = value.frequency};
+}
+
+inline CalibratedTimestamps fromC(const bfr_calibrated_timestamps& value) {
+    return {
+        .gpu = value.gpu,
+        .host = value.host,
+        .maxDeviationNs = value.max_deviation_ns,
+        .deviationGiven = value.deviation_given != BFR_FALSE,
+    };
+}
+
+inline CallTiming fromC(const bfr_call_timing& value) {
+    return {.count = value.count, .totalNs = value.total_ns, .maxNs = value.max_ns};
+}
+
 inline TextureSlots fromC(const bfr_texture_slots& value) {
     return {.sampled = value.sampled, .storage = value.storage};
 }
@@ -2477,7 +2773,6 @@ inline CapsLimits fromC(const bfr_caps_limits& value) {
         .copyRowPitchAlignment = value.copy_row_pitch_alignment,
         .nonCoherentAtomSize = value.non_coherent_atom_size,
         .bufferTextureGranularity = value.buffer_texture_granularity,
-        .timestampPeriod = value.timestamp_period,
     };
 }
 
@@ -2641,6 +2936,38 @@ inline CapsQueues fromC(const bfr_caps_queues& value) {
     };
 }
 
+inline TimestampStages fromC(const bfr_timestamp_stages& value) {
+    return {
+        .end = value.end != BFR_FALSE,
+        .start = value.start != BFR_FALSE,
+        .vertex = value.vertex != BFR_FALSE,
+        .fragment = value.fragment != BFR_FALSE,
+        .compute = value.compute != BFR_FALSE,
+        .copy = value.copy != BFR_FALSE,
+    };
+}
+
+inline HostClocks fromC(const bfr_host_clocks& value) {
+    return {
+        .monotonic = value.monotonic != BFR_FALSE,
+        .monotonicRaw = value.monotonic_raw != BFR_FALSE,
+        .performanceCounter = value.performance_counter != BFR_FALSE,
+    };
+}
+
+inline CapsTimestamps fromC(const bfr_caps_timestamps& value) {
+    return {
+        .graphics = value.graphics != BFR_FALSE,
+        .compute = value.compute != BFR_FALSE,
+        .copy = value.copy != BFR_FALSE,
+        .outsideRendering = fromC(value.outside_rendering),
+        .insideRendering = fromC(value.inside_rendering),
+        .granularity = value.granularity != BFR_FALSE,
+        .entryBytes = value.entry_bytes,
+        .hostClocks = fromC(value.host_clocks),
+    };
+}
+
 inline Caps fromC(const bfr_caps& value) {
     return {
         .info = fromC(value.info),
@@ -2652,6 +2979,7 @@ inline Caps fromC(const bfr_caps& value) {
         .features = fromC(value.features),
         .memory = fromC(value.memory),
         .queues = fromC(value.queues),
+        .timestamps = fromC(value.timestamps),
     };
 }
 
@@ -2769,6 +3097,10 @@ public:
     /// error_present_unsupported unless one of them can present to it.
     [[nodiscard]] Expected<Device> createDevice(const DeviceDesc& desc) const;
 
+    /// Lists the CPU time spent in each of the instance's own calls since it was made, indexed by
+    /// bfr_call, as bfr_get_call_timings lists a device's; its devices count theirs.
+    [[nodiscard]] Expected<std::vector<CallTiming>> instanceCallTimings() const;
+
 private:
     Instance(bfr_instance* instance, detail::KeepAlive keepAlive) : instance_(instance), keepAlive_(std::move(keepAlive)) {}
 
@@ -2787,8 +3119,8 @@ public:
     Device() = default;
     /// Destroys a device once the GPU has finished with it, with every handle it still owns. Null
     /// does nothing. A Device with Buffer or CommandList or CommandPool or Pipeline or Sampler or
-    /// Swapchain or Texture objects left lives on until the last of them is destroyed, so they may
-    /// be destroyed in any order.
+    /// Swapchain or Texture or TimestampPool objects left lives on until the last of them is
+    /// destroyed, so they may be destroyed in any order.
     ~Device() = default;
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
@@ -2959,6 +3291,41 @@ public:
     /// error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
     /// backend refuses the code or the desc; the message carries what it said.
     [[nodiscard]] Expected<Pipeline> createGraphicsPipeline(const GraphicsPipelineDesc& desc) const;
+
+    /// Creates a pool of desc's count GPU timestamps, written by lists on desc's queue. Not for the
+    /// frame path. Fails with error_invalid_argument when the device has no such queue,
+    /// error_limit_reached at the device's max_timestamp_pools, and error_device_failed when the
+    /// backend refuses.
+    [[nodiscard]] Expected<TimestampPool> createTimestampPool(const TimestampPoolDesc& desc) const;
+
+    /// Records a reset of count timestamps from first, which a backend that needs one before a
+    /// timestamp is written again is given; the others record nothing. Outside rendering.
+    [[nodiscard]] Expected<void> resetTimestamps(CommandList commandList, const TimestampPool& pool, std::uint32_t first, std::uint32_t count) const;
+
+    /// Records the GPU's timestamp at stage into the pool's timestamp index, with granularity where
+    /// the backend takes one. Fails with error_invalid_argument for a stage or granularity BFR does
+    /// not have, and error_unsupported for a stage the backend has no setting for where the list
+    /// is, as bfr_caps_timestamps says.
+    [[nodiscard]] Expected<void> writeTimestamp(CommandList commandList, const TimestampPool& pool, std::uint32_t index, TimestampStage stage, TimestampGranularity granularity) const;
+
+    /// Records a copy of count timestamps from first into buffer at offset, as raw ticks of
+    /// bfr_caps_timestamps.entry_bytes each, once the GPU has written them. The buffer needs
+    /// copy_dst usage. Outside rendering; fails with error_invalid_argument inside it on a backend
+    /// with nothing to record it in there.
+    [[nodiscard]] Expected<void> resolveTimestamps(CommandList commandList, const TimestampPool& pool, std::uint32_t first, std::uint32_t count, const Buffer& buffer, std::uint64_t offset) const;
+
+    /// Writes how long a timestamp tick lasts on queue, as the backend gives it. Fails with
+    /// error_invalid_argument when the device has no such queue.
+    [[nodiscard]] Expected<TimestampRate> timestampRate(std::uint32_t queue) const;
+
+    /// Writes a GPU timestamp on queue and clock's reading, taken together. Fails with
+    /// error_invalid_argument when the device has no such queue or clock is not one BFR has, and
+    /// error_unsupported for a clock bfr_caps_timestamps.host_clocks does not list.
+    [[nodiscard]] Expected<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue, HostClock clock) const;
+
+    /// Lists the CPU time spent in each of the device's calls since it was made, indexed by
+    /// bfr_call.
+    [[nodiscard]] Expected<std::vector<CallTiming>> callTimings() const;
 
 private:
     Device(bfr_device* device, detail::KeepAlive keepAlive) : device_(device), keepAlive_(detail::share(device, &bfr_destroy_device, std::move(keepAlive))) {}
@@ -3272,6 +3639,41 @@ private:
     detail::KeepAlive keepAlive_;
 };
 
+/// GPU timestamps that command lists write and resolve into a buffer.
+class TimestampPool {
+public:
+    /// Owns nothing, as a moved-from TimestampPool does.
+    TimestampPool() = default;
+    /// Destroys a timestamp pool once the GPU has finished with it; the handle is invalid at once.
+    /// Not for the frame path. A handle that is already destroyed does nothing.
+    ~TimestampPool() { bfr_destroy_timestamp_pool(device_, timestampPool_); }
+    TimestampPool(const TimestampPool&) = delete;
+    TimestampPool& operator=(const TimestampPool&) = delete;
+    TimestampPool(TimestampPool&& other) noexcept : device_(std::exchange(other.device_, nullptr)), timestampPool_(std::exchange(other.timestampPool_, {})), keepAlive_(std::move(other.keepAlive_)) {}
+    TimestampPool& operator=(TimestampPool&& other) noexcept {
+        if (this != &other) {
+            bfr_destroy_timestamp_pool(device_, timestampPool_);
+            device_ = std::exchange(other.device_, nullptr);
+            timestampPool_ = std::exchange(other.timestampPool_, {});
+            keepAlive_ = std::move(other.keepAlive_);
+        }
+        return *this;
+    }
+
+    /// The C value, for calls bfr.hpp does not wrap; this still owns it.
+    [[nodiscard]] bfr_timestamp_pool get() const { return timestampPool_; }
+    [[nodiscard]] explicit operator bool() const { return timestampPool_.bits != 0; }
+
+private:
+    TimestampPool(bfr_device* device, bfr_timestamp_pool timestampPool, detail::KeepAlive keepAlive) : device_(device), timestampPool_(timestampPool), keepAlive_(std::move(keepAlive)) {}
+    friend class Device;
+
+    bfr_device* device_ = nullptr;
+    bfr_timestamp_pool timestampPool_{};
+    // Keeps the Device that made this alive until this is destroyed.
+    detail::KeepAlive keepAlive_;
+};
+
 namespace detail {
 
 inline bfr_color_attachment toC(const ColorAttachment& value) {
@@ -3439,6 +3841,32 @@ inline Expected<Device> Instance::createDevice(const DeviceDesc& desc) const {
         return std::unexpected(detail::failure(result));
     }
     return Device{device, keepAlive_};
+}
+
+inline Expected<std::vector<CallTiming>> Instance::instanceCallTimings() const {
+    std::vector<bfr_call_timing> timingsC;
+    std::uint32_t count = 0;
+    // Asked again while the list grows between the two calls.
+    for (;;) {
+        bfr_result result = bfr_get_instance_call_timings(instance_, &count, nullptr);
+        if (result < 0) {
+            return std::unexpected(detail::failure(result));
+        }
+        timingsC.resize(count);
+        result = bfr_get_instance_call_timings(instance_, &count, timingsC.data());
+        if (result < 0) {
+            return std::unexpected(detail::failure(result));
+        }
+        if (result != BFR_RESULT_INCOMPLETE) {
+            break;
+        }
+    }
+    std::vector<CallTiming> timings;
+    timings.reserve(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        timings.push_back(detail::fromC(timingsC[i]));
+    }
+    return timings;
 }
 
 inline Expected<MemoryBudget> Device::budget() const {
@@ -3690,6 +4118,78 @@ inline Expected<Pipeline> Device::createGraphicsPipeline(const GraphicsPipelineD
         return std::unexpected(detail::failure(result));
     }
     return Pipeline{device_, pipeline, keepAlive_};
+}
+
+inline Expected<TimestampPool> Device::createTimestampPool(const TimestampPoolDesc& desc) const {
+    const bfr_timestamp_pool_desc cDesc = detail::toC(desc);
+    bfr_timestamp_pool pool{};
+    if (const bfr_result result = bfr_create_timestamp_pool(device_, &cDesc, &pool); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return TimestampPool{device_, pool, keepAlive_};
+}
+
+inline Expected<void> Device::resetTimestamps(CommandList commandList, const TimestampPool& pool, std::uint32_t first, std::uint32_t count) const {
+    if (const bfr_result result = bfr_reset_timestamps(device_, commandList.get(), pool.get(), first, count); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::writeTimestamp(CommandList commandList, const TimestampPool& pool, std::uint32_t index, TimestampStage stage, TimestampGranularity granularity) const {
+    if (const bfr_result result = bfr_write_timestamp(device_, commandList.get(), pool.get(), index, static_cast<bfr_timestamp_stage>(stage), static_cast<bfr_timestamp_granularity>(granularity)); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::resolveTimestamps(CommandList commandList, const TimestampPool& pool, std::uint32_t first, std::uint32_t count, const Buffer& buffer, std::uint64_t offset) const {
+    if (const bfr_result result = bfr_resolve_timestamps(device_, commandList.get(), pool.get(), first, count, buffer.get(), offset); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<TimestampRate> Device::timestampRate(std::uint32_t queue) const {
+    bfr_timestamp_rate rate{};
+    if (const bfr_result result = bfr_get_timestamp_rate(device_, queue, &rate); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(rate);
+}
+
+inline Expected<CalibratedTimestamps> Device::calibrateTimestamps(std::uint32_t queue, HostClock clock) const {
+    bfr_calibrated_timestamps timestamps{};
+    if (const bfr_result result = bfr_calibrate_timestamps(device_, queue, static_cast<bfr_host_clock>(clock), &timestamps); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(timestamps);
+}
+
+inline Expected<std::vector<CallTiming>> Device::callTimings() const {
+    std::vector<bfr_call_timing> timingsC;
+    std::uint32_t count = 0;
+    // Asked again while the list grows between the two calls.
+    for (;;) {
+        bfr_result result = bfr_get_call_timings(device_, &count, nullptr);
+        if (result < 0) {
+            return std::unexpected(detail::failure(result));
+        }
+        timingsC.resize(count);
+        result = bfr_get_call_timings(device_, &count, timingsC.data());
+        if (result < 0) {
+            return std::unexpected(detail::failure(result));
+        }
+        if (result != BFR_RESULT_INCOMPLETE) {
+            break;
+        }
+    }
+    std::vector<CallTiming> timings;
+    timings.reserve(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        timings.push_back(detail::fromC(timingsC[i]));
+    }
+    return timings;
 }
 
 inline Expected<SwapchainImages> Swapchain::resize(std::uint32_t width, std::uint32_t height) {

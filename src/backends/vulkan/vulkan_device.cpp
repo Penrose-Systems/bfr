@@ -120,9 +120,9 @@ void recordBarrier(const VolkDeviceTable& table, VkCommandBuffer buffer, const V
 
 core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance& rhi, VkPhysicalDevice adapter,
                                                                  VkDevice device, const QueueFamilies& families,
-                                                                 const DeviceDesc& desc, bool hasBudget,
-                                                                 bool hasSwapchain, std::uint32_t pushConstantsSize) {
-    auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, desc, hasBudget, hasSwapchain, pushConstantsSize);
+                                                                 const DeviceDesc& desc,
+                                                                 const VulkanDeviceSetup& setup) {
+    auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, desc, setup);
     if (auto opened = made->openQueues(families, desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
@@ -131,7 +131,7 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
         return std::unexpected(std::move(allocator.error()));
     }
     made->allocator_ = *allocator;
-    auto layout = VulkanBindlessLayout::create(made->table_, device, desc, pushConstantsSize);
+    auto layout = VulkanBindlessLayout::create(made->table_, device, desc, setup.pushConstantsSize);
     if (!layout) {
         return std::unexpected(std::move(layout.error()));
     }
@@ -140,13 +140,15 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
 }
 
 VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const DeviceDesc& desc,
-                           bool hasBudget, bool hasSwapchain, std::uint32_t pushConstantsSize)
+                           const VulkanDeviceSetup& setup)
     : instance_(&rhi),
       adapter_(adapter),
       device_(device),
-      hasBudget_(hasBudget),
-      hasSwapchain_(hasSwapchain),
-      pushConstantsSize_(pushConstantsSize),
+      hasBudget_(setup.hasBudget),
+      hasSwapchain_(setup.hasSwapchain),
+      pushConstantsSize_(setup.pushConstantsSize),
+      timestampPeriod_(setup.timestampPeriod),
+      hostClocks_(setup.hostClocks),
       desc_(heldPart(desc)),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
       commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
@@ -159,6 +161,7 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
       textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
       samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
+      timestampPools_("timestamp pools", desc.maxTimestampPools, desc.maxTimestampPools, rhi.logger()),
       bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
@@ -942,6 +945,9 @@ void VulkanDevice::warnLeftovers() const {
     if (samplers_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} samplers were left when the device went", samplers_.size());
     }
+    if (timestampPools_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} timestamp pools were left when the device went", timestampPools_.size());
+    }
     if (pipelines_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} pipelines were left when the device went", pipelines_.size());
     }
@@ -966,6 +972,7 @@ VulkanDevice::~VulkanDevice() {
     buffers_.clear();
     textures_.clear();
     samplers_.clear();
+    timestampPools_.clear();
     pipelines_.clear();
     layout_ = {};
     vmaDestroyAllocator(allocator_);

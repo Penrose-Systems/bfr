@@ -73,6 +73,11 @@ struct InstanceDesc {
     std::uint32_t applicationVersion = 0;
     std::string_view engineName{};
     std::uint32_t engineVersion = 0;
+
+    /// Time the CPU spends in each call of the Instance and its devices, which
+    /// Instance::callTimings and Device::callTimings give. Off, it costs
+    /// nothing; on, each call reads the clock twice.
+    bool callTimings = false;
 };
 
 /// The graphics API's entry point and the adapters it found.
@@ -130,6 +135,12 @@ public:
     /// as swapchainCaps does.
     [[nodiscard]] virtual core::Result<std::vector<SwapchainFormat>> swapchainFormats(
         std::size_t adapter, const core::window::NativeWindow& window) const = 0;
+
+    /// The CPU time spent in each of the Instance's own calls since it was
+    /// made, written to timings by Call, as many as it holds; its devices
+    /// count theirs. Fails with RhiInvalidCall when InstanceDesc::callTimings
+    /// was not set.
+    [[nodiscard]] virtual core::Result<void> callTimings(std::span<CallTiming> timings) const;
 
 protected:
     explicit Instance(const RhiConfig& config) : config_(config) {}

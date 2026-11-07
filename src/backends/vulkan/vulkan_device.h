@@ -20,6 +20,7 @@
 #include "vulkan/vulkan_sampler.h"
 #include "vulkan/vulkan_swapchain.h"
 #include "vulkan/vulkan_texture.h"
+#include "vulkan/vulkan_timestamp.h"
 
 #include <volk.h>
 
@@ -42,6 +43,19 @@ class VulkanInstance;
 /// beginCommands hands out, how many lists it handed out still record, and
 /// the timeline value its last submit signals. Plain data: the device
 /// destroys the VkCommandPool, once the GPU is done with it.
+/// What the instance read of the adapter and enabled on the device, which
+/// the device's calls need.
+struct VulkanDeviceSetup {
+    bool hasBudget = false;
+    bool hasSwapchain = false;
+    std::uint32_t pushConstantsSize = 0;
+    /// VkPhysicalDeviceLimits::timestampPeriod.
+    float timestampPeriod = 0;
+    /// What vkGetCalibratedTimestampsKHR reads, none when the device has no
+    /// calibrated timestamps extension enabled.
+    HostClocks hostClocks;
+};
+
 struct VulkanCommandPool {
     VkCommandPool pool = VK_NULL_HANDLE;
     std::uint32_t queue = 0;
@@ -117,13 +131,15 @@ public:
     /// maximums size everything the device holds. Fails with RhiDeviceFailed,
     /// destroying device, when the API refuses a queue's timeline or the
     /// bindless layout, and RhiLimitReached when it cannot hold the layout.
-    [[nodiscard]] static core::Result<std::unique_ptr<VulkanDevice>> create(
-        VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const QueueFamilies& families,
-        const DeviceDesc& desc, bool hasBudget, bool hasSwapchain, std::uint32_t pushConstantsSize);
+    [[nodiscard]] static core::Result<std::unique_ptr<VulkanDevice>> create(VulkanInstance& rhi,
+                                                                            VkPhysicalDevice adapter, VkDevice device,
+                                                                            const QueueFamilies& families,
+                                                                            const DeviceDesc& desc,
+                                                                            const VulkanDeviceSetup& setup);
 
     /// For create, with the number of queues create opens.
-    VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const DeviceDesc& desc, bool hasBudget,
-                 bool hasSwapchain, std::uint32_t pushConstantsSize);
+    VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevice device, const DeviceDesc& desc,
+                 const VulkanDeviceSetup& setup);
     ~VulkanDevice() override;
     VulkanDevice(const VulkanDevice&) = delete;
     VulkanDevice& operator=(const VulkanDevice&) = delete;
@@ -194,6 +210,19 @@ public:
     [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyPipeline(PipelineHandle pipeline) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
+    [[nodiscard]] core::Result<TimestampPoolHandle> createTimestampPool(const TimestampPoolDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroyTimestampPool(TimestampPoolHandle pool) override;
+    [[nodiscard]] core::Result<void> resetTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
+                                                     std::uint32_t first, std::uint32_t count) override;
+    [[nodiscard]] core::Result<void> writeTimestamp(CommandListHandle commandList, TimestampPoolHandle pool,
+                                                    std::uint32_t index, TimestampStage stage,
+                                                    TimestampGranularity granularity) override;
+    [[nodiscard]] core::Result<void> resolveTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
+                                                       std::uint32_t first, std::uint32_t count, BufferHandle buffer,
+                                                       std::uint64_t offset) override;
+    [[nodiscard]] core::Result<TimestampRate> timestampRate(std::uint32_t queue) const override;
+    [[nodiscard]] core::Result<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue,
+                                                                         HostClock clock) const override;
 
 private:
     [[nodiscard]] core::Result<void> openQueues(const QueueFamilies& families, const DeviceDesc& desc);
@@ -229,6 +258,8 @@ private:
     bool hasBudget_;
     bool hasSwapchain_;
     std::uint32_t pushConstantsSize_;
+    float timestampPeriod_;
+    HostClocks hostClocks_;
     DeviceDesc desc_;
     std::vector<std::unique_ptr<VulkanQueue>> queues_;
     core::Pool<VulkanSwapchain, Swapchain> swapchains_;
@@ -255,6 +286,7 @@ private:
     core::Pool<VulkanTexture, Texture> textures_;
     // Every sampler holds a slot, so the pool is made at the table's size.
     core::Pool<VulkanSampler, Sampler> samplers_;
+    core::Pool<VulkanTimestampPool, TimestampPool> timestampPools_;
     BindlessSlots bindless_;
     // Declared before pipelines_, which are made on it, so it outlives them.
     VulkanBindlessLayout layout_;

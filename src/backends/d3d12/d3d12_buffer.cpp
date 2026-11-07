@@ -119,6 +119,7 @@ void D3D12Device::collectBuffers() {
     buffers_.collect(completed, [this](const D3D12Buffer& buffer) { bindless_.giveBuffer(buffer.slot); });
     textures_.collect(completed, [this](const D3D12Texture& texture) { bindless_.giveTexture(texture.slots); });
     samplers_.collect(completed, [this](const D3D12Sampler& sampler) { bindless_.giveSampler(sampler.slot); });
+    timestampPools_.collect(completed);
     pipelines_.collect(completed);
 }
 

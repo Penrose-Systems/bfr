@@ -3,12 +3,14 @@
 #include "bfr/core/error.h"
 #include "bfr/core/window.h"
 #include "bfr/rhi/buffer.h"
+#include "bfr/rhi/call_timing.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/sampler.h"
 #include "bfr/rhi/swapchain.h"
 #include "bfr/rhi/texture.h"
+#include "bfr/rhi/timestamp.h"
 
 #include <array>
 #include <cstddef>
@@ -337,6 +339,61 @@ public:
     /// How much of each heap the process may use and uses now. Fails with
     /// RhiUnsupported when the driver can't say.
     [[nodiscard]] virtual core::Result<MemoryBudget> budget() const = 0;
+
+    /// A pool of desc.count GPU timestamps, written by lists on desc.queue.
+    /// Cold. Fails with RhiInvalidCall when the device has no queue
+    /// desc.queue, RhiLimitReached at maxTimestampPools, and RhiDeviceFailed
+    /// when the API refuses.
+    [[nodiscard]] virtual core::Result<TimestampPoolHandle> createTimestampPool(const TimestampPoolDesc& desc) = 0;
+
+    /// Destroys the pool once the GPU has passed every submit made before the
+    /// call; the handle is invalid at once. Cold. A null handle does nothing.
+    /// Fails with RhiInvalidHandle when the pool is already destroyed.
+    [[nodiscard]] virtual core::Result<void> destroyTimestampPool(TimestampPoolHandle pool) = 0;
+
+    /// Records a reset of count timestamps from first, which a backend that
+    /// needs one before a timestamp is written again is given; the others
+    /// record nothing. Outside rendering. Fails with RhiInvalidHandle for a
+    /// list or pool that is gone.
+    [[nodiscard]] virtual core::Result<void> resetTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
+                                                             std::uint32_t first, std::uint32_t count) = 0;
+
+    /// Records the GPU's timestamp at stage into the pool's timestamp index,
+    /// with granularity where the backend takes one. Fails with
+    /// RhiInvalidHandle for a list or pool that is gone, RhiInvalidCall for a
+    /// stage or granularity BFR doesn't have, and RhiUnsupported for a stage
+    /// the backend has no setting for where the list is, as Caps::timestamps
+    /// says.
+    [[nodiscard]] virtual core::Result<void> writeTimestamp(CommandListHandle commandList, TimestampPoolHandle pool,
+                                                            std::uint32_t index, TimestampStage stage,
+                                                            TimestampGranularity granularity) = 0;
+
+    /// Records a copy of count timestamps from first into buffer at offset,
+    /// as raw ticks of Caps::timestamps.entryBytes each, once the GPU has
+    /// written them. The buffer needs copyDst usage. Outside rendering. Fails
+    /// with RhiInvalidHandle for a list, pool or buffer that is gone, and
+    /// RhiInvalidCall inside rendering on a backend with nothing to record it
+    /// in there.
+    [[nodiscard]] virtual core::Result<void> resolveTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
+                                                               std::uint32_t first, std::uint32_t count,
+                                                               BufferHandle buffer, std::uint64_t offset) = 0;
+
+    /// How long a timestamp tick lasts on queue, as the backend gives it.
+    /// Fails with RhiInvalidCall when the device has no such queue, and
+    /// RhiDeviceFailed when the API can't say.
+    [[nodiscard]] virtual core::Result<TimestampRate> timestampRate(std::uint32_t queue) const = 0;
+
+    /// A GPU timestamp on queue and clock's reading, taken together. Fails
+    /// with RhiInvalidCall when the device has no such queue or clock is not
+    /// one BFR has, RhiUnsupported for a clock Caps::timestamps.hostClocks
+    /// doesn't list, and RhiDeviceFailed when the API refuses.
+    [[nodiscard]] virtual core::Result<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue,
+                                                                                 HostClock clock) const = 0;
+
+    /// The CPU time spent in each of the device's calls since it was made,
+    /// written to timings by Call, as many as it holds. Fails with
+    /// RhiInvalidCall when InstanceDesc::callTimings was not set.
+    [[nodiscard]] virtual core::Result<void> callTimings(std::span<CallTiming> timings) const;
 
 protected:
     Device() = default;

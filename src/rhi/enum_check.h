@@ -8,6 +8,7 @@
 #include "bfr/rhi/sampler.h"
 #include "bfr/rhi/swapchain.h"
 #include "bfr/rhi/texture.h"
+#include "bfr/rhi/timestamp.h"
 #include "rhi/format_check.h"
 
 #include <algorithm>
@@ -86,6 +87,15 @@ constexpr std::pair<TextureAspect, TextureAspect> rangeOf(TextureAspect /*unused
 }
 constexpr std::pair<QueueLevel, QueueLevel> rangeOf(QueueLevel /*unused*/) {
     return {QueueLevel::Normal, QueueLevel::Realtime};
+}
+constexpr std::pair<TimestampStage, TimestampStage> rangeOf(TimestampStage /*unused*/) {
+    return {TimestampStage::End, TimestampStage::Copy};
+}
+constexpr std::pair<TimestampGranularity, TimestampGranularity> rangeOf(TimestampGranularity /*unused*/) {
+    return {TimestampGranularity::Relaxed, TimestampGranularity::Precise};
+}
+constexpr std::pair<HostClock, HostClock> rangeOf(HostClock /*unused*/) {
+    return {HostClock::Monotonic, HostClock::PerformanceCounter};
 }
 
 /// Fails with RhiInvalidCall when value is not one its enum has, such as a

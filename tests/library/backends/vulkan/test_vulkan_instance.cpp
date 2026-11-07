@@ -487,7 +487,7 @@ TEST_CASE("Vulkan logs the device it creates, its queue families and its extensi
 
     INFO(failureOf(device));
     REQUIRE(device.has_value());
-    CHECK_THAT(log.str(), Catch::Matchers::ContainsSubstring(
-                              "device on " + (*rhi)->adapters()[cpuAdapter(**rhi)].name +
-                              ", queue families 0, extensions: VK_KHR_swapchain, VK_KHR_portability_subset"));
+    CHECK_THAT(log.str(), Catch::Matchers::ContainsSubstring("device on " + (*rhi)->adapters()[cpuAdapter(**rhi)].name +
+                                                             ", queue families 0, extensions: VK_KHR_swapchain, ") &&
+                              Catch::Matchers::ContainsSubstring("VK_KHR_portability_subset"));
 }

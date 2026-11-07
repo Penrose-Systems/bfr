@@ -84,7 +84,8 @@ auto eachBackend() {
 // An instance on backend, with validation on unless told otherwise, recording
 // its messages, destroyed at scope end.
 struct Instance {
-    Instance(bfr_backend backend, std::vector<std::string>& messages, bfr_bool validation = BFR_TRUE) {
+    Instance(bfr_backend backend, std::vector<std::string>& messages, bfr_bool validation = BFR_TRUE,
+             bfr_bool callTimings = BFR_FALSE) {
         const bfr_instance_desc desc{.next = nullptr,
                                      .backend = backend,
                                      .validation = validation,
@@ -94,7 +95,8 @@ struct Instance {
                                      .application_name = {},
                                      .application_version = 0,
                                      .engine_name = {},
-                                     .engine_version = 0};
+                                     .engine_version = 0,
+                                     .call_timings = callTimings};
         const bfr_result result = bfr_create_instance(&desc, &instance);
         INFO(lastError());
         REQUIRE(result == BFR_RESULT_SUCCESS);
@@ -129,7 +131,8 @@ struct HeadlessDevice {
                                        .max_bindless_textures = kDeviceTableSlots,
                                        .max_bindless_storage_textures = kDeviceTableSlots,
                                        .max_bindless_storage_buffers = kDeviceTableSlots,
-                                       .max_bindless_samplers = kDeviceSamplers};
+                                       .max_bindless_samplers = kDeviceSamplers,
+                                       .max_timestamp_pools = 1};
             const bfr_result result = bfr_create_device(instance, &desc, &device);
             INFO(lastError());
             REQUIRE((result == BFR_RESULT_SUCCESS || result == BFR_RESULT_ERROR_PRESENT_UNSUPPORTED));
@@ -176,7 +179,8 @@ TEST_CASE("C API rejects a backend value BFR does not have", "[c_api][unit]") {
                                  .application_name = {},
                                  .application_version = 0,
                                  .engine_name = {},
-                                 .engine_version = 0};
+                                 .engine_version = 0,
+                                 .call_timings = BFR_FALSE};
     bfr_instance* instance = nullptr;
 
     CHECK(bfr_create_instance(&desc, &instance) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
@@ -219,7 +223,8 @@ TEST_CASE("C API takes the application's and engine's names, and refuses a null 
                            .application_name = {.data = kApplication.data(), .length = kApplication.size()},
                            .application_version = 1,
                            .engine_name = {.data = kEngine.data(), .length = kEngine.size()},
-                           .engine_version = 1};
+                           .engine_version = 1,
+                           .call_timings = BFR_FALSE};
     bfr_instance* instance = nullptr;
 
     REQUIRE(bfr_create_instance(&desc, &instance) == BFR_RESULT_SUCCESS);
@@ -245,7 +250,8 @@ TEST_CASE("C API reports a backend this build lacks", "[c_api][unit]") {
                                      .application_name = {},
                                      .application_version = 0,
                                      .engine_name = {},
-                                     .engine_version = 0};
+                                     .engine_version = 0,
+                                     .call_timings = BFR_FALSE};
         bfr_instance* instance = nullptr;
 
         INFO(static_cast<int>(backend));
@@ -265,7 +271,8 @@ TEST_CASE("C API rejects a struct chained where it does not belong", "[c_api][un
                                  .application_name = {},
                                  .application_version = 0,
                                  .engine_name = {},
-                                 .engine_version = 0};
+                                 .engine_version = 0,
+                                 .call_timings = BFR_FALSE};
     bfr_instance* instance = nullptr;
 
     CHECK(bfr_create_instance(&desc, &instance) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
@@ -291,7 +298,8 @@ TEST_CASE("C API rejects a struct chained to a device or swapchain desc", "[c_ap
                                          .max_bindless_textures = kDeviceTableSlots,
                                          .max_bindless_storage_textures = kDeviceTableSlots,
                                          .max_bindless_storage_buffers = kDeviceTableSlots,
-                                         .max_bindless_samplers = kDeviceSamplers};
+                                         .max_bindless_samplers = kDeviceSamplers,
+                                         .max_timestamp_pools = 0};
         bfr_device* stray = nullptr;
         CHECK(bfr_create_device(instance.instance, &deviceDesc, &stray) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
         CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("takes no chained structs"));
@@ -336,7 +344,8 @@ TEST_CASE("C API rejects a device desc's null queues with a count, and a queue l
                                          .max_bindless_textures = 0,
                                          .max_bindless_storage_textures = 0,
                                          .max_bindless_storage_buffers = 0,
-                                         .max_bindless_samplers = 0};
+                                         .max_bindless_samplers = 0,
+                                         .max_timestamp_pools = 0};
         bfr_device* device = nullptr;
         CHECK(bfr_create_device(instance.instance, &nullQueues, &device) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
         CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("graphics_queues is null"));
@@ -915,6 +924,34 @@ TEST_CASE("C API says when a wait runs past its timeout", "[c_api][gpu]") {
     CHECK(bfr_wait(device.device, &ahead, kNoWait) == BFR_RESULT_ERROR_TIMEOUT);
 }
 
+TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call timings in two calls", "[c_api][gpu]") {
+    const bfr_backend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    const Instance instance{backend, messages, BFR_TRUE, BFR_TRUE};
+    const HeadlessDevice device{instance.instance};
+    const bfr_timestamp_pool_desc desc{.queue = 0, .count = 2};
+    bfr_timestamp_pool pool{};
+
+    REQUIRE(bfr_create_timestamp_pool(device.device, &desc, &pool) == BFR_RESULT_SUCCESS);
+    CHECK(bfr_create_timestamp_pool(device.device, &desc, &pool) == BFR_RESULT_ERROR_LIMIT_REACHED);
+    bfr_timestamp_rate rate{};
+    CHECK(bfr_get_timestamp_rate(device.device, 0, &rate) == BFR_RESULT_SUCCESS);
+    CHECK((rate.period_ns > 0 || rate.frequency != 0));
+    bfr_calibrated_timestamps taken{};
+    CHECK(bfr_calibrate_timestamps(device.device, 0, static_cast<bfr_host_clock>(99), &taken) ==
+          BFR_RESULT_ERROR_INVALID_ARGUMENT);
+
+    std::uint32_t count = 0;
+    REQUIRE(bfr_get_call_timings(device.device, &count, nullptr) == BFR_RESULT_SUCCESS);
+    CHECK(count == BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS + 1);
+    std::vector<bfr_call_timing> timings(count);
+    REQUIRE(bfr_get_call_timings(device.device, &count, timings.data()) == BFR_RESULT_SUCCESS);
+    CHECK(timings.at(BFR_CALL_CREATE_TIMESTAMP_POOL).count == 2);
+    std::uint32_t fewer = 1;
+    CHECK(bfr_get_instance_call_timings(instance.instance, &fewer, timings.data()) == BFR_RESULT_INCOMPLETE);
+    bfr_destroy_timestamp_pool(device.device, pool);
+}
+
 TEST_CASE("C API creates and destroys swapchains on one device from many threads", "[c_api][gpu]") {
     const bfr_backend backend = GENERATE(eachBackend());
     constexpr int kThreads = 4;
@@ -1047,7 +1084,8 @@ TEST_CASE("C API rejects a min_severity that is not a severity, 0 included", "[c
                                  .application_name = {},
                                  .application_version = 0,
                                  .engine_name = {},
-                                 .engine_version = 0};
+                                 .engine_version = 0,
+                                 .call_timings = BFR_FALSE};
     bfr_instance* instance = nullptr;
 
     CHECK(bfr_create_instance(&desc, &instance) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
@@ -1072,7 +1110,8 @@ TEST_CASE("C API sends BFR's messages from min_severity up", "[c_api][gpu]") {
                                      .application_name = {},
                                      .application_version = 0,
                                      .engine_name = {},
-                                     .engine_version = 0};
+                                     .engine_version = 0,
+                                     .call_timings = BFR_FALSE};
         bfr_instance* instance = nullptr;
         REQUIRE(bfr_create_instance(&desc, &instance) == BFR_RESULT_SUCCESS);
         bfr_destroy_instance(instance);

@@ -398,6 +398,20 @@ std::optional<std::vector<bfr::rhi::QueueDesc>> queuesIn(const bfr_queue_desc* q
     return out;
 }
 
+bfr_timestamp_pool toC(bfr::rhi::TimestampPoolHandle handle) {
+    return {.bits = handle.bits};
+}
+
+bfr::rhi::TimestampPoolHandle fromC(bfr_timestamp_pool handle) {
+    return bfr::rhi::TimestampPoolHandle::fromBits(handle.bits);
+}
+
+static_assert(static_cast<int>(bfr::rhi::TimestampStage::Copy) == BFR_TIMESTAMP_STAGE_COPY);
+static_assert(static_cast<int>(bfr::rhi::TimestampGranularity::Precise) == BFR_TIMESTAMP_GRANULARITY_PRECISE);
+static_assert(static_cast<int>(bfr::rhi::HostClock::PerformanceCounter) == BFR_HOST_CLOCK_PERFORMANCE_COUNTER);
+static_assert(static_cast<int>(bfr::rhi::Call::InstanceSwapchainFormats) == BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS + 1);
+
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
 }
@@ -867,7 +881,6 @@ bfr_caps_limits toC(const bfr::rhi::Limits& limits) {
         .copy_row_pitch_alignment = limits.copyRowPitchAlignment,
         .non_coherent_atom_size = limits.nonCoherentAtomSize,
         .buffer_texture_granularity = limits.bufferTextureGranularity,
-        .timestamp_period = limits.timestampPeriod,
     };
     std::ranges::copy(limits.minShadingRateTile, std::begin(out.min_shading_rate_tile));
     std::ranges::copy(limits.maxShadingRateTile, std::begin(out.max_shading_rate_tile));
@@ -1019,6 +1032,44 @@ bfr_queue_levels toC(const bfr::rhi::QueueLevels& levels) {
     };
 }
 
+bfr_timestamp_stages toC(const bfr::rhi::TimestampStages& stages) {
+    return {.end = toC(stages.end),
+            .start = toC(stages.start),
+            .vertex = toC(stages.vertex),
+            .fragment = toC(stages.fragment),
+            .compute = toC(stages.compute),
+            .copy = toC(stages.copy)};
+}
+
+bfr_caps_timestamps toC(const bfr::rhi::Timestamps& timestamps) {
+    const bfr::rhi::HostClocks& clocks = timestamps.hostClocks;
+    return {.graphics = toC(timestamps.graphics),
+            .compute = toC(timestamps.compute),
+            .copy = toC(timestamps.copy),
+            .outside_rendering = toC(timestamps.outsideRendering),
+            .inside_rendering = toC(timestamps.insideRendering),
+            .granularity = toC(timestamps.granularity),
+            .entry_bytes = timestamps.entryBytes,
+            .host_clocks = {.monotonic = toC(clocks.monotonic),
+                            .monotonic_raw = toC(clocks.monotonicRaw),
+                            .performance_counter = toC(clocks.performanceCounter)}};
+}
+
+// Writes timings as a bfr_get_*_call_timings listing does.
+bfr_result listTimings(std::span<const bfr::rhi::CallTiming> timings, std::uint32_t* count, bfr_call_timing* out) {
+    const auto total = static_cast<std::uint32_t>(timings.size());
+    if (out == nullptr) {
+        *count = total;
+        return BFR_RESULT_SUCCESS;
+    }
+    const std::uint32_t written = std::min(*count, total);
+    for (std::uint32_t i = 0; i < written; ++i) {
+        out[i] = {.count = timings[i].count, .total_ns = timings[i].totalNs, .max_ns = timings[i].maxNs};
+    }
+    *count = written;
+    return written < total ? BFR_RESULT_INCOMPLETE : BFR_RESULT_SUCCESS;
+}
+
 bfr_caps_queues toC(const bfr::rhi::Queues& queues) {
     return {
         .graphics = queues.graphics,
@@ -1166,7 +1217,8 @@ bfr_result bfr_create_instance(const bfr_instance_desc* desc, bfr_instance** ins
                                        .applicationName = {desc->application_name.data, desc->application_name.length},
                                        .applicationVersion = desc->application_version,
                                        .engineName = {desc->engine_name.data, desc->engine_name.length},
-                                       .engineVersion = desc->engine_version};
+                                       .engineVersion = desc->engine_version,
+                                       .callTimings = desc->call_timings != BFR_FALSE};
         // The severity is read only with a callback, which is all it filters.
         if (desc->message_callback != nullptr) {
             const auto least = severityFrom(desc->min_severity);
@@ -1256,7 +1308,8 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
                                               .maxBindlessTextures = desc->max_bindless_textures,
                                               .maxBindlessStorageTextures = desc->max_bindless_storage_textures,
                                               .maxBindlessStorageBuffers = desc->max_bindless_storage_buffers,
-                                              .maxBindlessSamplers = desc->max_bindless_samplers});
+                                              .maxBindlessSamplers = desc->max_bindless_samplers,
+                                              .maxTimestampPools = desc->max_timestamp_pools});
         if (!created) {
             return fail(created.error());
         }
@@ -1761,6 +1814,7 @@ bfr_result bfr_get_caps(bfr_instance* instance, uint32_t adapter, bfr_caps* caps
             .features = toC(found.features),
             .memory = toC(found.memory),
             .queues = toC(found.queues),
+            .timestamps = toC(found.timestamps),
         };
         return BFR_RESULT_SUCCESS;
     });
@@ -2088,6 +2142,141 @@ void bfr_destroy_pipeline(bfr_device* device, bfr_pipeline pipeline) {
         if (const auto destroyed = device->device->destroyPipeline(fromC(pipeline)); !destroyed) {
             lastError() = destroyed.error().message;
         }
+    });
+}
+
+bfr_result bfr_create_timestamp_pool(bfr_device* device, const bfr_timestamp_pool_desc* desc,
+                                     bfr_timestamp_pool* pool) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr || pool == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and pool must not be null");
+        }
+        *pool = {};
+        const auto created = device->device->createTimestampPool({.queue = desc->queue, .count = desc->count});
+        if (!created) {
+            return fail(created.error());
+        }
+        *pool = toC(*created);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+void bfr_destroy_timestamp_pool(bfr_device* device, bfr_timestamp_pool pool) {
+    quietly([&] {
+        if (device == nullptr) {
+            return;
+        }
+        if (const auto destroyed = device->device->destroyTimestampPool(fromC(pool)); !destroyed) {
+            lastError() = destroyed.error().message;
+        }
+    });
+}
+
+bfr_result bfr_reset_timestamps(bfr_device* device, bfr_command_list command_list, bfr_timestamp_pool pool,
+                                uint32_t first, uint32_t count) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto reset = device->device->resetTimestamps(fromC(command_list), fromC(pool), first, count);
+        return reset ? BFR_RESULT_SUCCESS : fail(reset.error());
+    });
+}
+
+bfr_result bfr_write_timestamp(bfr_device* device, bfr_command_list command_list, bfr_timestamp_pool pool,
+                               uint32_t index, bfr_timestamp_stage stage, bfr_timestamp_granularity granularity) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        bfr::core::Message error;
+        const auto at = enumIn(stage, bfr::rhi::TimestampStage::Copy, "timestamp stage", error);
+        if (!at) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto how = enumIn(granularity, bfr::rhi::TimestampGranularity::Precise, "timestamp granularity", error);
+        if (!how) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto written = device->device->writeTimestamp(fromC(command_list), fromC(pool), index, *at, *how);
+        return written ? BFR_RESULT_SUCCESS : fail(written.error());
+    });
+}
+
+bfr_result bfr_resolve_timestamps(bfr_device* device, bfr_command_list command_list, bfr_timestamp_pool pool,
+                                  uint32_t first, uint32_t count, bfr_buffer buffer, uint64_t offset) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto resolved = device->device->resolveTimestamps(fromC(command_list), fromC(pool), first, count,
+                                                                fromC(buffer), offset);
+        return resolved ? BFR_RESULT_SUCCESS : fail(resolved.error());
+    });
+}
+
+bfr_result bfr_get_timestamp_rate(bfr_device* device, uint32_t queue, bfr_timestamp_rate* rate) {
+    return guarded([&] {
+        if (device == nullptr || rate == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and rate must not be null");
+        }
+        *rate = {};
+        const auto found = device->device->timestampRate(queue);
+        if (!found) {
+            return fail(found.error());
+        }
+        *rate = {.period_ns = found->periodNs, .frequency = found->frequency};
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_calibrate_timestamps(bfr_device* device, uint32_t queue, bfr_host_clock clock,
+                                    bfr_calibrated_timestamps* timestamps) {
+    return guarded([&] {
+        if (device == nullptr || timestamps == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and timestamps must not be null");
+        }
+        *timestamps = {};
+        bfr::core::Message error;
+        const auto read = enumIn(clock, bfr::rhi::HostClock::PerformanceCounter, "host clock", error);
+        if (!read) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto taken = device->device->calibrateTimestamps(queue, *read);
+        if (!taken) {
+            return fail(taken.error());
+        }
+        *timestamps = {.gpu = taken->gpu,
+                       .host = taken->host,
+                       .max_deviation_ns = taken->maxDeviationNs,
+                       .deviation_given = toC(taken->deviationGiven)};
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_get_call_timings(bfr_device* device, uint32_t* count, bfr_call_timing* timings) {
+    return guarded([&] {
+        if (device == nullptr || count == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and count must not be null");
+        }
+        std::array<bfr::rhi::CallTiming, bfr::rhi::kCallCount> read{};
+        if (const auto written = device->device->callTimings(read); !written) {
+            return fail(written.error());
+        }
+        return listTimings(read, count, timings);
+    });
+}
+
+bfr_result bfr_get_instance_call_timings(bfr_instance* instance, uint32_t* count, bfr_call_timing* timings) {
+    return guarded([&] {
+        if (instance == nullptr || count == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instance and count must not be null");
+        }
+        std::array<bfr::rhi::CallTiming, bfr::rhi::kCallCount> read{};
+        if (const auto written = instance->instance->callTimings(read); !written) {
+            return fail(written.error());
+        }
+        return listTimings(read, count, timings);
     });
 }
 

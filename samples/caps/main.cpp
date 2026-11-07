@@ -467,8 +467,7 @@ void printAllLimits(const bfr::CapsLimits& l) {
                      field("copyOffsetAlignment", l.copyOffsetAlignment),
                      field("copyRowPitchAlignment", l.copyRowPitchAlignment),
                      field("nonCoherentAtomSize", l.nonCoherentAtomSize),
-                     field("bufferTextureGranularity", l.bufferTextureGranularity),
-                     field("timestampPeriod", l.timestampPeriod)});
+                     field("bufferTextureGranularity", l.bufferTextureGranularity)});
 }
 
 void printAllShaders(const bfr::Caps& caps) {
@@ -566,6 +565,11 @@ void printAllMemory(const bfr::Caps& caps) {
            field("computeTimestampBits", q.computeTimestampBits), field("copyTimestampBits", q.copyTimestampBits),
            field("ranks", q.ranks), field("graphicsLevels", levelNames(q.graphicsLevels)),
            field("computeLevels", levelNames(q.computeLevels)), field("copyLevels", levelNames(q.copyLevels))});
+    const bfr::CapsTimestamps& t = caps.timestamps;
+    group("timestamps", {field("graphics", t.graphics), field("compute", t.compute), field("copy", t.copy),
+                         field("granularity", t.granularity), field("entryBytes", t.entryBytes),
+                         field("monotonic", t.hostClocks.monotonic), field("monotonicRaw", t.hostClocks.monotonicRaw),
+                         field("performanceCounter", t.hostClocks.performanceCounter)});
 }
 
 void printAll(const bfr::Caps& caps) {

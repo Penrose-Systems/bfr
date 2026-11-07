@@ -154,6 +154,7 @@ void VulkanDevice::collectBuffers() {
     buffers_.collect(completed, [this](const VulkanBuffer& buffer) { bindless_.giveBuffer(buffer.slot()); });
     textures_.collect(completed, [this](const VulkanTexture& texture) { bindless_.giveTexture(texture.slots()); });
     samplers_.collect(completed, [this](const VulkanSampler& sampler) { bindless_.giveSampler(sampler.slot()); });
+    timestampPools_.collect(completed);
     pipelines_.collect(completed);
 }
 
