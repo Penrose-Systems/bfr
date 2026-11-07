@@ -373,6 +373,12 @@ enums:
       buffer_tiling: {value: 60}
       sparse_format: {value: 61}
       update_tile_mappings: {value: 62}
+      set_topology: {value: 63}
+      draw_indirect: {value: 64}
+      draw_indexed_indirect: {value: 65}
+      draw_indirect_count: {value: 66}
+      draw_indexed_indirect_count: {value: 67}
+      dispatch_indirect: {value: 68}
 
   timestamp_stage:
     doc: >-
@@ -460,12 +466,28 @@ enums:
       depth: {value: 1, doc: The depth of a depth format.}
       stencil: {value: 2, doc: The stencil of a stencil format.}
 
-  topology_class:
-    doc: What a graphics pipeline's draws assemble vertices into.
+  topology:
+    doc: >-
+      What draws assemble vertices into. Lists take each primitive's vertices
+      apart; strips share each one with the next.
     values:
-      triangle: {value: 0, doc: Three vertices a triangle.}
-      line: {value: 1, doc: Two vertices a line.}
-      point: {value: 2, doc: Each vertex a point.}
+      triangle_list: {value: 0, doc: Each three vertices a triangle.}
+      triangle_strip: {value: 1, doc: Each vertex and the two before it a triangle.}
+      triangle_fan: {value: 2, doc: "Each two vertices and the first a triangle, where bfr_caps_features.triangle_fans."}
+      line_list: {value: 3, doc: Each two vertices a line.}
+      line_strip: {value: 4, doc: Each vertex and the one before it a line.}
+      point_list: {value: 5, doc: Each vertex a point.}
+
+  primitive_restart:
+    doc: >-
+      Whether an index of all ones ends a strip and starts the next, in
+      indexed draws, and the index type it is all ones of: D3D12 fixes that
+      value in the pipeline. Restart on a list topology needs
+      bfr_caps_features.list_restart.
+    values:
+      "off": {value: 0, doc: No index restarts.}
+      index16: {value: 1, doc: "0xFFFF restarts, with 16-bit indices."}
+      index32: {value: 2, doc: "0xFFFFFFFF restarts, with 32-bit indices."}
 
   cull_mode:
     doc: Which triangles a graphics pipeline discards by the way they face.
@@ -832,6 +854,16 @@ structs:
           The most texture regions and the most buffer regions one bfr_update_tile_mappings takes; room
           for them is made with the device, so mapping never allocates. More fails with
           error_invalid_argument. 0 is none.
+      - name: indirect_strides
+        type: u32
+        array: indirect_stride_count
+        pointer: in
+        optional: true
+        doc: >-
+          The strides, in bytes, the device's indirect draws take, read during the call only. D3D12
+          fixes a stride in the command signature it makes for them, so it makes one for each here and
+          fails an indirect draw of any other with error_unsupported; Vulkan and Metal take any stride.
+      - {name: indirect_stride_count, type: u32}
 
   swapchain_desc:
     doc: How to create a swapchain.
@@ -977,6 +1009,30 @@ structs:
       - {name: sparse, type: bool, doc: "Made with no memory: bfr_update_tile_mappings maps sparse memory's tiles into it, as bfr_caps_sparse says. memory is device."}
       - {name: sparse_aliased, type: bool, doc: "Its tiles may be mapped to memory other sparse resources' tiles are mapped to, where bfr_caps_sparse.aliased."}
       - {name: tile_bytes, type: u32, doc: "One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty; only when sparse."}
+
+  draw_indirect_args:
+    doc: The arguments of one indirect draw, as a buffer holds them for bfr_draw_indirect; the layout every backend reads.
+    members:
+      - {name: vertex_count, type: u32}
+      - {name: instance_count, type: u32}
+      - {name: first_vertex, type: u32}
+      - {name: first_instance, type: u32}
+
+  draw_indexed_indirect_args:
+    doc: The arguments of one indirect indexed draw, for bfr_draw_indexed_indirect.
+    members:
+      - {name: index_count, type: u32}
+      - {name: instance_count, type: u32}
+      - {name: first_index, type: u32}
+      - {name: vertex_offset, type: i32}
+      - {name: first_instance, type: u32}
+
+  dispatch_indirect_args:
+    doc: The workgroups of one indirect dispatch, for bfr_dispatch_indirect.
+    members:
+      - {name: x, type: u32}
+      - {name: y, type: u32}
+      - {name: z, type: u32}
 
   buffer_copy:
     doc: One range copied from a source buffer to a destination buffer.
@@ -1219,7 +1275,8 @@ structs:
     members:
       - {name: vertex, type: shader_code}
       - {name: fragment, type: shader_code, doc: A code_size of 0 is no fragment shader; the pipeline writes depth alone.}
-      - {name: topology, type: topology_class}
+      - {name: topology, type: topology, doc: What its draws assemble until bfr_set_topology.}
+      - {name: primitive_restart, type: primitive_restart}
       - {name: raster, type: raster_state}
       - {name: depth_stencil, type: depth_stencil_state}
       - {name: color_target_count, type: u32, doc: "How many of color_targets are used, at most max_color_targets."}
@@ -1527,6 +1584,8 @@ structs:
       - {name: multi_draw_indirect, type: bool}
       - {name: draw_indirect_count, type: bool, doc: Indirect draws that read their count from a buffer.}
       - {name: draw_indirect_first_instance, type: bool}
+      - {name: triangle_fans, type: bool, doc: topology_triangle_fan draws.}
+      - {name: list_restart, type: bool, doc: "primitive_restart on list topologies, not only strips."}
       - {name: storage_read_without_format, type: bool}
       - {name: storage_write_without_format, type: bool}
       - {name: timestamps_on_all_queues, type: bool, doc: Every graphics and compute queue writes timestamps.}
@@ -1955,8 +2014,8 @@ functions:
     doc: >-
       Begins rendering to desc's attachments, with the image bfr_acquire took
       from swapchain as color attachment 0 when swapchain is not null. Sets the
-      viewport and scissor to the whole of the attachments. Only bfr_draw and
-      bfr_draw_indexed, and the state they take, are recorded until
+      viewport and scissor to the whole of the attachments. Only the draws, direct
+      and indirect, and the state they take, are recorded until
       bfr_end_rendering. Fails with error_invalid_argument when no attachment
       is given, when a color attachment but the swapchain's names no texture,
       or, with a swapchain, when there is no color attachment or attachment 0
@@ -2027,12 +2086,24 @@ functions:
     doc: >-
       Makes pipeline the one draws or dispatches after it run, a graphics
       pipeline for draws and a compute one for dispatches, until another of its
-      kind is bound. Draws assemble the list topology of the pipeline's class.
+      kind is bound. Draws assemble the pipeline's topology until bfr_set_topology.
     returns: result
     params:
       - {name: device, type: device}
       - {name: command_list, type: command_list}
       - {name: pipeline, type: pipeline}
+
+  set_topology:
+    doc: >-
+      Makes the draws after it assemble topology, which is of the bound
+      graphics pipeline's kind, points, lines or triangles, as each backend
+      requires, until the next bfr_bind_pipeline. Fails with
+      error_invalid_argument for a value BFR doesn't have.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: topology, type: topology}
 
   push_constants:
     doc: >-
@@ -2106,6 +2177,83 @@ functions:
       - {name: x, type: u32}
       - {name: y, type: u32}
       - {name: z, type: u32}
+
+  draw_indirect:
+    doc: >-
+      Records draw_count draws as bfr_draw does, each with the
+      bfr_draw_indirect_args buffer holds from offset, stride bytes apart.
+      buffer has indirect usage; work that wrote the arguments is ordered
+      before by a bfr_barrier. Fails with error_unsupported for draw_count
+      above 1 where bfr_caps_features.multi_draw_indirect is false and, on
+      D3D12, a stride not in the device's indirect_strides; and as bfr_draw
+      does.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: buffer, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into the buffer.}
+      - {name: draw_count, type: u32}
+      - {name: stride, type: u32, doc: Bytes between two draws' arguments.}
+
+  draw_indexed_indirect:
+    doc: >-
+      Records draw_count draws as bfr_draw_indexed does, each with the
+      bfr_draw_indexed_indirect_args buffer holds from offset, stride bytes
+      apart. Fails as bfr_draw_indirect does.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: buffer, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into the buffer.}
+      - {name: draw_count, type: u32}
+      - {name: stride, type: u32, doc: Bytes between two draws' arguments.}
+
+  draw_indirect_count:
+    doc: >-
+      Records bfr_draw_indirect's draws, as many as the 32-bit count
+      count_buffer holds at count_offset when the GPU runs it, at most
+      max_draw_count. count_buffer has indirect usage. Fails with
+      error_unsupported where bfr_caps_features.draw_indirect_count is false,
+      and as bfr_draw_indirect does.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: buffer, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into the buffer.}
+      - {name: count_buffer, type: buffer}
+      - {name: count_offset, type: u64, doc: Bytes into count_buffer.}
+      - {name: max_draw_count, type: u32}
+      - {name: stride, type: u32, doc: Bytes between two draws' arguments.}
+
+  draw_indexed_indirect_count:
+    doc: >-
+      Records bfr_draw_indexed_indirect's draws, as many as count_buffer
+      holds, as bfr_draw_indirect_count does. Fails as it does.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: buffer, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into the buffer.}
+      - {name: count_buffer, type: buffer}
+      - {name: count_offset, type: u64, doc: Bytes into count_buffer.}
+      - {name: max_draw_count, type: u32}
+      - {name: stride, type: u32, doc: Bytes between two draws' arguments.}
+
+  dispatch_indirect:
+    doc: >-
+      Records a dispatch as bfr_dispatch does, of the bfr_dispatch_indirect_args
+      buffer holds at offset. buffer has indirect usage. Fails as bfr_dispatch
+      does.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: buffer, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into the buffer.}
 
   copy_buffer:
     doc: >-

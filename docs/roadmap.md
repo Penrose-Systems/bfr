@@ -12,9 +12,9 @@ lists, clear, submit and wait, buffers (create, map, destroy), buffer copies,
 textures and texture copies, shaders and pipelines, draws and dispatches,
 samplers, timings (GPU timestamps, tick rates, CPU-GPU calibration, CPU time
 in each call), sparse and tiled resources (partly resident textures and
-buffers, sparse memory, tile mapping, sparse caps).
+buffers, sparse memory, tile mapping, sparse caps), indirect draws and
+dispatches (counts and strides), exact topologies and primitive restart.
 
-8. Indirect draws and dispatches; exact topologies.
 9. Depth-stencil and multisampled attachments in use; resolves.
 10. Compute and copy queues in use: cross-queue waits.
 11. Pipeline cache blobs.
@@ -23,4 +23,4 @@ buffers, sparse memory, tile mapping, sparse caps).
     resources, formatted buffer views, variable rate shading, HDR and
     present timing, and whatever each backend's caps turn up as we go.
 
-Next: 8.
+Next: 9.

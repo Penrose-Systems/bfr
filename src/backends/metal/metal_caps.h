@@ -17,6 +17,12 @@
 
 namespace bfr::rhi::metal {
 
+/// Metal 4's render encoder takes one indirect argument address per draw and
+/// no draw count (MTL4RenderCommandEncoder.hpp:69, 79), so it has neither
+/// Features::multiDrawIndirect nor Features::drawIndirectCount.
+inline constexpr bool kMultiDrawIndirect = false;
+inline constexpr bool kDrawIndirectCount = false;
+
 /// Why device is below the floor, empty when it meets it: Metal 4, by
 /// Metal's own answer.
 [[nodiscard]] std::string belowFloor(MTL::Device* device);

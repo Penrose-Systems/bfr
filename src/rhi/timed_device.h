@@ -82,6 +82,7 @@ public:
     [[nodiscard]] core::Result<void> setStencilReference(CommandListHandle commandList,
                                                          std::uint32_t reference) override;
     [[nodiscard]] core::Result<void> bindPipeline(CommandListHandle commandList, PipelineHandle pipeline) override;
+    [[nodiscard]] core::Result<void> setTopology(CommandListHandle commandList, Topology topology) override;
     [[nodiscard]] core::Result<void> pushConstants(CommandListHandle commandList,
                                                    std::span<const std::byte> data) override;
     [[nodiscard]] core::Result<void> bindIndexBuffer(CommandListHandle commandList, BufferHandle buffer,
@@ -94,6 +95,22 @@ public:
                                                  std::int32_t vertexOffset, std::uint32_t firstInstance) override;
     [[nodiscard]] core::Result<void> dispatch(CommandListHandle commandList, std::uint32_t x, std::uint32_t y,
                                               std::uint32_t z) override;
+    [[nodiscard]] core::Result<void> drawIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                  std::uint64_t offset, std::uint32_t drawCount,
+                                                  std::uint32_t stride) override;
+    [[nodiscard]] core::Result<void> drawIndexedIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                         std::uint64_t offset, std::uint32_t drawCount,
+                                                         std::uint32_t stride) override;
+    [[nodiscard]] core::Result<void> drawIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                       std::uint64_t offset, BufferHandle countBuffer,
+                                                       std::uint64_t countOffset, std::uint32_t maxDrawCount,
+                                                       std::uint32_t stride) override;
+    [[nodiscard]] core::Result<void> drawIndexedIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                              std::uint64_t offset, BufferHandle countBuffer,
+                                                              std::uint64_t countOffset, std::uint32_t maxDrawCount,
+                                                              std::uint32_t stride) override;
+    [[nodiscard]] core::Result<void> dispatchIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                      std::uint64_t offset) override;
     [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
                                                 std::span<const BufferCopy> regions) override;
     [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;

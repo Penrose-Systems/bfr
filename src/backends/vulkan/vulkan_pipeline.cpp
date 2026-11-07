@@ -26,6 +26,24 @@
 
 namespace bfr::rhi::vulkan {
 
+VkPrimitiveTopology topologyFor(Topology topology) {
+    switch (topology) {
+        case Topology::TriangleStrip:
+            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+        case Topology::TriangleFan:
+            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+        case Topology::LineList:
+            return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+        case Topology::LineStrip:
+            return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+        case Topology::PointList:
+            return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+        case Topology::TriangleList:
+        default:
+            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    }
+}
+
 namespace {
 
 constexpr std::uint32_t kBindlessSet = 0;
@@ -95,18 +113,6 @@ VkPipelineShaderStageCreateInfo stageFor(VkShaderStageFlagBits stage, VkShaderMo
     info.module = module;
     info.pName = entryPoint;
     return info;
-}
-
-VkPrimitiveTopology topologyFor(TopologyClass topology) {
-    switch (topology) {
-        case TopologyClass::Point:
-            return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
-        case TopologyClass::Line:
-            return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
-        case TopologyClass::Triangle:
-        default:
-            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    }
 }
 
 VkCullModeFlags cullFor(CullMode cull) {
@@ -506,6 +512,8 @@ core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable&
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     inputAssembly.topology = topologyFor(desc.topology);
+    // Vulkan restarts on the all-ones value of the bound index type.
+    inputAssembly.primitiveRestartEnable = desc.primitiveRestart != PrimitiveRestart::Off ? VK_TRUE : VK_FALSE;
     VkPipelineViewportStateCreateInfo viewport{};
     viewport.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     viewport.viewportCount = kViewports;

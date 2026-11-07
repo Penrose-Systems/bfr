@@ -45,6 +45,8 @@ struct DeviceFeatures {
     VkPhysicalDeviceGlobalPriorityQueryFeaturesKHR globalPriority{};
     /// A device with no queues needs its maintenance9.
     VkPhysicalDeviceMaintenance9FeaturesKHR maintenance9{};
+    /// Primitive restart on list topologies.
+    VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT listRestart{};
     /// The extensions whose structs are chained, which the device enables.
     std::vector<const char*> enabledExtensions;
 };

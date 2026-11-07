@@ -89,7 +89,8 @@ Limits limitsOf(const D3D12_FEATURE_DATA_D3D12_OPTIONS6& options6) {
     limits.copyOffsetAlignment = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT;
     limits.copyRowPitchAlignment = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
     // D3D12 answers sample counts per format only, in formatCaps, so the
-    // device-wide counts stay 0.
+    // device-wide counts stay 0. d3d12.h defines no limit on ExecuteIndirect's
+    // MaxCommandCount, so maxDrawIndirectCount stays 0 too.
     if (options6.VariableShadingRateTier >= D3D12_VARIABLE_SHADING_RATE_TIER_2) {
         // One size, for a square tile.
         const UINT tile = options6.ShadingRateImageTileSize;
@@ -222,12 +223,29 @@ void addFloorFeatures(Features& features) {
     features.compressionBc = true;
 }
 
+// What draws may be. ExecuteIndirect takes a
+// MaxCommandCount and an optional count buffer (d3d12.h:6618-6624), and its
+// draw arguments a StartInstanceLocation (d3d12.h:4597, 4606), with no caps
+// bit for any. Fans are OPTIONS15's. D3D12 cuts strips at the
+// IBStripCutValue (D3D12_INDEX_BUFFER_STRIP_CUT_VALUE) and no D3D12 source
+// says the cut applies to lists, so listRestart stays false.
+void addDrawFeatures(ID3D12Device* device, Features& features) {
+    features.multiDrawIndirect = true;
+    features.drawIndirectCount = true;
+    features.drawIndirectFirstInstance = true;
+    D3D12_FEATURE_DATA_D3D12_OPTIONS15 options15{};
+    if (query(device, D3D12_FEATURE_D3D12_OPTIONS15, options15)) {
+        features.triangleFans = options15.TriangleFanSupported != FALSE;
+    }
+}
+
 Features featuresOf(ID3D12Device* device, const SamplerFeatures& sampler) {
     Features features;
     addBasicFeatures(device, features);
     addAdvancedFeatures(device, features);
     addSamplerFeatures(device, sampler, features);
     addFloorFeatures(features);
+    addDrawFeatures(device, features);
     return features;
 }
 

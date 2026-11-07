@@ -84,6 +84,12 @@ struct DeviceDesc {
     /// The most texture regions and the most buffer regions one
     /// updateTileMappings call takes.
     std::uint32_t maxTileMappings = 0;
+    /// The strides, in bytes, the device's indirect draws take, read during
+    /// createDevice only: D3D12 fixes a stride in the command signature it
+    /// makes for them, so it makes one for each here and fails an indirect
+    /// draw of any other with RhiUnsupported. Vulkan and Metal take any
+    /// stride as it is given.
+    std::span<const std::uint32_t> indirectStrides{};
 };
 
 /// How to create a command pool: the queue its lists record for, how many
@@ -112,6 +118,31 @@ struct SubmitDesc {
     std::uint32_t queue = 0;
     std::span<const CommandListHandle> commandLists;
     std::span<const Token> waits;
+};
+
+/// The arguments of one indirect draw, as a buffer holds them for
+/// Device::drawIndirect; the layout every backend reads.
+struct DrawIndirectArgs {
+    std::uint32_t vertexCount = 0;
+    std::uint32_t instanceCount = 0;
+    std::uint32_t firstVertex = 0;
+    std::uint32_t firstInstance = 0;
+};
+
+/// The arguments of one indirect indexed draw, for Device::drawIndexedIndirect.
+struct DrawIndexedIndirectArgs {
+    std::uint32_t indexCount = 0;
+    std::uint32_t instanceCount = 0;
+    std::uint32_t firstIndex = 0;
+    std::int32_t vertexOffset = 0;
+    std::uint32_t firstInstance = 0;
+};
+
+/// The workgroups of one indirect dispatch, for Device::dispatchIndirect.
+struct DispatchIndirectArgs {
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+    std::uint32_t z = 0;
 };
 
 /// What an attachment holds when rendering begins.

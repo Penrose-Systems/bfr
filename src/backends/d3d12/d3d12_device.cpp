@@ -85,15 +85,43 @@ std::optional<INT> d3d12Priority(QueueLevel level) {
     return std::nullopt;
 }
 
+// A command signature of one argument of type, stride bytes apart. It sets no
+// root arguments, so it takes no root signature, as NVRHI's and Godot's do.
+core::Result<ComPtr<ID3D12CommandSignature>> createSignature(ID3D12Device& device, D3D12_INDIRECT_ARGUMENT_TYPE type,
+                                                             std::uint32_t stride) {
+    D3D12_INDIRECT_ARGUMENT_DESC argument{};
+    argument.Type = type;
+    const D3D12_COMMAND_SIGNATURE_DESC desc{.ByteStride = stride,
+                                            .NumArgumentDescs = 1,
+                                            .pArgumentDescs = &argument,
+                                            .NodeMask = 0};
+    ComPtr<ID3D12CommandSignature> signature;
+    if (const HRESULT result = device.CreateCommandSignature(&desc, nullptr, IID_PPV_ARGS(&signature));
+        FAILED(result)) {
+        return failure(core::ErrorCode::RhiDeviceFailed,
+                       {.call = "ID3D12Device::CreateCommandSignature", .result = result});
+    }
+    return signature;
+}
+
+// BFR's indirect structs are D3D12's argument structs field for field
+// (d3d12.h:4592-4614), which ExecuteIndirect reads.
+static_assert(sizeof(DrawIndirectArgs) == sizeof(D3D12_DRAW_ARGUMENTS));
+static_assert(sizeof(DrawIndexedIndirectArgs) == sizeof(D3D12_DRAW_INDEXED_ARGUMENTS));
+static_assert(sizeof(DispatchIndirectArgs) == sizeof(D3D12_DISPATCH_ARGUMENTS));
+
 } // namespace
 
 core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rhi, ComPtr<ID3D12Device> device,
-                                                               ComPtr<IDXGIAdapter3> adapter, std::size_t heapCount,
-                                                               std::uint32_t viewHeapSize, const DeviceDesc& desc) {
+                                                               ComPtr<IDXGIAdapter3> adapter, const Features& features,
+                                                               std::size_t heapCount, std::uint32_t viewHeapSize,
+                                                               const DeviceDesc& desc) {
     auto made = std::make_unique<D3D12Device>(rhi, std::move(device), std::move(adapter), heapCount, desc);
     // A runtime without it answers E_NOINTERFACE and leaves device11_ null.
     static_cast<void>(made->device_.As(&made->device11_));
     made->sparse_ = sparseOf(made->device_.Get());
+    made->multiDrawIndirect_ = features.multiDrawIndirect;
+    made->drawIndirectCount_ = features.drawIndirectCount;
     if (auto opened = made->open(desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
@@ -107,6 +135,24 @@ core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rh
         return std::unexpected(std::move(layout.error()));
     }
     made->layout_ = std::move(*layout);
+    for (std::size_t i = 0; i < desc.indirectStrides.size(); ++i) {
+        const std::uint32_t stride = desc.indirectStrides[i];
+        auto draw = createSignature(*made->device_.Get(), D3D12_INDIRECT_ARGUMENT_TYPE_DRAW, stride);
+        if (!draw) {
+            return std::unexpected(std::move(draw.error()));
+        }
+        auto drawIndexed = createSignature(*made->device_.Get(), D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED, stride);
+        if (!drawIndexed) {
+            return std::unexpected(std::move(drawIndexed.error()));
+        }
+        made->drawSignatures_[i] = {.stride = stride, .draw = std::move(*draw), .drawIndexed = std::move(*drawIndexed)};
+    }
+    auto dispatch = createSignature(*made->device_.Get(), D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH,
+                                    sizeof(D3D12_DISPATCH_ARGUMENTS));
+    if (!dispatch) {
+        return std::unexpected(std::move(dispatch.error()));
+    }
+    made->dispatchSignature_ = std::move(*dispatch);
     return made;
 }
 
@@ -117,6 +163,7 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       adapter_(std::move(adapter)),
       heapCount_(heapCount),
       desc_(heldPart(desc)),
+      drawSignatures_(desc.indirectStrides.size()),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
       commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
       commandLists_("command lists", desc.maxCommandLists, desc.maxCommandLists, rhi.logger()),

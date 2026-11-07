@@ -148,6 +148,48 @@ core::Result<void> TimedDevice::dispatch(CommandListHandle commandList, std::uin
     return counters_.time(Call::Dispatch, [&] { return device_->dispatch(commandList, x, y, z); });
 }
 
+core::Result<void> TimedDevice::setTopology(CommandListHandle commandList, Topology topology) {
+    return counters_.time(Call::SetTopology, [&] { return device_->setTopology(commandList, topology); });
+}
+
+core::Result<void> TimedDevice::drawIndirect(CommandListHandle commandList, BufferHandle buffer, std::uint64_t offset,
+                                             std::uint32_t drawCount, std::uint32_t stride) {
+    return counters_.time(Call::DrawIndirect,
+                          [&] { return device_->drawIndirect(commandList, buffer, offset, drawCount, stride); });
+}
+
+core::Result<void> TimedDevice::drawIndexedIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                    std::uint64_t offset, std::uint32_t drawCount,
+                                                    std::uint32_t stride) {
+    return counters_.time(Call::DrawIndexedIndirect,
+                          [&] { return device_->drawIndexedIndirect(commandList, buffer, offset, drawCount, stride); });
+}
+
+core::Result<void> TimedDevice::drawIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                  std::uint64_t offset, BufferHandle countBuffer,
+                                                  std::uint64_t countOffset, std::uint32_t maxDrawCount,
+                                                  std::uint32_t stride) {
+    return counters_.time(Call::DrawIndirectCount, [&] {
+        return device_->drawIndirectCount(commandList, buffer, offset, countBuffer, countOffset, maxDrawCount, stride);
+    });
+}
+
+core::Result<void> TimedDevice::drawIndexedIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                         std::uint64_t offset, BufferHandle countBuffer,
+                                                         std::uint64_t countOffset, std::uint32_t maxDrawCount,
+                                                         std::uint32_t stride) {
+    return counters_.time(Call::DrawIndexedIndirectCount, [&] {
+        return device_->drawIndexedIndirectCount(commandList, buffer, offset, countBuffer, countOffset, maxDrawCount,
+                                                 stride);
+    });
+}
+
+core::Result<void> TimedDevice::dispatchIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                 std::uint64_t offset) {
+    return counters_.time(Call::DispatchIndirect,
+                          [&] { return device_->dispatchIndirect(commandList, buffer, offset); });
+}
+
 core::Result<void> TimedDevice::copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
                                            std::span<const BufferCopy> regions) {
     return counters_.time(Call::CopyBuffer, [&] { return device_->copyBuffer(commandList, src, dst, regions); });

@@ -11,10 +11,12 @@
 #include <dxgiformat.h>
 #include <windows.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <span>
 #include <utility>
 
@@ -22,18 +24,28 @@ namespace bfr::rhi::d3d12 {
 
 namespace {
 
-// The list topology of a pipeline's class, which the PSO fixes the class of.
-D3D_PRIMITIVE_TOPOLOGY listTopologyFor(TopologyClass topology) {
+// The exact topology draws assemble; the PSO fixes only its class.
+D3D_PRIMITIVE_TOPOLOGY topologyFor(Topology topology) {
     switch (topology) {
-        case TopologyClass::Point:
-            return D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
-        case TopologyClass::Line:
+        case Topology::TriangleStrip:
+            return D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
+        case Topology::TriangleFan:
+            return D3D_PRIMITIVE_TOPOLOGY_TRIANGLEFAN;
+        case Topology::LineList:
             return D3D_PRIMITIVE_TOPOLOGY_LINELIST;
-        case TopologyClass::Triangle:
+        case Topology::LineStrip:
+            return D3D_PRIMITIVE_TOPOLOGY_LINESTRIP;
+        case Topology::PointList:
+            return D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
+        case Topology::TriangleList:
         default:
             return D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
     }
 }
+
+// dispatchIndirect records one dispatch, as Godot's does
+// (rendering_device_driver_d3d12.cpp:5685).
+constexpr UINT kOneDispatch = 1;
 
 } // namespace
 
@@ -106,8 +118,20 @@ core::Result<void> D3D12Device::bindPipeline(CommandListHandle commandList, Pipe
     (*list)->list->SetPipelineState((*found)->state.Get());
     if ((*found)->compute) {}
     else {
-        (*list)->list->IASetPrimitiveTopology(listTopologyFor((*found)->topology));
+        (*list)->list->IASetPrimitiveTopology(topologyFor((*found)->topology));
     }
+    return {};
+}
+
+core::Result<void> D3D12Device::setTopology(CommandListHandle commandList, Topology topology) {
+    if (auto checked = checkKnown(topology, "topology"); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    (*list)->list->IASetPrimitiveTopology(topologyFor(topology));
     return {};
 }
 
@@ -200,6 +224,99 @@ core::Result<void> D3D12Device::dispatch(CommandListHandle commandList, std::uin
     }
     (*list)->list->Dispatch(x, y, z);
     return {};
+}
+
+core::Result<D3D12DrawSignatures*> D3D12Device::drawSignaturesFor(std::uint32_t stride) {
+    // A short array the caller sized; the stride comes with each call.
+    const auto found = std::ranges::find(drawSignatures_, stride, &D3D12DrawSignatures::stride);
+    if (found == drawSignatures_.end()) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "stride {} is not in the DeviceDesc::indirectStrides the device was made with", stride);
+    }
+    return &*found;
+}
+
+core::Result<void> D3D12Device::executeIndirect(CommandListHandle commandList, ID3D12CommandSignature* signature,
+                                                UINT maxCommandCount, BufferHandle buffer, std::uint64_t offset,
+                                                std::optional<BufferHandle> countBuffer, std::uint64_t countOffset) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    ID3D12Resource* count = nullptr;
+    if (countBuffer) {
+        auto counted = bufferFor(*countBuffer);
+        if (!counted) {
+            return std::unexpected(std::move(counted.error()));
+        }
+        count = (*counted)->resource.Get();
+    }
+    (*list)->list->ExecuteIndirect(signature, maxCommandCount, (*found)->resource.Get(), offset, count, countOffset);
+    return {};
+}
+
+core::Result<void> D3D12Device::drawIndirect(CommandListHandle commandList, BufferHandle buffer, std::uint64_t offset,
+                                             std::uint32_t drawCount, std::uint32_t stride) {
+    if (auto checked = checkDrawCount(drawCount, multiDrawIndirect_); !checked) {
+        return checked;
+    }
+    auto signatures = drawSignaturesFor(stride);
+    if (!signatures) {
+        return std::unexpected(std::move(signatures.error()));
+    }
+    return executeIndirect(commandList, (*signatures)->draw.Get(), drawCount, buffer, offset, std::nullopt, 0);
+}
+
+core::Result<void> D3D12Device::drawIndexedIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                    std::uint64_t offset, std::uint32_t drawCount,
+                                                    std::uint32_t stride) {
+    if (auto checked = checkDrawCount(drawCount, multiDrawIndirect_); !checked) {
+        return checked;
+    }
+    auto signatures = drawSignaturesFor(stride);
+    if (!signatures) {
+        return std::unexpected(std::move(signatures.error()));
+    }
+    return executeIndirect(commandList, (*signatures)->drawIndexed.Get(), drawCount, buffer, offset, std::nullopt, 0);
+}
+
+core::Result<void> D3D12Device::drawIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                  std::uint64_t offset, BufferHandle countBuffer,
+                                                  std::uint64_t countOffset, std::uint32_t maxDrawCount,
+                                                  std::uint32_t stride) {
+    if (auto checked = checkCountDraws(drawIndirectCount_); !checked) {
+        return checked;
+    }
+    auto signatures = drawSignaturesFor(stride);
+    if (!signatures) {
+        return std::unexpected(std::move(signatures.error()));
+    }
+    return executeIndirect(commandList, (*signatures)->draw.Get(), maxDrawCount, buffer, offset, countBuffer,
+                           countOffset);
+}
+
+core::Result<void> D3D12Device::drawIndexedIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                         std::uint64_t offset, BufferHandle countBuffer,
+                                                         std::uint64_t countOffset, std::uint32_t maxDrawCount,
+                                                         std::uint32_t stride) {
+    if (auto checked = checkCountDraws(drawIndirectCount_); !checked) {
+        return checked;
+    }
+    auto signatures = drawSignaturesFor(stride);
+    if (!signatures) {
+        return std::unexpected(std::move(signatures.error()));
+    }
+    return executeIndirect(commandList, (*signatures)->drawIndexed.Get(), maxDrawCount, buffer, offset, countBuffer,
+                           countOffset);
+}
+
+core::Result<void> D3D12Device::dispatchIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                 std::uint64_t offset) {
+    return executeIndirect(commandList, dispatchSignature_.Get(), kOneDispatch, buffer, offset, std::nullopt, 0);
 }
 
 } // namespace bfr::rhi::d3d12

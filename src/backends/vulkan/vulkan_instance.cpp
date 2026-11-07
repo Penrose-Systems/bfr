@@ -478,7 +478,9 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
                                       .hasSwapchain = swapchains,
                                       .pushConstantsSize = listed.caps.limits.maxPushConstantsSize,
                                       .timestampPeriod = adapterProperties.limits.timestampPeriod,
-                                      .hostClocks = listed.caps.timestamps.hostClocks});
+                                      .hostClocks = listed.caps.timestamps.hostClocks,
+                                      .multiDrawIndirect = listed.caps.features.multiDrawIndirect,
+                                      .drawIndirectCount = listed.caps.features.drawIndirectCount});
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }

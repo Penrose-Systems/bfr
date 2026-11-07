@@ -58,12 +58,13 @@ namespace bfr::rhi {
     return static_cast<std::uint32_t>(desc.graphics.size() + desc.compute.size() + desc.copy.size());
 }
 
-/// The part of desc a device keeps: its queue spans point into the caller's
-/// memory, which lives only for createDevice.
+/// The part of desc a device keeps: its spans point into the caller's memory,
+/// which lives only for createDevice.
 [[nodiscard]] inline DeviceDesc heldPart(DeviceDesc desc) {
     desc.graphics = {};
     desc.compute = {};
     desc.copy = {};
+    desc.indirectStrides = {};
     return desc;
 }
 

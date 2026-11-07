@@ -23,6 +23,7 @@
 #include <Metal/MTLDevice.hpp>
 #include <Metal/MTLGPUAddress.hpp>
 #include <Metal/MTLLibrary.hpp>
+#include <Metal/MTLRenderCommandEncoder.hpp>
 #include <Metal/MTLRenderPipeline.hpp>
 #include <Metal/MTLResidencySet.hpp>
 #include <Metal/MTLResource.hpp>
@@ -78,19 +79,42 @@ core::Result<Stage> stageFor(MTL::Device& device, const ShaderCode& code) {
     return stage;
 }
 
-MTL::PrimitiveTopologyClass topologyFor(TopologyClass topology) {
+// The class Metal's pipeline takes for topology; each draw names the
+// topology itself.
+MTL::PrimitiveTopologyClass topologyClassFor(Topology topology) {
     switch (topology) {
-        case TopologyClass::Point:
+        case Topology::PointList:
             return MTL::PrimitiveTopologyClassPoint;
-        case TopologyClass::Line:
+        case Topology::LineList:
+        case Topology::LineStrip:
             return MTL::PrimitiveTopologyClassLine;
-        case TopologyClass::Triangle:
+        case Topology::TriangleList:
+        case Topology::TriangleStrip:
+        case Topology::TriangleFan:
         default:
             return MTL::PrimitiveTopologyClassTriangle;
     }
 }
 
 } // namespace
+
+core::Result<MTL::PrimitiveType> primitiveFor(Topology topology) {
+    switch (topology) {
+        case Topology::TriangleStrip:
+            return MTL::PrimitiveTypeTriangleStrip;
+        case Topology::TriangleFan:
+            return core::failure(core::ErrorCode::RhiUnsupported, "Metal has no triangle fan (Features::triangleFans)");
+        case Topology::LineList:
+            return MTL::PrimitiveTypeLine;
+        case Topology::LineStrip:
+            return MTL::PrimitiveTypeLineStrip;
+        case Topology::PointList:
+            return MTL::PrimitiveTypePoint;
+        case Topology::TriangleList:
+        default:
+            return MTL::PrimitiveTypeTriangle;
+    }
+}
 
 MTL::CompareFunction compareFor(CompareOp op) {
     switch (op) {
@@ -330,12 +354,16 @@ core::Result<MetalPipeline> createMetalComputePipeline(MTL::Device& device, MTL4
                          .render = {},
                          .depthStencil = {},
                          .raster = {},
-                         .topology = TopologyClass::Triangle,
+                         .primitive = {},
                          .workgroupSize = desc.workgroupSize};
 }
 
 core::Result<MetalPipeline> createMetalGraphicsPipeline(MTL::Device& device, MTL4::Compiler& compiler,
                                                         const GraphicsPipelineDesc& desc) {
+    auto primitive = primitiveFor(desc.topology);
+    if (!primitive) {
+        return std::unexpected(std::move(primitive.error()));
+    }
     const AutoreleasePool pool;
     auto vertex = stageFor(device, desc.vertex);
     if (!vertex) {
@@ -355,7 +383,11 @@ core::Result<MetalPipeline> createMetalGraphicsPipeline(MTL::Device& device, MTL
         info->setFragmentFunctionDescriptor(fragment.function.get());
     }
     // Vertices are pulled, so there is no vertex descriptor.
-    info->setInputPrimitiveTopology(topologyFor(desc.topology));
+    info->setInputPrimitiveTopology(topologyClassFor(desc.topology));
+    // desc.primitiveRestart is taken as given: metal-cpp's Metal headers have
+    // no restart setting, and Godot sets none
+    // (rendering_device_driver_metal.cpp:2039-2088). What Metal does with an
+    // all-ones index when it is Off is unverified.
     info->setRasterSampleCount(desc.samples);
     info->setAlphaToCoverageState(desc.alphaToCoverage ? MTL4::AlphaToCoverageStateEnabled
                                                        : MTL4::AlphaToCoverageStateDisabled);
@@ -377,7 +409,7 @@ core::Result<MetalPipeline> createMetalGraphicsPipeline(MTL::Device& device, MTL
                          .render = adopt(state),
                          .depthStencil = std::move(*depthStencil),
                          .raster = desc.raster,
-                         .topology = desc.topology,
+                         .primitive = *primitive,
                          .workgroupSize = {}};
 }
 

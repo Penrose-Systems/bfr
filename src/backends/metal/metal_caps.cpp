@@ -129,6 +129,19 @@ void addRenderFeatures(Features& features) {
     features.independentBlend = true;
 }
 
+// What Metal's draws take, from its headers. Indirect draws are one per call
+// (kMultiDrawIndirect, kDrawIndirectCount); their argument structs carry
+// baseInstance (MTLRenderCommandEncoder.hpp:118, 127). MTLPrimitiveType has
+// no fan (MTLRenderCommandEncoder.hpp:52-57), and the headers have no
+// primitive restart setting, so none is known to apply to lists.
+void addDrawFeatures(Features& features) {
+    features.multiDrawIndirect = kMultiDrawIndirect;
+    features.drawIndirectCount = kDrawIndirectCount;
+    features.drawIndirectFirstInstance = true;
+    features.triangleFans = false;
+    features.listRestart = false;
+}
+
 Features featuresOf(MTL::Device* device) {
     Features features;
     features.rayQuery = device->supportsRaytracing();
@@ -138,6 +151,7 @@ Features featuresOf(MTL::Device* device) {
     features.atomicInt64Texture = has64BitAtomics(device);
     addCompressionFeatures(device, features);
     addRenderFeatures(features);
+    addDrawFeatures(features);
     addSamplerFeatures(device, features);
     return features;
 }

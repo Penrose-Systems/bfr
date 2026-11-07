@@ -87,10 +87,21 @@ core::Result<void> VulkanDevice::bindPipeline(CommandListHandle commandList, Pip
     }
     table_.vkCmdBindPipeline((*list)->buffer, (*found)->bindPoint(), (*found)->pipeline());
     if ((*found)->bindPoint() == VK_PIPELINE_BIND_POINT_GRAPHICS) {
-        // Topology is dynamic, so a pipeline's class is set as it is bound.
+        // Topology is dynamic, so a pipeline's own is set as it is bound.
         table_.vkCmdSetPrimitiveTopology((*list)->buffer, (*found)->topology());
     }
-    else {}
+    return {};
+}
+
+core::Result<void> VulkanDevice::setTopology(CommandListHandle commandList, Topology topology) {
+    if (auto checked = checkKnown(topology, "topology"); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    table_.vkCmdSetPrimitiveTopology((*list)->buffer, topologyFor(topology));
     return {};
 }
 
@@ -161,6 +172,103 @@ core::Result<void> VulkanDevice::dispatch(CommandListHandle commandList, std::ui
         return std::unexpected(std::move(list.error()));
     }
     table_.vkCmdDispatch((*list)->buffer, x, y, z);
+    return {};
+}
+
+core::Result<void> VulkanDevice::drawIndirect(CommandListHandle commandList, BufferHandle buffer, std::uint64_t offset,
+                                              std::uint32_t drawCount, std::uint32_t stride) {
+    if (auto checked = checkDrawCount(drawCount, multiDrawIndirect_); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    table_.vkCmdDrawIndirect((*list)->buffer, (*found)->buffer(), offset, drawCount, stride);
+    return {};
+}
+
+core::Result<void> VulkanDevice::drawIndexedIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                     std::uint64_t offset, std::uint32_t drawCount,
+                                                     std::uint32_t stride) {
+    if (auto checked = checkDrawCount(drawCount, multiDrawIndirect_); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    table_.vkCmdDrawIndexedIndirect((*list)->buffer, (*found)->buffer(), offset, drawCount, stride);
+    return {};
+}
+
+core::Result<void> VulkanDevice::drawIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                   std::uint64_t offset, BufferHandle countBuffer,
+                                                   std::uint64_t countOffset, std::uint32_t maxDrawCount,
+                                                   std::uint32_t stride) {
+    if (auto checked = checkCountDraws(drawIndirectCount_); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    auto count = bufferFor(countBuffer);
+    if (!count) {
+        return std::unexpected(std::move(count.error()));
+    }
+    table_.vkCmdDrawIndirectCount((*list)->buffer, (*found)->buffer(), offset, (*count)->buffer(), countOffset,
+                                  maxDrawCount, stride);
+    return {};
+}
+
+core::Result<void> VulkanDevice::drawIndexedIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                          std::uint64_t offset, BufferHandle countBuffer,
+                                                          std::uint64_t countOffset, std::uint32_t maxDrawCount,
+                                                          std::uint32_t stride) {
+    if (auto checked = checkCountDraws(drawIndirectCount_); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    auto count = bufferFor(countBuffer);
+    if (!count) {
+        return std::unexpected(std::move(count.error()));
+    }
+    table_.vkCmdDrawIndexedIndirectCount((*list)->buffer, (*found)->buffer(), offset, (*count)->buffer(), countOffset,
+                                         maxDrawCount, stride);
+    return {};
+}
+
+core::Result<void> VulkanDevice::dispatchIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                  std::uint64_t offset) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    table_.vkCmdDispatchIndirect((*list)->buffer, (*found)->buffer(), offset);
     return {};
 }
 

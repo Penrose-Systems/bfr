@@ -120,15 +120,25 @@ struct D3D12CommandList {
     std::uint32_t rendered = core::SlotChains::kEnd;
 };
 
+/// The command signatures of indirect draws and indexed draws at one of the
+/// strides DeviceDesc::indirectStrides lists: D3D12 fixes the stride in each.
+struct D3D12DrawSignatures {
+    std::uint32_t stride = 0;
+    Microsoft::WRL::ComPtr<ID3D12CommandSignature> draw;
+    Microsoft::WRL::ComPtr<ID3D12CommandSignature> drawIndexed;
+};
+
 class D3D12Device final : public Device {
 public:
-    /// A device on device, which rhi listed from adapter, with heapCount memory
-    /// heaps, a shader-visible heap of viewHeapSize descriptors at most, and
-    /// the queues desc asks for. Fails with RhiDeviceFailed when D3D12 gives
-    /// no queue, fence, root signature or descriptor heap.
+    /// A device on device, which rhi listed from adapter with features, with
+    /// heapCount memory heaps, a shader-visible heap of viewHeapSize
+    /// descriptors at most, the queues desc asks for, and command signatures
+    /// for indirect draws at each of desc's indirect strides. Fails with
+    /// RhiDeviceFailed when D3D12 gives no queue, fence, root signature,
+    /// descriptor heap or command signature.
     [[nodiscard]] static core::Result<std::unique_ptr<D3D12Device>> create(
         D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device, Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter,
-        std::size_t heapCount, std::uint32_t viewHeapSize, const DeviceDesc& desc);
+        const Features& features, std::size_t heapCount, std::uint32_t viewHeapSize, const DeviceDesc& desc);
 
     /// For create, with the number of queues create opens.
     D3D12Device(D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device,
@@ -160,6 +170,7 @@ public:
     [[nodiscard]] core::Result<void> setStencilReference(CommandListHandle commandList,
                                                          std::uint32_t reference) override;
     [[nodiscard]] core::Result<void> bindPipeline(CommandListHandle commandList, PipelineHandle pipeline) override;
+    [[nodiscard]] core::Result<void> setTopology(CommandListHandle commandList, Topology topology) override;
     [[nodiscard]] core::Result<void> pushConstants(CommandListHandle commandList,
                                                    std::span<const std::byte> data) override;
     [[nodiscard]] core::Result<void> bindIndexBuffer(CommandListHandle commandList, BufferHandle buffer,
@@ -172,6 +183,22 @@ public:
                                                  std::int32_t vertexOffset, std::uint32_t firstInstance) override;
     [[nodiscard]] core::Result<void> dispatch(CommandListHandle commandList, std::uint32_t x, std::uint32_t y,
                                               std::uint32_t z) override;
+    [[nodiscard]] core::Result<void> drawIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                  std::uint64_t offset, std::uint32_t drawCount,
+                                                  std::uint32_t stride) override;
+    [[nodiscard]] core::Result<void> drawIndexedIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                         std::uint64_t offset, std::uint32_t drawCount,
+                                                         std::uint32_t stride) override;
+    [[nodiscard]] core::Result<void> drawIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                       std::uint64_t offset, BufferHandle countBuffer,
+                                                       std::uint64_t countOffset, std::uint32_t maxDrawCount,
+                                                       std::uint32_t stride) override;
+    [[nodiscard]] core::Result<void> drawIndexedIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                              std::uint64_t offset, BufferHandle countBuffer,
+                                                              std::uint64_t countOffset, std::uint32_t maxDrawCount,
+                                                              std::uint32_t stride) override;
+    [[nodiscard]] core::Result<void> dispatchIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                      std::uint64_t offset) override;
     [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
                                                 std::span<const BufferCopy> regions) override;
     [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
@@ -263,6 +290,15 @@ private:
                                                                const D3D12SparseMemory* memory);
     // The barrier barrier() records, ordering every resource on the list's queue.
     [[nodiscard]] core::Result<D3D12_GLOBAL_BARRIER> fullBarrierFor(const D3D12CommandList& list);
+    // The draw signatures of stride; fails with RhiUnsupported when
+    // DeviceDesc::indirectStrides did not list it.
+    [[nodiscard]] core::Result<D3D12DrawSignatures*> drawSignaturesFor(std::uint32_t stride);
+    // Records ExecuteIndirect of signature on the list, reading buffer from
+    // offset, and the count countBuffer holds at countOffset when one is given.
+    [[nodiscard]] core::Result<void> executeIndirect(CommandListHandle commandList, ID3D12CommandSignature* signature,
+                                                     UINT maxCommandCount, BufferHandle buffer, std::uint64_t offset,
+                                                     std::optional<BufferHandle> countBuffer,
+                                                     std::uint64_t countOffset);
 
     D3D12Instance* instance_;
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
@@ -274,6 +310,13 @@ private:
     DeviceDesc desc_;
     // The adapter's sparse caps, which mapping and heaps follow.
     Sparse sparse_;
+    // Features::multiDrawIndirect and drawIndirectCount, which indirect draws
+    // check.
+    bool multiDrawIndirect_ = false;
+    bool drawIndirectCount_ = false;
+    // Made with the device, one for each indirect stride, so no draw makes one.
+    std::vector<D3D12DrawSignatures> drawSignatures_;
+    Microsoft::WRL::ComPtr<ID3D12CommandSignature> dispatchSignature_;
     std::vector<std::unique_ptr<D3D12Queue>> queues_;
     core::Pool<D3D12Swapchain, Swapchain> swapchains_;
     core::Pool<D3D12CommandPool, CommandPool> commandPools_;

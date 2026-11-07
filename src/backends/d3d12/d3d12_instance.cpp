@@ -259,7 +259,7 @@ core::Result<std::unique_ptr<Device>> D3D12Instance::createDevice(std::size_t ad
     const D3D12Adapter& native = native_[adapter];
     const Caps& caps = adapters_[adapter].caps;
     // The resource tables share one heap, which is each table's most.
-    return D3D12Device::create(*this, native.device, native.adapter, caps.memory.heaps.size(),
+    return D3D12Device::create(*this, native.device, native.adapter, caps.features, caps.memory.heaps.size(),
                                caps.bindless.maxPerStage, desc);
 }
 

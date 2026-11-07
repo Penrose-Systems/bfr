@@ -69,15 +69,35 @@ D3D12_SHADER_BYTECODE bytecodeFor(const ShaderCode& code) {
     return {.pShaderBytecode = code.code.data(), .BytecodeLength = code.code.size()};
 }
 
-D3D12_PRIMITIVE_TOPOLOGY_TYPE topologyFor(TopologyClass topology) {
+// The class of topology, which the PSO fixes; IASetPrimitiveTopology sets the
+// exact one. A fan is a triangle topology, as NVRHI's d3d12-graphics.cpp
+// classes it.
+D3D12_PRIMITIVE_TOPOLOGY_TYPE topologyTypeFor(Topology topology) {
     switch (topology) {
-        case TopologyClass::Point:
+        case Topology::PointList:
             return D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
-        case TopologyClass::Line:
+        case Topology::LineList:
+        case Topology::LineStrip:
             return D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
-        case TopologyClass::Triangle:
+        case Topology::TriangleList:
+        case Topology::TriangleStrip:
+        case Topology::TriangleFan:
         default:
             return D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    }
+}
+
+// D3D12 fixes the all-ones index that restarts a strip in the PSO, by index
+// type.
+D3D12_INDEX_BUFFER_STRIP_CUT_VALUE stripCutFor(PrimitiveRestart restart) {
+    switch (restart) {
+        case PrimitiveRestart::Index16:
+            return D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFF;
+        case PrimitiveRestart::Index32:
+            return D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFFFFFF;
+        case PrimitiveRestart::Off:
+        default:
+            return D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED;
     }
 }
 
@@ -304,7 +324,7 @@ core::Result<D3D12Pipeline> createD3D12ComputePipeline(ID3D12Device& device, ID3
                                                  .NodeMask = 0,
                                                  .CachedPSO = {},
                                                  .Flags = D3D12_PIPELINE_STATE_FLAG_NONE};
-    D3D12Pipeline pipeline{.state = nullptr, .compute = true, .topology = TopologyClass::Triangle};
+    D3D12Pipeline pipeline{.state = nullptr, .compute = true, .topology = Topology::TriangleList};
     if (const HRESULT result = device.CreateComputePipelineState(&info, IID_PPV_ARGS(&pipeline.state));
         FAILED(result)) {
         return failure(core::ErrorCode::RhiDeviceFailed,
@@ -373,8 +393,8 @@ core::Result<D3D12Pipeline> createD3D12GraphicsPipeline(ID3D12Device& device, ID
                               .BackFace = stencilFaceFor(back)};
     // Vertices are pulled, so there is no input layout.
     info.InputLayout = {.pInputElementDescs = nullptr, .NumElements = 0};
-    info.IBStripCutValue = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED;
-    info.PrimitiveTopologyType = topologyFor(desc.topology);
+    info.IBStripCutValue = stripCutFor(desc.primitiveRestart);
+    info.PrimitiveTopologyType = topologyTypeFor(desc.topology);
     info.NumRenderTargets = desc.colorTargetCount;
     if (desc.depthStencilFormat != Format::Undefined) {
         info.DSVFormat = dxgiFormatsFor(desc.depthStencilFormat).depth;

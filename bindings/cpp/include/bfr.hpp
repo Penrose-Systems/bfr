@@ -717,6 +717,12 @@ enum class Call : std::int32_t {
     BufferTiling = BFR_CALL_BUFFER_TILING,
     SparseFormat = BFR_CALL_SPARSE_FORMAT,
     UpdateTileMappings = BFR_CALL_UPDATE_TILE_MAPPINGS,
+    SetTopology = BFR_CALL_SET_TOPOLOGY,
+    DrawIndirect = BFR_CALL_DRAW_INDIRECT,
+    DrawIndexedIndirect = BFR_CALL_DRAW_INDEXED_INDIRECT,
+    DrawIndirectCount = BFR_CALL_DRAW_INDIRECT_COUNT,
+    DrawIndexedIndirectCount = BFR_CALL_DRAW_INDEXED_INDIRECT_COUNT,
+    DispatchIndirect = BFR_CALL_DISPATCH_INDIRECT,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -785,6 +791,12 @@ enum class Call : std::int32_t {
     case Call::BufferTiling: return "buffer_tiling";
     case Call::SparseFormat: return "sparse_format";
     case Call::UpdateTileMappings: return "update_tile_mappings";
+    case Call::SetTopology: return "set_topology";
+    case Call::DrawIndirect: return "draw_indirect";
+    case Call::DrawIndexedIndirect: return "draw_indexed_indirect";
+    case Call::DrawIndirectCount: return "draw_indirect_count";
+    case Call::DrawIndexedIndirectCount: return "draw_indexed_indirect_count";
+    case Call::DispatchIndirect: return "dispatch_indirect";
     }
     return {};
 }
@@ -1015,22 +1027,54 @@ enum class TextureAspect : std::int32_t {
     return {};
 }
 
-/// What a graphics pipeline's draws assemble vertices into.
-enum class TopologyClass : std::int32_t {
-    /// Three vertices a triangle.
-    Triangle = BFR_TOPOLOGY_CLASS_TRIANGLE,
-    /// Two vertices a line.
-    Line = BFR_TOPOLOGY_CLASS_LINE,
+/// What draws assemble vertices into. Lists take each primitive's vertices apart; strips share each
+/// one with the next.
+enum class Topology : std::int32_t {
+    /// Each three vertices a triangle.
+    TriangleList = BFR_TOPOLOGY_TRIANGLE_LIST,
+    /// Each vertex and the two before it a triangle.
+    TriangleStrip = BFR_TOPOLOGY_TRIANGLE_STRIP,
+    /// Each two vertices and the first a triangle, where bfr_caps_features.triangle_fans.
+    TriangleFan = BFR_TOPOLOGY_TRIANGLE_FAN,
+    /// Each two vertices a line.
+    LineList = BFR_TOPOLOGY_LINE_LIST,
+    /// Each vertex and the one before it a line.
+    LineStrip = BFR_TOPOLOGY_LINE_STRIP,
     /// Each vertex a point.
-    Point = BFR_TOPOLOGY_CLASS_POINT,
+    PointList = BFR_TOPOLOGY_POINT_LIST,
 };
 
-/// value's name in bfr.yaml; empty for a value TopologyClass doesn't have.
-[[nodiscard]] constexpr std::string_view name(TopologyClass value) {
+/// value's name in bfr.yaml; empty for a value Topology doesn't have.
+[[nodiscard]] constexpr std::string_view name(Topology value) {
     switch (value) {
-    case TopologyClass::Triangle: return "triangle";
-    case TopologyClass::Line: return "line";
-    case TopologyClass::Point: return "point";
+    case Topology::TriangleList: return "triangle_list";
+    case Topology::TriangleStrip: return "triangle_strip";
+    case Topology::TriangleFan: return "triangle_fan";
+    case Topology::LineList: return "line_list";
+    case Topology::LineStrip: return "line_strip";
+    case Topology::PointList: return "point_list";
+    }
+    return {};
+}
+
+/// Whether an index of all ones ends a strip and starts the next, in indexed draws, and the index
+/// type it is all ones of: D3D12 fixes that value in the pipeline. Restart on a list topology needs
+/// bfr_caps_features.list_restart.
+enum class PrimitiveRestart : std::int32_t {
+    /// No index restarts.
+    Off = BFR_PRIMITIVE_RESTART_OFF,
+    /// 0xFFFF restarts, with 16-bit indices.
+    Index16 = BFR_PRIMITIVE_RESTART_INDEX16,
+    /// 0xFFFFFFFF restarts, with 32-bit indices.
+    Index32 = BFR_PRIMITIVE_RESTART_INDEX32,
+};
+
+/// value's name in bfr.yaml; empty for a value PrimitiveRestart doesn't have.
+[[nodiscard]] constexpr std::string_view name(PrimitiveRestart value) {
+    switch (value) {
+    case PrimitiveRestart::Off: return "off";
+    case PrimitiveRestart::Index16: return "index16";
+    case PrimitiveRestart::Index32: return "index32";
     }
     return {};
 }
@@ -1470,6 +1514,11 @@ struct DeviceDesc {
     /// room for them is made with the device, so mapping never allocates. More fails with
     /// error_invalid_argument. 0 is none.
     std::uint32_t maxTileMappings{};
+    /// The strides, in bytes, the device's indirect draws take, read during the call only. D3D12
+    /// fixes a stride in the command signature it makes for them, so it makes one for each here and
+    /// fails an indirect draw of any other with error_unsupported; Vulkan and Metal take any
+    /// stride.
+    std::span<const std::uint32_t> indirectStrides{};
 };
 
 /// How to create a swapchain.
@@ -1920,7 +1969,9 @@ struct GraphicsPipelineDesc {
     ShaderCode vertex{};
     /// A code_size of 0 is no fragment shader; the pipeline writes depth alone.
     ShaderCode fragment{};
-    TopologyClass topology{};
+    /// What its draws assemble until bfr_set_topology.
+    Topology topology{};
+    PrimitiveRestart primitiveRestart{};
     RasterState raster{};
     DepthStencilState depthStencil{};
     /// How many of color_targets are used, at most max_color_targets.
@@ -2330,6 +2381,10 @@ struct CapsFeatures {
     /// Indirect draws that read their count from a buffer.
     bool drawIndirectCount{};
     bool drawIndirectFirstInstance{};
+    /// topology_triangle_fan draws.
+    bool triangleFans{};
+    /// primitive_restart on list topologies, not only strips.
+    bool listRestart{};
     bool storageReadWithoutFormat{};
     bool storageWriteWithoutFormat{};
     /// Every graphics and compute queue writes timestamps.
@@ -2650,6 +2705,8 @@ inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
         .max_timestamp_pools = value.maxTimestampPools,
         .max_sparse_memories = value.maxSparseMemories,
         .max_tile_mappings = value.maxTileMappings,
+        .indirect_strides = reinterpret_cast<const uint32_t*>(value.indirectStrides.data()),
+        .indirect_stride_count = static_cast<uint32_t>(value.indirectStrides.size()),
     };
 }
 
@@ -2880,7 +2937,8 @@ inline bfr_graphics_pipeline_desc toC(const GraphicsPipelineDesc& value, const b
         .next = next,
         .vertex = toC(value.vertex),
         .fragment = toC(value.fragment),
-        .topology = static_cast<bfr_topology_class>(value.topology),
+        .topology = static_cast<bfr_topology>(value.topology),
+        .primitive_restart = static_cast<bfr_primitive_restart>(value.primitiveRestart),
         .raster = toC(value.raster),
         .depth_stencil = toC(value.depthStencil),
         .color_target_count = value.colorTargetCount,
@@ -3172,6 +3230,8 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .multiDrawIndirect = value.multi_draw_indirect != BFR_FALSE,
         .drawIndirectCount = value.draw_indirect_count != BFR_FALSE,
         .drawIndirectFirstInstance = value.draw_indirect_first_instance != BFR_FALSE,
+        .triangleFans = value.triangle_fans != BFR_FALSE,
+        .listRestart = value.list_restart != BFR_FALSE,
         .storageReadWithoutFormat = value.storage_read_without_format != BFR_FALSE,
         .storageWriteWithoutFormat = value.storage_write_without_format != BFR_FALSE,
         .timestampsOnAllQueues = value.timestamps_on_all_queues != BFR_FALSE,
@@ -3480,7 +3540,7 @@ public:
 
     /// Begins rendering to desc's attachments, with the image bfr_acquire took from swapchain as
     /// color attachment 0 when swapchain is not null. Sets the viewport and scissor to the whole of
-    /// the attachments. Only bfr_draw and bfr_draw_indexed, and the state they take, are recorded
+    /// the attachments. Only the draws, direct and indirect, and the state they take, are recorded
     /// until bfr_end_rendering. Fails with error_invalid_argument when no attachment is given, when
     /// a color attachment but the swapchain's names no texture, or, with a swapchain, when there is
     /// no color attachment or attachment 0 names a texture.
@@ -3510,9 +3570,14 @@ public:
     [[nodiscard]] Expected<void> setStencilReference(CommandList commandList, std::uint32_t reference) const;
 
     /// Makes pipeline the one draws or dispatches after it run, a graphics pipeline for draws and a
-    /// compute one for dispatches, until another of its kind is bound. Draws assemble the list
-    /// topology of the pipeline's class.
+    /// compute one for dispatches, until another of its kind is bound. Draws assemble the
+    /// pipeline's topology until bfr_set_topology.
     [[nodiscard]] Expected<void> bindPipeline(CommandList commandList, const Pipeline& pipeline) const;
+
+    /// Makes the draws after it assemble topology, which is of the bound graphics pipeline's kind,
+    /// points, lines or triangles, as each backend requires, until the next bfr_bind_pipeline.
+    /// Fails with error_invalid_argument for a value BFR doesn't have.
+    [[nodiscard]] Expected<void> setTopology(CommandList commandList, Topology topology) const;
 
     /// Sets the first size bytes of the push constants every shader reads, as bfr_pipeline states,
     /// for the draws and dispatches after it. size is a multiple of 4 and at most the caps'
@@ -3539,6 +3604,32 @@ public:
     /// Records a dispatch of x by y by z workgroups of the bound compute pipeline, outside
     /// rendering. Commands after a bfr_barrier see what it wrote.
     [[nodiscard]] Expected<void> dispatch(CommandList commandList, std::uint32_t x, std::uint32_t y, std::uint32_t z) const;
+
+    /// Records draw_count draws as bfr_draw does, each with the bfr_draw_indirect_args buffer holds
+    /// from offset, stride bytes apart. buffer has indirect usage; work that wrote the arguments is
+    /// ordered before by a bfr_barrier. Fails with error_unsupported for draw_count above 1 where
+    /// bfr_caps_features.multi_draw_indirect is false and, on D3D12, a stride not in the device's
+    /// indirect_strides; and as bfr_draw does.
+    [[nodiscard]] Expected<void> drawIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset, std::uint32_t drawCount, std::uint32_t stride) const;
+
+    /// Records draw_count draws as bfr_draw_indexed does, each with the
+    /// bfr_draw_indexed_indirect_args buffer holds from offset, stride bytes apart. Fails as
+    /// bfr_draw_indirect does.
+    [[nodiscard]] Expected<void> drawIndexedIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset, std::uint32_t drawCount, std::uint32_t stride) const;
+
+    /// Records bfr_draw_indirect's draws, as many as the 32-bit count count_buffer holds at
+    /// count_offset when the GPU runs it, at most max_draw_count. count_buffer has indirect usage.
+    /// Fails with error_unsupported where bfr_caps_features.draw_indirect_count is false, and as
+    /// bfr_draw_indirect does.
+    [[nodiscard]] Expected<void> drawIndirectCount(CommandList commandList, const Buffer& buffer, std::uint64_t offset, const Buffer& countBuffer, std::uint64_t countOffset, std::uint32_t maxDrawCount, std::uint32_t stride) const;
+
+    /// Records bfr_draw_indexed_indirect's draws, as many as count_buffer holds, as
+    /// bfr_draw_indirect_count does. Fails as it does.
+    [[nodiscard]] Expected<void> drawIndexedIndirectCount(CommandList commandList, const Buffer& buffer, std::uint64_t offset, const Buffer& countBuffer, std::uint64_t countOffset, std::uint32_t maxDrawCount, std::uint32_t stride) const;
+
+    /// Records a dispatch as bfr_dispatch does, of the bfr_dispatch_indirect_args buffer holds at
+    /// offset. buffer has indirect usage. Fails as bfr_dispatch does.
+    [[nodiscard]] Expected<void> dispatchIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset) const;
 
     /// Records copies of regions from src to dst, outside rendering. src has copy_src usage and is
     /// device or upload memory; dst has copy_dst usage and is device or readback memory. Commands
@@ -4257,6 +4348,9 @@ inline Expected<Device> Instance::createDevice(const DeviceDesc& desc) const {
     if (!std::in_range<uint32_t>(desc.copyQueues.size())) {
         return std::unexpected(detail::tooMany("desc.copyQueues holds more elements than a uint32_t counts"));
     }
+    if (!std::in_range<uint32_t>(desc.indirectStrides.size())) {
+        return std::unexpected(detail::tooMany("desc.indirectStrides holds more elements than a uint32_t counts"));
+    }
     const bfr_device_desc cDesc = detail::toC(desc, nullptr);
     bfr_device* device = nullptr;
     if (const bfr_result result = bfr_create_device(instance_, &cDesc, &device); result < 0) {
@@ -4369,6 +4463,13 @@ inline Expected<void> Device::bindPipeline(CommandList commandList, const Pipeli
     return {};
 }
 
+inline Expected<void> Device::setTopology(CommandList commandList, Topology topology) const {
+    if (const bfr_result result = bfr_set_topology(device_, commandList.get(), static_cast<bfr_topology>(topology)); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
 inline Expected<void> Device::pushConstants(CommandList commandList, std::span<const std::uint8_t> data) const {
     if (!std::in_range<uint32_t>(data.size())) {
         return std::unexpected(detail::tooMany("data holds more elements than a uint32_t counts"));
@@ -4402,6 +4503,41 @@ inline Expected<void> Device::drawIndexed(CommandList commandList, std::uint32_t
 
 inline Expected<void> Device::dispatch(CommandList commandList, std::uint32_t x, std::uint32_t y, std::uint32_t z) const {
     if (const bfr_result result = bfr_dispatch(device_, commandList.get(), x, y, z); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::drawIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset, std::uint32_t drawCount, std::uint32_t stride) const {
+    if (const bfr_result result = bfr_draw_indirect(device_, commandList.get(), buffer.get(), offset, drawCount, stride); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::drawIndexedIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset, std::uint32_t drawCount, std::uint32_t stride) const {
+    if (const bfr_result result = bfr_draw_indexed_indirect(device_, commandList.get(), buffer.get(), offset, drawCount, stride); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::drawIndirectCount(CommandList commandList, const Buffer& buffer, std::uint64_t offset, const Buffer& countBuffer, std::uint64_t countOffset, std::uint32_t maxDrawCount, std::uint32_t stride) const {
+    if (const bfr_result result = bfr_draw_indirect_count(device_, commandList.get(), buffer.get(), offset, countBuffer.get(), countOffset, maxDrawCount, stride); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::drawIndexedIndirectCount(CommandList commandList, const Buffer& buffer, std::uint64_t offset, const Buffer& countBuffer, std::uint64_t countOffset, std::uint32_t maxDrawCount, std::uint32_t stride) const {
+    if (const bfr_result result = bfr_draw_indexed_indirect_count(device_, commandList.get(), buffer.get(), offset, countBuffer.get(), countOffset, maxDrawCount, stride); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::dispatchIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset) const {
+    if (const bfr_result result = bfr_dispatch_indirect(device_, commandList.get(), buffer.get(), offset); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return {};

@@ -573,19 +573,21 @@ core::Result<CommandListHandle> MetalDevice::beginCommands(CommandPoolHandle com
     if (tables().buffer) {
         made.arguments->setAddress(tables().buffer->gpuAddress(), kTablesBufferIndex);
     }
-    const CommandListHandle commandList = commandLists_.emplace(MetalCommandList{.buffer = made.buffer.get(),
-                                                                                 .pool = commandPool,
-                                                                                 .slot = slot,
-                                                                                 .state = {},
-                                                                                 .graphics = {},
-                                                                                 .compute = {},
-                                                                                 .encoderGraphics = {},
-                                                                                 .indexType = MTL::IndexTypeUInt32,
-                                                                                 .indexBuffer = 0,
-                                                                                 .indexBytes = 0,
-                                                                                 .encoder = {},
-                                                                                 .presenting = {},
-                                                                                 .rendered = core::SlotChains::kEnd});
+    const CommandListHandle commandList = commandLists_.emplace(
+        MetalCommandList{.buffer = made.buffer.get(),
+                         .pool = commandPool,
+                         .slot = slot,
+                         .state = {},
+                         .graphics = {},
+                         .compute = {},
+                         .encoderGraphics = {},
+                         .primitive = MTL::PrimitiveTypeTriangle,
+                         .indexType = MTL::IndexTypeUInt32,
+                         .indexBuffer = 0,
+                         .indexBytes = 0,
+                         .encoder = {},
+                         .presenting = {},
+                         .rendered = core::SlotChains::kEnd});
     if (commandList.isNull()) {
         made.buffer->endCommandBuffer();
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command lists",

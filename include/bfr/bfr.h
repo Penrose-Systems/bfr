@@ -470,6 +470,12 @@ typedef enum bfr_call {
     BFR_CALL_BUFFER_TILING = 60,
     BFR_CALL_SPARSE_FORMAT = 61,
     BFR_CALL_UPDATE_TILE_MAPPINGS = 62,
+    BFR_CALL_SET_TOPOLOGY = 63,
+    BFR_CALL_DRAW_INDIRECT = 64,
+    BFR_CALL_DRAW_INDEXED_INDIRECT = 65,
+    BFR_CALL_DRAW_INDIRECT_COUNT = 66,
+    BFR_CALL_DRAW_INDEXED_INDIRECT_COUNT = 67,
+    BFR_CALL_DISPATCH_INDIRECT = 68,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -602,16 +608,36 @@ typedef enum bfr_texture_aspect {
     BFR_TEXTURE_ASPECT_FORCE32 = 0x7FFFFFFF
 } bfr_texture_aspect;
 
-// What a graphics pipeline's draws assemble vertices into.
-typedef enum bfr_topology_class {
-    // Three vertices a triangle.
-    BFR_TOPOLOGY_CLASS_TRIANGLE = 0,
-    // Two vertices a line.
-    BFR_TOPOLOGY_CLASS_LINE = 1,
+// What draws assemble vertices into. Lists take each primitive's vertices apart; strips share each
+// one with the next.
+typedef enum bfr_topology {
+    // Each three vertices a triangle.
+    BFR_TOPOLOGY_TRIANGLE_LIST = 0,
+    // Each vertex and the two before it a triangle.
+    BFR_TOPOLOGY_TRIANGLE_STRIP = 1,
+    // Each two vertices and the first a triangle, where bfr_caps_features.triangle_fans.
+    BFR_TOPOLOGY_TRIANGLE_FAN = 2,
+    // Each two vertices a line.
+    BFR_TOPOLOGY_LINE_LIST = 3,
+    // Each vertex and the one before it a line.
+    BFR_TOPOLOGY_LINE_STRIP = 4,
     // Each vertex a point.
-    BFR_TOPOLOGY_CLASS_POINT = 2,
-    BFR_TOPOLOGY_CLASS_FORCE32 = 0x7FFFFFFF
-} bfr_topology_class;
+    BFR_TOPOLOGY_POINT_LIST = 5,
+    BFR_TOPOLOGY_FORCE32 = 0x7FFFFFFF
+} bfr_topology;
+
+// Whether an index of all ones ends a strip and starts the next, in indexed draws, and the index
+// type it is all ones of: D3D12 fixes that value in the pipeline. Restart on a list topology needs
+// bfr_caps_features.list_restart.
+typedef enum bfr_primitive_restart {
+    // No index restarts.
+    BFR_PRIMITIVE_RESTART_OFF = 0,
+    // 0xFFFF restarts, with 16-bit indices.
+    BFR_PRIMITIVE_RESTART_INDEX16 = 1,
+    // 0xFFFFFFFF restarts, with 32-bit indices.
+    BFR_PRIMITIVE_RESTART_INDEX32 = 2,
+    BFR_PRIMITIVE_RESTART_FORCE32 = 0x7FFFFFFF
+} bfr_primitive_restart;
 
 // Which triangles a graphics pipeline discards by the way they face.
 typedef enum bfr_cull_mode {
@@ -992,6 +1018,12 @@ typedef struct bfr_device_desc {
     // for them is made with the device, so mapping never allocates. More fails with
     // error_invalid_argument. 0 is none.
     uint32_t max_tile_mappings;
+    // The strides, in bytes, the device's indirect draws take, read during the call only. D3D12
+    // fixes a stride in the command signature it makes for them, so it makes one for each here and
+    // fails an indirect draw of any other with error_unsupported; Vulkan and Metal take any stride.
+    // An array of indirect_stride_count elements. May be null.
+    const uint32_t* indirect_strides;
+    uint32_t indirect_stride_count;
 } bfr_device_desc;
 
 // How to create a swapchain.
@@ -1143,6 +1175,31 @@ typedef struct bfr_buffer_desc {
     // One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty; only when sparse.
     uint32_t tile_bytes;
 } bfr_buffer_desc;
+
+// The arguments of one indirect draw, as a buffer holds them for bfr_draw_indirect; the layout
+// every backend reads.
+typedef struct bfr_draw_indirect_args {
+    uint32_t vertex_count;
+    uint32_t instance_count;
+    uint32_t first_vertex;
+    uint32_t first_instance;
+} bfr_draw_indirect_args;
+
+// The arguments of one indirect indexed draw, for bfr_draw_indexed_indirect.
+typedef struct bfr_draw_indexed_indirect_args {
+    uint32_t index_count;
+    uint32_t instance_count;
+    uint32_t first_index;
+    int32_t vertex_offset;
+    uint32_t first_instance;
+} bfr_draw_indexed_indirect_args;
+
+// The workgroups of one indirect dispatch, for bfr_dispatch_indirect.
+typedef struct bfr_dispatch_indirect_args {
+    uint32_t x;
+    uint32_t y;
+    uint32_t z;
+} bfr_dispatch_indirect_args;
 
 // One range copied from a source buffer to a destination buffer.
 typedef struct bfr_buffer_copy {
@@ -1418,7 +1475,9 @@ typedef struct bfr_graphics_pipeline_desc {
     bfr_shader_code vertex;
     // A code_size of 0 is no fragment shader; the pipeline writes depth alone.
     bfr_shader_code fragment;
-    bfr_topology_class topology;
+    // What its draws assemble until bfr_set_topology.
+    bfr_topology topology;
+    bfr_primitive_restart primitive_restart;
     bfr_raster_state raster;
     bfr_depth_stencil_state depth_stencil;
     // How many of color_targets are used, at most max_color_targets.
@@ -1816,6 +1875,10 @@ typedef struct bfr_caps_features {
     // Indirect draws that read their count from a buffer.
     bfr_bool draw_indirect_count;
     bfr_bool draw_indirect_first_instance;
+    // topology_triangle_fan draws.
+    bfr_bool triangle_fans;
+    // primitive_restart on list topologies, not only strips.
+    bfr_bool list_restart;
     bfr_bool storage_read_without_format;
     bfr_bool storage_write_without_format;
     // Every graphics and compute queue writes timestamps.
@@ -2217,7 +2280,7 @@ BFR_API bfr_result bfr_begin_commands(
 
 // Begins rendering to desc's attachments, with the image bfr_acquire took from swapchain as color
 // attachment 0 when swapchain is not null. Sets the viewport and scissor to the whole of the
-// attachments. Only bfr_draw and bfr_draw_indexed, and the state they take, are recorded until
+// attachments. Only the draws, direct and indirect, and the state they take, are recorded until
 // bfr_end_rendering. Fails with error_invalid_argument when no attachment is given, when a color
 // attachment but the swapchain's names no texture, or, with a swapchain, when there is no color
 // attachment or attachment 0 names a texture.
@@ -2266,12 +2329,20 @@ BFR_API bfr_result bfr_set_stencil_reference(
     uint32_t reference);
 
 // Makes pipeline the one draws or dispatches after it run, a graphics pipeline for draws and a
-// compute one for dispatches, until another of its kind is bound. Draws assemble the list topology
-// of the pipeline's class.
+// compute one for dispatches, until another of its kind is bound. Draws assemble the pipeline's
+// topology until bfr_set_topology.
 BFR_API bfr_result bfr_bind_pipeline(
     bfr_device* device,
     bfr_command_list command_list,
     bfr_pipeline pipeline);
+
+// Makes the draws after it assemble topology, which is of the bound graphics pipeline's kind,
+// points, lines or triangles, as each backend requires, until the next bfr_bind_pipeline. Fails
+// with error_invalid_argument for a value BFR doesn't have.
+BFR_API bfr_result bfr_set_topology(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_topology topology);
 
 // Sets the first size bytes of the push constants every shader reads, as bfr_pipeline states, for
 // the draws and dispatches after it. size is a multiple of 4 and at most the caps'
@@ -2327,6 +2398,74 @@ BFR_API bfr_result bfr_dispatch(
     uint32_t x,
     uint32_t y,
     uint32_t z);
+
+// Records draw_count draws as bfr_draw does, each with the bfr_draw_indirect_args buffer holds from
+// offset, stride bytes apart. buffer has indirect usage; work that wrote the arguments is ordered
+// before by a bfr_barrier. Fails with error_unsupported for draw_count above 1 where
+// bfr_caps_features.multi_draw_indirect is false and, on D3D12, a stride not in the device's
+// indirect_strides; and as bfr_draw does.
+// offset: Bytes into the buffer.
+// stride: Bytes between two draws' arguments.
+BFR_API bfr_result bfr_draw_indirect(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_buffer buffer,
+    uint64_t offset,
+    uint32_t draw_count,
+    uint32_t stride);
+
+// Records draw_count draws as bfr_draw_indexed does, each with the bfr_draw_indexed_indirect_args
+// buffer holds from offset, stride bytes apart. Fails as bfr_draw_indirect does.
+// offset: Bytes into the buffer.
+// stride: Bytes between two draws' arguments.
+BFR_API bfr_result bfr_draw_indexed_indirect(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_buffer buffer,
+    uint64_t offset,
+    uint32_t draw_count,
+    uint32_t stride);
+
+// Records bfr_draw_indirect's draws, as many as the 32-bit count count_buffer holds at count_offset
+// when the GPU runs it, at most max_draw_count. count_buffer has indirect usage. Fails with
+// error_unsupported where bfr_caps_features.draw_indirect_count is false, and as bfr_draw_indirect
+// does.
+// offset: Bytes into the buffer.
+// count_offset: Bytes into count_buffer.
+// stride: Bytes between two draws' arguments.
+BFR_API bfr_result bfr_draw_indirect_count(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_buffer buffer,
+    uint64_t offset,
+    bfr_buffer count_buffer,
+    uint64_t count_offset,
+    uint32_t max_draw_count,
+    uint32_t stride);
+
+// Records bfr_draw_indexed_indirect's draws, as many as count_buffer holds, as
+// bfr_draw_indirect_count does. Fails as it does.
+// offset: Bytes into the buffer.
+// count_offset: Bytes into count_buffer.
+// stride: Bytes between two draws' arguments.
+BFR_API bfr_result bfr_draw_indexed_indirect_count(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_buffer buffer,
+    uint64_t offset,
+    bfr_buffer count_buffer,
+    uint64_t count_offset,
+    uint32_t max_draw_count,
+    uint32_t stride);
+
+// Records a dispatch as bfr_dispatch does, of the bfr_dispatch_indirect_args buffer holds at
+// offset. buffer has indirect usage. Fails as bfr_dispatch does.
+// offset: Bytes into the buffer.
+BFR_API bfr_result bfr_dispatch_indirect(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_buffer buffer,
+    uint64_t offset);
 
 // Records copies of regions from src to dst, outside rendering. src has copy_src usage and is
 // device or upload memory; dst has copy_dst usage and is device or readback memory. Commands after

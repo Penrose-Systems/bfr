@@ -134,7 +134,9 @@ struct HeadlessDevice {
                                        .max_bindless_samplers = kDeviceSamplers,
                                        .max_timestamp_pools = 1,
                                        .max_sparse_memories = 0,
-                                       .max_tile_mappings = 0};
+                                       .max_tile_mappings = 0,
+                                       .indirect_strides = nullptr,
+                                       .indirect_stride_count = 0};
             const bfr_result result = bfr_create_device(instance, &desc, &device);
             INFO(lastError());
             REQUIRE((result == BFR_RESULT_SUCCESS || result == BFR_RESULT_ERROR_PRESENT_UNSUPPORTED));
@@ -303,7 +305,9 @@ TEST_CASE("C API rejects a struct chained to a device or swapchain desc", "[c_ap
                                          .max_bindless_samplers = kDeviceSamplers,
                                          .max_timestamp_pools = 0,
                                          .max_sparse_memories = 0,
-                                         .max_tile_mappings = 0};
+                                         .max_tile_mappings = 0,
+                                         .indirect_strides = nullptr,
+                                         .indirect_stride_count = 0};
         bfr_device* stray = nullptr;
         CHECK(bfr_create_device(instance.instance, &deviceDesc, &stray) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
         CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("takes no chained structs"));
@@ -351,7 +355,9 @@ TEST_CASE("C API rejects a device desc's null queues with a count, and a queue l
                                          .max_bindless_samplers = 0,
                                          .max_timestamp_pools = 0,
                                          .max_sparse_memories = 0,
-                                         .max_tile_mappings = 0};
+                                         .max_tile_mappings = 0,
+                                         .indirect_strides = nullptr,
+                                         .indirect_stride_count = 0};
         bfr_device* device = nullptr;
         CHECK(bfr_create_device(instance.instance, &nullQueues, &device) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
         CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("graphics_queues is null"));
@@ -809,7 +815,8 @@ TEST_CASE("C API creates and destroys pipelines, and refuses a state value it do
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, and refuses a value it does not have",
+TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, directly or indirectly, and refuses a value it "
+          "does not have",
           "[c_api][gpu]") {
     const bfr_backend backend = GENERATE(eachBackend());
     // The shaders checked in are SPIR-V, which only Vulkan takes.
@@ -855,6 +862,22 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, and refu
     REQUIRE(bfr_get_buffer_slot(device.device, target, &slot) == BFR_RESULT_SUCCESS);
     CHECK(bfr_get_buffer_slot(device.device, readback, &slot) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     REQUIRE(bfr_get_buffer_slot(device.device, target, &slot) == BFR_RESULT_SUCCESS);
+    // One workgroup, read by bfr_dispatch_indirect.
+    bufferDesc.memory = BFR_BUFFER_MEMORY_UPLOAD;
+    bufferDesc.size = sizeof(bfr_dispatch_indirect_args);
+    bufferDesc.usage = {.copy_src = BFR_FALSE,
+                        .copy_dst = BFR_FALSE,
+                        .uniform = BFR_FALSE,
+                        .storage = BFR_FALSE,
+                        .index = BFR_FALSE,
+                        .indirect = BFR_TRUE};
+    bfr_buffer args{};
+    REQUIRE(bfr_create_buffer(device.device, &bufferDesc, &args) == BFR_RESULT_SUCCESS);
+    void* argsData = nullptr;
+    REQUIRE(bfr_map_buffer(device.device, args, &argsData) == BFR_RESULT_SUCCESS);
+    const bfr_dispatch_indirect_args oneGroup{.x = 1, .y = 1, .z = 1};
+    std::memcpy(argsData, &oneGroup, sizeof(oneGroup));
+    const bool indirect = GENERATE(false, true);
 
     const bfr_command_pool_desc poolDesc{.next = nullptr, .queue = 0, .list_count = 1, .push_constant_updates = 1};
     bfr_command_pool pool{};
@@ -869,7 +892,15 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, and refu
     CHECK(bfr_bind_index_buffer(device.device, list, target, 0, static_cast<bfr_index_type>(kNotAValue)) ==
           BFR_RESULT_ERROR_INVALID_ARGUMENT);
     CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("index type"));
-    CHECK(bfr_dispatch(device.device, list, 1, 1, 1) == BFR_RESULT_SUCCESS);
+    CHECK(bfr_set_topology(device.device, list, static_cast<bfr_topology>(kNotAValue)) ==
+          BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("topology"));
+    if (indirect) {
+        CHECK(bfr_dispatch_indirect(device.device, list, args, 0) == BFR_RESULT_SUCCESS);
+    }
+    else {
+        CHECK(bfr_dispatch(device.device, list, 1, 1, 1) == BFR_RESULT_SUCCESS);
+    }
     CHECK(bfr_barrier(device.device, list) == BFR_RESULT_SUCCESS);
     const bfr_buffer_copy whole{.src_offset = 0, .dst_offset = 0, .size = kBytes};
     CHECK(bfr_copy_buffer(device.device, list, target, readback, &whole, 1) == BFR_RESULT_SUCCESS);
@@ -893,6 +924,7 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, and refu
     bfr_destroy_command_pool(device.device, pool);
     bfr_destroy_buffer(device.device, target);
     bfr_destroy_buffer(device.device, readback);
+    bfr_destroy_buffer(device.device, args);
     bfr_destroy_pipeline(device.device, pipeline);
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

@@ -28,6 +28,11 @@ inline constexpr std::uint64_t kTableEntryBytes = 8;
 /// op as Metal's, for depth and stencil tests and compare samplers.
 [[nodiscard]] MTL::CompareFunction compareFor(CompareOp op);
 
+/// The primitive Metal's draws take for topology, which a pipeline is made
+/// with and setTopology sets. Fails with RhiUnsupported for TriangleFan: Metal
+/// has no fan (MTLRenderCommandEncoder.hpp:52-57).
+[[nodiscard]] core::Result<MTL::PrimitiveType> primitiveFor(Topology topology);
+
 /// The one resource layout every pipeline shares: one argument buffer holding
 /// the sampled textures, storage textures, storage buffers and samplers, in
 /// that order, each table sized as the DeviceDesc asked, resident while the
@@ -69,14 +74,15 @@ inline constexpr std::uint32_t kArgumentBufferBindings = 2;
                                                                           Ref<MTL::ResidencySet> residency);
 
 /// A pipeline: its Metal state, and the state Metal sets on the encoder
-/// instead, kept to set when the pipeline is bound. For compute, the
-/// workgroup size its desc gave, which a dispatch passes to Metal.
+/// instead, kept to set when the pipeline is bound, and the primitive its
+/// draws take until setTopology. For compute, the workgroup size its desc
+/// gave, which a dispatch passes to Metal.
 struct MetalPipeline {
     Ref<MTL::ComputePipelineState> compute;
     Ref<MTL::RenderPipelineState> render;
     Ref<MTL::DepthStencilState> depthStencil;
     RasterState raster;
-    TopologyClass topology = TopologyClass::Triangle;
+    MTL::PrimitiveType primitive = MTL::PrimitiveTypeTriangle;
     std::array<std::uint32_t, kWorkgroupDimensions> workgroupSize{};
 };
 
@@ -90,8 +96,8 @@ struct MetalPipeline {
 /// A graphics pipeline through compiler as desc says, whose code is a Metal
 /// library, with no vertex descriptor: vertices are pulled. Metal takes the
 /// depth-stencil format from the render pass, not the pipeline. Fails as
-/// createMetalComputePipeline does, and with RhiDeviceFailed when Metal gives
-/// no depth-stencil state.
+/// createMetalComputePipeline does, with RhiDeviceFailed when Metal gives no
+/// depth-stencil state, and as primitiveFor does.
 [[nodiscard]] core::Result<MetalPipeline> createMetalGraphicsPipeline(MTL::Device& device, MTL4::Compiler& compiler,
                                                                       const GraphicsPipelineDesc& desc);
 

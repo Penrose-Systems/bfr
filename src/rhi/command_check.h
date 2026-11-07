@@ -89,4 +89,26 @@ struct RecordState {
     return {};
 }
 
+/// Fails with RhiUnsupported for more than one indirect draw in a call where
+/// the device's Features::multiDrawIndirect is false. Each backend's
+/// indirect draws call it first.
+[[nodiscard]] inline core::Result<void> checkDrawCount(std::uint32_t drawCount, bool multiDrawIndirect) {
+    if (drawCount > 1 && !multiDrawIndirect) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device draws one indirect draw per call (Features::multiDrawIndirect); {} were asked",
+                             drawCount);
+    }
+    return {};
+}
+
+/// Fails with RhiUnsupported where the device's Features::drawIndirectCount
+/// is false. Each backend's count draws call it first.
+[[nodiscard]] inline core::Result<void> checkCountDraws(bool drawIndirectCount) {
+    if (!drawIndirectCount) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device reads no draw count from a buffer (Features::drawIndirectCount)");
+    }
+    return {};
+}
+
 } // namespace bfr::rhi

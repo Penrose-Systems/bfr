@@ -74,10 +74,16 @@ enum class Call : std::uint32_t {
     BufferTiling = 60,
     SparseFormat = 61,
     UpdateTileMappings = 62,
+    SetTopology = 63,
+    DrawIndirect = 64,
+    DrawIndexedIndirect = 65,
+    DrawIndirectCount = 66,
+    DrawIndexedIndirectCount = 67,
+    DispatchIndirect = 68,
 };
 
 /// How many values Call has.
-inline constexpr std::size_t kCallCount = 63;
+inline constexpr std::size_t kCallCount = 69;
 
 /// The CPU time one kind of call has taken, read from std::chrono::steady_clock
 /// around each call: how many there were, their nanoseconds in all, and the

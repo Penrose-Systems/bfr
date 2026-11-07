@@ -149,6 +149,8 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       pushConstantsSize_(setup.pushConstantsSize),
       timestampPeriod_(setup.timestampPeriod),
       hostClocks_(setup.hostClocks),
+      multiDrawIndirect_(setup.multiDrawIndirect),
+      drawIndirectCount_(setup.drawIndirectCount),
       desc_(heldPart(desc)),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
       commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),

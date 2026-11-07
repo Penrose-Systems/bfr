@@ -164,6 +164,10 @@ struct Features {
     bool multiDrawIndirect = false;
     bool drawIndirectCount = false;
     bool drawIndirectFirstInstance = false;
+    /// Topology::TriangleFan draws.
+    bool triangleFans = false;
+    /// PrimitiveRestart on list topologies, not only strips.
+    bool listRestart = false;
     bool storageReadWithoutFormat = false;
     bool storageWriteWithoutFormat = false;
     bool timestampsOnAllQueues = false;

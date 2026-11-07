@@ -104,8 +104,8 @@ public:
     /// Begins rendering to desc's attachments, with the image acquire took
     /// from swapchain as color attachment 0 when swapchain is not null, and
     /// sets the viewport and scissor to the whole of them; ends with
-    /// endRendering. Only draw and drawIndexed, and the state they take, are
-    /// recorded in between. Fails with RhiInvalidCall when no attachment is
+    /// endRendering. Only the draws, direct and indirect, and the state they
+    /// take, are recorded in between. Fails with RhiInvalidCall when no attachment is
     /// given, when a color attachment but the swapchain's names no texture,
     /// when a swapchain is given with no color attachment or with attachment 0
     /// naming a texture, when no image is acquired, when it was already
@@ -145,9 +145,17 @@ public:
 
     /// Makes pipeline the one draws or dispatches after it run, a graphics
     /// pipeline for draws and a compute one for dispatches, until another of
-    /// its kind is bound. Draws assemble the list topology of the pipeline's
-    /// class. Fails with RhiInvalidHandle when the list or pipeline is gone.
+    /// its kind is bound. Draws assemble the pipeline's topology until
+    /// setTopology. Fails with RhiInvalidHandle when the list or pipeline is
+    /// gone.
     [[nodiscard]] virtual core::Result<void> bindPipeline(CommandListHandle commandList, PipelineHandle pipeline) = 0;
+
+    /// Makes the draws after it assemble topology, which is of the bound
+    /// graphics pipeline's kind, points, lines or triangles, as each backend
+    /// requires. It lasts until the next bindPipeline. Fails with
+    /// RhiInvalidCall for a value BFR doesn't have, and RhiInvalidHandle when
+    /// the list is gone.
+    [[nodiscard]] virtual core::Result<void> setTopology(CommandListHandle commandList, Topology topology) = 0;
 
     /// Sets the first data.size() bytes of the push constants every shader
     /// reads, for the draws and dispatches after it. Fails with RhiInvalidCall
@@ -189,6 +197,45 @@ public:
     /// is gone.
     [[nodiscard]] virtual core::Result<void> dispatch(CommandListHandle commandList, std::uint32_t x, std::uint32_t y,
                                                       std::uint32_t z) = 0;
+
+    /// Records drawCount draws as draw does, each with the DrawIndirectArgs
+    /// buffer holds from offset, stride bytes apart. buffer has indirect
+    /// usage; work that wrote the arguments is ordered before by a barrier.
+    /// Fails with RhiUnsupported for drawCount above 1 where
+    /// Features::multiDrawIndirect is false and, on D3D12, a stride not in
+    /// DeviceDesc::indirectStrides; and as draw does, or with RhiInvalidHandle
+    /// when the buffer is gone.
+    [[nodiscard]] virtual core::Result<void> drawIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                          std::uint64_t offset, std::uint32_t drawCount,
+                                                          std::uint32_t stride) = 0;
+
+    /// Records drawCount draws as drawIndexed does, each with the
+    /// DrawIndexedIndirectArgs buffer holds from offset, stride bytes apart.
+    /// Fails as drawIndirect does.
+    [[nodiscard]] virtual core::Result<void> drawIndexedIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                                 std::uint64_t offset, std::uint32_t drawCount,
+                                                                 std::uint32_t stride) = 0;
+
+    /// Records drawIndirect's draws, as many as the 32-bit count countBuffer
+    /// holds at countOffset when the GPU runs it, at most maxDrawCount.
+    /// countBuffer has indirect usage. Fails with RhiUnsupported where
+    /// Features::drawIndirectCount is false, and as drawIndirect does.
+    [[nodiscard]] virtual core::Result<void> drawIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                               std::uint64_t offset, BufferHandle countBuffer,
+                                                               std::uint64_t countOffset, std::uint32_t maxDrawCount,
+                                                               std::uint32_t stride) = 0;
+
+    /// Records drawIndexedIndirect's draws, as many as countBuffer holds, as
+    /// drawIndirectCount does. Fails as drawIndirectCount does.
+    [[nodiscard]] virtual core::Result<void> drawIndexedIndirectCount(
+        CommandListHandle commandList, BufferHandle buffer, std::uint64_t offset, BufferHandle countBuffer,
+        std::uint64_t countOffset, std::uint32_t maxDrawCount, std::uint32_t stride) = 0;
+
+    /// Records a dispatch as dispatch does, of the DispatchIndirectArgs buffer
+    /// holds at offset. buffer has indirect usage. Fails as dispatch does, or
+    /// with RhiInvalidHandle when the buffer is gone.
+    [[nodiscard]] virtual core::Result<void> dispatchIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                              std::uint64_t offset) = 0;
 
     /// Records copies of regions from src to dst, outside rendering. src has
     /// copySrc usage and is device or upload memory; dst has copyDst usage and

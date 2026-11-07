@@ -40,12 +40,27 @@ struct ComputePipelineDesc {
     std::array<std::uint32_t, kWorkgroupDimensions> workgroupSize{};
 };
 
-/// What a graphics pipeline's draws assemble vertices into. The values are
-/// the C API's.
-enum class TopologyClass : std::uint8_t {
-    Triangle = 0,
-    Line = 1,
-    Point = 2,
+/// What draws assemble vertices into. Lists take each primitive's vertices
+/// apart; strips share each one with the next; a fan shares the first vertex
+/// with every triangle, where Features::triangleFans. The values are the C
+/// API's.
+enum class Topology : std::uint8_t {
+    TriangleList = 0,
+    TriangleStrip = 1,
+    TriangleFan = 2,
+    LineList = 3,
+    LineStrip = 4,
+    PointList = 5,
+};
+
+/// Whether an index of all ones ends a strip and starts the next, in indexed
+/// draws, and the index type it is all ones of: D3D12 fixes that value in the
+/// pipeline. Restart on a list topology needs Features::listRestart. The
+/// values are the C API's.
+enum class PrimitiveRestart : std::uint8_t {
+    Off = 0,
+    Index16 = 1,
+    Index32 = 2,
 };
 
 /// Which triangles a graphics pipeline discards by the way they face. The
@@ -197,7 +212,8 @@ struct ColorTarget {
 struct GraphicsPipelineDesc {
     ShaderCode vertex;
     ShaderCode fragment;
-    TopologyClass topology = TopologyClass::Triangle;
+    Topology topology = Topology::TriangleList;
+    PrimitiveRestart primitiveRestart = PrimitiveRestart::Off;
     RasterState raster;
     DepthStencilState depthStencil;
     std::uint32_t colorTargetCount = 0;

@@ -85,12 +85,12 @@ struct D3D12BindlessLayout {
 [[nodiscard]] core::Result<D3D12BindlessLayout> createD3D12BindlessLayout(ID3D12Device& device, const DeviceDesc& desc,
                                                                           std::uint32_t viewHeapSize);
 
-/// A pipeline state object, released when this goes, with the topology class
-/// its draws take.
+/// A pipeline state object, released when this goes, with the topology
+/// binding it sets; the PSO fixes only its class.
 struct D3D12Pipeline {
     Microsoft::WRL::ComPtr<ID3D12PipelineState> state;
     bool compute = false;
-    TopologyClass topology = TopologyClass::Triangle;
+    Topology topology = Topology::TriangleList;
 };
 
 /// A compute pipeline on rootSignature as desc says, whose code is DXIL. Fails

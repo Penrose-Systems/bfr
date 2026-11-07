@@ -38,8 +38,11 @@ constexpr std::pair<BufferMemory, BufferMemory> rangeOf(BufferMemory /*unused*/)
 constexpr std::pair<ColorSpace, ColorSpace> rangeOf(ColorSpace /*unused*/) {
     return {ColorSpace::Srgb, ColorSpace::DisplayNative};
 }
-constexpr std::pair<TopologyClass, TopologyClass> rangeOf(TopologyClass /*unused*/) {
-    return {TopologyClass::Triangle, TopologyClass::Point};
+constexpr std::pair<Topology, Topology> rangeOf(Topology /*unused*/) {
+    return {Topology::TriangleList, Topology::PointList};
+}
+constexpr std::pair<PrimitiveRestart, PrimitiveRestart> rangeOf(PrimitiveRestart /*unused*/) {
+    return {PrimitiveRestart::Off, PrimitiveRestart::Index32};
 }
 constexpr std::pair<CullMode, CullMode> rangeOf(CullMode /*unused*/) {
     return {CullMode::None, CullMode::Back};
@@ -206,6 +209,9 @@ template <class Enum>
 /// is not one BFR has. A depth-stencil format of Undefined is none.
 [[nodiscard]] inline core::Result<void> checkEnums(const GraphicsPipelineDesc& desc) {
     if (auto checked = checkKnown(desc.topology, "topology"); !checked) {
+        return checked;
+    }
+    if (auto checked = checkKnown(desc.primitiveRestart, "primitive restart"); !checked) {
         return checked;
     }
     if (auto checked = checkKnown(desc.raster.cull, "cull mode"); !checked) {

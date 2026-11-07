@@ -2,6 +2,7 @@
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/pipeline.h"
+#include "metal/metal_caps.h"
 #include "metal/metal_device.h"
 #include "metal/metal_pipeline.h"
 #include "metal/metal_util.h"
@@ -10,10 +11,12 @@
 
 #include <Foundation/NSTypes.hpp>
 #include <Metal/MTL4ArgumentTable.hpp>
+#include <Metal/MTL4CommandBuffer.hpp>
 #include <Metal/MTL4ComputeCommandEncoder.hpp>
 #include <Metal/MTL4RenderCommandEncoder.hpp>
 #include <Metal/MTLArgument.hpp>
 #include <Metal/MTLBuffer.hpp>
+#include <Metal/MTLComputeCommandEncoder.hpp>
 #include <Metal/MTLGPUAddress.hpp>
 #include <Metal/MTLRenderCommandEncoder.hpp>
 #include <Metal/MTLTypes.hpp>
@@ -30,18 +33,10 @@ namespace bfr::rhi::metal {
 
 namespace {
 
-// The list primitive of a pipeline's class, which the pipeline fixes.
-MTL::PrimitiveType primitiveFor(TopologyClass topology) {
-    switch (topology) {
-        case TopologyClass::Point:
-            return MTL::PrimitiveTypePoint;
-        case TopologyClass::Line:
-            return MTL::PrimitiveTypeLine;
-        case TopologyClass::Triangle:
-        default:
-            return MTL::PrimitiveTypeTriangle;
-    }
-}
+// Metal reads BFR's indirect arguments as its own, so they are the same.
+static_assert(sizeof(DrawIndirectArgs) == sizeof(MTL::DrawPrimitivesIndirectArguments));
+static_assert(sizeof(DrawIndexedIndirectArgs) == sizeof(MTL::DrawIndexedPrimitivesIndirectArguments));
+static_assert(sizeof(DispatchIndirectArgs) == sizeof(MTL::DispatchThreadgroupsIndirectArguments));
 
 MTL::CullMode cullFor(CullMode cull) {
     switch (cull) {
@@ -53,6 +48,28 @@ MTL::CullMode cullFor(CullMode cull) {
         default:
             return MTL::CullModeNone;
     }
+}
+
+// A compute encoder on buffer for one dispatch of pipeline, through the list's
+// arguments; the caller's autorelease pool drains it. Fails with
+// RhiDeviceFailed when Metal gives none.
+core::Result<MTL4::ComputeCommandEncoder*> computeEncoderFor(MTL4::CommandBuffer& buffer,
+                                                             const MTL4::ArgumentTable& arguments,
+                                                             const MetalPipeline& pipeline) {
+    MTL4::ComputeCommandEncoder* encoder = buffer.computeCommandEncoder();
+    if (encoder == nullptr) {
+        return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no compute command encoder");
+    }
+    encoder->setArgumentTable(&arguments);
+    encoder->setComputePipelineState(pipeline.compute.get());
+    return encoder;
+}
+
+// The threads of each of pipeline's threadgroups, which Metal 4 takes at the
+// dispatch.
+MTL::Size threadsOf(const MetalPipeline& pipeline) {
+    const auto& workgroup = pipeline.workgroupSize;
+    return MTL::Size::Make(workgroup[0], workgroup[1], workgroup[2]);
 }
 
 } // namespace
@@ -156,7 +173,24 @@ core::Result<void> MetalDevice::bindPipeline(CommandListHandle commandList, Pipe
     }
     else {
         (*list)->graphics = pipeline;
+        (*list)->primitive = (*found)->primitive;
     }
+    return {};
+}
+
+core::Result<void> MetalDevice::setTopology(CommandListHandle commandList, Topology topology) {
+    if (auto checked = checkKnown(topology, "topology"); !checked) {
+        return checked;
+    }
+    auto primitive = primitiveFor(topology);
+    if (!primitive) {
+        return std::unexpected(std::move(primitive.error()));
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    (*list)->primitive = *primitive;
     return {};
 }
 
@@ -230,8 +264,7 @@ core::Result<void> MetalDevice::draw(CommandListHandle commandList, std::uint32_
     if (!pipeline) {
         return std::unexpected(std::move(pipeline.error()));
     }
-    (*list)->encoder->drawPrimitives(primitiveFor((*pipeline)->topology), firstVertex, vertexCount, instanceCount,
-                                     firstInstance);
+    (*list)->encoder->drawPrimitives((*list)->primitive, firstVertex, vertexCount, instanceCount, firstInstance);
     return {};
 }
 
@@ -257,7 +290,7 @@ core::Result<void> MetalDevice::drawIndexed(CommandListHandle commandList, std::
     if (!pipeline) {
         return std::unexpected(std::move(pipeline.error()));
     }
-    (*list)->encoder->drawIndexedPrimitives(primitiveFor((*pipeline)->topology), indexCount, (*list)->indexType,
+    (*list)->encoder->drawIndexedPrimitives((*list)->primitive, indexCount, (*list)->indexType,
                                             (*list)->indexBuffer + skipped, (*list)->indexBytes - skipped,
                                             instanceCount, vertexOffset, firstInstance);
     return {};
@@ -274,17 +307,114 @@ core::Result<void> MetalDevice::dispatch(CommandListHandle commandList, std::uin
         return std::unexpected(std::move(pipeline.error()));
     }
     // One encoder per dispatch, which the pool drains the autoreleased
-    // reference of; Metal 4 takes the threadgroup size at the dispatch.
+    // reference of.
     const AutoreleasePool pool;
-    MTL4::ComputeCommandEncoder* encoder = (*list)->buffer->computeCommandEncoder();
-    if (encoder == nullptr) {
-        return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no compute command encoder");
+    auto encoder = computeEncoderFor(*(*list)->buffer, *lists_[(*list)->slot].arguments.get(), **pipeline);
+    if (!encoder) {
+        return std::unexpected(std::move(encoder.error()));
     }
-    encoder->setArgumentTable(lists_[(*list)->slot].arguments.get());
-    encoder->setComputePipelineState((*pipeline)->compute.get());
-    const auto& workgroup = (*pipeline)->workgroupSize;
-    encoder->dispatchThreadgroups(MTL::Size::Make(x, y, z), MTL::Size::Make(workgroup[0], workgroup[1], workgroup[2]));
-    encoder->endEncoding();
+    (*encoder)->dispatchThreadgroups(MTL::Size::Make(x, y, z), threadsOf(**pipeline));
+    (*encoder)->endEncoding();
+    return {};
+}
+
+// Metal 4 draws one indirect draw per call, so drawCount is 0 or 1 past
+// checkDrawCount, and stride, the distance between draws, is unused. Its
+// encoder reads the arguments at a GPU address; the buffer is resident, as
+// every buffer is from creation.
+
+core::Result<void> MetalDevice::drawIndirect(CommandListHandle commandList, BufferHandle buffer, std::uint64_t offset,
+                                             std::uint32_t drawCount, std::uint32_t /*stride*/) {
+    if (auto checked = checkDrawCount(drawCount, kMultiDrawIndirect); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    if (auto checked = checkRendering((*list)->state); !checked) {
+        return checked;
+    }
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    auto pipeline = applyGraphics(**list);
+    if (!pipeline) {
+        return std::unexpected(std::move(pipeline.error()));
+    }
+    // Metal's indirect draw always draws once, so none is recorded for 0.
+    if (drawCount != 0) {
+        (*list)->encoder->drawPrimitives((*list)->primitive, (*found)->buffer->gpuAddress() + offset);
+    }
+    return {};
+}
+
+core::Result<void> MetalDevice::drawIndexedIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                    std::uint64_t offset, std::uint32_t drawCount,
+                                                    std::uint32_t /*stride*/) {
+    if (auto checked = checkDrawCount(drawCount, kMultiDrawIndirect); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    if (auto checked = checkRendering((*list)->state); !checked) {
+        return checked;
+    }
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    auto pipeline = applyGraphics(**list);
+    if (!pipeline) {
+        return std::unexpected(std::move(pipeline.error()));
+    }
+    // The arguments name the first index, so the whole bound index buffer is
+    // given, unlike drawIndexed's.
+    if (drawCount != 0) {
+        (*list)->encoder->drawIndexedPrimitives((*list)->primitive, (*list)->indexType, (*list)->indexBuffer,
+                                                (*list)->indexBytes, (*found)->buffer->gpuAddress() + offset);
+    }
+    return {};
+}
+
+core::Result<void> MetalDevice::drawIndirectCount(CommandListHandle /*commandList*/, BufferHandle /*buffer*/,
+                                                  std::uint64_t /*offset*/, BufferHandle /*countBuffer*/,
+                                                  std::uint64_t /*countOffset*/, std::uint32_t /*maxDrawCount*/,
+                                                  std::uint32_t /*stride*/) {
+    return checkCountDraws(kDrawIndirectCount);
+}
+
+core::Result<void> MetalDevice::drawIndexedIndirectCount(CommandListHandle /*commandList*/, BufferHandle /*buffer*/,
+                                                         std::uint64_t /*offset*/, BufferHandle /*countBuffer*/,
+                                                         std::uint64_t /*countOffset*/, std::uint32_t /*maxDrawCount*/,
+                                                         std::uint32_t /*stride*/) {
+    return checkCountDraws(kDrawIndirectCount);
+}
+
+core::Result<void> MetalDevice::dispatchIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                 std::uint64_t offset) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto pipeline = pipelineFor((*list)->compute);
+    if (!pipeline) {
+        return std::unexpected(std::move(pipeline.error()));
+    }
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    const AutoreleasePool pool;
+    auto encoder = computeEncoderFor(*(*list)->buffer, *lists_[(*list)->slot].arguments.get(), **pipeline);
+    if (!encoder) {
+        return std::unexpected(std::move(encoder.error()));
+    }
+    (*encoder)->dispatchThreadgroups((*found)->buffer->gpuAddress() + offset, threadsOf(**pipeline));
+    (*encoder)->endEncoding();
     return {};
 }
 

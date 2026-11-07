@@ -287,6 +287,12 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
         .multiDrawIndirect = on(core.multiDrawIndirect),
         .drawIndirectCount = on(features.vulkan12.drawIndirectCount),
         .drawIndirectFirstInstance = on(core.drawIndirectFirstInstance),
+        // Core, but a portability driver says whether it has them
+        // (VUID-VkPipelineInputAssemblyStateCreateInfo-triangleFans-04452).
+        .triangleFans = !lists(extensions, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME) ||
+                        on(features.portability.triangleFans),
+        // VUID-VkPipelineInputAssemblyStateCreateInfo-topology-06252.
+        .listRestart = on(features.listRestart.primitiveTopologyListRestart),
         .storageReadWithoutFormat = on(core.shaderStorageImageReadWithoutFormat),
         .storageWriteWithoutFormat = on(core.shaderStorageImageWriteWithoutFormat),
         .timestampsOnAllQueues = on(properties.core.properties.limits.timestampComputeAndGraphics),
@@ -648,6 +654,7 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     portability.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR;
     globalPriority.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GLOBAL_PRIORITY_QUERY_FEATURES_KHR;
     maintenance9.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_9_FEATURES_KHR;
+    listRestart.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVE_TOPOLOGY_LIST_RESTART_FEATURES_EXT;
 
     void** tail = &core.pNext;
     link(tail, vulkan11);
@@ -667,6 +674,7 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     linkIfListed(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, customBorderColor);
     linkIfListed(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME, globalPriority);
     linkIfListed(VK_KHR_MAINTENANCE_9_EXTENSION_NAME, maintenance9);
+    linkIfListed(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME, listRestart);
     vk.vkGetPhysicalDeviceFeatures2(adapter, &core);
 }
 

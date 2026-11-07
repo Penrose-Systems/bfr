@@ -72,7 +72,8 @@ const ComputePipelineDesc kCompute{.compute = spirv(bfr::test::spirv::kBindlessC
 GraphicsPipelineDesc graphicsDesc() {
     GraphicsPipelineDesc desc{.vertex = spirv(bfr::test::spirv::kBindlessVert),
                               .fragment = spirv(bfr::test::spirv::kBindlessFrag),
-                              .topology = TopologyClass::Triangle,
+                              .topology = Topology::TriangleList,
+                              .primitiveRestart = PrimitiveRestart::Off,
                               .raster = {.cull = CullMode::Back, .frontFace = FrontFace::CounterClockwise},
                               .depthStencil = {.depthTest = true,
                                                .depthWrite = true,

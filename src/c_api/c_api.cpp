@@ -360,7 +360,8 @@ bfr::rhi::PipelineHandle fromC(bfr_pipeline handle) {
 
 // The C and C++ pipeline enums are the same numbers, so they cross as they
 // are, once checked to be a value BFR has.
-static_assert(static_cast<int>(bfr::rhi::TopologyClass::Point) == BFR_TOPOLOGY_CLASS_POINT);
+static_assert(static_cast<int>(bfr::rhi::Topology::PointList) == BFR_TOPOLOGY_POINT_LIST);
+static_assert(static_cast<int>(bfr::rhi::PrimitiveRestart::Index32) == BFR_PRIMITIVE_RESTART_INDEX32);
 static_assert(static_cast<int>(bfr::rhi::CullMode::Back) == BFR_CULL_MODE_BACK);
 static_assert(static_cast<int>(bfr::rhi::FrontFace::Clockwise) == BFR_FRONT_FACE_CLOCKWISE);
 static_assert(static_cast<int>(bfr::rhi::FillMode::Wireframe) == BFR_FILL_MODE_WIREFRAME);
@@ -460,7 +461,8 @@ static_assert(static_cast<int>(bfr::rhi::TimestampStage::Copy) == BFR_TIMESTAMP_
 static_assert(static_cast<int>(bfr::rhi::TimestampGranularity::Precise) == BFR_TIMESTAMP_GRANULARITY_PRECISE);
 static_assert(static_cast<int>(bfr::rhi::HostClock::PerformanceCounter) == BFR_HOST_CLOCK_PERFORMANCE_COUNTER);
 static_assert(static_cast<int>(bfr::rhi::Call::InstanceSwapchainFormats) == BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS);
-static_assert(bfr::rhi::kCallCount == BFR_CALL_UPDATE_TILE_MAPPINGS + 1);
+static_assert(static_cast<int>(bfr::rhi::Call::SetTopology) == BFR_CALL_SET_TOPOLOGY);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_DISPATCH_INDIRECT + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
@@ -564,7 +566,8 @@ std::optional<bfr::rhi::BlendState> blendIn(const bfr_blend_state& blend, bfr::c
 std::optional<bfr::rhi::GraphicsPipelineDesc> graphicsPipelineIn(const bfr_graphics_pipeline_desc& desc,
                                                                  bfr::core::Message& error) {
     using namespace bfr::rhi;
-    const auto topology = enumIn(desc.topology, TopologyClass::Point, "topology class", error);
+    const auto topology = enumIn(desc.topology, Topology::PointList, "topology", error);
+    const auto restart = enumIn(desc.primitive_restart, PrimitiveRestart::Index32, "primitive restart", error);
     const auto cull = enumIn(desc.raster.cull, CullMode::Back, "cull mode", error);
     const auto frontFace = enumIn(desc.raster.front_face, FrontFace::Clockwise, "front face", error);
     const auto fill = enumIn(desc.raster.fill, FillMode::Wireframe, "fill mode", error);
@@ -572,13 +575,15 @@ std::optional<bfr::rhi::GraphicsPipelineDesc> graphicsPipelineIn(const bfr_graph
     const auto front = stencilFaceIn(desc.depth_stencil.front, error);
     const auto back = stencilFaceIn(desc.depth_stencil.back, error);
     const auto depthStencilFormat = formatIn(desc.depth_stencil_format, "depth-stencil format", error);
-    if (!topology || !cull || !frontFace || !fill || !depthCompare || !front || !back || !depthStencilFormat) {
+    if (!topology || !restart || !cull || !frontFace || !fill || !depthCompare || !front || !back ||
+        !depthStencilFormat) {
         return std::nullopt;
     }
     GraphicsPipelineDesc pipeline{
         .vertex = shaderIn(desc.vertex),
         .fragment = shaderIn(desc.fragment),
         .topology = *topology,
+        .primitiveRestart = *restart,
         .raster = {.cull = *cull,
                    .frontFace = *frontFace,
                    .fill = *fill,
@@ -1039,6 +1044,8 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .multi_draw_indirect = toC(features.multiDrawIndirect),
         .draw_indirect_count = toC(features.drawIndirectCount),
         .draw_indirect_first_instance = toC(features.drawIndirectFirstInstance),
+        .triangle_fans = toC(features.triangleFans),
+        .list_restart = toC(features.listRestart),
         .storage_read_without_format = toC(features.storageReadWithoutFormat),
         .storage_write_without_format = toC(features.storageWriteWithoutFormat),
         .timestamps_on_all_queues = toC(features.timestampsOnAllQueues),
@@ -1379,21 +1386,26 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
         if (!copy) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
-        auto created =
-            instance->instance->createDevice(desc->adapter, *window,
-                                             {.graphics = *graphics,
-                                              .compute = *compute,
-                                              .copy = *copy,
-                                              .maxCommandLists = desc->max_command_lists,
-                                              .maxCommandPools = desc->max_command_pools,
-                                              .maxSwapchains = desc->max_swapchains,
-                                              .maxBindlessTextures = desc->max_bindless_textures,
-                                              .maxBindlessStorageTextures = desc->max_bindless_storage_textures,
-                                              .maxBindlessStorageBuffers = desc->max_bindless_storage_buffers,
-                                              .maxBindlessSamplers = desc->max_bindless_samplers,
-                                              .maxTimestampPools = desc->max_timestamp_pools,
-                                              .maxSparseMemories = desc->max_sparse_memories,
-                                              .maxTileMappings = desc->max_tile_mappings});
+        if (desc->indirect_strides == nullptr && desc->indirect_stride_count != 0) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT,
+                        "indirect_strides is null but indirect_stride_count is not 0");
+        }
+        auto created = instance->instance->createDevice(
+            desc->adapter, *window,
+            {.graphics = *graphics,
+             .compute = *compute,
+             .copy = *copy,
+             .maxCommandLists = desc->max_command_lists,
+             .maxCommandPools = desc->max_command_pools,
+             .maxSwapchains = desc->max_swapchains,
+             .maxBindlessTextures = desc->max_bindless_textures,
+             .maxBindlessStorageTextures = desc->max_bindless_storage_textures,
+             .maxBindlessStorageBuffers = desc->max_bindless_storage_buffers,
+             .maxBindlessSamplers = desc->max_bindless_samplers,
+             .maxTimestampPools = desc->max_timestamp_pools,
+             .maxSparseMemories = desc->max_sparse_memories,
+             .maxTileMappings = desc->max_tile_mappings,
+             .indirectStrides = {desc->indirect_strides, desc->indirect_stride_count}});
         if (!created) {
             return fail(created.error());
         }
@@ -1700,6 +1712,87 @@ bfr_result bfr_dispatch(bfr_device* device, bfr_command_list command_list, uint3
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
         }
         const auto dispatched = device->device->dispatch(fromC(command_list), x, y, z);
+        return dispatched ? BFR_RESULT_SUCCESS : fail(dispatched.error());
+    });
+}
+
+// The indirect arguments cross as they are: the C and C++ layouts are one.
+static_assert(sizeof(bfr_draw_indirect_args) == sizeof(bfr::rhi::DrawIndirectArgs));
+static_assert(sizeof(bfr_draw_indexed_indirect_args) == sizeof(bfr::rhi::DrawIndexedIndirectArgs));
+static_assert(sizeof(bfr_dispatch_indirect_args) == sizeof(bfr::rhi::DispatchIndirectArgs));
+
+bfr_result bfr_set_topology(bfr_device* device, bfr_command_list command_list, bfr_topology topology) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        bfr::core::Message error;
+        const auto known = enumIn(topology, bfr::rhi::Topology::PointList, "topology", error);
+        if (!known) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto set = device->device->setTopology(fromC(command_list), *known);
+        return set ? BFR_RESULT_SUCCESS : fail(set.error());
+    });
+}
+
+bfr_result bfr_draw_indirect(bfr_device* device, bfr_command_list command_list, bfr_buffer buffer, uint64_t offset,
+                             uint32_t draw_count, uint32_t stride) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto drawn = device->device->drawIndirect(fromC(command_list), fromC(buffer), offset, draw_count, stride);
+        return drawn ? BFR_RESULT_SUCCESS : fail(drawn.error());
+    });
+}
+
+bfr_result bfr_draw_indexed_indirect(bfr_device* device, bfr_command_list command_list, bfr_buffer buffer,
+                                     uint64_t offset, uint32_t draw_count, uint32_t stride) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto drawn = device->device->drawIndexedIndirect(fromC(command_list), fromC(buffer), offset, draw_count,
+                                                               stride);
+        return drawn ? BFR_RESULT_SUCCESS : fail(drawn.error());
+    });
+}
+
+bfr_result bfr_draw_indirect_count(bfr_device* device, bfr_command_list command_list, bfr_buffer buffer,
+                                   uint64_t offset, bfr_buffer count_buffer, uint64_t count_offset,
+                                   uint32_t max_draw_count, uint32_t stride) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto drawn = device->device->drawIndirectCount(fromC(command_list), fromC(buffer), offset,
+                                                             fromC(count_buffer), count_offset, max_draw_count, stride);
+        return drawn ? BFR_RESULT_SUCCESS : fail(drawn.error());
+    });
+}
+
+bfr_result bfr_draw_indexed_indirect_count(bfr_device* device, bfr_command_list command_list, bfr_buffer buffer,
+                                           uint64_t offset, bfr_buffer count_buffer, uint64_t count_offset,
+                                           uint32_t max_draw_count, uint32_t stride) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto drawn = device->device->drawIndexedIndirectCount(fromC(command_list), fromC(buffer), offset,
+                                                                    fromC(count_buffer), count_offset, max_draw_count,
+                                                                    stride);
+        return drawn ? BFR_RESULT_SUCCESS : fail(drawn.error());
+    });
+}
+
+bfr_result bfr_dispatch_indirect(bfr_device* device, bfr_command_list command_list, bfr_buffer buffer,
+                                 uint64_t offset) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto dispatched = device->device->dispatchIndirect(fromC(command_list), fromC(buffer), offset);
         return dispatched ? BFR_RESULT_SUCCESS : fail(dispatched.error());
     });
 }

@@ -24,6 +24,10 @@ inline constexpr std::uint32_t kViewports = 1;
 /// op as Vulkan's, for depth and stencil tests and compare samplers.
 [[nodiscard]] VkCompareOp compareFor(CompareOp op);
 
+/// The Vulkan topology topology is, which a pipeline is made with and
+/// setTopology sets.
+[[nodiscard]] VkPrimitiveTopology topologyFor(Topology topology);
+
 /// The one resource layout every pipeline shares: the descriptor set layout
 /// of the four tables, sized as the DeviceDesc asked, the set holding them,
 /// allocated from a pool of its own, and the pipeline layout over the set and
@@ -70,8 +74,8 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
 };
 
-/// A VkPipeline, destroyed when this goes, with where it binds and the list
-/// topology of its class, which a draw sets.
+/// A VkPipeline, destroyed when this goes, with where it binds and its
+/// topology, which binding it sets.
 class VulkanPipeline {
 public:
     VulkanPipeline(const VolkDeviceTable& table, VkDevice device, VkPipeline pipeline, VkPipelineBindPoint bindPoint,
@@ -103,7 +107,7 @@ private:
 
 /// A graphics pipeline on layout as desc says, whose code is SPIR-V, for
 /// dynamic rendering to desc's formats with a dynamic viewport, scissor,
-/// topology of the desc's class, blend constants and stencil reference. Fails
+/// topology, blend constants and stencil reference. Fails
 /// with RhiInvalidCall when code is not whole words, and RhiDeviceFailed when
 /// the API refuses a module or the pipeline.
 [[nodiscard]] core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable& table, VkDevice device,
