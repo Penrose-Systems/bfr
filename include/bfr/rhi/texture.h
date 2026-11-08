@@ -27,7 +27,11 @@ enum class TextureDimension : std::uint8_t {
 
 /// How a texture's memory is arranged for what the GPU does with it next.
 /// Device::textureBarrier moves a texture between layouts; BFR keeps no
-/// record of the one it is in. The values are the C API's.
+/// record of the one it is in. A copy queue's lists move a texture only
+/// between Undefined, CopySrc and CopyDst, and a compute queue's never to or
+/// from ColorTarget, DepthStencilTarget, DepthStencilRead, ResolveSrc or
+/// ResolveDst, as D3D12's layouts for those queues allow; so a texture crosses
+/// between queues in a layout both kinds take. The values are the C API's.
 enum class TextureLayout : std::uint8_t {
     /// Its contents are not kept. Only a layout to move from.
     Undefined = 0,
@@ -43,8 +47,6 @@ enum class TextureLayout : std::uint8_t {
     DepthStencilTarget = 6,
     /// Rendering tests depth or stencil in it without writing, as a
     /// DepthStencilAttachment with readOnly; shaders may sample it meanwhile.
-    /// Moved to and from only in a graphics queue's lists, as D3D12's layout
-    /// for it is a direct queue's.
     DepthStencilRead = 7,
     /// Device::resolveTexture reads it.
     ResolveSrc = 8,

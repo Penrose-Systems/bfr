@@ -454,6 +454,147 @@ TEST_CASE("Device dispatches a compute pipeline that writes a storage buffer thr
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("Device hands work across queues: compute writes and copy reads it, copy uploads and graphics reads it",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    if (!takesSpirv(backend)) {
+        SKIP("no " << backend.name << " bytecode is checked in");
+    }
+    std::vector<std::string> messages;
+    {
+        auto instance = createInstance(recordingInto(backend, messages), kValidation);
+        REQUIRE(instance.has_value());
+        const Caps& caps = (*instance)->adapters()[0].caps;
+        // Queue 0 is graphics, 1 compute and 2 copy, as DeviceDesc numbers them.
+        constexpr std::uint32_t kGraphics = 0;
+        constexpr std::uint32_t kCompute = 1;
+        constexpr std::uint32_t kCopy = 2;
+        auto opened = (*instance)->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& desc) {
+                                                    desc.compute = std::span{kTestQueues}.first(1);
+                                                    desc.copy = std::span{kTestQueues}.first(1);
+                                                }));
+        if (!opened && opened.error().code == ErrorCode::RhiUnsupported) {
+            SKIP(failureOf(opened));
+        }
+        INFO(failureOf(opened));
+        REQUIRE(opened.has_value());
+        Device& device = **opened;
+
+        constexpr std::uint64_t kBytes = std::uint64_t{kWorkgroup} * sizeof(std::uint32_t);
+        const BufferHandle written = created(device, {.size = kBytes, .usage = {.copySrc = true, .storage = true}});
+        const BufferHandle computed =
+            created(device, {.size = kBytes, .memory = BufferMemory::Readback, .usage = {.copyDst = true}});
+        const PipelineHandle pipeline = created(device,
+                                                ComputePipelineDesc{.compute = spirv(bfr::test::spirv::kBindlessComp),
+                                                                    .workgroupSize = {kWorkgroup, 1, 1}});
+        const auto slot = device.bufferSlot(written);
+        REQUIRE(slot.has_value());
+
+        const std::uint64_t bytesPerRow = alignUp(std::uint64_t{kSide} * kTexelBytes,
+                                                  std::max<std::uint64_t>(caps.limits.copyRowPitchAlignment, 1));
+        const std::uint64_t imageBytes = bytesPerRow * kSide;
+        const BufferHandle upload =
+            created(device, {.size = imageBytes, .memory = BufferMemory::Upload, .usage = {.copySrc = true}});
+        const BufferHandle uploaded =
+            created(device, {.size = imageBytes, .memory = BufferMemory::Readback, .usage = {.copyDst = true}});
+        const auto texels = device.mapBuffer(upload);
+        REQUIRE(texels.has_value());
+        for (std::size_t index = 0; index < texels->size(); ++index) {
+            (*texels)[index] = static_cast<std::byte>(static_cast<unsigned char>(index));
+        }
+        const auto texture = device.createTexture({.format = Format::Rgba8Unorm,
+                                                   .width = kSide,
+                                                   .height = kSide,
+                                                   .depth = 1,
+                                                   .layers = 1,
+                                                   .mipLevels = 1,
+                                                   .samples = 1,
+                                                   .usage = {.copySrc = true, .copyDst = true}});
+        REQUIRE(texture.has_value());
+        const BufferTextureCopy whole{.bufferOffset = 0,
+                                      .bytesPerRow = bytesPerRow,
+                                      .rowsPerImage = kSide,
+                                      .mipLevel = 0,
+                                      .layer = 0,
+                                      .aspect = TextureAspect::Color,
+                                      .x = 0,
+                                      .y = 0,
+                                      .z = 0,
+                                      .width = kSide,
+                                      .height = kSide,
+                                      .depth = 1};
+
+        const auto graphicsPool = device.createCommandPool({.queue = kGraphics, .listCount = kPoolLists});
+        const auto computePool = device.createCommandPool(
+            {.queue = kCompute, .listCount = kPoolLists, .pushConstantUpdates = 1});
+        const auto copyPool = device.createCommandPool({.queue = kCopy, .listCount = kPoolLists});
+        REQUIRE(graphicsPool.has_value());
+        REQUIRE(computePool.has_value());
+        REQUIRE(copyPool.has_value());
+        const auto send = [&device](std::uint32_t queue, CommandListHandle list, std::span<const Token> waits) {
+            const auto token = device.submit({.queue = queue, .commandLists = std::span{&list, 1}, .waits = waits});
+            INFO(failureOf(token));
+            REQUIRE(token.has_value());
+            return *token;
+        };
+
+        // Compute writes the buffer; the copy queue waits on it and reads it back.
+        const auto dispatching = device.beginCommands(*computePool);
+        REQUIRE(dispatching.has_value());
+        CHECK(device.bindPipeline(*dispatching, pipeline).has_value());
+        CHECK(device.pushConstants(*dispatching, bytesOf({.positions = *slot})).has_value());
+        CHECK(device.dispatch(*dispatching, 1, 1, 1).has_value());
+        const Token dispatched = send(kCompute, *dispatching, {});
+        const auto reading = device.beginCommands(*copyPool);
+        REQUIRE(reading.has_value());
+        const BufferCopy all{.srcOffset = 0, .dstOffset = 0, .size = kBytes};
+        CHECK(device.copyBuffer(*reading, written, computed, std::span{&all, 1}).has_value());
+        const Token read = send(kCopy, *reading, std::span{&dispatched, 1});
+
+        // The copy queue uploads the texture in a copy layout; graphics waits,
+        // moves it on and reads it back.
+        const auto uploading = device.beginCommands(*copyPool);
+        REQUIRE(uploading.has_value());
+        CHECK(
+            device.textureBarrier(*uploading, *texture, TextureLayout::Undefined, TextureLayout::CopyDst).has_value());
+        CHECK(device.copyBufferToTexture(*uploading, upload, *texture, std::span{&whole, 1}).has_value());
+        const Token filled = send(kCopy, *uploading, std::span{&read, 1});
+        const auto consuming = device.beginCommands(*graphicsPool);
+        REQUIRE(consuming.has_value());
+        CHECK(device.textureBarrier(*consuming, *texture, TextureLayout::CopyDst, TextureLayout::CopySrc).has_value());
+        CHECK(device.copyTextureToBuffer(*consuming, *texture, uploaded, std::span{&whole, 1}).has_value());
+        const Token used = send(kGraphics, *consuming, std::span{&filled, 1});
+        REQUIRE(device.wait(used, kTestWait).has_value());
+        CHECK(device.poll(read).value_or(false));
+
+        // The shader writes each invocation its own index.
+        const auto values = device.mapBuffer(computed);
+        REQUIRE(values.has_value());
+        std::array<std::uint32_t, kWorkgroup> indices{};
+        std::memcpy(indices.data(), values->data(), kBytes);
+        for (std::uint32_t i = 0; i < kWorkgroup; ++i) {
+            CHECK(indices.at(i) == i);
+        }
+        const auto back = device.mapBuffer(uploaded);
+        REQUIRE(back.has_value());
+        const std::uint64_t rowBytes = std::uint64_t{kSide} * kTexelBytes;
+        for (std::uint64_t row = 0; row < kSide; ++row) {
+            INFO("row " << row);
+            CHECK(std::ranges::equal(back->subspan(row * bytesPerRow, rowBytes),
+                                     texels->subspan(row * bytesPerRow, rowBytes)));
+        }
+        for (const auto pool : {*graphicsPool, *computePool, *copyPool}) {
+            CHECK(device.destroyCommandPool(pool).has_value());
+        }
+        CHECK(device.destroyPipeline(pipeline).has_value());
+        CHECK(device.destroyTexture(*texture).has_value());
+        for (const BufferHandle buffer : {written, computed, upload, uploaded}) {
+            CHECK(device.destroyBuffer(buffer).has_value());
+        }
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("Device draws a triangle pulled from a storage buffer into a texture, with y up", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     if (!takesSpirv(backend)) {

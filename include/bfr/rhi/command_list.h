@@ -68,6 +68,14 @@ struct QueueDesc {
 /// is the backend's to refuse, which Vulkan's validation does; D3D12 makes the three resource
 /// tables in one heap, so there they fail with RhiLimitReached when together
 /// they are more than it holds.
+///
+/// A graphics queue's lists run every call. A compute queue's run all but
+/// rendering, draws, the calls that set their state or bind a graphics
+/// pipeline or an index buffer, and resolveTexture; a copy queue's run only
+/// copies, barriers and writeTimestamp. A copy between a buffer and a
+/// texture's depth or stencil runs only in a graphics queue's lists, and one
+/// in a copy queue's has a bufferOffset that is a multiple of 4.
+/// TextureLayout says which layouts each kind's lists move a texture between.
 struct DeviceDesc {
     std::span<const QueueDesc> graphics;
     std::span<const QueueDesc> compute;

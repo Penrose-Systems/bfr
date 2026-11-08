@@ -210,6 +210,19 @@ struct QueueLevels {
     bool realtime = false;
 };
 
+/// How a copy between a buffer and a texture, or between two textures, lines
+/// up in a kind of queue's lists, in texels, or texel blocks for a compressed
+/// format: its offsets are multiples of width, height and depth, and each
+/// size is a multiple too or reaches the edge of the mip level. With
+/// wholeLevels it copies whole mip levels only, from 0. All 0 and false
+/// where the backend states none.
+struct CopyGranularity {
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint32_t depth = 0;
+    bool wholeLevels = false;
+};
+
 /// graphics, compute and copy are 0 where the backend has no count of queues;
 /// createDevice then takes any number of each. ranks is how many distinct
 /// priorities the backend gives a device's queues by their QueueDesc::rank; 0
@@ -229,6 +242,9 @@ struct Queues {
     bool graphicsSparse = false;
     bool computeSparse = false;
     bool copySparse = false;
+    CopyGranularity graphicsGranularity;
+    CopyGranularity computeGranularity;
+    CopyGranularity copyGranularity;
 };
 
 /// The TimestampStage values a timestamp write takes; each true where the

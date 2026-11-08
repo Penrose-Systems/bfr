@@ -1143,6 +1143,13 @@ bfr_result listTimings(std::span<const bfr::rhi::CallTiming> timings, std::uint3
     return written < total ? BFR_RESULT_INCOMPLETE : BFR_RESULT_SUCCESS;
 }
 
+bfr_copy_granularity toC(const bfr::rhi::CopyGranularity& granularity) {
+    return {.width = granularity.width,
+            .height = granularity.height,
+            .depth = granularity.depth,
+            .whole_levels = toC(granularity.wholeLevels)};
+}
+
 bfr_caps_queues toC(const bfr::rhi::Queues& queues) {
     return {
         .graphics = queues.graphics,
@@ -1158,6 +1165,9 @@ bfr_caps_queues toC(const bfr::rhi::Queues& queues) {
         .graphics_sparse = toC(queues.graphicsSparse),
         .compute_sparse = toC(queues.computeSparse),
         .copy_sparse = toC(queues.copySparse),
+        .graphics_granularity = toC(queues.graphicsGranularity),
+        .compute_granularity = toC(queues.computeGranularity),
+        .copy_granularity = toC(queues.copyGranularity),
     };
 }
 

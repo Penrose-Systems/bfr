@@ -591,7 +591,10 @@ typedef enum bfr_texture_dimension {
 } bfr_texture_dimension;
 
 // How a texture's memory is arranged for what the GPU does with it next. bfr_texture_barrier moves
-// a texture between layouts; BFR keeps no record of the one it is in.
+// a texture between layouts; BFR keeps no record of the one it is in. A copy queue's lists move a
+// texture only between undefined, copy_src and copy_dst, and a compute queue's never to or from
+// color_target, depth_stencil_target, depth_stencil_read, resolve_src or resolve_dst, as D3D12's
+// layouts for those queues allow; so a texture crosses between queues in a layout both kinds take.
 typedef enum bfr_texture_layout {
     // Its contents are not kept. Only a layout to move from.
     BFR_TEXTURE_LAYOUT_UNDEFINED = 0,
@@ -608,8 +611,7 @@ typedef enum bfr_texture_layout {
     // Rendering tests and writes depth or stencil in it.
     BFR_TEXTURE_LAYOUT_DEPTH_STENCIL_TARGET = 6,
     // Rendering tests depth or stencil in it without writing, as a read_only depth-stencil
-    // attachment; shaders may sample it meanwhile. Moved to and from only in a graphics queue's
-    // lists, as D3D12's layout for it is a direct queue's.
+    // attachment; shaders may sample it meanwhile.
     BFR_TEXTURE_LAYOUT_DEPTH_STENCIL_READ = 7,
     // bfr_resolve_texture reads it.
     BFR_TEXTURE_LAYOUT_RESOLVE_SRC = 8,
@@ -982,7 +984,13 @@ typedef struct bfr_queue_desc {
 } bfr_queue_desc;
 
 // How to open an adapter. The device's queues are numbered: the graphics queues from 0, then the
-// compute queues, then the copy queues, in the order asked for here.
+// compute queues, then the copy queues, in the order asked for here. A graphics queue's lists run
+// every call. A compute queue's run all but rendering, draws, the calls that set their state or
+// bind a graphics pipeline or an index buffer, and bfr_resolve_texture; a copy queue's run only
+// copies, barriers and bfr_write_timestamp. A copy between a buffer and a texture's depth or
+// stencil runs only in a graphics queue's lists, and one in a copy queue's has a buffer_offset that
+// is a multiple of 4. bfr_texture_layout says which layouts each kind's lists move a texture
+// between.
 typedef struct bfr_device_desc {
     const bfr_chain* next;
     // Index into the instance's adapter list.
@@ -1990,6 +1998,18 @@ typedef struct bfr_queue_levels {
     bfr_bool realtime;
 } bfr_queue_levels;
 
+// How a copy between a buffer and a texture, or between two textures, lines up in a kind of queue's
+// lists, in texels, or texel blocks for a compressed format: its offsets are multiples of width,
+// height and depth, and each size is a multiple too or reaches the edge of the mip level. With
+// whole_levels it copies whole mip levels only, from 0. All 0 and false where the backend states
+// none.
+typedef struct bfr_copy_granularity {
+    uint32_t width;
+    uint32_t height;
+    uint32_t depth;
+    bfr_bool whole_levels;
+} bfr_copy_granularity;
+
 // How many queues of each type the adapter has, and what they do, for a device opened without a
 // window. On Vulkan a window may move a type to another family that presents to it, with its own
 // counts, timestamp bits and levels. The counts are 0 where the backend has no count of queues;
@@ -2016,6 +2036,10 @@ typedef struct bfr_caps_queues {
     bfr_bool graphics_sparse;
     bfr_bool compute_sparse;
     bfr_bool copy_sparse;
+    // How a graphics queue's copies line up.
+    bfr_copy_granularity graphics_granularity;
+    bfr_copy_granularity compute_granularity;
+    bfr_copy_granularity copy_granularity;
 } bfr_caps_queues;
 
 // The bfr_timestamp_stage values a timestamp write takes; each true where the backend says so.

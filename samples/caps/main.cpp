@@ -149,6 +149,17 @@ std::string levelNames(const bfr::QueueLevels& levels) {
     return names.empty() ? std::string{"none"} : names;
 }
 
+// "4x4x1", "whole levels", or "none" where the backend states none.
+std::string granularityOf(const bfr::CopyGranularity& granularity) {
+    if (granularity.wholeLevels) {
+        return "whole levels";
+    }
+    if (granularity.width == 0) {
+        return "none";
+    }
+    return std::format("{}x{}x{}", granularity.width, granularity.height, granularity.depth);
+}
+
 void printMemory(const bfr::CapsMemory& memory) {
     std::vector<std::string> heaps;
     heaps.reserve(memory.heapCount);
@@ -569,7 +580,10 @@ void printAllMemory(const bfr::Caps& caps) {
            field("graphicsTimestampBits", q.graphicsTimestampBits),
            field("computeTimestampBits", q.computeTimestampBits), field("copyTimestampBits", q.copyTimestampBits),
            field("ranks", q.ranks), field("graphicsLevels", levelNames(q.graphicsLevels)),
-           field("computeLevels", levelNames(q.computeLevels)), field("copyLevels", levelNames(q.copyLevels))});
+           field("computeLevels", levelNames(q.computeLevels)), field("copyLevels", levelNames(q.copyLevels)),
+           field("graphicsGranularity", granularityOf(q.graphicsGranularity)),
+           field("computeGranularity", granularityOf(q.computeGranularity)),
+           field("copyGranularity", granularityOf(q.copyGranularity))});
     const bfr::CapsTimestamps& t = caps.timestamps;
     group("timestamps", {field("graphics", t.graphics), field("compute", t.compute), field("copy", t.copy),
                          field("granularity", t.granularity), field("entryBytes", t.entryBytes),

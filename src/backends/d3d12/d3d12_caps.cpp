@@ -326,6 +326,7 @@ QueueLevels levelsOf(ID3D12Device* device, D3D12_COMMAND_LIST_TYPE type) {
 // UpdateTileMappings is an ID3D12CommandQueue call, so every kind maps them
 // where the device has tiled resources (sparse.binding), as Diligent marks
 // every queue (EngineFactoryD3D12.cpp, COMMAND_QUEUE_TYPE_SPARSE_BINDING).
+// D3D12 states no copy granularity for any queue type.
 Queues queuesOf(ID3D12Device* device, const Sparse& sparse) {
     return {.graphics = 0,
             .compute = 0,
@@ -336,7 +337,10 @@ Queues queuesOf(ID3D12Device* device, const Sparse& sparse) {
             .copyLevels = levelsOf(device, D3D12_COMMAND_LIST_TYPE_COPY),
             .graphicsSparse = sparse.binding,
             .computeSparse = sparse.binding,
-            .copySparse = sparse.binding};
+            .copySparse = sparse.binding,
+            .graphicsGranularity = {},
+            .computeGranularity = {},
+            .copyGranularity = {}};
 }
 
 } // namespace

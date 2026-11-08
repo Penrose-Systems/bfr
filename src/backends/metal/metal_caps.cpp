@@ -172,6 +172,7 @@ Features featuresOf(MTL::Device* device) {
 // no queue priority, so there are no ranks or levels. Tile mappings are
 // calls on every MTL4CommandQueue (MTL4CommandQueue.hpp:144-146), and Metal
 // has no device query to gate them on, as D3D12 gates its on the tiled tier.
+// Metal states no copy granularity.
 Queues queuesOf() {
     return {.graphics = 0,
             .compute = 0,
@@ -185,7 +186,10 @@ Queues queuesOf() {
             .copyLevels = {},
             .graphicsSparse = true,
             .computeSparse = true,
-            .copySparse = true};
+            .copySparse = true,
+            .graphicsGranularity = {},
+            .computeGranularity = {},
+            .copyGranularity = {}};
 }
 
 // Metal has no device query for sparse support: the tiers are only on

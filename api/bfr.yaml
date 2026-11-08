@@ -462,7 +462,12 @@ enums:
     doc: >-
       How a texture's memory is arranged for what the GPU does with it next.
       bfr_texture_barrier moves a texture between layouts; BFR keeps no record
-      of the one it is in.
+      of the one it is in. A copy queue's lists move a texture only between
+      undefined, copy_src and copy_dst, and a compute queue's never to or from
+      color_target, depth_stencil_target, depth_stencil_read, resolve_src or
+      resolve_dst, as D3D12's
+      layouts for those queues allow; so a texture crosses between queues in a
+      layout both kinds take.
     values:
       undefined: {value: 0, doc: Its contents are not kept. Only a layout to move from.}
       copy_src: {value: 1, doc: Copies read it.}
@@ -471,7 +476,7 @@ enums:
       storage: {value: 4, doc: Shaders read and write it through the storage texture table.}
       color_target: {value: 5, doc: Rendering writes color to it.}
       depth_stencil_target: {value: 6, doc: Rendering tests and writes depth or stencil in it.}
-      depth_stencil_read: {value: 7, doc: "Rendering tests depth or stencil in it without writing, as a read_only depth-stencil attachment; shaders may sample it meanwhile. Moved to and from only in a graphics queue's lists, as D3D12's layout for it is a direct queue's."}
+      depth_stencil_read: {value: 7, doc: "Rendering tests depth or stencil in it without writing, as a read_only depth-stencil attachment; shaders may sample it meanwhile."}
       resolve_src: {value: 8, doc: bfr_resolve_texture reads it.}
       resolve_dst: {value: 9, doc: bfr_resolve_texture writes it.}
 
@@ -796,7 +801,14 @@ structs:
     doc: >-
       How to open an adapter. The device's queues are numbered: the graphics
       queues from 0, then the compute queues, then the copy queues, in the
-      order asked for here.
+      order asked for here. A graphics queue's lists run every call. A compute
+      queue's run all but rendering, draws, the calls that set their state or
+      bind a graphics pipeline or an index buffer, and bfr_resolve_texture; a
+      copy queue's run only copies, barriers and bfr_write_timestamp. A copy
+      between a buffer and a texture's depth or stencil runs only in a
+      graphics queue's lists, and one in a copy queue's has a buffer_offset
+      that is a multiple of 4. bfr_texture_layout says which layouts each
+      kind's lists move a texture between.
     extensible: true
     members:
       - {name: adapter, type: u32, doc: Index into the instance's adapter list.}
@@ -1657,6 +1669,20 @@ structs:
       - {name: high, type: bool}
       - {name: realtime, type: bool}
 
+  copy_granularity:
+    doc: >-
+      How a copy between a buffer and a texture, or between two textures,
+      lines up in a kind of queue's lists, in texels, or texel blocks for a
+      compressed format: its offsets are multiples of width, height and depth,
+      and each size is a multiple too or reaches the edge of the mip level.
+      With whole_levels it copies whole mip levels only, from 0. All 0 and
+      false where the backend states none.
+    members:
+      - {name: width, type: u32}
+      - {name: height, type: u32}
+      - {name: depth, type: u32}
+      - {name: whole_levels, type: bool}
+
   caps_queues:
     doc: >-
       How many queues of each type the adapter has, and what they do, for a
@@ -1682,6 +1708,9 @@ structs:
       - {name: graphics_sparse, type: bool, doc: Graphics queues run bfr_update_tile_mappings.}
       - {name: compute_sparse, type: bool}
       - {name: copy_sparse, type: bool}
+      - {name: graphics_granularity, type: copy_granularity, doc: How a graphics queue's copies line up.}
+      - {name: compute_granularity, type: copy_granularity}
+      - {name: copy_granularity, type: copy_granularity}
 
   timestamp_stages:
     doc: The bfr_timestamp_stage values a timestamp write takes; each true where the backend says so.

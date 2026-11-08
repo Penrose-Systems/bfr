@@ -1000,7 +1000,10 @@ enum class TextureDimension : std::int32_t {
 }
 
 /// How a texture's memory is arranged for what the GPU does with it next. bfr_texture_barrier moves
-/// a texture between layouts; BFR keeps no record of the one it is in.
+/// a texture between layouts; BFR keeps no record of the one it is in. A copy queue's lists move a
+/// texture only between undefined, copy_src and copy_dst, and a compute queue's never to or from
+/// color_target, depth_stencil_target, depth_stencil_read, resolve_src or resolve_dst, as D3D12's
+/// layouts for those queues allow; so a texture crosses between queues in a layout both kinds take.
 enum class TextureLayout : std::int32_t {
     /// Its contents are not kept. Only a layout to move from.
     Undefined = BFR_TEXTURE_LAYOUT_UNDEFINED,
@@ -1017,8 +1020,7 @@ enum class TextureLayout : std::int32_t {
     /// Rendering tests and writes depth or stencil in it.
     DepthStencilTarget = BFR_TEXTURE_LAYOUT_DEPTH_STENCIL_TARGET,
     /// Rendering tests depth or stencil in it without writing, as a read_only depth-stencil
-    /// attachment; shaders may sample it meanwhile. Moved to and from only in a graphics queue's
-    /// lists, as D3D12's layout for it is a direct queue's.
+    /// attachment; shaders may sample it meanwhile.
     DepthStencilRead = BFR_TEXTURE_LAYOUT_DEPTH_STENCIL_READ,
     /// bfr_resolve_texture reads it.
     ResolveSrc = BFR_TEXTURE_LAYOUT_RESOLVE_SRC,
@@ -1500,7 +1502,13 @@ static_assert(offsetof(QueueDesc, rank) == offsetof(bfr_queue_desc, rank));
 static_assert(offsetof(QueueDesc, level) == offsetof(bfr_queue_desc, level));
 
 /// How to open an adapter. The device's queues are numbered: the graphics queues from 0, then the
-/// compute queues, then the copy queues, in the order asked for here.
+/// compute queues, then the copy queues, in the order asked for here. A graphics queue's lists run
+/// every call. A compute queue's run all but rendering, draws, the calls that set their state or
+/// bind a graphics pipeline or an index buffer, and bfr_resolve_texture; a copy queue's run only
+/// copies, barriers and bfr_write_timestamp. A copy between a buffer and a texture's depth or
+/// stencil runs only in a graphics queue's lists, and one in a copy queue's has a buffer_offset
+/// that is a multiple of 4. bfr_texture_layout says which layouts each kind's lists move a texture
+/// between.
 struct DeviceDesc {
     /// Index into the instance's adapter list.
     std::uint32_t adapter{};
@@ -2511,6 +2519,18 @@ struct QueueLevels {
     bool realtime{};
 };
 
+/// How a copy between a buffer and a texture, or between two textures, lines up in a kind of
+/// queue's lists, in texels, or texel blocks for a compressed format: its offsets are multiples of
+/// width, height and depth, and each size is a multiple too or reaches the edge of the mip level.
+/// With whole_levels it copies whole mip levels only, from 0. All 0 and false where the backend
+/// states none.
+struct CopyGranularity {
+    std::uint32_t width{};
+    std::uint32_t height{};
+    std::uint32_t depth{};
+    bool wholeLevels{};
+};
+
 /// How many queues of each type the adapter has, and what they do, for a device opened without a
 /// window. On Vulkan a window may move a type to another family that presents to it, with its own
 /// counts, timestamp bits and levels. The counts are 0 where the backend has no count of queues;
@@ -2537,6 +2557,10 @@ struct CapsQueues {
     bool graphicsSparse{};
     bool computeSparse{};
     bool copySparse{};
+    /// How a graphics queue's copies line up.
+    CopyGranularity graphicsGranularity{};
+    CopyGranularity computeGranularity{};
+    CopyGranularity copyGranularity{};
 };
 
 /// The bfr_timestamp_stage values a timestamp write takes; each true where the backend says so.
@@ -3373,6 +3397,15 @@ inline QueueLevels fromC(const bfr_queue_levels& value) {
     };
 }
 
+inline CopyGranularity fromC(const bfr_copy_granularity& value) {
+    return {
+        .width = value.width,
+        .height = value.height,
+        .depth = value.depth,
+        .wholeLevels = value.whole_levels != BFR_FALSE,
+    };
+}
+
 inline CapsQueues fromC(const bfr_caps_queues& value) {
     return {
         .graphics = value.graphics,
@@ -3388,6 +3421,9 @@ inline CapsQueues fromC(const bfr_caps_queues& value) {
         .graphicsSparse = value.graphics_sparse != BFR_FALSE,
         .computeSparse = value.compute_sparse != BFR_FALSE,
         .copySparse = value.copy_sparse != BFR_FALSE,
+        .graphicsGranularity = fromC(value.graphics_granularity),
+        .computeGranularity = fromC(value.compute_granularity),
+        .copyGranularity = fromC(value.copy_granularity),
     };
 }
 

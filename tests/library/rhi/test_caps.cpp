@@ -42,15 +42,27 @@ std::vector<std::string> failing(std::initializer_list<std::pair<bool, std::stri
     return failed;
 }
 
+// A granularity that is whole levels with sizes too, or has some sizes and
+// not others.
+bool granularityHolds(const CopyGranularity& granularity) {
+    const bool none = granularity.width == 0 && granularity.height == 0 && granularity.depth == 0;
+    const bool sized = granularity.width != 0 && granularity.height != 0 && granularity.depth != 0;
+    return granularity.wholeLevels ? none : none || sized;
+}
+
 // Each way caps disagree with themselves.
 std::vector<std::string> inconsistencies(const Caps& caps) {
     const auto& heaps = caps.memory.heaps;
+    const Queues& queues = caps.queues;
     return failing({
         {caps.compute.minSubgroupSize <= caps.compute.subgroupSize &&
              caps.compute.subgroupSize <= caps.compute.maxSubgroupSize,
          "a subgroup size within its range"},
         {std::ranges::all_of(caps.memory.types, [&heaps](const MemoryType& type) { return type.heap < heaps.size(); }),
          "types in listed heaps"},
+        {granularityHolds(queues.graphicsGranularity) && granularityHolds(queues.computeGranularity) &&
+             granularityHolds(queues.copyGranularity),
+         "copy granularities of whole levels or of every size"},
     });
 }
 

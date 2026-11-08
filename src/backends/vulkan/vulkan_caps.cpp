@@ -433,6 +433,17 @@ Queues queuesFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<c
     const auto sparse = [&families](std::uint32_t queues, std::optional<std::uint32_t> family) {
         return queues != 0 && (families[*family].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) != 0;
     };
+    // (0,0,0) is whole mip levels only (the spec's VkQueueFamilyProperties).
+    const auto granularity = [&families](std::uint32_t queues, std::optional<std::uint32_t> family) -> CopyGranularity {
+        if (queues == 0) {
+            return {};
+        }
+        const VkExtent3D extent = families[*family].minImageTransferGranularity;
+        return {.width = extent.width,
+                .height = extent.height,
+                .depth = extent.depth,
+                .wholeLevels = extent.width == 0 && extent.height == 0 && extent.depth == 0};
+    };
     return {
         .graphics = counts.graphics,
         .compute = counts.compute,
@@ -447,6 +458,9 @@ Queues queuesFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<c
         .graphicsSparse = sparse(counts.graphics, chosen.graphics),
         .computeSparse = sparse(counts.compute, chosen.compute),
         .copySparse = sparse(counts.copy, chosen.transfer),
+        .graphicsGranularity = granularity(counts.graphics, chosen.graphics),
+        .computeGranularity = granularity(counts.compute, chosen.compute),
+        .copyGranularity = granularity(counts.copy, chosen.transfer),
     };
 }
 
