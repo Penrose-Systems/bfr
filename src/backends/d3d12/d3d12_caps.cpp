@@ -223,6 +223,14 @@ void addFloorFeatures(Features& features) {
     features.compressionBc = true;
 }
 
+// What multisampling may be. D3D12_GRAPHICS_PIPELINE_STATE_DESC takes a
+// SampleMask (d3d12.h:2289); D3D12_BLEND_DESC has alpha to coverage but no
+// alpha to one (d3d12.h:1778-1783), and the pipeline state no minimum sample
+// shading, so alphaToOne and sampleRateShading stay false.
+void addMultisampleFeatures(Features& features) {
+    features.sampleMask = true;
+}
+
 // What draws may be. ExecuteIndirect takes a
 // MaxCommandCount and an optional count buffer (d3d12.h:6618-6624), and its
 // draw arguments a StartInstanceLocation (d3d12.h:4597, 4606), with no caps
@@ -246,6 +254,7 @@ Features featuresOf(ID3D12Device* device, const SamplerFeatures& sampler) {
     addSamplerFeatures(device, sampler, features);
     addFloorFeatures(features);
     addDrawFeatures(device, features);
+    addMultisampleFeatures(features);
     return features;
 }
 
@@ -481,6 +490,14 @@ Caps readCaps(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
     caps.sparse = sparseOf(device);
     caps.queues = queuesOf(device, caps.sparse);
     caps.timestamps = timestampsOf(device);
+    // caps.resolve stays 0. ResolveSubresourceRegion takes MIN, MAX and
+    // AVERAGE modes (d3d12.h:7284, :3378-3386), but no D3D12 query says which
+    // depth or stencil formats it resolves, and no engine resolves them:
+    // Godot's D3D12 driver resolves color only, by ResolveSubresource
+    // (rendering_device_driver_d3d12.cpp:4152, :4780), and so does Diligent's,
+    // whose render pass resolve is a render target's, by
+    // D3D12_RESOLVE_MODE_AVERAGE
+    // (GraphicsEngineD3D12/src/DeviceContextD3D12Impl.cpp:1541).
     return caps;
 }
 

@@ -102,15 +102,20 @@ public:
     [[nodiscard]] virtual core::Result<CommandListHandle> beginCommands(CommandPoolHandle commandPool) = 0;
 
     /// Begins rendering to desc's attachments, with the image acquire took
-    /// from swapchain as color attachment 0 when swapchain is not null, and
+    /// from swapchain as color attachment 0 when swapchain is not null, or as
+    /// the image attachment 0's texture resolves into when it names one, and
     /// sets the viewport and scissor to the whole of them; ends with
-    /// endRendering. Only the draws, direct and indirect, and the state they
-    /// take, are recorded in between. Fails with RhiInvalidCall when no attachment is
-    /// given, when a color attachment but the swapchain's names no texture,
+    /// endRendering, which resolves the attachments that name a resolve
+    /// texture. Only the draws, direct and indirect, and the state they take,
+    /// are recorded in between. Fails with RhiInvalidCall when no attachment
+    /// is given, when a color attachment but the swapchain's names no texture,
     /// when a swapchain is given with no color attachment or with attachment 0
-    /// naming a texture, when no image is acquired, when it was already
-    /// submitted, and RhiInvalidHandle when a
-    /// texture is gone.
+    /// naming a resolve texture, when a resolve texture is named with no
+    /// texture, when a read-only depth-stencil attachment clears or drops an
+    /// aspect, when no image is acquired, when it was already submitted;
+    /// RhiUnsupported for a depth or stencil resolve mode, or a pair of them,
+    /// Caps::resolve doesn't have; and RhiInvalidHandle when a texture is
+    /// gone.
     [[nodiscard]] virtual core::Result<void> beginRendering(CommandListHandle commandList, SwapchainHandle swapchain,
                                                             const RenderingDesc& desc) = 0;
 
@@ -277,6 +282,20 @@ public:
     [[nodiscard]] virtual core::Result<void> copyTexture(CommandListHandle commandList, TextureHandle src,
                                                          TextureHandle dst, std::span<const TextureCopy> regions) = 0;
 
+    /// Records a resolve of one mip level and layer of src, a multisampled
+    /// texture of a color format in layout ResolveSrc, into one of dst, a
+    /// single-sample texture of its format in layout ResolveDst, outside
+    /// rendering: the whole level, of the same size in both. src has
+    /// colorAttachment and copySrc usage, dst colorAttachment and copyDst; its
+    /// format resolves, as FormatCaps::resolve says, and each texture has the
+    /// mip level and layer named. Fails with RhiInvalidHandle when the list or
+    /// a texture is gone, and RhiDeviceFailed when the backend gives no
+    /// encoder for it (Metal).
+    [[nodiscard]] virtual core::Result<void> resolveTexture(CommandListHandle commandList, TextureHandle src,
+                                                            std::uint32_t srcMipLevel, std::uint32_t srcLayer,
+                                                            TextureHandle dst, std::uint32_t dstMipLevel,
+                                                            std::uint32_t dstLayer) = 0;
+
     /// Sends desc's command lists to its queue, which runs them after what it
     /// was sent before and after the GPU passes the waits, ends the lists, and
     /// returns the token their completion signals. Calls for one queue must
@@ -374,8 +393,10 @@ public:
     /// A graphics pipeline as desc says, made before returning. Cold, as
     /// createComputePipeline is. A target of format Undefined is an unused
     /// one. Fails with RhiInvalidCall for a desc with an enum value or format
-    /// BFR doesn't have or more than kMaxColorTargets targets, RhiUnsupported
-    /// for a topology the backend has no form for (Metal's fan),
+    /// BFR doesn't have, more than kMaxColorTargets targets or a
+    /// minSampleShading outside 0 to 1, RhiUnsupported for a topology the
+    /// backend has no form for (Metal's fan), and for an alphaToOne,
+    /// minSampleShading or sampleMask whose feature the device lacks,
     /// RhiLimitReached at the device's maximum, and RhiDeviceFailed when the
     /// API refuses the code or the desc, with what it said.
     [[nodiscard]] virtual core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) = 0;

@@ -2,6 +2,7 @@
 
 #include "bfr/core/error.h"
 #include "bfr/rhi/caps.h"
+#include "bfr/rhi/command_list.h"
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/pipeline.h"
 #include "vulkan/instance_table.h"
@@ -20,6 +21,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bfr::rhi::vulkan {
@@ -293,6 +295,9 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
                         on(features.portability.triangleFans),
         // VUID-VkPipelineInputAssemblyStateCreateInfo-topology-06252.
         .listRestart = on(features.listRestart.primitiveTopologyListRestart),
+        .alphaToOne = on(core.alphaToOne),
+        // pSampleMask is core 1.0, with no feature.
+        .sampleMask = true,
         .storageReadWithoutFormat = on(core.shaderStorageImageReadWithoutFormat),
         .storageWriteWithoutFormat = on(core.shaderStorageImageWriteWithoutFormat),
         .timestampsOnAllQueues = on(properties.core.properties.limits.timestampComputeAndGraphics),
@@ -780,6 +785,31 @@ Timestamps timestampsFrom(const InstanceTable& vk, VkPhysicalDevice adapter,
             .hostClocks = hostClocksFrom(vk, adapter, extensions)};
 }
 
+// The ResolveMode bits a set of Vulkan resolve modes holds.
+std::uint32_t resolveModesFrom(VkResolveModeFlags modes) {
+    constexpr std::array kModes{
+        std::pair{VK_RESOLVE_MODE_SAMPLE_ZERO_BIT, ResolveMode::SampleZero},
+        std::pair{VK_RESOLVE_MODE_AVERAGE_BIT, ResolveMode::Average},
+        std::pair{VK_RESOLVE_MODE_MIN_BIT, ResolveMode::Min},
+        std::pair{VK_RESOLVE_MODE_MAX_BIT, ResolveMode::Max},
+    };
+    std::uint32_t bits = 0;
+    for (const auto& [vulkan, mode] : kModes) {
+        if ((modes & static_cast<VkResolveModeFlags>(vulkan)) != 0) {
+            bits |= 1U << std::to_underlying(mode);
+        }
+    }
+    return bits;
+}
+
+ResolveCaps resolveFrom(const PropertyQuery& properties) {
+    const VkPhysicalDeviceVulkan12Properties& vulkan12 = properties.vulkan12;
+    return {.depthModes = resolveModesFrom(vulkan12.supportedDepthResolveModes),
+            .stencilModes = resolveModesFrom(vulkan12.supportedStencilResolveModes),
+            .independent = on(vulkan12.independentResolve),
+            .independentNone = on(vulkan12.independentResolveNone)};
+}
+
 Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const VkExtensionProperties> extensions) {
     const DeviceFeatures features(vk, adapter, extensions);
     const PropertyQuery properties(vk, adapter, extensions);
@@ -796,6 +826,7 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const
         .queues = queuesFrom(vk, adapter, extensions, properties.core.properties.limits),
         .timestamps = {},
         .sparse = sparseFrom(features, properties),
+        .resolve = resolveFrom(properties),
     };
     caps.timestamps = timestampsFrom(vk, adapter, extensions, caps.queues);
     if (reported.shadingRateTexture) {
@@ -832,6 +863,12 @@ core::Result<FormatCaps> readFormatCaps(const InstanceTable& vk, VkPhysicalDevic
         .texelBuffer = has(buffer, VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT),
         .storageTexelBuffer = has(buffer, VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT),
         .storageTexelBufferAtomic = has(buffer, VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_ATOMIC_BIT),
+        .sampleCounts = 0,
+        // Vulkan has no resolve feature: a resolve writes the target as an
+        // attachment (VUID-vkCmdResolveImage-dstImage-02003), and the depth
+        // and stencil modes are Caps::resolve's.
+        .resolve = has(texture, VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT) ||
+                   has(texture, VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT),
     };
     if (!caps.colorAttachment && !caps.depthStencil) {
         return caps;

@@ -297,7 +297,8 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
                 bfr::GraphicsPipelineDesc desc{.vertex = shaders->vertex,
                                                .fragment = shaders->fragment,
                                                .colorTargetCount = 1,
-                                               .samples = 1};
+                                               .samples = 1,
+                                               .sampleMask = BFR_MASK_ALL};
                 desc.colorTargets[0] = {.format = images->format, .blend = {.writeMask = BFR_MASK_ALL}};
                 auto made = device.createGraphicsPipeline(desc);
                 if (!made) {

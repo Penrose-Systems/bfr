@@ -103,10 +103,19 @@ struct D3D12Queue {
     std::mutex lock;
 };
 
+/// A multisampled color attachment and the texture, or swapchain image, a
+/// rendering resolves it into as it ends, in format.
+struct D3D12Resolve {
+    ID3D12Resource* source = nullptr;
+    ID3D12Resource* target = nullptr;
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+};
+
 /// Commands recorded on one list: the list, which its slot owns, the pool and
 /// slot it came from, what it has bound, the swapchain the open rendering
 /// draws to, if one, and what becomes of its image when rendering ends, the
-/// attachments a rendering discards when it ends, and the chain of render
+/// attachments a rendering resolves and discards when it ends, whether the
+/// first resolve's target is the swapchain's image, and the chain of render
 /// slots naming every swapchain rendered to, whose images the submit marks as
 /// sent.
 struct D3D12CommandList {
@@ -115,6 +124,9 @@ struct D3D12CommandList {
     std::uint32_t slot = 0;
     std::optional<SwapchainHandle> presenting;
     StoreOp presentStoreOp = StoreOp::Store;
+    std::array<D3D12Resolve, kMaxColorTargets> resolves{};
+    std::uint32_t resolveCount = 0;
+    bool resolvesIntoImage = false;
     std::array<D3D12Target, kMaxColorTargets + 1> discards{};
     std::uint32_t discardCount = 0;
     std::uint32_t rendered = core::SlotChains::kEnd;
@@ -139,15 +151,16 @@ struct D3D12DrawSignatures {
 
 class D3D12Device final : public Device {
 public:
-    /// A device on device, which rhi listed from adapter with features, with
-    /// heapCount memory heaps, a shader-visible heap of viewHeapSize
+    /// A device on device, which rhi listed from adapter with features and
+    /// resolve, with heapCount memory heaps, a shader-visible heap of viewHeapSize
     /// descriptors at most, the queues desc asks for, and command signatures
     /// for indirect draws at each of desc's indirect strides. Fails with
     /// RhiDeviceFailed when D3D12 gives no queue, fence, root signature,
     /// descriptor heap or command signature.
     [[nodiscard]] static core::Result<std::unique_ptr<D3D12Device>> create(
         D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device, Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter,
-        const Features& features, std::size_t heapCount, std::uint32_t viewHeapSize, const DeviceDesc& desc);
+        const Features& features, const ResolveCaps& resolve, std::size_t heapCount, std::uint32_t viewHeapSize,
+        const DeviceDesc& desc);
 
     /// For create, with the number of queues create opens.
     D3D12Device(D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device,
@@ -221,6 +234,10 @@ public:
                                                          std::span<const BufferTextureCopy> regions) override;
     [[nodiscard]] core::Result<void> copyTexture(CommandListHandle commandList, TextureHandle src, TextureHandle dst,
                                                  std::span<const TextureCopy> regions) override;
+    [[nodiscard]] core::Result<void> resolveTexture(CommandListHandle commandList, TextureHandle src,
+                                                    std::uint32_t srcMipLevel, std::uint32_t srcLayer,
+                                                    TextureHandle dst, std::uint32_t dstMipLevel,
+                                                    std::uint32_t dstLayer) override;
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
     [[nodiscard]] core::Result<void> wait(Token token, std::uint64_t timeoutNs) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
@@ -322,6 +339,10 @@ private:
     // check.
     bool multiDrawIndirect_ = false;
     bool drawIndirectCount_ = false;
+    // The features createGraphicsPipeline checks a desc against, and how
+    // depth-stencil attachments resolve.
+    Features features_;
+    ResolveCaps resolve_;
     // Made with the device, one for each indirect stride, so no draw makes one.
     std::vector<D3D12DrawSignatures> drawSignatures_;
     Microsoft::WRL::ComPtr<ID3D12CommandSignature> dispatchSignature_;

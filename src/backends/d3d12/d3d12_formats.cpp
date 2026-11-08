@@ -208,6 +208,10 @@ core::Result<FormatCaps> formatCapsFor(ID3D12Device* device, Format format) {
         if (caps.colorAttachment) {
             caps.sampleCounts = sampleCountsFor(device, formats.texture);
         }
+        // A depth format's shader format is a color one, which would say a
+        // color resolve; no depth resolve is shown (Caps::resolve).
+        caps.resolve = formats.depth == DXGI_FORMAT_UNKNOWN &&
+                       has(support->support1, D3D12_FORMAT_SUPPORT1_MULTISAMPLE_RESOLVE);
     }
     if (formats.depth != DXGI_FORMAT_UNKNOWN) {
         const auto support = supportOf(device, formats.depth);

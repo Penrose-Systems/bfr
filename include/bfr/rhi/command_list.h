@@ -163,9 +163,23 @@ enum class StoreOp : std::uint8_t {
     DontCare,
 };
 
+/// How the samples of a depth or stencil pixel become one when a rendering's
+/// depth-stencil attachment is resolved; Caps::resolve says which the device
+/// has. The values are the C API's.
+enum class ResolveMode : std::uint8_t {
+    /// Not resolved.
+    None = 0,
+    SampleZero = 1,
+    Average = 2,
+    Min = 3,
+    Max = 4,
+};
+
 /// One color target of a rendering: a texture with colorAttachment usage, in
 /// layout ColorTarget, or, as attachment 0 when beginRendering is given a
-/// swapchain, that swapchain's acquired image, with texture null.
+/// swapchain, that swapchain's acquired image, with texture null. Given a
+/// swapchain, attachment 0 may instead name a multisampled texture of the
+/// swapchain's format, which is then resolved into the acquired image.
 struct ColorAttachment {
     TextureHandle texture;
     LoadOp loadOp = LoadOp::Load;
@@ -179,19 +193,40 @@ struct ColorAttachment {
     /// Red, green, blue and alpha bits, when loadOp is Clear; a signed format
     /// reads them as int32.
     std::array<std::uint32_t, 4> clearColorInteger{};
+    /// A single-sample texture of texture's format and size, with
+    /// colorAttachment usage, in layout ColorTarget, that texture's samples
+    /// are resolved into as rendering ends; null for none, and null for the
+    /// attachment the swapchain's image is resolved into. Non-integer formats
+    /// average and integer ones take sample zero, as the backend resolves;
+    /// FormatCaps::resolve says which formats resolve.
+    TextureHandle resolveTexture{};
 };
 
 /// The depth-stencil target of a rendering: a texture with depthStencil
-/// usage, in layout DepthStencilTarget, or none when texture is null. Its
-/// depth and stencil are loaded and stored alike.
+/// usage, in layout DepthStencilTarget, or DepthStencilRead when readOnly, or
+/// none when texture is null. Depth and stencil each load and store as their
+/// ops say; an op of an aspect the format lacks is ignored.
 struct DepthStencilAttachment {
     TextureHandle texture;
-    LoadOp loadOp = LoadOp::Load;
-    StoreOp storeOp = StoreOp::Store;
-    /// 0 to 1, when loadOp is Clear.
+    LoadOp depthLoadOp = LoadOp::Load;
+    StoreOp depthStoreOp = StoreOp::Store;
+    LoadOp stencilLoadOp = LoadOp::Load;
+    StoreOp stencilStoreOp = StoreOp::Store;
+    /// 0 to 1, when depthLoadOp is Clear.
     float clearDepth = 0;
-    /// When loadOp is Clear. The low 8 bits count.
+    /// When stencilLoadOp is Clear. The low 8 bits count.
     std::uint32_t clearStencil = 0;
+    /// The rendering tests depth and stencil but never writes them, and
+    /// shaders may sample the texture meanwhile; every op is then Load and
+    /// Store. The pipelines drawn with write neither depth nor stencil.
+    bool readOnly = false;
+    /// A single-sample texture of texture's format and size, with
+    /// depthStencil usage, in layout DepthStencilTarget, that the samples are
+    /// resolved into as rendering ends, by depthResolve and stencilResolve;
+    /// null for none.
+    TextureHandle resolveTexture{};
+    ResolveMode depthResolve = ResolveMode::None;
+    ResolveMode stencilResolve = ResolveMode::None;
 };
 
 /// How to begin rendering: the attachments drawn to, all of one size and

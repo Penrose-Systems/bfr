@@ -60,20 +60,37 @@ VkImageType typeFor(TextureDimension dimension) {
     }
 }
 
-VkImageLayout layoutFor(TextureLayout layout) {
+// The layout shaders sample a texture of aspects in. A depth or stencil one
+// is sampled in the layout a read-only attachment is in, which allows both,
+// since a descriptor matches only the layout it names ("Image Layout Matching
+// Rules"), and rendering may test it read-only while shaders sample it.
+VkImageLayout sampledLayoutFor(VkImageAspectFlags aspects) {
+    return (aspects & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0
+               ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+               : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+}
+
+VkImageLayout layoutFor(TextureLayout layout, VkImageAspectFlags aspects) {
     switch (layout) {
         case TextureLayout::CopySrc:
             return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         case TextureLayout::CopyDst:
             return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         case TextureLayout::Sampled:
-            return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            return sampledLayoutFor(aspects);
         case TextureLayout::Storage:
             return VK_IMAGE_LAYOUT_GENERAL;
         case TextureLayout::ColorTarget:
             return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         case TextureLayout::DepthStencilTarget:
             return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        case TextureLayout::DepthStencilRead:
+            return VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        // vkCmdResolveImage takes the transfer layouts.
+        case TextureLayout::ResolveSrc:
+            return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        case TextureLayout::ResolveDst:
+            return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         case TextureLayout::Undefined:
         default:
             return VK_IMAGE_LAYOUT_UNDEFINED;
@@ -339,13 +356,14 @@ core::Result<TextureHandle> VulkanDevice::createTexture(const TextureDesc& desc)
         return std::unexpected(std::move(made.error()));
     }
     VkImageView view = made->shaderView();
+    const VkImageLayout sampled = sampledLayoutFor(made->aspects());
     const TextureHandle texture = textures_.emplace(std::move(*made));
     if (texture.isNull()) {
         bindless_.giveTexture(*slots);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} textures", kBufferLimit);
     }
     if (slots->sampled != core::SlotChains::kEnd) {
-        layout_.writeSampledImage(slots->sampled, view);
+        layout_.writeSampledImage(slots->sampled, view, sampled);
     }
     if (slots->storage != core::SlotChains::kEnd) {
         layout_.writeStorageImage(slots->storage, view);
@@ -397,8 +415,8 @@ core::Result<void> VulkanDevice::textureBarrier(CommandListHandle commandList, T
     barrier.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
     barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-    barrier.oldLayout = layoutFor(before);
-    barrier.newLayout = layoutFor(after);
+    barrier.oldLayout = layoutFor(before, (*found)->aspects());
+    barrier.newLayout = layoutFor(after, (*found)->aspects());
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = (*found)->image();
@@ -533,6 +551,41 @@ core::Result<void> VulkanDevice::copyTexture(CommandListHandle commandList, Text
         table_.vkCmdCopyImage((*list)->buffer, (*from)->image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, (*to)->image(),
                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
     }
+    return {};
+}
+
+core::Result<void> VulkanDevice::resolveTexture(CommandListHandle commandList, TextureHandle src,
+                                                std::uint32_t srcMipLevel, std::uint32_t srcLayer, TextureHandle dst,
+                                                std::uint32_t dstMipLevel, std::uint32_t dstLayer) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto from = textureFor(src);
+    if (!from) {
+        return std::unexpected(std::move(from.error()));
+    }
+    auto to = textureFor(dst);
+    if (!to) {
+        return std::unexpected(std::move(to.error()));
+    }
+    const VkExtent3D size = (*from)->size();
+    const VkImageResolve resolve{.srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    .mipLevel = srcMipLevel,
+                                                    .baseArrayLayer = srcLayer,
+                                                    .layerCount = 1},
+                                 .srcOffset = {},
+                                 .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    .mipLevel = dstMipLevel,
+                                                    .baseArrayLayer = dstLayer,
+                                                    .layerCount = 1},
+                                 .dstOffset = {},
+                                 .extent = {.width = levelSize(size.width, srcMipLevel),
+                                            .height = levelSize(size.height, srcMipLevel),
+                                            .depth = levelSize(size.depth, srcMipLevel)}};
+    table_.vkCmdResolveImage((*list)->buffer, (*from)->image(),
+                             layoutFor(TextureLayout::ResolveSrc, VK_IMAGE_ASPECT_COLOR_BIT), (*to)->image(),
+                             layoutFor(TextureLayout::ResolveDst, VK_IMAGE_ASPECT_COLOR_BIT), 1, &resolve);
     return {};
 }
 

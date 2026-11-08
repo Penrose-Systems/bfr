@@ -224,6 +224,16 @@ struct GraphicsPipelineDesc {
     std::uint32_t samples = 0;
     /// The fragment's alpha sets how many samples it covers.
     bool alphaToCoverage = false;
+    /// The samples written, bit i for sample i; bits from samples up are
+    /// ignored. Leaving one of the low samples bits clear needs
+    /// Features::sampleMask.
+    std::uint64_t sampleMask = 0;
+    /// The fragment's alpha becomes 1 after coverage is taken from it, where
+    /// Features::alphaToOne.
+    bool alphaToOne = false;
+    /// The fraction of samples, 0 to 1, shaded apart; above 0 shades per
+    /// sample, where Features::sampleRateShading.
+    float minSampleShading = 0;
 };
 
 } // namespace bfr::rhi

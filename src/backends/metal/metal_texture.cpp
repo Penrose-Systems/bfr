@@ -18,10 +18,14 @@
 #include "rhi/tile_extent.h"
 
 #include <Foundation/NSTypes.hpp>
+#include <Metal/MTL4CommandBuffer.hpp>
 #include <Metal/MTL4CommandQueue.hpp>
 #include <Metal/MTL4ComputeCommandEncoder.hpp>
+#include <Metal/MTL4RenderCommandEncoder.hpp>
+#include <Metal/MTL4RenderPass.hpp>
 #include <Metal/MTLBlitCommandEncoder.hpp>
 #include <Metal/MTLDevice.hpp>
+#include <Metal/MTLRenderPass.hpp>
 #include <Metal/MTLResidencySet.hpp>
 #include <Metal/MTLResource.hpp>
 #include <Metal/MTLResourceStateCommandEncoder.hpp>
@@ -352,6 +356,48 @@ core::Result<void> MetalDevice::copyTexture(CommandListHandle commandList, Textu
                                  MTL::Size::Make(region.width, region.height, region.depth), (*to)->texture.get(),
                                  region.dstLayer, region.dstMipLevel,
                                  MTL::Origin::Make(region.dstX, region.dstY, region.dstZ));
+    }
+    encoder->endEncoding();
+    return {};
+}
+
+// A render pass with no draws, which loads src and stores it as it resolves
+// into dst, so src keeps its samples as vkCmdResolveImage and
+// ResolveSubresource leave them. Godot resolves so on Metal 3
+// (metal3_objects.cpp:479-492); that an MTL4 render encoder
+// (MTL4CommandBuffer.hpp:81) resolves the same way is an inference, with no
+// Metal 4 reference. The slot's own descriptor is refilled, so a resolve
+// allocates none.
+core::Result<void> MetalDevice::resolveTexture(CommandListHandle commandList, TextureHandle src,
+                                               std::uint32_t srcMipLevel, std::uint32_t srcLayer, TextureHandle dst,
+                                               std::uint32_t dstMipLevel, std::uint32_t dstLayer) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto from = textureFor(src);
+    if (!from) {
+        return std::unexpected(std::move(from.error()));
+    }
+    auto to = textureFor(dst);
+    if (!to) {
+        return std::unexpected(std::move(to.error()));
+    }
+    // The pool drains the autoreleased encoder reference.
+    const AutoreleasePool pool;
+    MTL4::RenderPassDescriptor* pass = lists_[(*list)->slot].resolvePass.get();
+    MTL::RenderPassColorAttachmentDescriptor* color = pass->colorAttachments()->object(0);
+    color->setTexture((*from)->texture.get());
+    color->setLevel(srcMipLevel);
+    color->setSlice(srcLayer);
+    color->setLoadAction(MTL::LoadActionLoad);
+    color->setStoreAction(MTL::StoreActionStoreAndMultisampleResolve);
+    color->setResolveTexture((*to)->texture.get());
+    color->setResolveLevel(dstMipLevel);
+    color->setResolveSlice(dstLayer);
+    MTL4::RenderCommandEncoder* encoder = (*list)->buffer->renderCommandEncoder(pass);
+    if (encoder == nullptr) {
+        return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no render command encoder");
     }
     encoder->endEncoding();
     return {};

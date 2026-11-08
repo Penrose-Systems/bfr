@@ -168,6 +168,10 @@ struct Features {
     bool triangleFans = false;
     /// PrimitiveRestart on list topologies, not only strips.
     bool listRestart = false;
+    /// GraphicsPipelineDesc::alphaToOne.
+    bool alphaToOne = false;
+    /// A GraphicsPipelineDesc::sampleMask that leaves samples out.
+    bool sampleMask = false;
     bool storageReadWithoutFormat = false;
     bool storageWriteWithoutFormat = false;
     bool timestampsOnAllQueues = false;
@@ -308,6 +312,17 @@ struct Sparse {
 inline constexpr std::size_t kMaxSparseTileSizes = 3;
 
 /// Everything about an adapter that stays the same while it runs.
+/// How a rendering's depth-stencil attachment resolves. depthModes and
+/// stencilModes have bit 1 << mode set for each ResolveMode but None the
+/// device takes; independent: depth and stencil may take different modes;
+/// independentNone: they may differ where one is None.
+struct ResolveCaps {
+    std::uint32_t depthModes = 0;
+    std::uint32_t stencilModes = 0;
+    bool independent = false;
+    bool independentNone = false;
+};
+
 struct Caps {
     AdapterInfo info;
     Limits limits;
@@ -320,6 +335,7 @@ struct Caps {
     Queues queues;
     Timestamps timestamps;
     Sparse sparse;
+    ResolveCaps resolve;
 };
 
 struct FormatCaps {
@@ -338,6 +354,10 @@ struct FormatCaps {
     bool storageTexelBuffer = false;
     bool storageTexelBufferAtomic = false;
     std::uint32_t sampleCounts = 0;
+    /// Multisampled textures of it resolve into single-sample ones: color
+    /// formats in a rendering and by Device::resolveTexture, depth and stencil
+    /// formats in a rendering, by the modes ResolveCaps names.
+    bool resolve = false;
 };
 
 struct SwapchainCaps {

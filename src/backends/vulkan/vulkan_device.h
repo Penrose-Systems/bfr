@@ -58,6 +58,10 @@ struct VulkanDeviceSetup {
     /// Features::multiDrawIndirect and drawIndirectCount.
     bool multiDrawIndirect = false;
     bool drawIndirectCount = false;
+    /// The features createGraphicsPipeline checks a desc against, and how
+    /// depth-stencil attachments resolve.
+    Features features{};
+    ResolveCaps resolve{};
 };
 
 struct VulkanCommandPool {
@@ -220,6 +224,10 @@ public:
     [[nodiscard]] core::Result<void> copyTextureToBuffer(CommandListHandle commandList, TextureHandle texture,
                                                          BufferHandle buffer,
                                                          std::span<const BufferTextureCopy> regions) override;
+    [[nodiscard]] core::Result<void> resolveTexture(CommandListHandle commandList, TextureHandle src,
+                                                    std::uint32_t srcMipLevel, std::uint32_t srcLayer,
+                                                    TextureHandle dst, std::uint32_t dstMipLevel,
+                                                    std::uint32_t dstLayer) override;
     [[nodiscard]] core::Result<void> copyTexture(CommandListHandle commandList, TextureHandle src, TextureHandle dst,
                                                  std::span<const TextureCopy> regions) override;
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
@@ -304,6 +312,8 @@ private:
     HostClocks hostClocks_;
     bool multiDrawIndirect_;
     bool drawIndirectCount_;
+    Features features_;
+    ResolveCaps resolve_;
     DeviceDesc desc_;
     std::vector<std::unique_ptr<VulkanQueue>> queues_;
     core::Pool<VulkanSwapchain, Swapchain> swapchains_;

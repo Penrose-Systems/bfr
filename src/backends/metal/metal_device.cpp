@@ -84,6 +84,13 @@ MTL::StoreAction storeActionFor(StoreOp op) {
     return MTL::StoreActionDontCare;
 }
 
+// The store action of an attachment that resolves: the samples are kept too
+// when op stores them (MTLRenderPass.hpp:53-54), as Godot keeps them
+// (metal_objects_shared.cpp:398-403).
+MTL::StoreAction resolveActionFor(StoreOp op) {
+    return op == StoreOp::Store ? MTL::StoreActionStoreAndMultisampleResolve : MTL::StoreActionMultisampleResolve;
+}
+
 core::Result<void> deviceFailed(const char* what) {
     return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no {}", what);
 }
@@ -91,17 +98,21 @@ core::Result<void> deviceFailed(const char* what) {
 } // namespace
 
 core::Result<std::unique_ptr<MetalDevice>> MetalDevice::create(MetalInstance& rhi, Ref<MTL::Device> device,
+                                                               const Features& features, const ResolveCaps& resolve,
                                                                const DeviceDesc& desc) {
-    auto made = std::make_unique<MetalDevice>(rhi, std::move(device), desc);
+    auto made = std::make_unique<MetalDevice>(rhi, std::move(device), features, resolve, desc);
     if (auto opened = made->open(desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
     return made;
 }
 
-MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const DeviceDesc& desc)
+MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Features& features,
+                         const ResolveCaps& resolve, const DeviceDesc& desc)
     : instance_(&rhi),
       device_(std::move(device)),
+      features_(features),
+      resolve_(resolve),
       desc_(heldPart(desc)),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
       commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
@@ -460,6 +471,13 @@ core::Result<CommandPoolHandle> MetalDevice::createCommandPool(const CommandPool
         for (std::uint32_t i = 0; i < kMaxColorTargets; ++i) {
             std::ignore = pass->colorAttachments()->object(i);
         }
+        MTL4::RenderPassDescriptor* resolvePass = MTL4::RenderPassDescriptor::alloc()->init();
+        if (resolvePass == nullptr) {
+            release();
+            return std::unexpected(deviceFailed("render pass descriptor").error());
+        }
+        lists_[slot].resolvePass = adopt(resolvePass);
+        std::ignore = resolvePass->colorAttachments()->object(0);
         auto arguments = createArgumentTable(*device_.get());
         if (!arguments) {
             release();
@@ -611,12 +629,14 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
     // Every handle is looked up before anything is recorded, so a bad one
     // leaves the list as it was.
     std::array<MTL::Texture*, kMaxColorTargets> colors{};
+    std::array<MTL::Texture*, kMaxColorTargets> resolves{};
     // A swapchain's image is never a signed integer format.
     std::array<Format, kMaxColorTargets> formats{};
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     MetalSwapchain* chain = nullptr;
     for (std::uint32_t i = 0; i < desc.colorAttachmentCount; ++i) {
+        const ColorAttachment& attachment = desc.colorAttachments.at(i);
         if (i == 0 && !swapchain.isNull()) {
             auto found = swapchainFor(swapchain);
             if (!found) {
@@ -631,12 +651,17 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
             if (drawable == nullptr) {
                 return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
             }
-            colors.at(i) = drawable->texture();
-            width = static_cast<std::uint32_t>(colors.at(i)->width());
-            height = static_cast<std::uint32_t>(colors.at(i)->height());
-            continue;
+            // The swapchain's image is attachment 0, or what a texture there
+            // resolves into.
+            if (attachment.texture.isNull()) {
+                colors.at(i) = drawable->texture();
+                width = static_cast<std::uint32_t>(colors.at(i)->width());
+                height = static_cast<std::uint32_t>(colors.at(i)->height());
+                continue;
+            }
+            resolves.at(i) = drawable->texture();
         }
-        auto texture = textureFor(desc.colorAttachments.at(i).texture);
+        auto texture = textureFor(attachment.texture);
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
@@ -644,16 +669,35 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
         formats.at(i) = (*texture)->format;
         width = (*texture)->width;
         height = (*texture)->height;
+        if (!attachment.resolveTexture.isNull()) {
+            auto target = textureFor(attachment.resolveTexture);
+            if (!target) {
+                return std::unexpected(std::move(target.error()));
+            }
+            resolves.at(i) = (*target)->texture.get();
+        }
     }
+    const DepthStencilAttachment& depthStencil = desc.depthStencil;
     const MetalTexture* depth = nullptr;
-    if (!desc.depthStencil.texture.isNull()) {
-        auto texture = textureFor(desc.depthStencil.texture);
+    MTL::Texture* depthResolve = nullptr;
+    if (!depthStencil.texture.isNull()) {
+        auto texture = textureFor(depthStencil.texture);
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
         depth = *texture;
         width = depth->width;
         height = depth->height;
+        if (!depthStencil.resolveTexture.isNull()) {
+            if (auto checked = checkDepthResolve(depthStencil, depth->format, resolve_); !checked) {
+                return checked;
+            }
+            auto target = textureFor(depthStencil.resolveTexture);
+            if (!target) {
+                return std::unexpected(std::move(target.error()));
+            }
+            depthResolve = (*target)->texture.get();
+        }
     }
     if (chain != nullptr) {
         // Rendered to earlier in this list, the swapchain is already in its chain.
@@ -681,33 +725,47 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
         MTL::RenderPassColorAttachmentDescriptor* color = pass->colorAttachments()->object(i);
         if (i >= desc.colorAttachmentCount) {
             color->setTexture(nullptr);
+            color->setResolveTexture(nullptr);
             continue;
         }
         const ColorAttachment& attachment = desc.colorAttachments.at(i);
         color->setTexture(colors.at(i));
+        color->setResolveTexture(resolves.at(i));
         color->setLoadAction(loadActionFor(attachment.loadOp));
-        color->setStoreAction(storeActionFor(attachment.storeOp));
+        color->setStoreAction(resolves.at(i) != nullptr ? resolveActionFor(attachment.storeOp)
+                                                        : storeActionFor(attachment.storeOp));
         const auto [red, green, blue, alpha] = clearValues(attachment, formats.at(i));
         color->setClearColor(MTL::ClearColor::Make(red, green, blue, alpha));
     }
     MTL::RenderPassDepthAttachmentDescriptor* depthAttachment = pass->depthAttachment();
     MTL::RenderPassStencilAttachmentDescriptor* stencilAttachment = pass->stencilAttachment();
     depthAttachment->setTexture(nullptr);
+    depthAttachment->setResolveTexture(nullptr);
     stencilAttachment->setTexture(nullptr);
     if (depth != nullptr) {
-        // Each aspect the format has gets its attachment, loaded and stored alike.
+        // Each aspect the format has gets its attachment, with its own ops. A
+        // read-only attachment loads and stores, which checkRenderingDesc
+        // holds it to, so Metal needs nothing more. Only depth resolves:
+        // Caps::resolve has no stencil mode, and its one depth mode is sample
+        // 0.
         const FormatBlock& block = blockOf(depth->format);
         if (block.depthBytes != 0) {
+            const bool resolvesDepth = depthResolve != nullptr && depthStencil.depthResolve != ResolveMode::None;
             depthAttachment->setTexture(depth->texture.get());
-            depthAttachment->setLoadAction(loadActionFor(desc.depthStencil.loadOp));
-            depthAttachment->setStoreAction(storeActionFor(desc.depthStencil.storeOp));
-            depthAttachment->setClearDepth(static_cast<double>(desc.depthStencil.clearDepth));
+            depthAttachment->setLoadAction(loadActionFor(depthStencil.depthLoadOp));
+            depthAttachment->setStoreAction(resolvesDepth ? resolveActionFor(depthStencil.depthStoreOp)
+                                                          : storeActionFor(depthStencil.depthStoreOp));
+            depthAttachment->setClearDepth(static_cast<double>(depthStencil.clearDepth));
+            if (resolvesDepth) {
+                depthAttachment->setResolveTexture(depthResolve);
+                depthAttachment->setDepthResolveFilter(MTL::MultisampleDepthResolveFilterSample0);
+            }
         }
         if (block.stencilBytes != 0) {
             stencilAttachment->setTexture(depth->texture.get());
-            stencilAttachment->setLoadAction(loadActionFor(desc.depthStencil.loadOp));
-            stencilAttachment->setStoreAction(storeActionFor(desc.depthStencil.storeOp));
-            stencilAttachment->setClearStencil(desc.depthStencil.clearStencil);
+            stencilAttachment->setLoadAction(loadActionFor(depthStencil.stencilLoadOp));
+            stencilAttachment->setStoreAction(storeActionFor(depthStencil.stencilStoreOp));
+            stencilAttachment->setClearStencil(depthStencil.clearStencil);
         }
     }
     MTL4::RenderCommandEncoder* encoder = (*list)->buffer->renderCommandEncoder(pass);

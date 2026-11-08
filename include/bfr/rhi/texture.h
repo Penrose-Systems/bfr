@@ -41,6 +41,15 @@ enum class TextureLayout : std::uint8_t {
     ColorTarget = 5,
     /// Rendering tests and writes depth or stencil in it.
     DepthStencilTarget = 6,
+    /// Rendering tests depth or stencil in it without writing, as a
+    /// DepthStencilAttachment with readOnly; shaders may sample it meanwhile.
+    /// Moved to and from only in a graphics queue's lists, as D3D12's layout
+    /// for it is a direct queue's.
+    DepthStencilRead = 7,
+    /// Device::resolveTexture reads it.
+    ResolveSrc = 8,
+    /// Device::resolveTexture writes it.
+    ResolveDst = 9,
 };
 
 /// Which part of a texel a copy moves. The values are the C API's, and so is

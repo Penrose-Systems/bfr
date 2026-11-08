@@ -488,7 +488,8 @@ TEST_CASE("C++ API creates and destroys pipelines", "[cpp_api][gpu]") {
         bfr::GraphicsPipelineDesc desc{.vertex = code(bfr::test::spirv::kBindlessVert),
                                        .fragment = code(bfr::test::spirv::kBindlessFrag),
                                        .colorTargetCount = 1,
-                                       .samples = 1};
+                                       .samples = 1,
+                                       .sampleMask = BFR_MASK_ALL};
         desc.colorTargets[0] = {.format = bfr::Format::Rgba8Unorm,
                                 .blend = {.enable = true,
                                           .srcColor = bfr::BlendFactor::SrcAlpha,

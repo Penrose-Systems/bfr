@@ -781,13 +781,15 @@ TEST_CASE("C API creates and destroys pipelines, and refuses a state value it do
     bfr_pipeline compute{};
     REQUIRE(bfr_create_compute_pipeline(device.device, &computeDesc, &compute) == BFR_RESULT_SUCCESS);
 
-    // Every state 0, which is every test off and every target written whole.
+    // Every state 0, which is every test off and every target written whole,
+    // but the samples written.
     bfr_graphics_pipeline_desc graphicsDesc{};
     graphicsDesc.vertex = code(bfr::test::spirv::kBindlessVert);
     graphicsDesc.fragment = code(bfr::test::spirv::kBindlessFrag);
     graphicsDesc.color_target_count = 1;
     graphicsDesc.color_targets[0].format = BFR_FORMAT_RGBA8_UNORM;
     graphicsDesc.samples = 1;
+    graphicsDesc.sample_mask = BFR_MASK_ALL;
     bfr_pipeline graphics{};
     REQUIRE(bfr_create_graphics_pipeline(device.device, &graphicsDesc, &graphics) == BFR_RESULT_SUCCESS);
     CHECK(graphics.bits != compute.bits);
@@ -973,11 +975,19 @@ TEST_CASE("C API renders to a texture with the viewport and scissor set, and ref
                                       .store_op = BFR_STORE_OP_STORE,
                                       .clear_color = {0, 0, 0, 1},
                                       .clear_integer = BFR_FALSE,
-                                      .clear_color_integer = {}};
+                                      .clear_color_integer = {},
+                                      .resolve_texture = {}};
     const bfr_swapchain none{};
     CHECK(bfr_begin_rendering(device.device, list, none, &rendering) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("load op"));
     rendering.color_attachments[0].load_op = BFR_LOAD_OP_CLEAR;
+    rendering.depth_stencil.depth_resolve = static_cast<bfr_resolve_mode>(kNotAValue);
+    CHECK(bfr_begin_rendering(device.device, list, none, &rendering) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("resolve mode"));
+    rendering.depth_stencil.depth_resolve = BFR_RESOLVE_MODE_NONE;
+    // A texture that is gone, resolved from.
+    CHECK(bfr_resolve_texture(device.device, list, bfr_texture{}, 0, 0, target, 0, 0) ==
+          BFR_RESULT_ERROR_INVALID_HANDLE);
     REQUIRE(bfr_begin_rendering(device.device, list, none, &rendering) == BFR_RESULT_SUCCESS);
     const bfr_viewport viewport{.x = 0, .y = 0, .width = kSide, .height = kSide, .min_depth = 0, .max_depth = 1};
     CHECK(bfr_set_viewport(device.device, list, &viewport) == BFR_RESULT_SUCCESS);
@@ -1048,7 +1058,7 @@ TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call tim
 
     std::uint32_t count = 0;
     REQUIRE(bfr_get_call_timings(device.device, &count, nullptr) == BFR_RESULT_SUCCESS);
-    CHECK(count == BFR_CALL_UPDATE_TILE_MAPPINGS + 1);
+    CHECK(count == BFR_CALL_RESOLVE_TEXTURE + 1);
     std::vector<bfr_call_timing> timings(count);
     REQUIRE(bfr_get_call_timings(device.device, &count, timings.data()) == BFR_RESULT_SUCCESS);
     CHECK(timings.at(BFR_CALL_CREATE_TIMESTAMP_POOL).count == 2);
@@ -1436,7 +1446,8 @@ TEST_CASE("C API allocates and frees nothing on the heap frame after frame", "[c
                                                                .store_op = BFR_STORE_OP_STORE,
                                                                .clear_color = {0, 0, 0, 1},
                                                                .clear_integer = BFR_FALSE,
-                                                               .clear_color_integer = {}}},
+                                                               .clear_color_integer = {},
+                                                               .resolve_texture = {}}},
                                         .depth_stencil = {}};
     std::vector<std::string> messages;
     {

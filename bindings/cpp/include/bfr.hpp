@@ -723,6 +723,7 @@ enum class Call : std::int32_t {
     DrawIndirectCount = BFR_CALL_DRAW_INDIRECT_COUNT,
     DrawIndexedIndirectCount = BFR_CALL_DRAW_INDEXED_INDIRECT_COUNT,
     DispatchIndirect = BFR_CALL_DISPATCH_INDIRECT,
+    ResolveTexture = BFR_CALL_RESOLVE_TEXTURE,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -797,6 +798,7 @@ enum class Call : std::int32_t {
     case Call::DrawIndirectCount: return "draw_indirect_count";
     case Call::DrawIndexedIndirectCount: return "draw_indexed_indirect_count";
     case Call::DispatchIndirect: return "dispatch_indirect";
+    case Call::ResolveTexture: return "resolve_texture";
     }
     return {};
 }
@@ -931,6 +933,29 @@ enum class StoreOp : std::int32_t {
     return {};
 }
 
+/// How the samples of a depth or stencil pixel become one when a rendering's depth-stencil
+/// attachment is resolved; bfr_caps_resolve says which the device has.
+enum class ResolveMode : std::int32_t {
+    /// Not resolved.
+    None = BFR_RESOLVE_MODE_NONE,
+    SampleZero = BFR_RESOLVE_MODE_SAMPLE_ZERO,
+    Average = BFR_RESOLVE_MODE_AVERAGE,
+    Min = BFR_RESOLVE_MODE_MIN,
+    Max = BFR_RESOLVE_MODE_MAX,
+};
+
+/// value's name in bfr.yaml; empty for a value ResolveMode doesn't have.
+[[nodiscard]] constexpr std::string_view name(ResolveMode value) {
+    switch (value) {
+    case ResolveMode::None: return "none";
+    case ResolveMode::SampleZero: return "sample_zero";
+    case ResolveMode::Average: return "average";
+    case ResolveMode::Min: return "min";
+    case ResolveMode::Max: return "max";
+    }
+    return {};
+}
+
 /// Where a buffer's memory is, and whether the CPU maps it.
 enum class BufferMemory : std::int32_t {
     /// On or nearest the GPU; the CPU does not map it.
@@ -991,6 +1016,14 @@ enum class TextureLayout : std::int32_t {
     ColorTarget = BFR_TEXTURE_LAYOUT_COLOR_TARGET,
     /// Rendering tests and writes depth or stencil in it.
     DepthStencilTarget = BFR_TEXTURE_LAYOUT_DEPTH_STENCIL_TARGET,
+    /// Rendering tests depth or stencil in it without writing, as a read_only depth-stencil
+    /// attachment; shaders may sample it meanwhile. Moved to and from only in a graphics queue's
+    /// lists, as D3D12's layout for it is a direct queue's.
+    DepthStencilRead = BFR_TEXTURE_LAYOUT_DEPTH_STENCIL_READ,
+    /// bfr_resolve_texture reads it.
+    ResolveSrc = BFR_TEXTURE_LAYOUT_RESOLVE_SRC,
+    /// bfr_resolve_texture writes it.
+    ResolveDst = BFR_TEXTURE_LAYOUT_RESOLVE_DST,
 };
 
 /// value's name in bfr.yaml; empty for a value TextureLayout doesn't have.
@@ -1003,6 +1036,9 @@ enum class TextureLayout : std::int32_t {
     case TextureLayout::Storage: return "storage";
     case TextureLayout::ColorTarget: return "color_target";
     case TextureLayout::DepthStencilTarget: return "depth_stencil_target";
+    case TextureLayout::DepthStencilRead: return "depth_stencil_read";
+    case TextureLayout::ResolveSrc: return "resolve_src";
+    case TextureLayout::ResolveDst: return "resolve_dst";
     }
     return {};
 }
@@ -1560,7 +1596,8 @@ struct SwapchainImages {
 
 /// One color target of a rendering: a texture with color_attachment usage, in layout color_target,
 /// or the swapchain's acquired image when bfr_begin_rendering is given a swapchain and this is
-/// attachment 0.
+/// attachment 0. Given a swapchain, attachment 0 may instead name a multisampled texture of the
+/// swapchain's format, which is then resolved into the acquired image.
 struct ColorAttachment {
     /// Null for the swapchain's image.
     const Texture* texture{};
@@ -1576,21 +1613,44 @@ struct ColorAttachment {
     bool clearInteger{};
     /// Red, green, blue and alpha bits, when load_op is clear; a signed format reads them as int32.
     std::array<std::uint32_t, 4> clearColorInteger{};
+    /// A single-sample texture of texture's format and size, with color_attachment usage, in layout
+    /// color_target, that texture's samples are resolved into as rendering ends; null for none, and
+    /// null for the attachment the swapchain's image is resolved into. Non-integer formats average
+    /// and integer ones take sample zero, as the backend resolves; bfr_format_caps.resolve says
+    /// which formats resolve.
+    const Texture* resolveTexture{};
 };
 
 /// The depth-stencil target of a rendering: a texture with depth_stencil usage, in layout
-/// depth_stencil_target. Its depth and stencil are loaded and stored alike.
+/// depth_stencil_target, or depth_stencil_read when read_only. Depth and stencil each load and
+/// store as their ops say; an op of an aspect the format lacks is ignored.
 struct DepthStencilAttachment {
     /// Null for no depth-stencil target.
     const Texture* texture{};
     /// 0 is load.
-    LoadOp loadOp{};
+    LoadOp depthLoadOp{};
     /// 0 is store.
-    StoreOp storeOp{};
-    /// 0 to 1, when load_op is clear.
+    StoreOp depthStoreOp{};
+    /// 0 is load.
+    LoadOp stencilLoadOp{};
+    /// 0 is store.
+    StoreOp stencilStoreOp{};
+    /// 0 to 1, when depth_load_op is clear.
     float clearDepth{};
-    /// When load_op is clear. The low 8 bits count.
+    /// When stencil_load_op is clear. The low 8 bits count.
     std::uint32_t clearStencil{};
+    /// The rendering tests depth and stencil but never writes them, and shaders may sample the
+    /// texture meanwhile; every op is then load and store. The pipelines drawn with write neither
+    /// depth nor stencil.
+    bool readOnly{};
+    /// A single-sample texture of texture's format and size, with depth_stencil usage, in layout
+    /// depth_stencil_target, that the samples are resolved into as rendering ends, by depth_resolve
+    /// and stencil_resolve; null for none.
+    const Texture* resolveTexture{};
+    /// 0 is none.
+    ResolveMode depthResolve{};
+    /// 0 is none.
+    ResolveMode stencilResolve{};
 };
 
 /// How to begin rendering: the attachments drawn to, all of one size and sample count, which the
@@ -1984,6 +2044,15 @@ struct GraphicsPipelineDesc {
     std::uint32_t samples{};
     /// The fragment's alpha sets how many samples it covers.
     bool alphaToCoverage{};
+    /// The samples written, bit i for sample i; bits from samples up are ignored. Leaving one of
+    /// the low samples bits clear needs bfr_caps_features.sample_mask.
+    std::uint64_t sampleMask{};
+    /// The fragment's alpha becomes 1 after coverage is taken from it, where
+    /// bfr_caps_features.alpha_to_one.
+    bool alphaToOne{};
+    /// The fraction of samples, 0 to 1, shaded apart; above 0 shades per sample, where
+    /// bfr_caps_features.sample_rate_shading.
+    float minSampleShading{};
 };
 
 /// A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was
@@ -2385,6 +2454,10 @@ struct CapsFeatures {
     bool triangleFans{};
     /// primitive_restart on list topologies, not only strips.
     bool listRestart{};
+    /// bfr_graphics_pipeline_desc.alpha_to_one.
+    bool alphaToOne{};
+    /// A bfr_graphics_pipeline_desc.sample_mask that leaves samples out.
+    bool sampleMask{};
     bool storageReadWithoutFormat{};
     bool storageWriteWithoutFormat{};
     /// Every graphics and compute queue writes timestamps.
@@ -2544,6 +2617,18 @@ struct CapsSparse {
     std::array<std::uint32_t, 3> tileBytes{};
 };
 
+/// How a rendering's depth-stencil attachment resolves.
+struct CapsResolve {
+    /// Bit 1 << mode set for each resolve_mode but none the device takes for depth.
+    std::uint32_t depthModes{};
+    /// As depth_modes, for stencil.
+    std::uint32_t stencilModes{};
+    /// Depth and stencil may take different modes.
+    bool independent{};
+    /// Depth and stencil may differ where one is none.
+    bool independentNone{};
+};
+
 /// Everything about an adapter that stays the same while it runs.
 struct Caps {
     CapsInfo info{};
@@ -2557,6 +2642,7 @@ struct Caps {
     CapsQueues queues{};
     CapsTimestamps timestamps{};
     CapsSparse sparse{};
+    CapsResolve resolve{};
 };
 
 /// What an adapter does with one format.
@@ -2585,6 +2671,10 @@ struct FormatCaps {
     /// Sample counts for 2D textures of it: each set bit is a count, 1, 2, 4 and so on; 0 when it
     /// can't be rendered to.
     std::uint32_t sampleCounts{};
+    /// Multisampled textures of it resolve into single-sample ones: color formats in a rendering
+    /// and by bfr_resolve_texture, depth and stencil formats in a rendering, by the modes
+    /// bfr_caps_resolve names.
+    bool resolve{};
 };
 
 /// What a window's swapchain may be, on one adapter.
@@ -2946,6 +3036,9 @@ inline bfr_graphics_pipeline_desc toC(const GraphicsPipelineDesc& value, const b
         .depth_stencil_format = static_cast<bfr_format>(value.depthStencilFormat),
         .samples = value.samples,
         .alpha_to_coverage = value.alphaToCoverage ? BFR_TRUE : BFR_FALSE,
+        .sample_mask = value.sampleMask,
+        .alpha_to_one = value.alphaToOne ? BFR_TRUE : BFR_FALSE,
+        .min_sample_shading = value.minSampleShading,
     };
 }
 
@@ -3232,6 +3325,8 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .drawIndirectFirstInstance = value.draw_indirect_first_instance != BFR_FALSE,
         .triangleFans = value.triangle_fans != BFR_FALSE,
         .listRestart = value.list_restart != BFR_FALSE,
+        .alphaToOne = value.alpha_to_one != BFR_FALSE,
+        .sampleMask = value.sample_mask != BFR_FALSE,
         .storageReadWithoutFormat = value.storage_read_without_format != BFR_FALSE,
         .storageWriteWithoutFormat = value.storage_write_without_format != BFR_FALSE,
         .timestampsOnAllQueues = value.timestamps_on_all_queues != BFR_FALSE,
@@ -3355,6 +3450,15 @@ inline CapsSparse fromC(const bfr_caps_sparse& value) {
     };
 }
 
+inline CapsResolve fromC(const bfr_caps_resolve& value) {
+    return {
+        .depthModes = value.depth_modes,
+        .stencilModes = value.stencil_modes,
+        .independent = value.independent != BFR_FALSE,
+        .independentNone = value.independent_none != BFR_FALSE,
+    };
+}
+
 inline Caps fromC(const bfr_caps& value) {
     return {
         .info = fromC(value.info),
@@ -3368,6 +3472,7 @@ inline Caps fromC(const bfr_caps& value) {
         .queues = fromC(value.queues),
         .timestamps = fromC(value.timestamps),
         .sparse = fromC(value.sparse),
+        .resolve = fromC(value.resolve),
     };
 }
 
@@ -3388,6 +3493,7 @@ inline FormatCaps fromC(const bfr_format_caps& value) {
         .storageTexelBuffer = value.storage_texel_buffer != BFR_FALSE,
         .storageTexelBufferAtomic = value.storage_texel_buffer_atomic != BFR_FALSE,
         .sampleCounts = value.sample_counts,
+        .resolve = value.resolve != BFR_FALSE,
     };
 }
 
@@ -3539,11 +3645,15 @@ public:
     [[nodiscard]] Expected<CommandPool> createCommandPool(const CommandPoolDesc& desc) const;
 
     /// Begins rendering to desc's attachments, with the image bfr_acquire took from swapchain as
-    /// color attachment 0 when swapchain is not null. Sets the viewport and scissor to the whole of
-    /// the attachments. Only the draws, direct and indirect, and the state they take, are recorded
-    /// until bfr_end_rendering. Fails with error_invalid_argument when no attachment is given, when
-    /// a color attachment but the swapchain's names no texture, or, with a swapchain, when there is
-    /// no color attachment or attachment 0 names a texture.
+    /// color attachment 0 when swapchain is not null, or as the image attachment 0's texture
+    /// resolves into when it names one. Sets the viewport and scissor to the whole of the
+    /// attachments. Only the draws, direct and indirect, and the state they take, are recorded
+    /// until bfr_end_rendering, which resolves the attachments that name a resolve texture. Fails
+    /// with error_invalid_argument when no attachment is given, when a color attachment but the
+    /// swapchain's names no texture, with a swapchain when there is no color attachment or
+    /// attachment 0 names a resolve texture, when a resolve texture is named with no texture, and
+    /// when a read-only depth-stencil attachment clears or drops an aspect; error_unsupported for a
+    /// depth or stencil resolve mode, or a pair of them, bfr_caps_resolve doesn't have.
     [[nodiscard]] Expected<void> beginRendering(CommandList commandList, const Swapchain& swapchain, const RenderingDesc& desc) const;
 
     /// Ends the rendering bfr_begin_rendering began; a swapchain image is then ready to present,
@@ -3661,6 +3771,15 @@ public:
     /// seen as bfr_copy_buffer says.
     [[nodiscard]] Expected<void> copyTexture(CommandList commandList, const Texture& src, const Texture& dst, std::span<const TextureCopy> regions) const;
 
+    /// Records a resolve of one mip level and layer of src, a multisampled texture of a color
+    /// format in layout resolve_src, into one of dst, a single-sample texture of its format in
+    /// layout resolve_dst, outside rendering: the whole level, of the same size in both. src has
+    /// color_attachment and copy_src usage, dst color_attachment and copy_dst; its format resolves,
+    /// as bfr_format_caps.resolve says, and each texture has the mip level and layer named. Fails
+    /// with error_device_failed when the backend gives no encoder for it (Metal). What was resolved
+    /// is seen as bfr_copy_buffer says.
+    [[nodiscard]] Expected<void> resolveTexture(CommandList commandList, const Texture& src, std::uint32_t srcMipLevel, std::uint32_t srcLayer, const Texture& dst, std::uint32_t dstMipLevel, std::uint32_t dstLayer) const;
+
     /// Sends recorded command lists to a queue, which runs them after what it was sent before and
     /// after the GPU passes the waits, and writes the token their completion signals. The command
     /// lists are gone afterwards. Calls on one queue must not overlap; the caller synchronizes
@@ -3707,10 +3826,12 @@ public:
 
     /// Creates a graphics pipeline, as desc says, before returning. Not for the frame path, as
     /// bfr_create_compute_pipeline is not. A target of format undefined is an unused one. Fails
-    /// with error_invalid_argument for a desc with more than max_color_targets targets,
-    /// error_unsupported for a topology the backend has no form for (Metal's fan),
-    /// error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
-    /// backend refuses the code or the desc; the message carries what it said.
+    /// with error_invalid_argument for a desc with more than max_color_targets targets or a
+    /// min_sample_shading outside 0 to 1, error_unsupported for a topology the backend has no form
+    /// for (Metal's fan) and for an alpha_to_one, min_sample_shading or sample_mask whose feature
+    /// the device lacks, error_limit_reached at the device's maximum of pipelines, and
+    /// error_device_failed when the backend refuses the code or the desc; the message carries what
+    /// it said.
     [[nodiscard]] Expected<Pipeline> createGraphicsPipeline(const GraphicsPipelineDesc& desc) const;
 
     /// Creates a pool of desc's count GPU timestamps, written by lists on desc's queue. Not for the
@@ -4174,16 +4295,23 @@ inline bfr_color_attachment toC(const ColorAttachment& value) {
         .clear_color = {value.clearColor[0], value.clearColor[1], value.clearColor[2], value.clearColor[3]},
         .clear_integer = value.clearInteger ? BFR_TRUE : BFR_FALSE,
         .clear_color_integer = {value.clearColorInteger[0], value.clearColorInteger[1], value.clearColorInteger[2], value.clearColorInteger[3]},
+        .resolve_texture = value.resolveTexture != nullptr ? value.resolveTexture->get() : bfr_texture{},
     };
 }
 
 inline bfr_depth_stencil_attachment toC(const DepthStencilAttachment& value) {
     return {
         .texture = value.texture != nullptr ? value.texture->get() : bfr_texture{},
-        .load_op = static_cast<bfr_load_op>(value.loadOp),
-        .store_op = static_cast<bfr_store_op>(value.storeOp),
+        .depth_load_op = static_cast<bfr_load_op>(value.depthLoadOp),
+        .depth_store_op = static_cast<bfr_store_op>(value.depthStoreOp),
+        .stencil_load_op = static_cast<bfr_load_op>(value.stencilLoadOp),
+        .stencil_store_op = static_cast<bfr_store_op>(value.stencilStoreOp),
         .clear_depth = value.clearDepth,
         .clear_stencil = value.clearStencil,
+        .read_only = value.readOnly ? BFR_TRUE : BFR_FALSE,
+        .resolve_texture = value.resolveTexture != nullptr ? value.resolveTexture->get() : bfr_texture{},
+        .depth_resolve = static_cast<bfr_resolve_mode>(value.depthResolve),
+        .stencil_resolve = static_cast<bfr_resolve_mode>(value.stencilResolve),
     };
 }
 
@@ -4594,6 +4722,13 @@ inline Expected<void> Device::copyTexture(CommandList commandList, const Texture
         return std::unexpected(detail::tooMany("regions holds more elements than a uint32_t counts"));
     }
     if (const bfr_result result = bfr_copy_texture(device_, commandList.get(), src.get(), dst.get(), reinterpret_cast<const bfr_texture_copy*>(regions.data()), static_cast<uint32_t>(regions.size())); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::resolveTexture(CommandList commandList, const Texture& src, std::uint32_t srcMipLevel, std::uint32_t srcLayer, const Texture& dst, std::uint32_t dstMipLevel, std::uint32_t dstLayer) const {
+    if (const bfr_result result = bfr_resolve_texture(device_, commandList.get(), src.get(), srcMipLevel, srcLayer, dst.get(), dstMipLevel, dstLayer); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return {};

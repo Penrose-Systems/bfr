@@ -9,6 +9,7 @@
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/swapchain.h"
+#include "bfr/rhi/texture.h"
 #include "rhi_test_support.h"
 
 #include <catch2/catch_message.hpp>
@@ -121,6 +122,56 @@ TEST_CASE("Device clears and presents a headless swapchain, frame after frame", 
         }
         CHECK(device.wait(last, kTestWait).has_value());
         CHECK(device.poll(last).value_or(false));
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device resolves a multisampled texture into a swapchain's image and presents it", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const HeadlessSwapchain headless{recordingInto(backend, messages)};
+        Device& device = *headless.device;
+        const Format format = swapchainDesc(*headless.instance).format;
+        constexpr std::uint32_t kSamples = 4;
+        const auto caps = headless.instance->formatCaps(headlessAdapter(*headless.instance), format);
+        REQUIRE(caps.has_value());
+        if ((caps->sampleCounts & kSamples) == 0 || !caps->resolve) {
+            SKIP("the adapter does not resolve the swapchain's format from 4 samples");
+        }
+        const auto texture = device.createTexture({.dimension = TextureDimension::D2,
+                                                   .format = format,
+                                                   .width = kWidth,
+                                                   .height = kHeight,
+                                                   .depth = 1,
+                                                   .layers = 1,
+                                                   .mipLevels = 1,
+                                                   .samples = kSamples,
+                                                   .usage = {.colorAttachment = true}});
+        INFO(failureOf(texture));
+        REQUIRE(texture.has_value());
+        const auto acquired = device.acquire(headless.swapchain, kTestWait);
+        INFO(failureOf(acquired));
+        REQUIRE(acquired.has_value());
+        const auto commands = device.beginCommands(headless.pool);
+        REQUIRE(commands.has_value());
+        CHECK(device.textureBarrier(*commands, *texture, TextureLayout::Undefined, TextureLayout::ColorTarget)
+                  .has_value());
+        RenderingDesc resolving = kClear;
+        resolving.colorAttachments[0].texture = *texture;
+        resolving.colorAttachments[0].storeOp = StoreOp::DontCare;
+        const auto begun = device.beginRendering(*commands, headless.swapchain, resolving);
+        INFO(failureOf(begun));
+        CHECK(begun.has_value());
+        CHECK(device.endRendering(*commands).has_value());
+        const auto submitted = submitOne(device, *commands);
+        INFO(failureOf(submitted));
+        REQUIRE(submitted.has_value());
+        const auto presented = device.present(headless.swapchain);
+        INFO(failureOf(presented));
+        CHECK(presented.has_value());
+        CHECK(device.wait(*submitted, kTestWait).has_value());
+        CHECK(device.destroyTexture(*texture).has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

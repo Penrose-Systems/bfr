@@ -1,6 +1,7 @@
 #include "metal/metal_caps.h"
 
 #include "bfr/rhi/caps.h"
+#include "bfr/rhi/command_list.h"
 #include "metal/metal_pipeline.h"
 #include "metal/metal_sparse.h"
 #include "metal/metal_util.h"
@@ -142,6 +143,14 @@ void addDrawFeatures(Features& features) {
     features.listRestart = false;
 }
 
+// What Metal 4's pipelines take of multisampling: alpha to one
+// (MTL4RenderPipeline.hpp:177), and no sample mask, which
+// MTL4::RenderPipelineDescriptor has no setting for.
+void addMultisampleFeatures(Features& features) {
+    features.alphaToOne = true;
+    features.sampleMask = false;
+}
+
 Features featuresOf(MTL::Device* device) {
     Features features;
     features.rayQuery = device->supportsRaytracing();
@@ -152,6 +161,7 @@ Features featuresOf(MTL::Device* device) {
     addCompressionFeatures(device, features);
     addRenderFeatures(features);
     addDrawFeatures(features);
+    addMultisampleFeatures(features);
     addSamplerFeatures(device, features);
     return features;
 }
@@ -221,6 +231,25 @@ bool has64BitAtomics(MTL::Device* device) {
            (device->supportsFamily(MTL::GPUFamilyApple8) && device->supportsFamily(MTL::GPUFamilyMac2));
 }
 
+ResolveCaps resolveCapsOf(MTL::Device* device) {
+    ResolveCaps resolve;
+    // Godot's check for depth resolve (metal_device_properties.cpp:155). It
+    // sets no resolve filter, so it resolves by the descriptor's default,
+    // taken to be Sample0, the filter of value 0 (MTLRenderPass.hpp:65), an
+    // inference; nothing sources which devices take Min or Max.
+    if (device->supportsFamily(MTL::GPUFamilyMetal3) || device->supportsFamily(MTL::GPUFamilyApple3) ||
+        device->supportsFamily(MTL::GPUFamilyMac2)) {
+        resolve.depthModes = 1U << std::to_underlying(ResolveMode::SampleZero);
+        // Godot resolves the depth of a depth-stencil attachment and not its
+        // stencil (metal3_objects.cpp:1342-1352, :1365): one mode None.
+        resolve.independentNone = true;
+    }
+    // Godot resolves no stencil, and no Metal call says whether a device
+    // takes a stencil filter or depth and stencil filters apart, so
+    // stencilModes and independent stay 0.
+    return resolve;
+}
+
 std::string belowFloor(MTL::Device* device) {
     std::string reasons;
     const auto add = [&reasons](const char* reason) {
@@ -276,6 +305,7 @@ Caps readCaps(MTL::Device* device) {
     caps.queues = queuesOf();
     caps.timestamps = timestampsOf(device);
     caps.sparse = sparseOf(device);
+    caps.resolve = resolveCapsOf(device);
     return caps;
 }
 

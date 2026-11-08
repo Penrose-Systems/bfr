@@ -312,7 +312,7 @@ bfr::rhi::TextureHandle fromC(bfr_texture handle) {
 
 // The C and C++ texture enums are the same numbers, so they cross as they are.
 static_assert(static_cast<int>(bfr::rhi::TextureDimension::Cube) == BFR_TEXTURE_DIMENSION_CUBE);
-static_assert(static_cast<int>(bfr::rhi::TextureLayout::DepthStencilTarget) == BFR_TEXTURE_LAYOUT_DEPTH_STENCIL_TARGET);
+static_assert(static_cast<int>(bfr::rhi::TextureLayout::ResolveDst) == BFR_TEXTURE_LAYOUT_RESOLVE_DST);
 static_assert(static_cast<int>(bfr::rhi::TextureAspect::Stencil) == BFR_TEXTURE_ASPECT_STENCIL);
 
 // The texture desc asks for. Nothing when its dimension or format is not one
@@ -362,6 +362,7 @@ bfr::rhi::PipelineHandle fromC(bfr_pipeline handle) {
 // are, once checked to be a value BFR has.
 static_assert(static_cast<int>(bfr::rhi::Topology::PointList) == BFR_TOPOLOGY_POINT_LIST);
 static_assert(static_cast<int>(bfr::rhi::PrimitiveRestart::Index32) == BFR_PRIMITIVE_RESTART_INDEX32);
+static_assert(static_cast<int>(bfr::rhi::ResolveMode::Max) == BFR_RESOLVE_MODE_MAX);
 static_assert(static_cast<int>(bfr::rhi::CullMode::Back) == BFR_CULL_MODE_BACK);
 static_assert(static_cast<int>(bfr::rhi::FrontFace::Clockwise) == BFR_FRONT_FACE_CLOCKWISE);
 static_assert(static_cast<int>(bfr::rhi::FillMode::Wireframe) == BFR_FILL_MODE_WIREFRAME);
@@ -462,7 +463,8 @@ static_assert(static_cast<int>(bfr::rhi::TimestampGranularity::Precise) == BFR_T
 static_assert(static_cast<int>(bfr::rhi::HostClock::PerformanceCounter) == BFR_HOST_CLOCK_PERFORMANCE_COUNTER);
 static_assert(static_cast<int>(bfr::rhi::Call::InstanceSwapchainFormats) == BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS);
 static_assert(static_cast<int>(bfr::rhi::Call::SetTopology) == BFR_CALL_SET_TOPOLOGY);
-static_assert(bfr::rhi::kCallCount == BFR_CALL_DISPATCH_INDIRECT + 1);
+static_assert(static_cast<int>(bfr::rhi::Call::ResolveTexture) == BFR_CALL_RESOLVE_TEXTURE);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_RESOLVE_TEXTURE + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
@@ -602,6 +604,9 @@ std::optional<bfr::rhi::GraphicsPipelineDesc> graphicsPipelineIn(const bfr_graph
         .depthStencilFormat = *depthStencilFormat,
         .samples = desc.samples,
         .alphaToCoverage = desc.alpha_to_coverage != BFR_FALSE,
+        .sampleMask = desc.sample_mask,
+        .alphaToOne = desc.alpha_to_one != BFR_FALSE,
+        .minSampleShading = desc.min_sample_shading,
     };
     const std::span targets{desc.color_targets};
     for (std::uint32_t i = 0; i < std::min<std::uint32_t>(desc.color_target_count, kMaxColorTargets); ++i) {
@@ -723,18 +728,30 @@ std::optional<bfr::rhi::RenderingDesc> renderingIn(const bfr_rendering_desc& des
                                             .storeOp = *storeOp,
                                             .clearColor = std::to_array(attachment.clear_color),
                                             .clearInteger = attachment.clear_integer != BFR_FALSE,
-                                            .clearColorInteger = std::to_array(attachment.clear_color_integer)};
+                                            .clearColorInteger = std::to_array(attachment.clear_color_integer),
+                                            .resolveTexture = fromC(attachment.resolve_texture)};
     }
-    const auto depthLoad = enumIn(desc.depth_stencil.load_op, LoadOp::DontCare, "load op", error);
-    const auto depthStore = enumIn(desc.depth_stencil.store_op, StoreOp::DontCare, "store op", error);
-    if (!depthLoad || !depthStore) {
+    const bfr_depth_stencil_attachment& depth = desc.depth_stencil;
+    const auto depthLoad = enumIn(depth.depth_load_op, LoadOp::DontCare, "load op", error);
+    const auto depthStore = enumIn(depth.depth_store_op, StoreOp::DontCare, "store op", error);
+    const auto stencilLoad = enumIn(depth.stencil_load_op, LoadOp::DontCare, "load op", error);
+    const auto stencilStore = enumIn(depth.stencil_store_op, StoreOp::DontCare, "store op", error);
+    const auto depthResolve = enumIn(depth.depth_resolve, ResolveMode::Max, "resolve mode", error);
+    const auto stencilResolve = enumIn(depth.stencil_resolve, ResolveMode::Max, "resolve mode", error);
+    if (!depthLoad || !depthStore || !stencilLoad || !stencilStore || !depthResolve || !stencilResolve) {
         return std::nullopt;
     }
-    rendering.depthStencil = {.texture = fromC(desc.depth_stencil.texture),
-                              .loadOp = *depthLoad,
-                              .storeOp = *depthStore,
-                              .clearDepth = desc.depth_stencil.clear_depth,
-                              .clearStencil = desc.depth_stencil.clear_stencil};
+    rendering.depthStencil = {.texture = fromC(depth.texture),
+                              .depthLoadOp = *depthLoad,
+                              .depthStoreOp = *depthStore,
+                              .stencilLoadOp = *stencilLoad,
+                              .stencilStoreOp = *stencilStore,
+                              .clearDepth = depth.clear_depth,
+                              .clearStencil = depth.clear_stencil,
+                              .readOnly = depth.read_only != BFR_FALSE,
+                              .resolveTexture = fromC(depth.resolve_texture),
+                              .depthResolve = *depthResolve,
+                              .stencilResolve = *stencilResolve};
     return rendering;
 }
 
@@ -1046,6 +1063,8 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .draw_indirect_first_instance = toC(features.drawIndirectFirstInstance),
         .triangle_fans = toC(features.triangleFans),
         .list_restart = toC(features.listRestart),
+        .alpha_to_one = toC(features.alphaToOne),
+        .sample_mask = toC(features.sampleMask),
         .storage_read_without_format = toC(features.storageReadWithoutFormat),
         .storage_write_without_format = toC(features.storageWriteWithoutFormat),
         .timestamps_on_all_queues = toC(features.timestampsOnAllQueues),
@@ -1174,6 +1193,13 @@ bfr_caps_sparse toC(const bfr::rhi::Sparse& sparse) {
     return out;
 }
 
+bfr_caps_resolve toC(const bfr::rhi::ResolveCaps& resolve) {
+    return {.depth_modes = resolve.depthModes,
+            .stencil_modes = resolve.stencilModes,
+            .independent = toC(resolve.independent),
+            .independent_none = toC(resolve.independentNone)};
+}
+
 bfr_format_caps toC(const bfr::rhi::FormatCaps& caps) {
     return {
         .format = toC(caps.format),
@@ -1191,6 +1217,7 @@ bfr_format_caps toC(const bfr::rhi::FormatCaps& caps) {
         .storage_texel_buffer = toC(caps.storageTexelBuffer),
         .storage_texel_buffer_atomic = toC(caps.storageTexelBufferAtomic),
         .sample_counts = caps.sampleCounts,
+        .resolve = toC(caps.resolve),
     };
 }
 
@@ -1830,7 +1857,7 @@ bfr_result bfr_texture_barrier(bfr_device* device, bfr_command_list command_list
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
         }
         for (const bfr_texture_layout layout : {before, after}) {
-            if (layout < BFR_TEXTURE_LAYOUT_UNDEFINED || layout > BFR_TEXTURE_LAYOUT_DEPTH_STENCIL_TARGET) {
+            if (layout < BFR_TEXTURE_LAYOUT_UNDEFINED || layout > BFR_TEXTURE_LAYOUT_RESOLVE_DST) {
                 return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "texture layout {} is not one BFR has",
                             static_cast<std::int64_t>(layout));
             }
@@ -1894,6 +1921,19 @@ bfr_result bfr_copy_texture(bfr_device* device, bfr_command_list command_list, b
         const std::span copies{reinterpret_cast<const bfr::rhi::TextureCopy*>(regions), region_count};
         const auto copied = device->device->copyTexture(fromC(command_list), fromC(src), fromC(dst), copies);
         return copied ? BFR_RESULT_SUCCESS : fail(copied.error());
+    });
+}
+
+bfr_result bfr_resolve_texture(bfr_device* device, bfr_command_list command_list, bfr_texture src,
+                               uint32_t src_mip_level, uint32_t src_layer, bfr_texture dst, uint32_t dst_mip_level,
+                               uint32_t dst_layer) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto resolved = device->device->resolveTexture(fromC(command_list), fromC(src), src_mip_level, src_layer,
+                                                             fromC(dst), dst_mip_level, dst_layer);
+        return resolved ? BFR_RESULT_SUCCESS : fail(resolved.error());
     });
 }
 
@@ -1993,6 +2033,7 @@ bfr_result bfr_get_caps(bfr_instance* instance, uint32_t adapter, bfr_caps* caps
             .queues = toC(found.queues),
             .timestamps = toC(found.timestamps),
             .sparse = toC(found.sparse),
+            .resolve = toC(found.resolve),
         };
         return BFR_RESULT_SUCCESS;
     });

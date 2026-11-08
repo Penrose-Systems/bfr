@@ -13,14 +13,18 @@ textures and texture copies, shaders and pipelines, draws and dispatches,
 samplers, timings (GPU timestamps, tick rates, CPU-GPU calibration, CPU time
 in each call), sparse and tiled resources (partly resident textures and
 buffers, sparse memory, tile mapping, sparse caps), indirect draws and
-dispatches (counts and strides), exact topologies and primitive restart.
+dispatches (counts and strides), exact topologies and primitive restart,
+depth-stencil and multisampled attachments in use (depth and stencil ops
+apart, read-only depth-stencil, sample mask, alpha to one, sample shading),
+resolves (color and depth-stencil as rendering ends, into a swapchain's
+image, and by resolveTexture).
 
-9. Depth-stencil and multisampled attachments in use; resolves.
 10. Compute and copy queues in use: cross-queue waits.
 11. Pipeline cache blobs.
 12. Mesh shaders and ray tracing, exposed where the backend has them.
 13. Queries (occlusion, statistics), debug labels, memory heaps and placed
-    resources, formatted buffer views, variable rate shading, HDR and
-    present timing, and whatever each backend's caps turn up as we go.
+    resources, formatted buffer views, variable rate shading, programmable
+    sample positions, HDR and present timing, and whatever each backend's
+    caps turn up as we go.
 
-Next: 9.
+Next: 10.

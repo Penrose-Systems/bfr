@@ -12,9 +12,23 @@ namespace bfr::rhi {
 
 /// The formats whose channels are signed integers.
 inline constexpr std::array kSignedIntegerFormats{
-    Format::R8Sint,     Format::Rg8Sint, Format::Rgba8Sint, Format::R16Sint,   Format::Rg16Sint,
-    Format::Rgba16Sint, Format::R32Sint, Format::Rg32Sint,  Format::Rgb32Sint, Format::Rgba32Sint,
+    Format::R8Sint,     Format::Rg8Sint,  Format::Rgba8Sint, Format::R16Sint,    Format::Rg16Sint,
+    Format::Rgba16Sint, Format::R32Sint,  Format::Rg32Sint,  Format::Rgb32Sint,  Format::Rgba32Sint,
+    Format::R64Sint,    Format::Rg64Sint, Format::Rgb64Sint, Format::Rgba64Sint,
 };
+
+/// The color formats whose channels are unsigned integers.
+inline constexpr std::array kUnsignedIntegerFormats{
+    Format::R8Uint,     Format::Rg8Uint,  Format::Rgba8Uint, Format::R16Uint,    Format::Rg16Uint,
+    Format::Rgba16Uint, Format::R32Uint,  Format::Rg32Uint,  Format::Rgb32Uint,  Format::Rgba32Uint,
+    Format::R64Uint,    Format::Rg64Uint, Format::Rgb64Uint, Format::Rgba64Uint, Format::Rgb10a2Uint,
+};
+
+/// Whether format is a color format of integers, signed or not.
+[[nodiscard]] constexpr bool integerFormat(Format format) {
+    return std::ranges::find(kSignedIntegerFormats, format) != kSignedIntegerFormats.end() ||
+           std::ranges::find(kUnsignedIntegerFormats, format) != kUnsignedIntegerFormats.end();
+}
 
 /// Red, green, blue and alpha as numbers, which a double holds each of exactly.
 using ClearValues = std::array<double, std::tuple_size_v<decltype(ColorAttachment::clearColor)>>;

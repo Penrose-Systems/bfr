@@ -17,8 +17,8 @@ namespace bfr::rhi::metal {
 namespace {
 
 // What a pixel format may do, as Godot's Metal driver records Apple's Metal
-// feature set tables (drivers/metal/pixel_formats.h:74-93). Metal has no call
-// for it. Resolve, which Godot also records, has no FormatCaps field.
+// feature set tables (drivers/metal/pixel_formats.h:74-112). Metal has no call
+// for it.
 enum FormatBits : std::uint16_t {
     kNone = 0,
     kRead = 1U << 0U,
@@ -29,15 +29,18 @@ enum FormatBits : std::uint16_t {
     kDepth = 1U << 5U,
     kBlend = 1U << 6U,
     kMsaa = 1U << 7U,
+    kResolve = 1U << 8U,
 };
 
 constexpr std::uint16_t kRf = kRead | kFilter;
 constexpr std::uint16_t kRwc = kRead | kWrite | kColor;
 constexpr std::uint16_t kRwcm = kRwc | kMsaa;
-constexpr std::uint16_t kRfcmb = kRf | kColor | kMsaa | kBlend;
-constexpr std::uint16_t kAll = kRfcmb | kWrite;
+constexpr std::uint16_t kRfcmrb = kRf | kColor | kMsaa | kResolve | kBlend;
+constexpr std::uint16_t kRfwcmb = kRf | kWrite | kColor | kMsaa | kBlend;
+constexpr std::uint16_t kAll = kRfwcmb | kResolve;
 constexpr std::uint16_t kDrm = kDepth | kRead | kMsaa;
-constexpr std::uint16_t kDrfm = kDrm | kFilter;
+constexpr std::uint16_t kDrmr = kDrm | kResolve;
+constexpr std::uint16_t kDrfmr = kDrm | kFilter | kResolve;
 constexpr std::uint16_t kDrf = kDepth | kRf;
 
 // A format rendered to without multisampling renders at one sample, where the
@@ -73,18 +76,18 @@ constexpr std::array kMetalFormats{
     MetalFormat{.format = Format::Rgba8Sint, .metal = MTL::PixelFormatRGBA8Sint, .caps = kRwcm},
     MetalFormat{.format = Format::Bgra8Unorm, .metal = MTL::PixelFormatBGRA8Unorm, .caps = kAll},
     MetalFormat{.format = Format::Bgra8Srgb, .metal = MTL::PixelFormatBGRA8Unorm_sRGB, .caps = kAll},
-    MetalFormat{.format = Format::R16Unorm, .metal = MTL::PixelFormatR16Unorm, .caps = kAll},
-    MetalFormat{.format = Format::R16Snorm, .metal = MTL::PixelFormatR16Snorm, .caps = kAll},
+    MetalFormat{.format = Format::R16Unorm, .metal = MTL::PixelFormatR16Unorm, .caps = kRfwcmb},
+    MetalFormat{.format = Format::R16Snorm, .metal = MTL::PixelFormatR16Snorm, .caps = kRfwcmb},
     MetalFormat{.format = Format::R16Uint, .metal = MTL::PixelFormatR16Uint, .caps = kRwcm},
     MetalFormat{.format = Format::R16Sint, .metal = MTL::PixelFormatR16Sint, .caps = kRwcm},
     MetalFormat{.format = Format::R16Float, .metal = MTL::PixelFormatR16Float, .caps = kAll},
-    MetalFormat{.format = Format::Rg16Unorm, .metal = MTL::PixelFormatRG16Unorm, .caps = kAll},
-    MetalFormat{.format = Format::Rg16Snorm, .metal = MTL::PixelFormatRG16Snorm, .caps = kAll},
+    MetalFormat{.format = Format::Rg16Unorm, .metal = MTL::PixelFormatRG16Unorm, .caps = kRfwcmb},
+    MetalFormat{.format = Format::Rg16Snorm, .metal = MTL::PixelFormatRG16Snorm, .caps = kRfwcmb},
     MetalFormat{.format = Format::Rg16Uint, .metal = MTL::PixelFormatRG16Uint, .caps = kRwcm},
     MetalFormat{.format = Format::Rg16Sint, .metal = MTL::PixelFormatRG16Sint, .caps = kRwcm},
     MetalFormat{.format = Format::Rg16Float, .metal = MTL::PixelFormatRG16Float, .caps = kAll},
-    MetalFormat{.format = Format::Rgba16Unorm, .metal = MTL::PixelFormatRGBA16Unorm, .caps = kAll},
-    MetalFormat{.format = Format::Rgba16Snorm, .metal = MTL::PixelFormatRGBA16Snorm, .caps = kAll},
+    MetalFormat{.format = Format::Rgba16Unorm, .metal = MTL::PixelFormatRGBA16Unorm, .caps = kRfwcmb},
+    MetalFormat{.format = Format::Rgba16Snorm, .metal = MTL::PixelFormatRGBA16Snorm, .caps = kRfwcmb},
     MetalFormat{.format = Format::Rgba16Uint, .metal = MTL::PixelFormatRGBA16Uint, .caps = kRwcm},
     MetalFormat{.format = Format::Rgba16Sint, .metal = MTL::PixelFormatRGBA16Sint, .caps = kRwcm},
     MetalFormat{.format = Format::Rgba16Float, .metal = MTL::PixelFormatRGBA16Float, .caps = kAll},
@@ -105,8 +108,8 @@ constexpr std::array kMetalFormats{
     MetalFormat{.format = Format::Bgr10a2Unorm, .metal = MTL::PixelFormatBGR10A2Unorm, .caps = kAll},
     MetalFormat{.format = Format::Rg11b10Float, .metal = MTL::PixelFormatRG11B10Float, .caps = kAll},
     MetalFormat{.format = Format::Rgb9e5Float, .metal = MTL::PixelFormatRGB9E5Float, .caps = kAll},
-    MetalFormat{.format = Format::B5g6r5Unorm, .metal = MTL::PixelFormatB5G6R5Unorm, .caps = kRfcmb},
-    MetalFormat{.format = Format::Bgr5a1Unorm, .metal = MTL::PixelFormatBGR5A1Unorm, .caps = kRfcmb},
+    MetalFormat{.format = Format::B5g6r5Unorm, .metal = MTL::PixelFormatB5G6R5Unorm, .caps = kRfcmrb},
+    MetalFormat{.format = Format::Bgr5a1Unorm, .metal = MTL::PixelFormatBGR5A1Unorm, .caps = kRfcmrb},
     MetalFormat{.format = Format::Bgra4Unorm, .metal = MTL::PixelFormatInvalid, .caps = kNone},
     MetalFormat{.format = Format::R64Uint, .metal = MTL::PixelFormatInvalid, .caps = kNone},
     MetalFormat{.format = Format::R64Sint, .metal = MTL::PixelFormatInvalid, .caps = kNone},
@@ -120,10 +123,10 @@ constexpr std::array kMetalFormats{
     MetalFormat{.format = Format::Rgba64Uint, .metal = MTL::PixelFormatInvalid, .caps = kNone},
     MetalFormat{.format = Format::Rgba64Sint, .metal = MTL::PixelFormatInvalid, .caps = kNone},
     MetalFormat{.format = Format::Rgba64Float, .metal = MTL::PixelFormatInvalid, .caps = kNone},
-    MetalFormat{.format = Format::D16Unorm, .metal = MTL::PixelFormatDepth16Unorm, .caps = kDrfm},
+    MetalFormat{.format = Format::D16Unorm, .metal = MTL::PixelFormatDepth16Unorm, .caps = kDrfmr},
     MetalFormat{.format = Format::D24UnormS8Uint, .metal = MTL::PixelFormatDepth24Unorm_Stencil8, .caps = kNone},
-    MetalFormat{.format = Format::D32Float, .metal = MTL::PixelFormatDepth32Float, .caps = kDrm},
-    MetalFormat{.format = Format::D32FloatS8Uint, .metal = MTL::PixelFormatDepth32Float_Stencil8, .caps = kDrm},
+    MetalFormat{.format = Format::D32Float, .metal = MTL::PixelFormatDepth32Float, .caps = kDrmr},
+    MetalFormat{.format = Format::D32FloatS8Uint, .metal = MTL::PixelFormatDepth32Float_Stencil8, .caps = kDrmr},
     MetalFormat{.format = Format::S8Uint, .metal = MTL::PixelFormatStencil8, .caps = kDrm},
     MetalFormat{.format = Format::Bc1Unorm, .metal = MTL::PixelFormatBC1_RGBA, .caps = kRf},
     MetalFormat{.format = Format::Bc1Srgb, .metal = MTL::PixelFormatBC1_RGBA_sRGB, .caps = kRf},
@@ -251,6 +254,9 @@ FormatCaps formatCapsFor(MTL::Device* device, Format format) {
     if (int32 && device->supports32BitMSAA()) {
         caps |= kMsaa;
     }
+    if (float32 && device->supports32BitMSAA()) {
+        caps |= kResolve;
+    }
     if (float32 && device->supports32BitFloatFiltering()) {
         caps |= kFilter;
     }
@@ -291,6 +297,9 @@ FormatCaps formatCapsFor(MTL::Device* device, Format format) {
         .storageTexelBuffer = false,
         .storageTexelBufferAtomic = false,
         .sampleCounts = has(kMsaa) ? sampleCountsOf(device) : (renders ? sampleCountsOf(device) & kOneSample : 0U),
+        // Godot's table gives depth formats resolve on every Metal 4 device
+        // but gates depth resolve itself apart, as Caps::resolve does.
+        .resolve = has(kResolve) && (!has(kDepth) || resolveCapsOf(device).depthModes != 0),
     };
 }
 

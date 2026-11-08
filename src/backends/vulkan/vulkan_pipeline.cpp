@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <expected>
+#include <limits>
 #include <span>
 #include <string>
 #include <utility>
@@ -45,6 +46,9 @@ VkPrimitiveTopology topologyFor(Topology topology) {
 }
 
 namespace {
+
+// Bits in one VkSampleMask word; pSampleMask holds as many words as samples need.
+constexpr std::uint32_t kSampleMaskBits = std::numeric_limits<VkSampleMask>::digits;
 
 constexpr std::uint32_t kBindlessSet = 0;
 constexpr std::uint32_t kBindingCount = 4;
@@ -370,10 +374,8 @@ void VulkanBindlessLayout::writeStorageBuffer(std::uint32_t slot, VkBuffer buffe
     table_->vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
 }
 
-void VulkanBindlessLayout::writeSampledImage(std::uint32_t slot, VkImageView view) const {
-    const VkDescriptorImageInfo info{.sampler = VK_NULL_HANDLE,
-                                     .imageView = view,
-                                     .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+void VulkanBindlessLayout::writeSampledImage(std::uint32_t slot, VkImageView view, VkImageLayout layout) const {
+    const VkDescriptorImageInfo info{.sampler = VK_NULL_HANDLE, .imageView = view, .imageLayout = layout};
     VkWriteDescriptorSet write = writeFor(set_, kSampledTextureBinding, slot, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     write.pImageInfo = &info;
     table_->vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
@@ -534,6 +536,12 @@ core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable&
     multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisample.rasterizationSamples = static_cast<VkSampleCountFlagBits>(desc.samples);
     multisample.alphaToCoverageEnable = desc.alphaToCoverage ? VK_TRUE : VK_FALSE;
+    multisample.alphaToOneEnable = desc.alphaToOne ? VK_TRUE : VK_FALSE;
+    multisample.sampleShadingEnable = desc.minSampleShading > 0 ? VK_TRUE : VK_FALSE;
+    multisample.minSampleShading = desc.minSampleShading;
+    const std::array<VkSampleMask, 2> sampleMask{static_cast<VkSampleMask>(desc.sampleMask),
+                                                 static_cast<VkSampleMask>(desc.sampleMask >> kSampleMaskBits)};
+    multisample.pSampleMask = sampleMask.data();
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
     depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     depthStencil.depthTestEnable = desc.depthStencil.depthTest ? VK_TRUE : VK_FALSE;
@@ -620,6 +628,9 @@ core::Result<PipelineHandle> VulkanDevice::createComputePipeline(const ComputePi
 
 core::Result<PipelineHandle> VulkanDevice::createGraphicsPipeline(const GraphicsPipelineDesc& desc) {
     if (auto checked = checkGraphicsPipelineDesc(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkMultisample(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     collectBuffers();

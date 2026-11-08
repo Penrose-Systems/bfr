@@ -254,6 +254,8 @@ void printFeatures(const bfr::CapsFeatures& f, const bfr::CapsSparse& sparse) {
         {.has = f.drawIndirectFirstInstance, .name = "indirect first instance"},
         {.has = f.triangleFans, .name = "triangle fans"},
         {.has = f.listRestart, .name = "list restart"},
+        {.has = f.alphaToOne, .name = "alpha to one"},
+        {.has = f.sampleMask, .name = "sample mask"},
         {.has = f.storageReadWithoutFormat, .name = "typeless storage reads"},
         {.has = f.storageWriteWithoutFormat, .name = "typeless storage writes"},
         {.has = f.timestampsOnAllQueues, .name = "timestamps on every queue"},
@@ -291,18 +293,18 @@ void printFormatTable(const std::vector<bfr::FormatCaps>& formats) {
     const auto mark = [](bool has) {
         return has ? "✓" : "·";
     };
-    print(std::format("{}{:<{}} sample linear minmax storage atomic color blend depth texel  MSAA\n", kIndent, "Format",
-                      kNameWidth));
+    print(std::format("{}{:<{}} sample linear minmax storage atomic color blend depth texel resolve  MSAA\n", kIndent,
+                      "Format", kNameWidth));
     std::vector<std::string> unsupported;
     for (const bfr::FormatCaps& f : formats) {
         if (!f.sampled && !f.storage && !f.colorAttachment && !f.depthStencil && !f.texelBuffer && !f.copySrc) {
             unsupported.emplace_back(bfr::name(f.format));
             continue;
         }
-        print(std::format("{}{:<{}}   {}      {}      {}      {}       {}     {}     {}     {}     {}    {}\n", kIndent,
-                          bfr::name(f.format), kNameWidth, mark(f.sampled), mark(f.filterLinear), mark(f.filterMinmax),
-                          mark(f.storage), mark(f.storageAtomic), mark(f.colorAttachment), mark(f.blend),
-                          mark(f.depthStencil), mark(f.texelBuffer),
+        print(std::format("{}{:<{}}   {}      {}      {}      {}       {}     {}     {}     {}     {}     {}     {}\n",
+                          kIndent, bfr::name(f.format), kNameWidth, mark(f.sampled), mark(f.filterLinear),
+                          mark(f.filterMinmax), mark(f.storage), mark(f.storageAtomic), mark(f.colorAttachment),
+                          mark(f.blend), mark(f.depthStencil), mark(f.texelBuffer), mark(f.resolve),
                           f.sampleCounts == 0 ? "·" : samples(f.sampleCounts)));
     }
     print("\n");
@@ -536,6 +538,8 @@ void printAllFeatures(const bfr::CapsFeatures& f) {
                        field("drawIndirectFirstInstance", f.drawIndirectFirstInstance),
                        field("triangleFans", f.triangleFans),
                        field("listRestart", f.listRestart),
+                       field("alphaToOne", f.alphaToOne),
+                       field("sampleMask", f.sampleMask),
                        field("storageReadWithoutFormat", f.storageReadWithoutFormat),
                        field("storageWriteWithoutFormat", f.storageWriteWithoutFormat),
                        field("timestampsOnAllQueues", f.timestampsOnAllQueues),
@@ -596,6 +600,9 @@ void printAllMemory(const bfr::Caps& caps) {
                      field("graphicsSparse", q.graphicsSparse),
                      field("computeSparse", q.computeSparse),
                      field("copySparse", q.copySparse)});
+    const bfr::CapsResolve& r = caps.resolve;
+    group("resolve", {field("depthModes", r.depthModes), field("stencilModes", r.stencilModes),
+                      field("independent", r.independent), field("independentNone", r.independentNone)});
 }
 
 void printAll(const bfr::Caps& caps) {

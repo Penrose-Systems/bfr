@@ -73,8 +73,10 @@ struct MetalListSlot {
     Ref<MTL4::CommandAllocator> allocator;
     Ref<MTL4::CommandBuffer> buffer;
     // Made with the slot and filled in by each beginRendering, so a pass
-    // allocates no descriptor.
+    // allocates no descriptor; resolvePass likewise by each resolveTexture,
+    // apart, so neither inherits the other's attachments, levels or slices.
     Ref<MTL4::RenderPassDescriptor> pass;
+    Ref<MTL4::RenderPassDescriptor> resolvePass;
     Ref<MTL4::ArgumentTable> arguments;
     Ref<MTL::Buffer> pushRing;
     std::optional<Resident> pushResident;
@@ -145,14 +147,17 @@ struct MetalCommandList {
 
 class MetalDevice final : public Device {
 public:
-    /// A device on device, which rhi listed, with a graphics queue and the
-    /// queues asked for. Fails with RhiDeviceFailed when Metal gives no queue,
-    /// event, compiler or bindless tables.
+    /// A device on device, which rhi listed with features and resolve, with a
+    /// graphics queue and the queues asked for. Fails with RhiDeviceFailed
+    /// when Metal gives no queue, event, compiler or bindless tables.
     [[nodiscard]] static core::Result<std::unique_ptr<MetalDevice>> create(MetalInstance& rhi, Ref<MTL::Device> device,
+                                                                           const Features& features,
+                                                                           const ResolveCaps& resolve,
                                                                            const DeviceDesc& desc);
 
     /// For create.
-    MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const DeviceDesc& desc);
+    MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Features& features, const ResolveCaps& resolve,
+                const DeviceDesc& desc);
     ~MetalDevice() override;
     MetalDevice(const MetalDevice&) = delete;
     MetalDevice& operator=(const MetalDevice&) = delete;
@@ -222,6 +227,10 @@ public:
                                                          std::span<const BufferTextureCopy> regions) override;
     [[nodiscard]] core::Result<void> copyTexture(CommandListHandle commandList, TextureHandle src, TextureHandle dst,
                                                  std::span<const TextureCopy> regions) override;
+    [[nodiscard]] core::Result<void> resolveTexture(CommandListHandle commandList, TextureHandle src,
+                                                    std::uint32_t srcMipLevel, std::uint32_t srcLayer,
+                                                    TextureHandle dst, std::uint32_t dstMipLevel,
+                                                    std::uint32_t dstLayer) override;
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
     [[nodiscard]] core::Result<void> wait(Token token, std::uint64_t timeoutNs) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
@@ -299,6 +308,10 @@ private:
 
     MetalInstance* instance_;
     Ref<MTL::Device> device_;
+    // What createGraphicsPipeline checks a desc against, and how
+    // depth-stencil attachments resolve.
+    Features features_;
+    ResolveCaps resolve_;
     DeviceDesc desc_;
     std::vector<std::unique_ptr<MetalQueue>> queues_;
     core::Pool<MetalSwapchain, Swapchain> swapchains_;

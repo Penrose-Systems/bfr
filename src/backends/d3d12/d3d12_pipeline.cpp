@@ -37,7 +37,6 @@ constexpr std::uint32_t kTableStart = 0;
 // bindless table is.
 constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kTableFlags = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE |
                                                      D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
-constexpr UINT kAllSamples = std::numeric_limits<UINT>::max();
 constexpr UINT8 kStencilMaskBits = std::numeric_limits<UINT8>::max();
 
 // A range at register 0 of space, whose index 0 is descriptor offset of the
@@ -369,7 +368,8 @@ core::Result<D3D12Pipeline> createD3D12GraphicsPipeline(ID3D12Device& device, ID
         blends[i] = blendFor(targets[i].blend);
         formats[i] = dxgiFormatsFor(targets[i].format).texture;
     }
-    info.SampleMask = kAllSamples;
+    // A UINT (d3d12.h:2289) holds every sample: D3D12_MAX_MULTISAMPLE_SAMPLE_COUNT is 32 (d3d12.h:1141).
+    info.SampleMask = static_cast<UINT>(desc.sampleMask);
     info.RasterizerState = {.FillMode = desc.raster.fill == FillMode::Wireframe ? D3D12_FILL_MODE_WIREFRAME
                                                                                 : D3D12_FILL_MODE_SOLID,
                             .CullMode = cullFor(desc.raster.cull),
@@ -436,6 +436,9 @@ core::Result<PipelineHandle> D3D12Device::createComputePipeline(const ComputePip
 
 core::Result<PipelineHandle> D3D12Device::createGraphicsPipeline(const GraphicsPipelineDesc& desc) {
     if (auto checked = checkGraphicsPipelineDesc(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkMultisample(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     collectBuffers();

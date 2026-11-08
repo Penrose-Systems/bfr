@@ -55,9 +55,8 @@ public:
 
     /// Points slot of the storage buffer table at the whole of buffer.
     void writeStorageBuffer(std::uint32_t slot, VkBuffer buffer) const;
-    /// Points slot of the texture table at view, read in layout
-    /// SHADER_READ_ONLY_OPTIMAL.
-    void writeSampledImage(std::uint32_t slot, VkImageView view) const;
+    /// Points slot of the texture table at view, read in layout.
+    void writeSampledImage(std::uint32_t slot, VkImageView view, VkImageLayout layout) const;
     /// Points slot of the storage texture table at view, in layout GENERAL.
     void writeStorageImage(std::uint32_t slot, VkImageView view) const;
     /// Points slot of the sampler table at sampler.

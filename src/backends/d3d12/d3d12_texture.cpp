@@ -90,19 +90,32 @@ UINT subresourceOf(const D3D12Texture& texture, std::uint32_t mip, std::uint32_t
 
 D3D12Target targetOf(const D3D12Texture& texture) {
     constexpr std::uint32_t kDepthAndStencil = 2;
+    const std::uint32_t planes = planar(blockOf(texture.desc.format)) ? kDepthAndStencil : 1;
     return {.resource = texture.resource.Get(),
             .mipLevels = texture.mipLevels,
             .layers = texture.layers,
-            .planes = planar(blockOf(texture.desc.format)) ? kDepthAndStencil : 1};
+            .planes = planes,
+            .firstPlane = 0,
+            .planeCount = planes};
+}
+
+D3D12Target aspectsOf(const D3D12Texture& texture, bool depth, bool stencil) {
+    const FormatBlock& block = blockOf(texture.desc.format);
+    const bool depthPlane = depth && block.depthBytes != 0;
+    const bool stencilPlane = stencil && block.stencilBytes != 0;
+    D3D12Target target = targetOf(texture);
+    target.firstPlane = planeOf(block, depthPlane ? TextureAspect::Depth : TextureAspect::Stencil);
+    target.planeCount = (depthPlane ? 1U : 0U) + (stencilPlane ? 1U : 0U);
+    return target;
 }
 
 void discardTarget(ID3D12GraphicsCommandList* list, const D3D12Target& target) {
-    // With one mip, every subresource is mip 0's.
-    if (target.mipLevels == 1) {
+    // With one mip and every plane, every subresource is covered.
+    if (target.mipLevels == 1 && target.planeCount == target.planes) {
         list->DiscardResource(target.resource, nullptr);
         return;
     }
-    for (std::uint32_t plane = 0; plane < target.planes; ++plane) {
+    for (std::uint32_t plane = target.firstPlane; plane < target.firstPlane + target.planeCount; ++plane) {
         for (std::uint32_t layer = 0; layer < target.layers; ++layer) {
             const D3D12_DISCARD_REGION region{.NumRects = 0,
                                               .pRects = nullptr,
@@ -188,11 +201,17 @@ D3D12_BOX boxOf(const FormatBlock& block, std::uint32_t x, std::uint32_t y, std:
 
 namespace {
 
-// The one-descriptor heap a texture's render target or depth-stencil view
-// lives in: made with the texture, so a rendering allocates nothing.
-core::Result<ComPtr<ID3D12DescriptorHeap>> createTargetHeap(ID3D12Device& device, D3D12_DESCRIPTOR_HEAP_TYPE type) {
+// A color texture's heap holds its render target view; a depth texture's its
+// writable depth-stencil view and its read-only one.
+constexpr UINT kColorTargetViews = 1;
+constexpr UINT kDepthTargetViews = 2;
+
+// The heap of count descriptors a texture's render target or depth-stencil
+// views live in: made with the texture, so a rendering allocates nothing.
+core::Result<ComPtr<ID3D12DescriptorHeap>> createTargetHeap(ID3D12Device& device, D3D12_DESCRIPTOR_HEAP_TYPE type,
+                                                            UINT count) {
     const D3D12_DESCRIPTOR_HEAP_DESC heapDesc{.Type = type,
-                                              .NumDescriptors = 1,
+                                              .NumDescriptors = count,
                                               .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
                                               .NodeMask = 0};
     ComPtr<ID3D12DescriptorHeap> heap;
@@ -204,11 +223,12 @@ core::Result<ComPtr<ID3D12DescriptorHeap>> createTargetHeap(ID3D12Device& device
 }
 
 // The whole first mip level of a depth texture as a depth-stencil view of
-// format, every layer; a resource made typeless needs the format named.
-D3D12_DEPTH_STENCIL_VIEW_DESC depthViewFor(const D3D12Texture& texture, DXGI_FORMAT format) {
+// format, every layer, with flags; a resource made typeless needs the format
+// named.
+D3D12_DEPTH_STENCIL_VIEW_DESC depthViewFor(const D3D12Texture& texture, DXGI_FORMAT format, D3D12_DSV_FLAGS flags) {
     D3D12_DEPTH_STENCIL_VIEW_DESC view{};
     view.Format = format;
-    view.Flags = D3D12_DSV_FLAG_NONE;
+    view.Flags = flags;
     const bool array = texture.layers > 1;
     if (texture.samples > 1) {
         if (array) {
@@ -228,6 +248,19 @@ D3D12_DEPTH_STENCIL_VIEW_DESC depthViewFor(const D3D12Texture& texture, DXGI_FOR
         view.Texture2D = {.MipSlice = 0};
     }
     return view;
+}
+
+// The flags of a depth-stencil view that writes none of the aspects format has.
+D3D12_DSV_FLAGS readOnlyFlagsFor(Format format) {
+    const FormatBlock& block = blockOf(format);
+    auto flags = D3D12_DSV_FLAG_NONE;
+    if (block.depthBytes != 0) {
+        flags |= D3D12_DSV_FLAG_READ_ONLY_DEPTH;
+    }
+    if (block.stencilBytes != 0) {
+        flags |= D3D12_DSV_FLAG_READ_ONLY_STENCIL;
+    }
+    return flags;
 }
 
 } // namespace
@@ -253,6 +286,7 @@ core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3
                          .resource = {},
                          .targetHeap = {},
                          .target = {},
+                         .readOnlyTarget = {},
                          .desc = desc,
                          .dxgi = depth ? (readToo ? formats.typeless : formats.depth) : formats.texture,
                          .mipLevels = desc.mipLevels,
@@ -307,16 +341,22 @@ core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3
     texture.mipLevels = texture.resource->GetDesc().MipLevels;
     // The whole texture as a target, with the API's default view of it.
     if (desc.usage.colorAttachment || desc.usage.depthStencil) {
-        auto heap = createTargetHeap(device, desc.usage.depthStencil ? D3D12_DESCRIPTOR_HEAP_TYPE_DSV
-                                                                     : D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        auto heap = desc.usage.depthStencil
+                        ? createTargetHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kDepthTargetViews)
+                        : createTargetHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kColorTargetViews);
         if (!heap) {
             return std::unexpected(std::move(heap.error()));
         }
         texture.targetHeap = std::move(*heap);
         texture.target = texture.targetHeap->GetCPUDescriptorHandleForHeapStart();
         if (desc.usage.depthStencil) {
-            const D3D12_DEPTH_STENCIL_VIEW_DESC view = depthViewFor(texture, formats.depth);
+            const D3D12_DEPTH_STENCIL_VIEW_DESC view = depthViewFor(texture, formats.depth, D3D12_DSV_FLAG_NONE);
             device.CreateDepthStencilView(texture.resource.Get(), &view, texture.target);
+            texture.readOnlyTarget = {.ptr = texture.target.ptr +
+                                             device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV)};
+            const D3D12_DEPTH_STENCIL_VIEW_DESC readOnly = depthViewFor(texture, formats.depth,
+                                                                        readOnlyFlagsFor(desc.format));
+            device.CreateDepthStencilView(texture.resource.Get(), &readOnly, texture.readOnlyTarget);
         }
         else {
             device.CreateRenderTargetView(texture.resource.Get(), nullptr, texture.target);
@@ -613,6 +653,28 @@ core::Result<void> D3D12Device::copyTexture(CommandListHandle commandList, Textu
             (*list)->list->CopyTextureRegion(&target, region.dstX, region.dstY, region.dstZ, &source, &box);
         }
     }
+    return {};
+}
+
+core::Result<void> D3D12Device::resolveTexture(CommandListHandle commandList, TextureHandle src,
+                                               std::uint32_t srcMipLevel, std::uint32_t srcLayer, TextureHandle dst,
+                                               std::uint32_t dstMipLevel, std::uint32_t dstLayer) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto from = textureFor(src);
+    if (!from) {
+        return std::unexpected(std::move(from.error()));
+    }
+    auto to = textureFor(dst);
+    if (!to) {
+        return std::unexpected(std::move(to.error()));
+    }
+    const std::uint32_t plane = planeOf(blockOf((*from)->desc.format), TextureAspect::Color);
+    (*list)->list->ResolveSubresource((*to)->resource.Get(), subresourceOf(**to, dstMipLevel, dstLayer, plane),
+                                      (*from)->resource.Get(), subresourceOf(**from, srcMipLevel, srcLayer, plane),
+                                      (*from)->dxgi);
     return {};
 }
 

@@ -124,6 +124,10 @@ public:
                                                          std::span<const BufferTextureCopy> regions) override;
     [[nodiscard]] core::Result<void> copyTexture(CommandListHandle commandList, TextureHandle src, TextureHandle dst,
                                                  std::span<const TextureCopy> regions) override;
+    [[nodiscard]] core::Result<void> resolveTexture(CommandListHandle commandList, TextureHandle src,
+                                                    std::uint32_t srcMipLevel, std::uint32_t srcLayer,
+                                                    TextureHandle dst, std::uint32_t dstMipLevel,
+                                                    std::uint32_t dstLayer) override;
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
     [[nodiscard]] core::Result<void> wait(Token token, std::uint64_t timeoutNs) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;

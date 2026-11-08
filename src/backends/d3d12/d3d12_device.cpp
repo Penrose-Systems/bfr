@@ -57,8 +57,8 @@ core::Result<void> deviceFailed(const char* call, HRESULT result) {
     return failure(core::ErrorCode::RhiDeviceFailed, {.call = call, .result = result});
 }
 
-// A barrier that moves image between the states a swapchain image is presented
-// and rendered to in.
+// A barrier that moves image between the states a swapchain image is presented,
+// rendered to and resolved into in.
 D3D12_RESOURCE_BARRIER transition(ID3D12Resource* image, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -68,6 +68,93 @@ D3D12_RESOURCE_BARRIER transition(ID3D12Resource* image, D3D12_RESOURCE_STATES b
     barrier.Transition.StateBefore = before;
     barrier.Transition.StateAfter = after;
     return barrier;
+}
+
+// Mip 0xffffffff with no mip count names every subresource.
+constexpr UINT kAllSubresources = 0xffffffff;
+constexpr D3D12_BARRIER_SUBRESOURCE_RANGE kEverySubresource{.IndexOrFirstMipLevel = kAllSubresources,
+                                                            .NumMipLevels = 0,
+                                                            .FirstArraySlice = 0,
+                                                            .NumArraySlices = 0,
+                                                            .FirstPlane = 0,
+                                                            .NumPlanes = 0};
+
+// Mip 0 of layer 0, which a rendering's resolve covers.
+constexpr UINT kFirstSubresource = 0;
+
+// How a texture is used on one side of a barrier.
+struct TextureUse {
+    D3D12_BARRIER_SYNC sync;
+    D3D12_BARRIER_ACCESS access;
+    D3D12_BARRIER_LAYOUT layout;
+};
+
+constexpr TextureUse kRenderTargetUse{.sync = D3D12_BARRIER_SYNC_RENDER_TARGET,
+                                      .access = D3D12_BARRIER_ACCESS_RENDER_TARGET,
+                                      .layout = D3D12_BARRIER_LAYOUT_RENDER_TARGET};
+constexpr TextureUse kResolveSourceUse{.sync = D3D12_BARRIER_SYNC_RESOLVE,
+                                       .access = D3D12_BARRIER_ACCESS_RESOLVE_SOURCE,
+                                       .layout = D3D12_BARRIER_LAYOUT_RESOLVE_SOURCE};
+constexpr TextureUse kResolveDestUse{.sync = D3D12_BARRIER_SYNC_RESOLVE,
+                                     .access = D3D12_BARRIER_ACCESS_RESOLVE_DEST,
+                                     .layout = D3D12_BARRIER_LAYOUT_RESOLVE_DEST};
+
+D3D12_TEXTURE_BARRIER barrierFor(ID3D12Resource* resource, const TextureUse& before, const TextureUse& after) {
+    return {.SyncBefore = before.sync,
+            .SyncAfter = after.sync,
+            .AccessBefore = before.access,
+            .AccessAfter = after.access,
+            .LayoutBefore = before.layout,
+            .LayoutAfter = after.layout,
+            .pResource = resource,
+            .Subresources = kEverySubresource,
+            .Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE};
+}
+
+// A source and a target barrier for each color attachment.
+constexpr std::size_t kResolveBarriers = 2 * kMaxColorTargets;
+
+// Records each resolve, the first into a swapchain image when intoImage. The
+// textures move from RENDER_TARGET to the resolve layouts and back by
+// enhanced barriers; the image, which presents in legacy states, from PRESENT
+// to RESOLVE_DEST and back. Godot resolves so as a subpass ends
+// (rendering_device_driver_d3d12.cpp:4740-4782) but leaves the textures in
+// the resolve layouts; BFR returns them to the layout the rendering was given
+// them in.
+void recordResolves(ID3D12GraphicsCommandList7* list, std::span<const D3D12Resolve> resolves, bool intoImage) {
+    std::array<D3D12_TEXTURE_BARRIER, kResolveBarriers> toResolve{};
+    std::array<D3D12_TEXTURE_BARRIER, kResolveBarriers> back{};
+    UINT32 count = 0;
+    for (std::size_t i = 0; i < resolves.size(); ++i) {
+        const D3D12Resolve& resolve = resolves[i];
+        toResolve.at(count) = barrierFor(resolve.source, kRenderTargetUse, kResolveSourceUse);
+        back.at(count++) = barrierFor(resolve.source, kResolveSourceUse, kRenderTargetUse);
+        if (i != 0 || !intoImage) {
+            toResolve.at(count) = barrierFor(resolve.target, kRenderTargetUse, kResolveDestUse);
+            back.at(count++) = barrierFor(resolve.target, kResolveDestUse, kRenderTargetUse);
+        }
+    }
+    const D3D12_BARRIER_GROUP toGroup{.Type = D3D12_BARRIER_TYPE_TEXTURE,
+                                      .NumBarriers = count,
+                                      .pTextureBarriers = toResolve.data()};
+    list->Barrier(1, &toGroup);
+    if (intoImage) {
+        const D3D12_RESOURCE_BARRIER toDest = transition(resolves.front().target, D3D12_RESOURCE_STATE_PRESENT,
+                                                         D3D12_RESOURCE_STATE_RESOLVE_DEST);
+        list->ResourceBarrier(1, &toDest);
+    }
+    for (const D3D12Resolve& resolve : resolves) {
+        list->ResolveSubresource(resolve.target, kFirstSubresource, resolve.source, kFirstSubresource, resolve.format);
+    }
+    const D3D12_BARRIER_GROUP backGroup{.Type = D3D12_BARRIER_TYPE_TEXTURE,
+                                        .NumBarriers = count,
+                                        .pTextureBarriers = back.data()};
+    list->Barrier(1, &backGroup);
+    if (intoImage) {
+        const D3D12_RESOURCE_BARRIER toPresent = transition(resolves.front().target, D3D12_RESOURCE_STATE_RESOLVE_DEST,
+                                                            D3D12_RESOURCE_STATE_PRESENT);
+        list->ResourceBarrier(1, &toPresent);
+    }
 }
 
 // D3D12's priority for level; nothing for one it has none for.
@@ -114,14 +201,16 @@ static_assert(sizeof(DispatchIndirectArgs) == sizeof(D3D12_DISPATCH_ARGUMENTS));
 
 core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rhi, ComPtr<ID3D12Device> device,
                                                                ComPtr<IDXGIAdapter3> adapter, const Features& features,
-                                                               std::size_t heapCount, std::uint32_t viewHeapSize,
-                                                               const DeviceDesc& desc) {
+                                                               const ResolveCaps& resolve, std::size_t heapCount,
+                                                               std::uint32_t viewHeapSize, const DeviceDesc& desc) {
     auto made = std::make_unique<D3D12Device>(rhi, std::move(device), std::move(adapter), heapCount, desc);
     // A runtime without it answers E_NOINTERFACE and leaves device11_ null.
     static_cast<void>(made->device_.As(&made->device11_));
     made->sparse_ = sparseOf(made->device_.Get());
     made->multiDrawIndirect_ = features.multiDrawIndirect;
     made->drawIndirectCount_ = features.drawIndirectCount;
+    made->features_ = features;
+    made->resolve_ = resolve;
     if (auto opened = made->open(desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
@@ -689,6 +778,9 @@ core::Result<CommandListHandle> D3D12Device::beginCommands(CommandPoolHandle com
                                                                                  .slot = slot,
                                                                                  .presenting = {},
                                                                                  .presentStoreOp = StoreOp::Store,
+                                                                                 .resolves = {},
+                                                                                 .resolveCount = 0,
+                                                                                 .resolvesIntoImage = false,
                                                                                  .discards = {},
                                                                                  .discardCount = 0,
                                                                                  .rendered = core::SlotChains::kEnd});
@@ -721,6 +813,9 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
     // leaves the list as it was.
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMaxColorTargets> colors{};
     std::array<std::array<FLOAT, std::tuple_size_v<ClearValues>>, kMaxColorTargets> clears{};
+    std::array<D3D12Resolve, kMaxColorTargets> resolves{};
+    std::uint32_t resolveCount = 0;
+    bool resolvesIntoImage = false;
     std::array<D3D12Target, kMaxColorTargets + 1> discards{};
     std::uint32_t discardCount = 0;
     // The attachments whose contents are not loaded, discarded as rendering
@@ -735,6 +830,9 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
         D3D12Target target;
         // A swapchain's image is never a signed integer format.
         Format format = Format::Undefined;
+        // The swapchain's image is attachment 0, or what a texture there
+        // resolves into.
+        ID3D12Resource* resolveTarget = nullptr;
         if (i == 0 && !swapchain.isNull()) {
             auto found = swapchainFor(swapchain);
             if (!found) {
@@ -745,16 +843,23 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
                 return core::failure(core::ErrorCode::RhiInvalidCall,
                                      "the acquired image was already submitted; present it first");
             }
-            target.resource = chain->image();
-            if (target.resource == nullptr) {
+            ID3D12Resource* image = chain->image();
+            if (image == nullptr) {
                 return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
             }
-            colors.at(i) = chain->view();
-            const D3D12_RESOURCE_DESC image = target.resource->GetDesc();
-            width = static_cast<std::uint32_t>(image.Width);
-            height = image.Height;
+            if (attachment.texture.isNull()) {
+                target.resource = image;
+                colors.at(i) = chain->view();
+                const D3D12_RESOURCE_DESC imageDesc = image->GetDesc();
+                width = static_cast<std::uint32_t>(imageDesc.Width);
+                height = imageDesc.Height;
+            }
+            else {
+                resolveTarget = image;
+                resolvesIntoImage = true;
+            }
         }
-        else {
+        if (!attachment.texture.isNull()) {
             auto texture = textureFor(attachment.texture);
             if (!texture) {
                 return std::unexpected(std::move(texture.error()));
@@ -764,6 +869,18 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
             width = (*texture)->desc.width;
             height = (*texture)->desc.height;
             format = (*texture)->desc.format;
+            if (!attachment.resolveTexture.isNull()) {
+                auto resolved = textureFor(attachment.resolveTexture);
+                if (!resolved) {
+                    return std::unexpected(std::move(resolved.error()));
+                }
+                resolveTarget = (*resolved)->resource.Get();
+            }
+            if (resolveTarget != nullptr) {
+                resolves.at(resolveCount++) = {.source = (*texture)->resource.Get(),
+                                               .target = resolveTarget,
+                                               .format = (*texture)->dxgi};
+            }
         }
         // D3D12 clears with floats, which hold every value clearColor does
         // but not every integer.
@@ -783,20 +900,36 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
             discards.at(discardCount++) = target;
         }
     }
+    const DepthStencilAttachment& depthStencil = desc.depthStencil;
     const D3D12Texture* depth = nullptr;
-    if (!desc.depthStencil.texture.isNull()) {
-        auto texture = textureFor(desc.depthStencil.texture);
+    if (!depthStencil.texture.isNull()) {
+        auto texture = textureFor(depthStencil.texture);
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
         depth = *texture;
         width = depth->desc.width;
         height = depth->desc.height;
-        if (desc.depthStencil.loadOp == LoadOp::DontCare) {
-            unloaded.at(unloadedCount++) = targetOf(*depth);
+        // ResolveCaps has no mode, so only None passes, which resolves
+        // nothing.
+        if (!depthStencil.resolveTexture.isNull()) {
+            if (auto checked = checkDepthResolve(depthStencil, depth->desc.format, resolve_); !checked) {
+                return checked;
+            }
+            if (auto resolved = textureFor(depthStencil.resolveTexture); !resolved) {
+                return std::unexpected(std::move(resolved.error()));
+            }
         }
-        if (desc.depthStencil.storeOp == StoreOp::DontCare) {
-            discards.at(discardCount++) = targetOf(*depth);
+        // The aspects an op drops, of those the format has, as one target.
+        const D3D12Target notLoaded = aspectsOf(*depth, depthStencil.depthLoadOp == LoadOp::DontCare,
+                                                depthStencil.stencilLoadOp == LoadOp::DontCare);
+        if (notLoaded.planeCount != 0) {
+            unloaded.at(unloadedCount++) = notLoaded;
+        }
+        const D3D12Target notStored = aspectsOf(*depth, depthStencil.depthStoreOp == StoreOp::DontCare,
+                                                depthStencil.stencilStoreOp == StoreOp::DontCare);
+        if (notStored.planeCount != 0) {
+            discards.at(discardCount++) = notStored;
         }
     }
     if (chain != nullptr) {
@@ -817,7 +950,8 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
     }
 
     ID3D12GraphicsCommandList7* recording = (*list)->list;
-    if (chain != nullptr) {
+    // An image resolved into is moved as rendering ends.
+    if (chain != nullptr && !resolvesIntoImage) {
         const D3D12_RESOURCE_BARRIER toRender = transition(chain->image(), D3D12_RESOURCE_STATE_PRESENT,
                                                            D3D12_RESOURCE_STATE_RENDER_TARGET);
         recording->ResourceBarrier(1, &toRender);
@@ -825,24 +959,38 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
     for (std::uint32_t i = 0; i < unloadedCount; ++i) {
         discardTarget(recording, unloaded.at(i));
     }
-    recording->OMSetRenderTargets(desc.colorAttachmentCount, colors.data(), FALSE,
-                                  depth != nullptr ? &depth->target : nullptr);
+    const D3D12_CPU_DESCRIPTOR_HANDLE* depthView = nullptr;
+    if (depth != nullptr) {
+        depthView = depthStencil.readOnly ? &depth->readOnlyTarget : &depth->target;
+    }
+    recording->OMSetRenderTargets(desc.colorAttachmentCount, colors.data(), FALSE, depthView);
     for (std::uint32_t i = 0; i < desc.colorAttachmentCount; ++i) {
         if (desc.colorAttachments.at(i).loadOp == LoadOp::Clear) {
             recording->ClearRenderTargetView(colors.at(i), clears.at(i).data(), 0, nullptr);
         }
     }
-    if (depth != nullptr && desc.depthStencil.loadOp == LoadOp::Clear) {
+    if (depth != nullptr) {
         const FormatBlock& block = blockOf(depth->desc.format);
-        const D3D12_CLEAR_FLAGS flags = block.depthBytes != 0 && block.stencilBytes != 0
-                                            ? D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL
-                                        : block.depthBytes != 0 ? D3D12_CLEAR_FLAG_DEPTH
-                                                                : D3D12_CLEAR_FLAG_STENCIL;
-        recording->ClearDepthStencilView(depth->target, flags, desc.depthStencil.clearDepth,
-                                         static_cast<UINT8>(desc.depthStencil.clearStencil), 0, nullptr);
+        D3D12_CLEAR_FLAGS flags{};
+        if (block.depthBytes != 0 && depthStencil.depthLoadOp == LoadOp::Clear) {
+            flags |= D3D12_CLEAR_FLAG_DEPTH;
+        }
+        if (block.stencilBytes != 0 && depthStencil.stencilLoadOp == LoadOp::Clear) {
+            flags |= D3D12_CLEAR_FLAG_STENCIL;
+        }
+        if (flags != D3D12_CLEAR_FLAGS{}) {
+            recording->ClearDepthStencilView(depth->target, flags, depthStencil.clearDepth,
+                                             static_cast<UINT8>(depthStencil.clearStencil), 0, nullptr);
+        }
     }
     (*list)->presenting = chain != nullptr ? std::optional{swapchain} : std::nullopt;
-    (*list)->presentStoreOp = chain != nullptr ? desc.colorAttachments.at(0).storeOp : StoreOp::Store;
+    // An image resolved into keeps the resolve; attachment 0's store op is
+    // its multisampled texture's.
+    (*list)->presentStoreOp = chain != nullptr && !resolvesIntoImage ? desc.colorAttachments.at(0).storeOp
+                                                                     : StoreOp::Store;
+    (*list)->resolves = resolves;
+    (*list)->resolveCount = resolveCount;
+    (*list)->resolvesIntoImage = resolvesIntoImage;
     (*list)->discards = discards;
     (*list)->discardCount = discardCount;
     // The whole area, until the caller sets its own.
@@ -863,22 +1011,32 @@ core::Result<void> D3D12Device::endRendering(CommandListHandle commandList) {
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
+    D3D12Swapchain* chain = nullptr;
+    if (const std::optional<SwapchainHandle> open = (*list)->presenting; open.has_value()) {
+        auto found = swapchainFor(*open);
+        if (!found) {
+            return std::unexpected(std::move(found.error()));
+        }
+        chain = *found;
+    }
     ID3D12GraphicsCommandList7* recording = (*list)->list;
+    // The resolves read what the discards then drop.
+    if (const std::span resolves{(*list)->resolves.data(), (*list)->resolveCount}; !resolves.empty()) {
+        recordResolves(recording, resolves, (*list)->resolvesIntoImage);
+    }
     // What the caller does not keep is discarded, the swapchain's image among
     // it before it moves to present.
     for (std::uint32_t i = 0; i < (*list)->discardCount; ++i) {
         discardTarget(recording, (*list)->discards.at(i));
     }
-    if (const std::optional<SwapchainHandle> open = (*list)->presenting; open.has_value()) {
-        auto chain = swapchainFor(*open);
-        if (!chain) {
-            return std::unexpected(std::move(chain.error()));
-        }
-        const D3D12_RESOURCE_BARRIER toPresent = transition((*chain)->image(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+    if (chain != nullptr && !(*list)->resolvesIntoImage) {
+        const D3D12_RESOURCE_BARRIER toPresent = transition(chain->image(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                                                             D3D12_RESOURCE_STATE_PRESENT);
         recording->ResourceBarrier(1, &toPresent);
     }
     (*list)->presenting.reset();
+    (*list)->resolveCount = 0;
+    (*list)->resolvesIntoImage = false;
     (*list)->discardCount = 0;
     return {};
 }
@@ -918,6 +1076,16 @@ D3D12_BARRIER_LAYOUT layoutFor(TextureLayout layout) {
             return D3D12_BARRIER_LAYOUT_RENDER_TARGET;
         case TextureLayout::DepthStencilTarget:
             return D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE;
+        // The one layout whose accesses take read-only depth and shader reads
+        // together; DEPTH_STENCIL_READ takes depth reads alone (Enhanced
+        // Barriers spec, "Layout Access Compatibility"). It is a direct
+        // queue's, as rendering is.
+        case TextureLayout::DepthStencilRead:
+            return D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_GENERIC_READ;
+        case TextureLayout::ResolveSrc:
+            return D3D12_BARRIER_LAYOUT_RESOLVE_SOURCE;
+        case TextureLayout::ResolveDst:
+            return D3D12_BARRIER_LAYOUT_RESOLVE_DEST;
         case TextureLayout::Undefined:
             return D3D12_BARRIER_LAYOUT_UNDEFINED;
         case TextureLayout::CopySrc:
@@ -941,6 +1109,13 @@ D3D12_BARRIER_ACCESS accessFor(TextureLayout layout) {
             return D3D12_BARRIER_ACCESS_RENDER_TARGET;
         case TextureLayout::DepthStencilTarget:
             return D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE;
+        // Shaders may sample a read-only attachment while it is tested.
+        case TextureLayout::DepthStencilRead:
+            return D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ | D3D12_BARRIER_ACCESS_SHADER_RESOURCE;
+        case TextureLayout::ResolveSrc:
+            return D3D12_BARRIER_ACCESS_RESOLVE_SOURCE;
+        case TextureLayout::ResolveDst:
+            return D3D12_BARRIER_ACCESS_RESOLVE_DEST;
         case TextureLayout::Undefined:
         default:
             return D3D12_BARRIER_ACCESS_NO_ACCESS;
@@ -992,10 +1167,8 @@ core::Result<void> D3D12Device::textureBarrier(CommandListHandle commandList, Te
         return std::unexpected(global.error());
     }
     // A texture barrier orders only the texture, so the full one goes with it.
-    // Mip 0xffffffff with no mip count names every subresource; moving from
-    // UNDEFINED discards, which a placed render target or depth texture needs
-    // before its first use.
-    constexpr UINT kAllSubresources = 0xffffffff;
+    // It moves every subresource; moving from UNDEFINED discards, which a
+    // placed render target or depth texture needs before its first use.
     // From an undefined layout nothing was accessed, which D3D12 pairs with
     // no sync before.
     const D3D12_TEXTURE_BARRIER moved{.SyncBefore = before == TextureLayout::Undefined ? D3D12_BARRIER_SYNC_NONE
@@ -1006,12 +1179,7 @@ core::Result<void> D3D12Device::textureBarrier(CommandListHandle commandList, Te
                                       .LayoutBefore = layoutFor(before),
                                       .LayoutAfter = layoutFor(after),
                                       .pResource = (*found)->resource.Get(),
-                                      .Subresources = {.IndexOrFirstMipLevel = kAllSubresources,
-                                                       .NumMipLevels = 0,
-                                                       .FirstArraySlice = 0,
-                                                       .NumArraySlices = 0,
-                                                       .FirstPlane = 0,
-                                                       .NumPlanes = 0},
+                                      .Subresources = kEverySubresource,
                                       .Flags = before == TextureLayout::Undefined ? D3D12_TEXTURE_BARRIER_FLAG_DISCARD
                                                                                   : D3D12_TEXTURE_BARRIER_FLAG_NONE};
     const std::array groups{

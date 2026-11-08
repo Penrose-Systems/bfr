@@ -38,7 +38,7 @@ typedef uint32_t bfr_bool;
 // more in max_color_attachments. Taking a span sized by that cap instead may be revisited.
 #define BFR_MAX_COLOR_TARGETS 8u
 
-// Every bit of a mask set.
+// Every bit of a 32-bit mask set.
 #define BFR_MASK_ALL 4294967295u
 
 // A bindless slot a texture doesn't have, in a table its usage doesn't set; no table has a slot
@@ -476,6 +476,7 @@ typedef enum bfr_call {
     BFR_CALL_DRAW_INDIRECT_COUNT = 66,
     BFR_CALL_DRAW_INDEXED_INDIRECT_COUNT = 67,
     BFR_CALL_DISPATCH_INDIRECT = 68,
+    BFR_CALL_RESOLVE_TEXTURE = 69,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -553,6 +554,18 @@ typedef enum bfr_store_op {
     BFR_STORE_OP_FORCE32 = 0x7FFFFFFF
 } bfr_store_op;
 
+// How the samples of a depth or stencil pixel become one when a rendering's depth-stencil
+// attachment is resolved; bfr_caps_resolve says which the device has.
+typedef enum bfr_resolve_mode {
+    // Not resolved.
+    BFR_RESOLVE_MODE_NONE = 0,
+    BFR_RESOLVE_MODE_SAMPLE_ZERO = 1,
+    BFR_RESOLVE_MODE_AVERAGE = 2,
+    BFR_RESOLVE_MODE_MIN = 3,
+    BFR_RESOLVE_MODE_MAX = 4,
+    BFR_RESOLVE_MODE_FORCE32 = 0x7FFFFFFF
+} bfr_resolve_mode;
+
 // Where a buffer's memory is, and whether the CPU maps it.
 typedef enum bfr_buffer_memory {
     // On or nearest the GPU; the CPU does not map it.
@@ -594,6 +607,14 @@ typedef enum bfr_texture_layout {
     BFR_TEXTURE_LAYOUT_COLOR_TARGET = 5,
     // Rendering tests and writes depth or stencil in it.
     BFR_TEXTURE_LAYOUT_DEPTH_STENCIL_TARGET = 6,
+    // Rendering tests depth or stencil in it without writing, as a read_only depth-stencil
+    // attachment; shaders may sample it meanwhile. Moved to and from only in a graphics queue's
+    // lists, as D3D12's layout for it is a direct queue's.
+    BFR_TEXTURE_LAYOUT_DEPTH_STENCIL_READ = 7,
+    // bfr_resolve_texture reads it.
+    BFR_TEXTURE_LAYOUT_RESOLVE_SRC = 8,
+    // bfr_resolve_texture writes it.
+    BFR_TEXTURE_LAYOUT_RESOLVE_DST = 9,
     BFR_TEXTURE_LAYOUT_FORCE32 = 0x7FFFFFFF
 } bfr_texture_layout;
 
@@ -1066,7 +1087,8 @@ typedef struct bfr_swapchain_images {
 
 // One color target of a rendering: a texture with color_attachment usage, in layout color_target,
 // or the swapchain's acquired image when bfr_begin_rendering is given a swapchain and this is
-// attachment 0.
+// attachment 0. Given a swapchain, attachment 0 may instead name a multisampled texture of the
+// swapchain's format, which is then resolved into the acquired image.
 typedef struct bfr_color_attachment {
     // Null for the swapchain's image.
     bfr_texture texture;
@@ -1082,21 +1104,44 @@ typedef struct bfr_color_attachment {
     bfr_bool clear_integer;
     // Red, green, blue and alpha bits, when load_op is clear; a signed format reads them as int32.
     uint32_t clear_color_integer[4];
+    // A single-sample texture of texture's format and size, with color_attachment usage, in layout
+    // color_target, that texture's samples are resolved into as rendering ends; null for none, and
+    // null for the attachment the swapchain's image is resolved into. Non-integer formats average
+    // and integer ones take sample zero, as the backend resolves; bfr_format_caps.resolve says
+    // which formats resolve.
+    bfr_texture resolve_texture;
 } bfr_color_attachment;
 
 // The depth-stencil target of a rendering: a texture with depth_stencil usage, in layout
-// depth_stencil_target. Its depth and stencil are loaded and stored alike.
+// depth_stencil_target, or depth_stencil_read when read_only. Depth and stencil each load and store
+// as their ops say; an op of an aspect the format lacks is ignored.
 typedef struct bfr_depth_stencil_attachment {
     // Null for no depth-stencil target.
     bfr_texture texture;
     // 0 is load.
-    bfr_load_op load_op;
+    bfr_load_op depth_load_op;
     // 0 is store.
-    bfr_store_op store_op;
-    // 0 to 1, when load_op is clear.
+    bfr_store_op depth_store_op;
+    // 0 is load.
+    bfr_load_op stencil_load_op;
+    // 0 is store.
+    bfr_store_op stencil_store_op;
+    // 0 to 1, when depth_load_op is clear.
     float clear_depth;
-    // When load_op is clear. The low 8 bits count.
+    // When stencil_load_op is clear. The low 8 bits count.
     uint32_t clear_stencil;
+    // The rendering tests depth and stencil but never writes them, and shaders may sample the
+    // texture meanwhile; every op is then load and store. The pipelines drawn with write neither
+    // depth nor stencil.
+    bfr_bool read_only;
+    // A single-sample texture of texture's format and size, with depth_stencil usage, in layout
+    // depth_stencil_target, that the samples are resolved into as rendering ends, by depth_resolve
+    // and stencil_resolve; null for none.
+    bfr_texture resolve_texture;
+    // 0 is none.
+    bfr_resolve_mode depth_resolve;
+    // 0 is none.
+    bfr_resolve_mode stencil_resolve;
 } bfr_depth_stencil_attachment;
 
 // How to begin rendering: the attachments drawn to, all of one size and sample count, which the
@@ -1490,6 +1535,15 @@ typedef struct bfr_graphics_pipeline_desc {
     uint32_t samples;
     // The fragment's alpha sets how many samples it covers.
     bfr_bool alpha_to_coverage;
+    // The samples written, bit i for sample i; bits from samples up are ignored. Leaving one of the
+    // low samples bits clear needs bfr_caps_features.sample_mask.
+    uint64_t sample_mask;
+    // The fragment's alpha becomes 1 after coverage is taken from it, where
+    // bfr_caps_features.alpha_to_one.
+    bfr_bool alpha_to_one;
+    // The fraction of samples, 0 to 1, shaded apart; above 0 shades per sample, where
+    // bfr_caps_features.sample_rate_shading.
+    float min_sample_shading;
 } bfr_graphics_pipeline_desc;
 
 // A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was submitted
@@ -1879,6 +1933,10 @@ typedef struct bfr_caps_features {
     bfr_bool triangle_fans;
     // primitive_restart on list topologies, not only strips.
     bfr_bool list_restart;
+    // bfr_graphics_pipeline_desc.alpha_to_one.
+    bfr_bool alpha_to_one;
+    // A bfr_graphics_pipeline_desc.sample_mask that leaves samples out.
+    bfr_bool sample_mask;
     bfr_bool storage_read_without_format;
     bfr_bool storage_write_without_format;
     // Every graphics and compute queue writes timestamps.
@@ -2038,6 +2096,18 @@ typedef struct bfr_caps_sparse {
     uint32_t tile_bytes[3];
 } bfr_caps_sparse;
 
+// How a rendering's depth-stencil attachment resolves.
+typedef struct bfr_caps_resolve {
+    // Bit 1 << mode set for each resolve_mode but none the device takes for depth.
+    uint32_t depth_modes;
+    // As depth_modes, for stencil.
+    uint32_t stencil_modes;
+    // Depth and stencil may take different modes.
+    bfr_bool independent;
+    // Depth and stencil may differ where one is none.
+    bfr_bool independent_none;
+} bfr_caps_resolve;
+
 // Everything about an adapter that stays the same while it runs.
 typedef struct bfr_caps {
     bfr_caps_info info;
@@ -2051,6 +2121,7 @@ typedef struct bfr_caps {
     bfr_caps_queues queues;
     bfr_caps_timestamps timestamps;
     bfr_caps_sparse sparse;
+    bfr_caps_resolve resolve;
 } bfr_caps;
 
 // What an adapter does with one format.
@@ -2079,6 +2150,10 @@ typedef struct bfr_format_caps {
     // Sample counts for 2D textures of it: each set bit is a count, 1, 2, 4 and so on; 0 when it
     // can't be rendered to.
     uint32_t sample_counts;
+    // Multisampled textures of it resolve into single-sample ones: color formats in a rendering and
+    // by bfr_resolve_texture, depth and stencil formats in a rendering, by the modes
+    // bfr_caps_resolve names.
+    bfr_bool resolve;
 } bfr_format_caps;
 
 // What a window's swapchain may be, on one adapter.
@@ -2279,11 +2354,15 @@ BFR_API bfr_result bfr_begin_commands(
     bfr_command_list* command_list);
 
 // Begins rendering to desc's attachments, with the image bfr_acquire took from swapchain as color
-// attachment 0 when swapchain is not null. Sets the viewport and scissor to the whole of the
-// attachments. Only the draws, direct and indirect, and the state they take, are recorded until
-// bfr_end_rendering. Fails with error_invalid_argument when no attachment is given, when a color
-// attachment but the swapchain's names no texture, or, with a swapchain, when there is no color
-// attachment or attachment 0 names a texture.
+// attachment 0 when swapchain is not null, or as the image attachment 0's texture resolves into
+// when it names one. Sets the viewport and scissor to the whole of the attachments. Only the draws,
+// direct and indirect, and the state they take, are recorded until bfr_end_rendering, which
+// resolves the attachments that name a resolve texture. Fails with error_invalid_argument when no
+// attachment is given, when a color attachment but the swapchain's names no texture, with a
+// swapchain when there is no color attachment or attachment 0 names a resolve texture, when a
+// resolve texture is named with no texture, and when a read-only depth-stencil attachment clears or
+// drops an aspect; error_unsupported for a depth or stencil resolve mode, or a pair of them,
+// bfr_caps_resolve doesn't have.
 BFR_API bfr_result bfr_begin_rendering(
     bfr_device* device,
     bfr_command_list command_list,
@@ -2528,6 +2607,23 @@ BFR_API bfr_result bfr_copy_texture(
     const bfr_texture_copy* regions,
     uint32_t region_count);
 
+// Records a resolve of one mip level and layer of src, a multisampled texture of a color format in
+// layout resolve_src, into one of dst, a single-sample texture of its format in layout resolve_dst,
+// outside rendering: the whole level, of the same size in both. src has color_attachment and
+// copy_src usage, dst color_attachment and copy_dst; its format resolves, as
+// bfr_format_caps.resolve says, and each texture has the mip level and layer named. Fails with
+// error_device_failed when the backend gives no encoder for it (Metal). What was resolved is seen
+// as bfr_copy_buffer says.
+BFR_API bfr_result bfr_resolve_texture(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_texture src,
+    uint32_t src_mip_level,
+    uint32_t src_layer,
+    bfr_texture dst,
+    uint32_t dst_mip_level,
+    uint32_t dst_layer);
+
 // Sends recorded command lists to a queue, which runs them after what it was sent before and after
 // the GPU passes the waits, and writes the token their completion signals. The command lists are
 // gone afterwards. Calls on one queue must not overlap; the caller synchronizes them. Different
@@ -2623,10 +2719,11 @@ BFR_API bfr_result bfr_create_compute_pipeline(
 
 // Creates a graphics pipeline, as desc says, before returning. Not for the frame path, as
 // bfr_create_compute_pipeline is not. A target of format undefined is an unused one. Fails with
-// error_invalid_argument for a desc with more than max_color_targets targets, error_unsupported for
-// a topology the backend has no form for (Metal's fan), error_limit_reached at the device's maximum
-// of pipelines, and error_device_failed when the backend refuses the code or the desc; the message
-// carries what it said.
+// error_invalid_argument for a desc with more than max_color_targets targets or a
+// min_sample_shading outside 0 to 1, error_unsupported for a topology the backend has no form for
+// (Metal's fan) and for an alpha_to_one, min_sample_shading or sample_mask whose feature the device
+// lacks, error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
+// backend refuses the code or the desc; the message carries what it said.
 BFR_API bfr_result bfr_create_graphics_pipeline(
     bfr_device* device,
     const bfr_graphics_pipeline_desc* desc,

@@ -9,6 +9,7 @@
 #include "bfr/rhi/swapchain.h"
 #include "core/fixed_vector.h"
 #include "core/slot_chains.h"
+#include "rhi/clear_color.h"
 #include "rhi/command_check.h"
 #include "rhi/device_limits.h"
 #include "rhi/enum_check.h"
@@ -64,6 +65,22 @@ VkAttachmentStoreOp storeOpFor(StoreOp op) {
             return VK_ATTACHMENT_STORE_OP_DONT_CARE;
     }
     return VK_ATTACHMENT_STORE_OP_DONT_CARE;
+}
+
+VkResolveModeFlagBits resolveModeFor(ResolveMode mode) {
+    switch (mode) {
+        case ResolveMode::SampleZero:
+            return VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+        case ResolveMode::Average:
+            return VK_RESOLVE_MODE_AVERAGE_BIT;
+        case ResolveMode::Min:
+            return VK_RESOLVE_MODE_MIN_BIT;
+        case ResolveMode::Max:
+            return VK_RESOLVE_MODE_MAX_BIT;
+        case ResolveMode::None:
+        default:
+            return VK_RESOLVE_MODE_NONE;
+    }
 }
 
 // A barrier moving a swapchain image between layouts around rendering to it.
@@ -151,6 +168,8 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       hostClocks_(setup.hostClocks),
       multiDrawIndirect_(setup.multiDrawIndirect),
       drawIndirectCount_(setup.drawIndirectCount),
+      features_(setup.features),
+      resolve_(setup.resolve),
       desc_(heldPart(desc)),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
       commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
@@ -605,6 +624,9 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
         else {
             std::ranges::copy(attachment.clearColor, color.clearValue.color.float32);
         }
+        // The swapchain's image is attachment 0, or what a texture there
+        // resolves into.
+        VkImageView resolveView = VK_NULL_HANDLE;
         if (i == 0 && !swapchain.isNull()) {
             auto chain = swapchainFor(swapchain);
             if (!chain) {
@@ -619,9 +641,12 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
                 return std::unexpected(acquired.error());
             }
             image = *acquired;
-            color.imageView = image->view;
             extent = image->extent;
-            continue;
+            if (attachment.texture.isNull()) {
+                color.imageView = image->view;
+                continue;
+            }
+            resolveView = image->view;
         }
         auto texture = textureFor(attachment.texture);
         if (!texture) {
@@ -629,22 +654,55 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
         }
         color.imageView = (*texture)->view();
         extent = (*texture)->extent();
+        if (!attachment.resolveTexture.isNull()) {
+            auto target = textureFor(attachment.resolveTexture);
+            if (!target) {
+                return std::unexpected(std::move(target.error()));
+            }
+            resolveView = (*target)->view();
+        }
+        if (resolveView != VK_NULL_HANDLE) {
+            // The only modes a color resolve takes (VUID-VkRenderingAttachmentInfo-imageView-06129, -06130).
+            color.resolveMode = integerFormat((*texture)->format()) ? VK_RESOLVE_MODE_SAMPLE_ZERO_BIT
+                                                                    : VK_RESOLVE_MODE_AVERAGE_BIT;
+            color.resolveImageView = resolveView;
+            color.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
     }
-    if (!desc.depthStencil.texture.isNull()) {
-        auto texture = textureFor(desc.depthStencil.texture);
+    const DepthStencilAttachment& depthStencil = desc.depthStencil;
+    if (!depthStencil.texture.isNull()) {
+        auto texture = textureFor(depthStencil.texture);
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
-        // Depth and stencil are loaded and stored alike; each aspect the
-        // format has gets its slot.
+        // Each aspect the format has gets its slot, with its own ops. A
+        // read-only attachment keeps what it holds without writing it.
         depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         depth.imageView = (*texture)->view();
-        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        depth.loadOp = loadOpFor(desc.depthStencil.loadOp);
-        depth.storeOp = storeOpFor(desc.depthStencil.storeOp);
-        depth.clearValue.depthStencil = {.depth = desc.depthStencil.clearDepth,
-                                         .stencil = desc.depthStencil.clearStencil};
+        depth.imageLayout = depthStencil.readOnly ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                                                  : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depth.clearValue.depthStencil = {.depth = depthStencil.clearDepth, .stencil = depthStencil.clearStencil};
         stencil = depth;
+        depth.loadOp = loadOpFor(depthStencil.depthLoadOp);
+        depth.storeOp = depthStencil.readOnly ? VK_ATTACHMENT_STORE_OP_NONE : storeOpFor(depthStencil.depthStoreOp);
+        stencil.loadOp = loadOpFor(depthStencil.stencilLoadOp);
+        stencil.storeOp = depthStencil.readOnly ? VK_ATTACHMENT_STORE_OP_NONE : storeOpFor(depthStencil.stencilStoreOp);
+        if (!depthStencil.resolveTexture.isNull()) {
+            if (auto checked = checkDepthResolve(depthStencil, (*texture)->format(), resolve_); !checked) {
+                return checked;
+            }
+            auto target = textureFor(depthStencil.resolveTexture);
+            if (!target) {
+                return std::unexpected(std::move(target.error()));
+            }
+            // Both aspects resolve into one view (VUID-VkRenderingInfo-pDepthAttachment-06086).
+            for (VkRenderingAttachmentInfo* aspect : {&depth, &stencil}) {
+                aspect->resolveImageView = (*target)->view();
+                aspect->resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            }
+            depth.resolveMode = resolveModeFor(depthStencil.depthResolve);
+            stencil.resolveMode = resolveModeFor(depthStencil.stencilResolve);
+        }
         extent = (*texture)->extent();
     }
     if (image.has_value()) {

@@ -480,7 +480,9 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
                                       .timestampPeriod = adapterProperties.limits.timestampPeriod,
                                       .hostClocks = listed.caps.timestamps.hostClocks,
                                       .multiDrawIndirect = listed.caps.features.multiDrawIndirect,
-                                      .drawIndirectCount = listed.caps.features.drawIndirectCount});
+                                      .drawIndirectCount = listed.caps.features.drawIndirectCount,
+                                      .features = listed.caps.features,
+                                      .resolve = listed.caps.resolve});
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }

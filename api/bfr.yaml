@@ -33,7 +33,7 @@ version: {major: 0, minor: 1, patch: 0}
 
 constants:
   max_color_targets: {value: 8, doc: "The most color targets a graphics pipeline renders to. Fixed at D3D12's D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT so the descs hold fixed arrays; a Vulkan device may report more in max_color_attachments. Taking a span sized by that cap instead may be revisited."}
-  mask_all: {value: 4294967295, doc: Every bit of a mask set.}
+  mask_all: {value: 4294967295, doc: Every bit of a 32-bit mask set.}
   no_slot: {value: 4294967295, doc: "A bindless slot a texture doesn't have, in a table its usage doesn't set; no table has a slot this high."}
   max_message_length: {value: 1024, doc: The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".}
 
@@ -379,6 +379,7 @@ enums:
       draw_indirect_count: {value: 66}
       draw_indexed_indirect_count: {value: 67}
       dispatch_indirect: {value: 68}
+      resolve_texture: {value: 69}
 
   timestamp_stage:
     doc: >-
@@ -430,6 +431,18 @@ enums:
       store: {value: 0, doc: What was rendered is kept.}
       dont_care: {value: 1, doc: It may be dropped.}
 
+  resolve_mode:
+    doc: >-
+      How the samples of a depth or stencil pixel become one when a
+      rendering's depth-stencil attachment is resolved; bfr_caps_resolve says
+      which the device has.
+    values:
+      none: {value: 0, doc: Not resolved.}
+      sample_zero: {value: 1}
+      average: {value: 2}
+      min: {value: 3}
+      max: {value: 4}
+
   buffer_memory:
     doc: Where a buffer's memory is, and whether the CPU maps it.
     values:
@@ -458,6 +471,9 @@ enums:
       storage: {value: 4, doc: Shaders read and write it through the storage texture table.}
       color_target: {value: 5, doc: Rendering writes color to it.}
       depth_stencil_target: {value: 6, doc: Rendering tests and writes depth or stencil in it.}
+      depth_stencil_read: {value: 7, doc: "Rendering tests depth or stencil in it without writing, as a read_only depth-stencil attachment; shaders may sample it meanwhile. Moved to and from only in a graphics queue's lists, as D3D12's layout for it is a direct queue's."}
+      resolve_src: {value: 8, doc: bfr_resolve_texture reads it.}
+      resolve_dst: {value: 9, doc: bfr_resolve_texture writes it.}
 
   texture_aspect:
     doc: Which part of a texel a copy moves.
@@ -918,7 +934,9 @@ structs:
     doc: >-
       One color target of a rendering: a texture with color_attachment usage,
       in layout color_target, or the swapchain's acquired image when
-      bfr_begin_rendering is given a swapchain and this is attachment 0.
+      bfr_begin_rendering is given a swapchain and this is attachment 0. Given
+      a swapchain, attachment 0 may instead name a multisampled texture of the
+      swapchain's format, which is then resolved into the acquired image.
     members:
       - {name: texture, type: texture, doc: Null for the swapchain's image.}
       - {name: load_op, type: load_op, doc: What it holds at the start; 0 is load.}
@@ -926,18 +944,26 @@ structs:
       - {name: clear_color, type: f32, fixed: 4, doc: "Red, green, blue and alpha, 0 to 1, when load_op is clear."}
       - {name: clear_integer, type: bool, doc: "The target holds integers: clear_color_integer applies instead. D3D12 clears with floats, so there a value a 32-bit float does not hold exactly fails with BFR_RESULT_ERROR_INVALID_ARGUMENT."}
       - {name: clear_color_integer, type: u32, fixed: 4, doc: "Red, green, blue and alpha bits, when load_op is clear; a signed format reads them as int32."}
+      - {name: resolve_texture, type: texture, doc: "A single-sample texture of texture's format and size, with color_attachment usage, in layout color_target, that texture's samples are resolved into as rendering ends; null for none, and null for the attachment the swapchain's image is resolved into. Non-integer formats average and integer ones take sample zero, as the backend resolves; bfr_format_caps.resolve says which formats resolve."}
 
   depth_stencil_attachment:
     doc: >-
       The depth-stencil target of a rendering: a texture with depth_stencil
-      usage, in layout depth_stencil_target. Its depth and stencil are loaded
-      and stored alike.
+      usage, in layout depth_stencil_target, or depth_stencil_read when
+      read_only. Depth and stencil each load and store as their ops say; an op
+      of an aspect the format lacks is ignored.
     members:
       - {name: texture, type: texture, doc: Null for no depth-stencil target.}
-      - {name: load_op, type: load_op, doc: 0 is load.}
-      - {name: store_op, type: store_op, doc: 0 is store.}
-      - {name: clear_depth, type: f32, doc: "0 to 1, when load_op is clear."}
-      - {name: clear_stencil, type: u32, doc: When load_op is clear. The low 8 bits count.}
+      - {name: depth_load_op, type: load_op, doc: 0 is load.}
+      - {name: depth_store_op, type: store_op, doc: 0 is store.}
+      - {name: stencil_load_op, type: load_op, doc: 0 is load.}
+      - {name: stencil_store_op, type: store_op, doc: 0 is store.}
+      - {name: clear_depth, type: f32, doc: "0 to 1, when depth_load_op is clear."}
+      - {name: clear_stencil, type: u32, doc: When stencil_load_op is clear. The low 8 bits count.}
+      - {name: read_only, type: bool, doc: "The rendering tests depth and stencil but never writes them, and shaders may sample the texture meanwhile; every op is then load and store. The pipelines drawn with write neither depth nor stencil."}
+      - {name: resolve_texture, type: texture, doc: "A single-sample texture of texture's format and size, with depth_stencil usage, in layout depth_stencil_target, that the samples are resolved into as rendering ends, by depth_resolve and stencil_resolve; null for none."}
+      - {name: depth_resolve, type: resolve_mode, doc: 0 is none.}
+      - {name: stencil_resolve, type: resolve_mode, doc: 0 is none.}
 
   rendering_desc:
     doc: >-
@@ -1284,6 +1310,9 @@ structs:
       - {name: depth_stencil_format, type: format, doc: undefined is no depth-stencil target.}
       - {name: samples, type: u32, doc: Samples per pixel of every target; 1 is no multisampling.}
       - {name: alpha_to_coverage, type: bool, doc: The fragment's alpha sets how many samples it covers.}
+      - {name: sample_mask, type: u64, doc: "The samples written, bit i for sample i; bits from samples up are ignored. Leaving one of the low samples bits clear needs bfr_caps_features.sample_mask."}
+      - {name: alpha_to_one, type: bool, doc: "The fragment's alpha becomes 1 after coverage is taken from it, where bfr_caps_features.alpha_to_one."}
+      - {name: min_sample_shading, type: f32, doc: "The fraction of samples, 0 to 1, shaded apart; above 0 shades per sample, where bfr_caps_features.sample_rate_shading."}
 
   token:
     doc: >-
@@ -1586,6 +1615,8 @@ structs:
       - {name: draw_indirect_first_instance, type: bool}
       - {name: triangle_fans, type: bool, doc: topology_triangle_fan draws.}
       - {name: list_restart, type: bool, doc: "primitive_restart on list topologies, not only strips."}
+      - {name: alpha_to_one, type: bool, doc: bfr_graphics_pipeline_desc.alpha_to_one.}
+      - {name: sample_mask, type: bool, doc: A bfr_graphics_pipeline_desc.sample_mask that leaves samples out.}
       - {name: storage_read_without_format, type: bool}
       - {name: storage_write_without_format, type: bool}
       - {name: timestamps_on_all_queues, type: bool, doc: Every graphics and compute queue writes timestamps.}
@@ -1710,6 +1741,15 @@ structs:
       - {name: tile_byte_count, type: u32}
       - {name: tile_bytes, type: u32, fixed: 3, doc: "The first tile_byte_count are the tile sizes, in bytes, a sparse resource is made with; none where the backend sets them itself, and bfr_texture_tiling and bfr_buffer_tiling say what they are. 3 is Metal's sparse page sizes."}
 
+  caps_resolve:
+    doc: >-
+      How a rendering's depth-stencil attachment resolves.
+    members:
+      - {name: depth_modes, type: u32, doc: "Bit 1 << mode set for each resolve_mode but none the device takes for depth."}
+      - {name: stencil_modes, type: u32, doc: "As depth_modes, for stencil."}
+      - {name: independent, type: bool, doc: Depth and stencil may take different modes.}
+      - {name: independent_none, type: bool, doc: Depth and stencil may differ where one is none.}
+
   caps:
     doc: Everything about an adapter that stays the same while it runs.
     members:
@@ -1724,6 +1764,7 @@ structs:
       - {name: queues, type: caps_queues}
       - {name: timestamps, type: caps_timestamps}
       - {name: sparse, type: caps_sparse}
+      - {name: resolve, type: caps_resolve}
 
   format_caps:
     doc: What an adapter does with one format.
@@ -1743,6 +1784,7 @@ structs:
       - {name: storage_texel_buffer, type: bool}
       - {name: storage_texel_buffer_atomic, type: bool}
       - {name: sample_counts, type: u32, doc: "Sample counts for 2D textures of it: each set bit is a count, 1, 2, 4 and so on; 0 when it can't be rendered to."}
+      - {name: resolve, type: bool, doc: "Multisampled textures of it resolve into single-sample ones: color formats in a rendering and by bfr_resolve_texture, depth and stencil formats in a rendering, by the modes bfr_caps_resolve names."}
 
   swapchain_caps:
     doc: What a window's swapchain may be, on one adapter.
@@ -2013,13 +2055,18 @@ functions:
   begin_rendering:
     doc: >-
       Begins rendering to desc's attachments, with the image bfr_acquire took
-      from swapchain as color attachment 0 when swapchain is not null. Sets the
-      viewport and scissor to the whole of the attachments. Only the draws, direct
-      and indirect, and the state they take, are recorded until
-      bfr_end_rendering. Fails with error_invalid_argument when no attachment
-      is given, when a color attachment but the swapchain's names no texture,
-      or, with a swapchain, when there is no color attachment or attachment 0
-      names a texture.
+      from swapchain as color attachment 0 when swapchain is not null, or as
+      the image attachment 0's texture resolves into when it names one. Sets
+      the viewport and scissor to the whole of the attachments. Only the
+      draws, direct and indirect, and the state they take, are recorded until
+      bfr_end_rendering, which resolves the attachments that name a resolve
+      texture. Fails with error_invalid_argument when no attachment is given,
+      when a color attachment but the swapchain's names no texture, with a
+      swapchain when there is no color attachment or attachment 0 names a
+      resolve texture, when a resolve texture is named with no texture, and
+      when a read-only depth-stencil attachment clears or drops an aspect;
+      error_unsupported for a depth or stencil resolve mode, or a pair of
+      them, bfr_caps_resolve doesn't have.
     returns: result
     params:
       - {name: device, type: device}
@@ -2336,6 +2383,28 @@ functions:
       - {name: regions, type: texture_copy, array: region_count, pointer: in}
       - {name: region_count, type: u32}
 
+  resolve_texture:
+    doc: >-
+      Records a resolve of one mip level and layer of src, a multisampled
+      texture of a color format in layout resolve_src, into one of dst, a
+      single-sample texture of its format in layout resolve_dst, outside
+      rendering: the whole level, of the same size in both. src has
+      color_attachment and copy_src usage, dst color_attachment and copy_dst;
+      its format resolves, as bfr_format_caps.resolve says, and each texture
+      has the mip level and layer named. Fails with error_device_failed when
+      the backend gives no encoder for it (Metal). What was resolved is seen
+      as bfr_copy_buffer says.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: src, type: texture}
+      - {name: src_mip_level, type: u32}
+      - {name: src_layer, type: u32}
+      - {name: dst, type: texture}
+      - {name: dst_mip_level, type: u32}
+      - {name: dst_layer, type: u32}
+
   submit:
     doc: >-
       Sends recorded command lists to a queue, which runs them after what it
@@ -2508,8 +2577,10 @@ functions:
       Creates a graphics pipeline, as desc says, before returning. Not for the
       frame path, as bfr_create_compute_pipeline is not. A target of format
       undefined is an unused one. Fails with error_invalid_argument for a desc
-      with more than max_color_targets targets, error_unsupported for a
-      topology the backend has no form for (Metal's fan), error_limit_reached
+      with more than max_color_targets targets or a min_sample_shading outside
+      0 to 1, error_unsupported for a topology the backend has no form for
+      (Metal's fan) and for an alpha_to_one, min_sample_shading or sample_mask
+      whose feature the device lacks, error_limit_reached
       at the device's maximum of pipelines, and error_device_failed when the
       backend refuses the code or the desc; the message carries what it said.
     returns: result

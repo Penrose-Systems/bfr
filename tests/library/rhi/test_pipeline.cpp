@@ -83,7 +83,8 @@ GraphicsPipelineDesc graphicsDesc() {
                                                .back = {}},
                               .colorTargetCount = 1,
                               .depthStencilFormat = Format::D32Float,
-                              .samples = 1};
+                              .samples = 1,
+                              .sampleMask = BFR_MASK_ALL};
     desc.colorTargets[0] = {.format = Format::Rgba8Unorm,
                             .blend = {.enable = true,
                                       .srcColor = BlendFactor::SrcAlpha,

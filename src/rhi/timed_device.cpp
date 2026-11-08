@@ -222,6 +222,14 @@ core::Result<void> TimedDevice::copyTexture(CommandListHandle commandList, Textu
     return counters_.time(Call::CopyTexture, [&] { return device_->copyTexture(commandList, src, dst, regions); });
 }
 
+core::Result<void> TimedDevice::resolveTexture(CommandListHandle commandList, TextureHandle src,
+                                               std::uint32_t srcMipLevel, std::uint32_t srcLayer, TextureHandle dst,
+                                               std::uint32_t dstMipLevel, std::uint32_t dstLayer) {
+    return counters_.time(Call::ResolveTexture, [&] {
+        return device_->resolveTexture(commandList, src, srcMipLevel, srcLayer, dst, dstMipLevel, dstLayer);
+    });
+}
+
 core::Result<Token> TimedDevice::submit(const SubmitDesc& desc) {
     return counters_.time(Call::Submit, [&] { return device_->submit(desc); });
 }

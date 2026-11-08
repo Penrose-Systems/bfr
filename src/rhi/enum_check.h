@@ -38,6 +38,9 @@ constexpr std::pair<BufferMemory, BufferMemory> rangeOf(BufferMemory /*unused*/)
 constexpr std::pair<ColorSpace, ColorSpace> rangeOf(ColorSpace /*unused*/) {
     return {ColorSpace::Srgb, ColorSpace::DisplayNative};
 }
+constexpr std::pair<ResolveMode, ResolveMode> rangeOf(ResolveMode /*unused*/) {
+    return {ResolveMode::None, ResolveMode::Max};
+}
 constexpr std::pair<Topology, Topology> rangeOf(Topology /*unused*/) {
     return {Topology::TriangleList, Topology::PointList};
 }
@@ -84,7 +87,7 @@ constexpr std::pair<TextureDimension, TextureDimension> rangeOf(TextureDimension
     return {TextureDimension::D2, TextureDimension::Cube};
 }
 constexpr std::pair<TextureLayout, TextureLayout> rangeOf(TextureLayout /*unused*/) {
-    return {TextureLayout::Undefined, TextureLayout::DepthStencilTarget};
+    return {TextureLayout::Undefined, TextureLayout::ResolveDst};
 }
 constexpr std::pair<TextureAspect, TextureAspect> rangeOf(TextureAspect /*unused*/) {
     return {TextureAspect::Color, TextureAspect::Stencil};
@@ -186,8 +189,8 @@ template <class Enum>
     return checkKnown(desc.alphaMode, "alpha mode");
 }
 
-/// Fails with RhiInvalidCall when a load or store op of desc's attachments is
-/// not one BFR has.
+/// Fails with RhiInvalidCall when a load or store op or a resolve mode of
+/// desc's attachments is not one BFR has.
 [[nodiscard]] inline core::Result<void> checkEnums(const RenderingDesc& desc) {
     const std::span attachments{desc.colorAttachments.data(),
                                 std::min<std::size_t>(desc.colorAttachmentCount, desc.colorAttachments.size())};
@@ -199,10 +202,23 @@ template <class Enum>
             return checked;
         }
     }
-    if (auto checked = checkKnown(desc.depthStencil.loadOp, "load op"); !checked) {
-        return checked;
+    const DepthStencilAttachment& depth = desc.depthStencil;
+    for (const LoadOp op : {depth.depthLoadOp, depth.stencilLoadOp}) {
+        if (auto checked = checkKnown(op, "load op"); !checked) {
+            return checked;
+        }
     }
-    return checkKnown(desc.depthStencil.storeOp, "store op");
+    for (const StoreOp op : {depth.depthStoreOp, depth.stencilStoreOp}) {
+        if (auto checked = checkKnown(op, "store op"); !checked) {
+            return checked;
+        }
+    }
+    for (const ResolveMode mode : {depth.depthResolve, depth.stencilResolve}) {
+        if (auto checked = checkKnown(mode, "resolve mode"); !checked) {
+            return checked;
+        }
+    }
+    return {};
 }
 
 /// Fails with RhiInvalidCall when one of desc's enums, or a format it names,

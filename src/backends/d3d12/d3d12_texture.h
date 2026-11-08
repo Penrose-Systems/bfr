@@ -16,7 +16,9 @@ namespace bfr::rhi::d3d12 {
 /// it goes: before the allocator is. dxgi is the resource's DXGI format, and
 /// the rest what its subresources are numbered by and its views are made as.
 /// target is its render target or depth-stencil view, in a heap of its own,
-/// when its usage has rendering write it. The slots are its places in the
+/// when its usage has rendering write it; a depth texture's heap also holds
+/// readOnlyTarget, the depth-stencil view a read-only attachment is drawn
+/// with, which writes neither aspect. The slots are its places in the
 /// tables, kEnd in a table its usage does not set; the device gives them back
 /// when the texture is collected. A sparse one is a reserved resource with no
 /// allocation: tileShape and packedMips are what GetResourceTiling said when
@@ -28,6 +30,7 @@ struct D3D12Texture {
     Microsoft::WRL::ComPtr<ID3D12Resource> resource;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> targetHeap;
     D3D12_CPU_DESCRIPTOR_HANDLE target{};
+    D3D12_CPU_DESCRIPTOR_HANDLE readOnlyTarget{};
     TextureDesc desc;
     DXGI_FORMAT dxgi = DXGI_FORMAT_UNKNOWN;
     std::uint32_t mipLevels = 0;
@@ -41,16 +44,24 @@ struct D3D12Texture {
 };
 
 /// What a rendering's attachment covers of a resource: mip 0 of each of its
-/// layers and planes. A swapchain's image has one of each.
+/// layers, in planeCount of its planes from firstPlane. A swapchain's image
+/// has one of each.
 struct D3D12Target {
     ID3D12Resource* resource = nullptr;
     std::uint32_t mipLevels = 1;
     std::uint32_t layers = 1;
     std::uint32_t planes = 1;
+    std::uint32_t firstPlane = 0;
+    std::uint32_t planeCount = 1;
 };
 
 /// What an attachment of texture covers.
 [[nodiscard]] D3D12Target targetOf(const D3D12Texture& texture);
+
+/// What an attachment of texture covers of its depth plane, when depth, and
+/// its stencil plane, when stencil: an op of a depth-stencil attachment on
+/// those aspects. planeCount is 0 when the format has neither.
+[[nodiscard]] D3D12Target aspectsOf(const D3D12Texture& texture, bool depth, bool stencil);
 
 /// Records on list the discard of what target covers, and nothing of its other mips.
 void discardTarget(ID3D12GraphicsCommandList* list, const D3D12Target& target);

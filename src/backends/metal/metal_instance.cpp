@@ -121,7 +121,8 @@ core::Result<std::unique_ptr<Device>> MetalInstance::createDevice(std::size_t ad
             return std::unexpected(std::move(checked.error()));
         }
     }
-    return MetalDevice::create(*this, devices_[adapter], desc);
+    const Caps& caps = adapters_[adapter].caps;
+    return MetalDevice::create(*this, devices_[adapter], caps.features, caps.resolve, desc);
 }
 
 core::Result<FormatCaps> MetalInstance::formatCaps(std::size_t adapter, Format format) const {

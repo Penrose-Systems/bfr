@@ -35,6 +35,10 @@ inline constexpr bool kDrawIndirectCount = false;
 /// Each sample count device renders at, as bits whose values are the counts.
 [[nodiscard]] std::uint32_t sampleCountsOf(MTL::Device* device);
 
+/// How device resolves a depth-stencil attachment: by sample 0, where Godot
+/// gives the device depth resolve; the rest Metal says nothing of, so 0.
+[[nodiscard]] ResolveCaps resolveCapsOf(MTL::Device* device);
+
 /// What device is and does, from what Metal answers about it. Where Metal has
 /// no call, a field is what BFR builds on it (queues, one viewport, render
 /// state) or what Metal's documentation gives; any other is 0 or false.

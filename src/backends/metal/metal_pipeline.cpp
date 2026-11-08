@@ -391,6 +391,7 @@ core::Result<MetalPipeline> createMetalGraphicsPipeline(MTL::Device& device, MTL
     info->setRasterSampleCount(desc.samples);
     info->setAlphaToCoverageState(desc.alphaToCoverage ? MTL4::AlphaToCoverageStateEnabled
                                                        : MTL4::AlphaToCoverageStateDisabled);
+    info->setAlphaToOneState(desc.alphaToOne ? MTL4::AlphaToOneStateEnabled : MTL4::AlphaToOneStateDisabled);
     const std::span targets{desc.colorTargets.data(), desc.colorTargetCount};
     for (std::size_t i = 0; i < targets.size(); ++i) {
         describeTarget(*info->colorAttachments()->object(i), targets[i]);
@@ -439,6 +440,9 @@ core::Result<PipelineHandle> MetalDevice::createComputePipeline(const ComputePip
 
 core::Result<PipelineHandle> MetalDevice::createGraphicsPipeline(const GraphicsPipelineDesc& desc) {
     if (auto checked = checkGraphicsPipelineDesc(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkMultisample(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     collectBuffers();
