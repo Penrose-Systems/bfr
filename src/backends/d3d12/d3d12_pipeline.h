@@ -3,11 +3,13 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/pipeline.h"
+#include "d3d12/d3d12_pipeline_cache.h"
 
 #include <d3d12.h>
 #include <wrl/client.h>
 
 #include <cstdint>
+#include <memory>
 
 namespace bfr::rhi::d3d12 {
 
@@ -50,6 +52,9 @@ inline constexpr std::uint32_t kViewportCount = 1;
 /// device and released with it, after every pipeline.
 struct D3D12BindlessLayout {
     Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;
+    /// A hash of the serialized root signature, which names pipelines on it
+    /// in a pipeline library: it changes with the device's table sizes.
+    std::uint64_t signatureHash = 0;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> resources;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> samplers;
     /// Where each region starts in the resource heap, in descriptors; the
@@ -88,23 +93,31 @@ struct D3D12BindlessLayout {
 /// A pipeline state object, released when this goes, with the topology
 /// binding it sets; the PSO fixes only its class.
 struct D3D12Pipeline {
+    /// The library the PSO was loaded from or stored in, null without a
+    /// cache: shared, as D3D12PipelineCache says, so the cache may go first.
+    /// Declared before state, so the PSO is released before the library.
+    std::shared_ptr<D3D12PipelineLibrary> library;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> state;
     bool compute = false;
     Topology topology = Topology::TriangleList;
 };
 
-/// A compute pipeline on rootSignature as desc says, whose code is DXIL. Fails
-/// with RhiDeviceFailed when D3D12 refuses it.
+/// A compute pipeline on layout as desc says, whose code is DXIL, loaded from
+/// library or stored in it where library is not null. Fails with
+/// RhiDeviceFailed when D3D12 refuses it.
 [[nodiscard]] core::Result<D3D12Pipeline> createD3D12ComputePipeline(ID3D12Device& device,
-                                                                     ID3D12RootSignature& rootSignature,
+                                                                     const D3D12BindlessLayout& layout,
+                                                                     std::shared_ptr<D3D12PipelineLibrary> library,
                                                                      const ComputePipelineDesc& desc);
 
-/// A graphics pipeline on rootSignature as desc says, whose code is DXIL, with
-/// no input layout: vertices are pulled. Fails with RhiUnsupported when the
+/// A graphics pipeline on layout as desc says, whose code is DXIL, with no
+/// input layout: vertices are pulled; library is used as
+/// createD3D12ComputePipeline does. Fails with RhiUnsupported when the
 /// two stencil faces mask differently, which D3D12 does not take, and
 /// RhiDeviceFailed when D3D12 refuses it.
 [[nodiscard]] core::Result<D3D12Pipeline> createD3D12GraphicsPipeline(ID3D12Device& device,
-                                                                      ID3D12RootSignature& rootSignature,
+                                                                      const D3D12BindlessLayout& layout,
+                                                                      std::shared_ptr<D3D12PipelineLibrary> library,
                                                                       const GraphicsPipelineDesc& desc);
 
 } // namespace bfr::rhi::d3d12

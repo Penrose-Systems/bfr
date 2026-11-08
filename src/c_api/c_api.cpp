@@ -358,6 +358,14 @@ bfr::rhi::PipelineHandle fromC(bfr_pipeline handle) {
     return bfr::rhi::PipelineHandle::fromBits(handle.bits);
 }
 
+bfr_pipeline_cache toC(bfr::rhi::PipelineCacheHandle handle) {
+    return {.bits = handle.bits};
+}
+
+bfr::rhi::PipelineCacheHandle fromC(bfr_pipeline_cache handle) {
+    return bfr::rhi::PipelineCacheHandle::fromBits(handle.bits);
+}
+
 // The C and C++ pipeline enums are the same numbers, so they cross as they
 // are, once checked to be a value BFR has.
 static_assert(static_cast<int>(bfr::rhi::Topology::PointList) == BFR_TOPOLOGY_POINT_LIST);
@@ -464,7 +472,8 @@ static_assert(static_cast<int>(bfr::rhi::HostClock::PerformanceCounter) == BFR_H
 static_assert(static_cast<int>(bfr::rhi::Call::InstanceSwapchainFormats) == BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS);
 static_assert(static_cast<int>(bfr::rhi::Call::SetTopology) == BFR_CALL_SET_TOPOLOGY);
 static_assert(static_cast<int>(bfr::rhi::Call::ResolveTexture) == BFR_CALL_RESOLVE_TEXTURE);
-static_assert(bfr::rhi::kCallCount == BFR_CALL_RESOLVE_TEXTURE + 1);
+static_assert(static_cast<int>(bfr::rhi::Call::DestroyPipelineCache) == BFR_CALL_DESTROY_PIPELINE_CACHE);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_DESTROY_PIPELINE_CACHE + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
@@ -522,7 +531,9 @@ bfr::rhi::ShaderCode shaderIn(const bfr_shader_code& code) {
 
 // The compute pipeline desc asks for.
 bfr::rhi::ComputePipelineDesc computePipelineIn(const bfr_compute_pipeline_desc& desc) {
-    return {.compute = shaderIn(desc.compute), .workgroupSize = std::to_array(desc.workgroup_size)};
+    return {.compute = shaderIn(desc.compute),
+            .workgroupSize = std::to_array(desc.workgroup_size),
+            .cache = fromC(desc.cache)};
 }
 
 std::optional<bfr::rhi::StencilFace> stencilFaceIn(const bfr_stencil_face& face, bfr::core::Message& error) {
@@ -607,6 +618,7 @@ std::optional<bfr::rhi::GraphicsPipelineDesc> graphicsPipelineIn(const bfr_graph
         .sampleMask = desc.sample_mask,
         .alphaToOne = desc.alpha_to_one != BFR_FALSE,
         .minSampleShading = desc.min_sample_shading,
+        .cache = fromC(desc.cache),
     };
     const std::span targets{desc.color_targets};
     for (std::uint32_t i = 0; i < std::min<std::uint32_t>(desc.color_target_count, kMaxColorTargets); ++i) {
@@ -1065,6 +1077,7 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .list_restart = toC(features.listRestart),
         .alpha_to_one = toC(features.alphaToOne),
         .sample_mask = toC(features.sampleMask),
+        .pipeline_cache = toC(features.pipelineCache),
         .storage_read_without_format = toC(features.storageReadWithoutFormat),
         .storage_write_without_format = toC(features.storageWriteWithoutFormat),
         .timestamps_on_all_queues = toC(features.timestampsOnAllQueues),
@@ -2369,6 +2382,60 @@ void bfr_destroy_pipeline(bfr_device* device, bfr_pipeline pipeline) {
             return;
         }
         if (const auto destroyed = device->device->destroyPipeline(fromC(pipeline)); !destroyed) {
+            lastError() = destroyed.error().message;
+        }
+    });
+}
+
+bfr_result bfr_create_pipeline_cache(bfr_device* device, const bfr_pipeline_cache_desc* desc,
+                                     bfr_pipeline_cache* cache) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr || cache == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and cache must not be null");
+        }
+        *cache = {};
+        if (desc->data == nullptr && desc->data_size != 0) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "data is null but data_size is not 0");
+        }
+        const auto created = device->device->createPipelineCache(
+            {.data = std::as_bytes(std::span{desc->data, desc->data_size})});
+        if (!created) {
+            return fail(created.error());
+        }
+        *cache = toC(*created);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_get_pipeline_cache_data(bfr_device* device, bfr_pipeline_cache cache, size_t* size, uint8_t* data) {
+    return guarded([&] {
+        if (device == nullptr || size == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and size must not be null");
+        }
+        if (data == nullptr) {
+            const auto total = device->device->pipelineCacheSize(fromC(cache));
+            if (!total) {
+                return fail(total.error());
+            }
+            *size = *total;
+            return BFR_RESULT_SUCCESS;
+        }
+        const auto written = device->device->pipelineCacheData(fromC(cache),
+                                                               std::as_writable_bytes(std::span{data, *size}));
+        if (!written) {
+            return fail(written.error());
+        }
+        *size = written->written;
+        return written->complete ? BFR_RESULT_SUCCESS : BFR_RESULT_INCOMPLETE;
+    });
+}
+
+void bfr_destroy_pipeline_cache(bfr_device* device, bfr_pipeline_cache cache) {
+    quietly([&] {
+        if (device == nullptr) {
+            return;
+        }
+        if (const auto destroyed = device->device->destroyPipelineCache(fromC(cache)); !destroyed) {
             lastError() = destroyed.error().message;
         }
     });

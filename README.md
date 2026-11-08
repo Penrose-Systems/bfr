@@ -135,11 +135,11 @@ flowchart TB
    validation settings and a message callback. Several instances, even of
    different backends, can live in one process.
 2. **List adapters.** Each is a plain description: name, vendor, limits,
-   optional features. Nothing is opened yet.
-3. **Create a device** from one adapter, naming the queues and optional
-   features you want (ray queries, mesh shaders). If the adapter misses the
-   floor (bindless, dynamic rendering, timelines, enhanced barriers on D3D12)
-   creation fails with a reason.
+   features. Nothing is opened yet. Every adapter the backend lists is
+   listed.
+3. **Create a device** from one adapter, naming the queues and features you
+   want (ray queries, mesh shaders). Caps say what the adapter has; a call
+   that needs what the device lacks fails with RhiUnsupported.
 4. **Create a swapchain** per window from a native window handle and the
    queue that presents. Tools can have as many as they like.
 

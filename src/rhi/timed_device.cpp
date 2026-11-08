@@ -298,6 +298,22 @@ core::Result<void> TimedDevice::destroyPipeline(PipelineHandle pipeline) {
     return counters_.time(Call::DestroyPipeline, [&] { return device_->destroyPipeline(pipeline); });
 }
 
+core::Result<PipelineCacheHandle> TimedDevice::createPipelineCache(const PipelineCacheDesc& desc) {
+    return counters_.time(Call::CreatePipelineCache, [&] { return device_->createPipelineCache(desc); });
+}
+
+core::Result<std::size_t> TimedDevice::pipelineCacheSize(PipelineCacheHandle cache) {
+    return counters_.time(Call::PipelineCacheSize, [&] { return device_->pipelineCacheSize(cache); });
+}
+
+core::Result<PipelineCacheWrite> TimedDevice::pipelineCacheData(PipelineCacheHandle cache, std::span<std::byte> data) {
+    return counters_.time(Call::PipelineCacheData, [&] { return device_->pipelineCacheData(cache, data); });
+}
+
+core::Result<void> TimedDevice::destroyPipelineCache(PipelineCacheHandle cache) {
+    return counters_.time(Call::DestroyPipelineCache, [&] { return device_->destroyPipelineCache(cache); });
+}
+
 core::Result<MemoryBudget> TimedDevice::budget() const {
     return counters_.time(Call::Budget, [&] { return device_->budget(); });
 }

@@ -724,6 +724,10 @@ enum class Call : std::int32_t {
     DrawIndexedIndirectCount = BFR_CALL_DRAW_INDEXED_INDIRECT_COUNT,
     DispatchIndirect = BFR_CALL_DISPATCH_INDIRECT,
     ResolveTexture = BFR_CALL_RESOLVE_TEXTURE,
+    CreatePipelineCache = BFR_CALL_CREATE_PIPELINE_CACHE,
+    PipelineCacheSize = BFR_CALL_PIPELINE_CACHE_SIZE,
+    PipelineCacheData = BFR_CALL_PIPELINE_CACHE_DATA,
+    DestroyPipelineCache = BFR_CALL_DESTROY_PIPELINE_CACHE,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -799,6 +803,10 @@ enum class Call : std::int32_t {
     case Call::DrawIndexedIndirectCount: return "draw_indexed_indirect_count";
     case Call::DispatchIndirect: return "dispatch_indirect";
     case Call::ResolveTexture: return "resolve_texture";
+    case Call::CreatePipelineCache: return "create_pipeline_cache";
+    case Call::PipelineCacheSize: return "pipeline_cache_size";
+    case Call::PipelineCacheData: return "pipeline_cache_data";
+    case Call::DestroyPipelineCache: return "destroy_pipeline_cache";
     }
     return {};
 }
@@ -1444,6 +1452,8 @@ class TimestampPool;
 
 class SparseMemory;
 
+class PipelineCache;
+
 /// How to create an instance.
 struct InstanceDesc {
     Backend backend{};
@@ -2029,6 +2039,8 @@ struct ComputePipelineDesc {
     ShaderCode compute{};
     /// Threads in each workgroup, as the shader declares them; a dispatch counts workgroups.
     std::array<std::uint32_t, 3> workgroupSize{};
+    /// Where the pipeline is looked for, and added on a miss; null is none.
+    const PipelineCache* cache{};
 };
 
 /// How to create a graphics pipeline. Vertices are pulled: the vertex shader reads them by index
@@ -2061,6 +2073,14 @@ struct GraphicsPipelineDesc {
     /// The fraction of samples, 0 to 1, shaded apart; above 0 shades per sample, where
     /// bfr_caps_features.sample_rate_shading.
     float minSampleShading{};
+    /// Where the pipeline is looked for, and added on a miss; null is none.
+    const PipelineCache* cache{};
+};
+
+/// How to create a pipeline cache.
+struct PipelineCacheDesc {
+    /// Bytes bfr_get_pipeline_cache_data gave before, read during the call only.
+    std::span<const std::uint8_t> data{};
 };
 
 /// A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was
@@ -2248,7 +2268,8 @@ struct CapsInfo {
     std::array<std::uint8_t, 8> luid{};
     /// Whether luid is set; only on Windows.
     bool luidValid{};
-    /// A pipeline cache loads only on an adapter with the same cache_uuid.
+    /// The backend's ID for the adapter and driver whose pipeline cache data loads; all 0 where the
+    /// backend states none.
     std::array<std::uint8_t, 16> cacheUuid{};
 };
 
@@ -2466,6 +2487,8 @@ struct CapsFeatures {
     bool alphaToOne{};
     /// A bfr_graphics_pipeline_desc.sample_mask that leaves samples out.
     bool sampleMask{};
+    /// bfr_create_pipeline_cache makes caches.
+    bool pipelineCache{};
     bool storageReadWithoutFormat{};
     bool storageWriteWithoutFormat{};
     /// Every graphics and compute queue writes timestamps.
@@ -3038,31 +3061,10 @@ inline bfr_color_target toC(const ColorTarget& value) {
     return {.format = static_cast<bfr_format>(value.format), .blend = toC(value.blend)};
 }
 
-inline bfr_compute_pipeline_desc toC(const ComputePipelineDesc& value, const bfr_chain* next) {
+inline bfr_pipeline_cache_desc toC(const PipelineCacheDesc& value) {
     return {
-        .next = next,
-        .compute = toC(value.compute),
-        .workgroup_size = {value.workgroupSize[0], value.workgroupSize[1], value.workgroupSize[2]},
-    };
-}
-
-inline bfr_graphics_pipeline_desc toC(const GraphicsPipelineDesc& value, const bfr_chain* next) {
-    return {
-        .next = next,
-        .vertex = toC(value.vertex),
-        .fragment = toC(value.fragment),
-        .topology = static_cast<bfr_topology>(value.topology),
-        .primitive_restart = static_cast<bfr_primitive_restart>(value.primitiveRestart),
-        .raster = toC(value.raster),
-        .depth_stencil = toC(value.depthStencil),
-        .color_target_count = value.colorTargetCount,
-        .color_targets = {toC(value.colorTargets[0]), toC(value.colorTargets[1]), toC(value.colorTargets[2]), toC(value.colorTargets[3]), toC(value.colorTargets[4]), toC(value.colorTargets[5]), toC(value.colorTargets[6]), toC(value.colorTargets[7])},
-        .depth_stencil_format = static_cast<bfr_format>(value.depthStencilFormat),
-        .samples = value.samples,
-        .alpha_to_coverage = value.alphaToCoverage ? BFR_TRUE : BFR_FALSE,
-        .sample_mask = value.sampleMask,
-        .alpha_to_one = value.alphaToOne ? BFR_TRUE : BFR_FALSE,
-        .min_sample_shading = value.minSampleShading,
+        .data = reinterpret_cast<const uint8_t*>(value.data.data()),
+        .data_size = static_cast<size_t>(value.data.size()),
     };
 }
 
@@ -3351,6 +3353,7 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .listRestart = value.list_restart != BFR_FALSE,
         .alphaToOne = value.alpha_to_one != BFR_FALSE,
         .sampleMask = value.sample_mask != BFR_FALSE,
+        .pipelineCache = value.pipeline_cache != BFR_FALSE,
         .storageReadWithoutFormat = value.storage_read_without_format != BFR_FALSE,
         .storageWriteWithoutFormat = value.storage_write_without_format != BFR_FALSE,
         .timestampsOnAllQueues = value.timestamps_on_all_queues != BFR_FALSE,
@@ -3648,9 +3651,9 @@ public:
     /// Owns nothing, as a moved-from Device does.
     Device() = default;
     /// Destroys a device once the GPU has finished with it, with every handle it still owns. Null
-    /// does nothing. A Device with Buffer or CommandList or CommandPool or Pipeline or Sampler or
-    /// SparseMemory or Swapchain or Texture or TimestampPool objects left lives on until the last
-    /// of them is destroyed, so they may be destroyed in any order.
+    /// does nothing. A Device with Buffer or CommandList or CommandPool or Pipeline or
+    /// PipelineCache or Sampler or SparseMemory or Swapchain or Texture or TimestampPool objects
+    /// left lives on until the last of them is destroyed, so they may be destroyed in any order.
     ~Device() = default;
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
@@ -3855,20 +3858,29 @@ public:
     [[nodiscard]] Expected<Sampler> createSampler(const SamplerDesc& desc) const;
 
     /// Creates a compute pipeline, as desc says, before returning. Not for the frame path: it
-    /// compiles, and frees pipelines the GPU is done with. Fails with error_limit_reached at the
-    /// device's maximum of pipelines, and error_device_failed when the backend refuses the code or
-    /// the desc; the message carries what it said.
+    /// compiles, and frees pipelines the GPU is done with. A desc.cache is looked in first, and the
+    /// pipeline added on a miss. Fails with error_invalid_handle when desc.cache is gone,
+    /// error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
+    /// backend refuses the code, the desc or the cache; the message carries what it said.
     [[nodiscard]] Expected<Pipeline> createComputePipeline(const ComputePipelineDesc& desc) const;
 
     /// Creates a graphics pipeline, as desc says, before returning. Not for the frame path, as
-    /// bfr_create_compute_pipeline is not. A target of format undefined is an unused one. Fails
-    /// with error_invalid_argument for a desc with more than max_color_targets targets or a
-    /// min_sample_shading outside 0 to 1, error_unsupported for a topology the backend has no form
-    /// for (Metal's fan) and for an alpha_to_one, min_sample_shading or sample_mask whose feature
-    /// the device lacks, error_limit_reached at the device's maximum of pipelines, and
-    /// error_device_failed when the backend refuses the code or the desc; the message carries what
-    /// it said.
+    /// bfr_create_compute_pipeline is not. A desc.cache is used as there. A target of format
+    /// undefined is an unused one. Fails with error_invalid_argument for a desc with more than
+    /// max_color_targets targets or a min_sample_shading outside 0 to 1, error_unsupported for a
+    /// topology the backend has no form for (Metal's fan) and for an alpha_to_one,
+    /// min_sample_shading or sample_mask whose feature the device lacks, error_invalid_handle when
+    /// desc.cache is gone, error_limit_reached at the device's maximum of pipelines, and
+    /// error_device_failed when the backend refuses the code, the desc or the cache; the message
+    /// carries what it said.
     [[nodiscard]] Expected<Pipeline> createGraphicsPipeline(const GraphicsPipelineDesc& desc) const;
+
+    /// Creates a pipeline cache that starts with desc's data. Not for the frame path. Data from
+    /// another adapter or driver makes an empty cache or fails with error_device_failed, as the
+    /// backend does. Fails with error_unsupported where the backend makes none, as
+    /// bfr_caps_features.pipeline_cache reports, and error_limit_reached at the device's maximum of
+    /// pipeline caches.
+    [[nodiscard]] Expected<PipelineCache> createPipelineCache(const PipelineCacheDesc& desc) const;
 
     /// Creates a pool of desc's count GPU timestamps, written by lists on desc's queue. Not for the
     /// frame path. Fails with error_invalid_argument when the device has no such queue,
@@ -4321,6 +4333,46 @@ private:
     detail::KeepAlive keepAlive_;
 };
 
+/// Pipelines the backend has compiled, which it reads back as bytes for a later run to start from.
+/// Pipelines made with one look in it first and add themselves on a miss.
+class PipelineCache {
+public:
+    /// Owns nothing, as a moved-from PipelineCache does.
+    PipelineCache() = default;
+    /// Destroys a pipeline cache at once; pipelines made with it stay. Not for the frame path. Not
+    /// while another thread is using the cache or creating a pipeline with it. A handle that is
+    /// already destroyed does nothing.
+    ~PipelineCache() { bfr_destroy_pipeline_cache(device_, pipelineCache_); }
+    PipelineCache(const PipelineCache&) = delete;
+    PipelineCache& operator=(const PipelineCache&) = delete;
+    PipelineCache(PipelineCache&& other) noexcept : device_(std::exchange(other.device_, nullptr)), pipelineCache_(std::exchange(other.pipelineCache_, {})), keepAlive_(std::move(other.keepAlive_)) {}
+    PipelineCache& operator=(PipelineCache&& other) noexcept {
+        if (this != &other) {
+            bfr_destroy_pipeline_cache(device_, pipelineCache_);
+            device_ = std::exchange(other.device_, nullptr);
+            pipelineCache_ = std::exchange(other.pipelineCache_, {});
+            keepAlive_ = std::move(other.keepAlive_);
+        }
+        return *this;
+    }
+
+    /// The C value, for calls bfr.hpp does not wrap; this still owns it.
+    [[nodiscard]] bfr_pipeline_cache get() const { return pipelineCache_; }
+    [[nodiscard]] explicit operator bool() const { return pipelineCache_.bits != 0; }
+
+    /// Writes a pipeline cache's bytes, for a later bfr_pipeline_cache_desc.
+    [[nodiscard]] Expected<std::vector<std::uint8_t>> pipelineCacheData();
+
+private:
+    PipelineCache(bfr_device* device, bfr_pipeline_cache pipelineCache, detail::KeepAlive keepAlive) : device_(device), pipelineCache_(pipelineCache), keepAlive_(std::move(keepAlive)) {}
+    friend class Device;
+
+    bfr_device* device_ = nullptr;
+    bfr_pipeline_cache pipelineCache_{};
+    // Keeps the Device that made this alive until this is destroyed.
+    detail::KeepAlive keepAlive_;
+};
+
 namespace detail {
 
 inline bfr_color_attachment toC(const ColorAttachment& value) {
@@ -4357,6 +4409,36 @@ inline bfr_rendering_desc toC(const RenderingDesc& value, const bfr_chain* next)
         .color_attachment_count = value.colorAttachmentCount,
         .color_attachments = {toC(value.colorAttachments[0]), toC(value.colorAttachments[1]), toC(value.colorAttachments[2]), toC(value.colorAttachments[3]), toC(value.colorAttachments[4]), toC(value.colorAttachments[5]), toC(value.colorAttachments[6]), toC(value.colorAttachments[7])},
         .depth_stencil = toC(value.depthStencil),
+    };
+}
+
+inline bfr_compute_pipeline_desc toC(const ComputePipelineDesc& value, const bfr_chain* next) {
+    return {
+        .next = next,
+        .compute = toC(value.compute),
+        .workgroup_size = {value.workgroupSize[0], value.workgroupSize[1], value.workgroupSize[2]},
+        .cache = value.cache != nullptr ? value.cache->get() : bfr_pipeline_cache{},
+    };
+}
+
+inline bfr_graphics_pipeline_desc toC(const GraphicsPipelineDesc& value, const bfr_chain* next) {
+    return {
+        .next = next,
+        .vertex = toC(value.vertex),
+        .fragment = toC(value.fragment),
+        .topology = static_cast<bfr_topology>(value.topology),
+        .primitive_restart = static_cast<bfr_primitive_restart>(value.primitiveRestart),
+        .raster = toC(value.raster),
+        .depth_stencil = toC(value.depthStencil),
+        .color_target_count = value.colorTargetCount,
+        .color_targets = {toC(value.colorTargets[0]), toC(value.colorTargets[1]), toC(value.colorTargets[2]), toC(value.colorTargets[3]), toC(value.colorTargets[4]), toC(value.colorTargets[5]), toC(value.colorTargets[6]), toC(value.colorTargets[7])},
+        .depth_stencil_format = static_cast<bfr_format>(value.depthStencilFormat),
+        .samples = value.samples,
+        .alpha_to_coverage = value.alphaToCoverage ? BFR_TRUE : BFR_FALSE,
+        .sample_mask = value.sampleMask,
+        .alpha_to_one = value.alphaToOne ? BFR_TRUE : BFR_FALSE,
+        .min_sample_shading = value.minSampleShading,
+        .cache = value.cache != nullptr ? value.cache->get() : bfr_pipeline_cache{},
     };
 }
 
@@ -4417,6 +4499,10 @@ inline Expected<std::vector<AdapterInfo>> Instance::adapters() const {
         if (result < 0) {
             return std::unexpected(detail::failure(result));
         }
+        // None to fill: a null array would ask the count again.
+        if (count == 0) {
+            break;
+        }
         adaptersC.resize(count);
         result = bfr_get_adapters(instance_, &count, adaptersC.data());
         if (result < 0) {
@@ -4450,6 +4536,10 @@ inline Expected<std::vector<FormatCaps>> Instance::formats(std::uint32_t adapter
         bfr_result result = bfr_get_formats(instance_, adapter, &count, nullptr);
         if (result < 0) {
             return std::unexpected(detail::failure(result));
+        }
+        // None to fill: a null array would ask the count again.
+        if (count == 0) {
+            break;
         }
         formatsC.resize(count);
         result = bfr_get_formats(instance_, adapter, &count, formatsC.data());
@@ -4486,6 +4576,10 @@ inline Expected<std::vector<SwapchainFormat>> Instance::swapchainFormats(std::ui
         bfr_result result = bfr_get_swapchain_formats(instance_, adapter, &cDesc, &count, nullptr);
         if (result < 0) {
             return std::unexpected(detail::failure(result));
+        }
+        // None to fill: a null array would ask the count again.
+        if (count == 0) {
+            break;
         }
         formatsC.resize(count);
         result = bfr_get_swapchain_formats(instance_, adapter, &cDesc, &count, formatsC.data());
@@ -4533,6 +4627,10 @@ inline Expected<std::vector<CallTiming>> Instance::instanceCallTimings() const {
         bfr_result result = bfr_get_instance_call_timings(instance_, &count, nullptr);
         if (result < 0) {
             return std::unexpected(detail::failure(result));
+        }
+        // None to fill: a null array would ask the count again.
+        if (count == 0) {
+            break;
         }
         timingsC.resize(count);
         result = bfr_get_instance_call_timings(instance_, &count, timingsC.data());
@@ -4851,6 +4949,15 @@ inline Expected<Pipeline> Device::createGraphicsPipeline(const GraphicsPipelineD
     return Pipeline{device_, pipeline, keepAlive_};
 }
 
+inline Expected<PipelineCache> Device::createPipelineCache(const PipelineCacheDesc& desc) const {
+    const bfr_pipeline_cache_desc cDesc = detail::toC(desc);
+    bfr_pipeline_cache cache{};
+    if (const bfr_result result = bfr_create_pipeline_cache(device_, &cDesc, &cache); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return PipelineCache{device_, cache, keepAlive_};
+}
+
 inline Expected<TimestampPool> Device::createTimestampPool(const TimestampPoolDesc& desc) const {
     const bfr_timestamp_pool_desc cDesc = detail::toC(desc);
     bfr_timestamp_pool pool{};
@@ -4941,6 +5048,10 @@ inline Expected<std::vector<CallTiming>> Device::callTimings() const {
         bfr_result result = bfr_get_call_timings(device_, &count, nullptr);
         if (result < 0) {
             return std::unexpected(detail::failure(result));
+        }
+        // None to fill: a null array would ask the count again.
+        if (count == 0) {
+            break;
         }
         timingsC.resize(count);
         result = bfr_get_call_timings(device_, &count, timingsC.data());
@@ -5046,6 +5157,36 @@ inline Expected<std::uint32_t> Sampler::samplerSlot() {
     return slot;
 }
 
+inline Expected<std::vector<std::uint8_t>> PipelineCache::pipelineCacheData() {
+    std::vector<uint8_t> dataC;
+    std::size_t size = 0;
+    // Asked again while the list grows between the two calls.
+    for (;;) {
+        bfr_result result = bfr_get_pipeline_cache_data(device_, pipelineCache_, &size, nullptr);
+        if (result < 0) {
+            return std::unexpected(detail::failure(result));
+        }
+        // None to fill: a null array would ask the count again.
+        if (size == 0) {
+            break;
+        }
+        dataC.resize(size);
+        result = bfr_get_pipeline_cache_data(device_, pipelineCache_, &size, dataC.data());
+        if (result < 0) {
+            return std::unexpected(detail::failure(result));
+        }
+        if (result != BFR_RESULT_INCOMPLETE) {
+            break;
+        }
+    }
+    std::vector<std::uint8_t> data;
+    data.reserve(size);
+    for (std::size_t i = 0; i < size; ++i) {
+        data.push_back(dataC[i]);
+    }
+    return data;
+}
+
 /// Lists the backends this build has, in bfr_backend order.
 [[nodiscard]] inline Expected<std::vector<Backend>> backends() {
     std::vector<bfr_backend> backendsC;
@@ -5055,6 +5196,10 @@ inline Expected<std::uint32_t> Sampler::samplerSlot() {
         bfr_result result = bfr_get_backends(&count, nullptr);
         if (result < 0) {
             return std::unexpected(detail::failure(result));
+        }
+        // None to fill: a null array would ask the count again.
+        if (count == 0) {
+            break;
         }
         backendsC.resize(count);
         result = bfr_get_backends(&count, backendsC.data());

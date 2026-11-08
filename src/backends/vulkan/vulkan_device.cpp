@@ -184,6 +184,7 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
       timestampPools_("timestamp pools", desc.maxTimestampPools, desc.maxTimestampPools, rhi.logger()),
       sparseMemories_("sparse memories", desc.maxSparseMemories, desc.maxSparseMemories, rhi.logger()),
+      pipelineCaches_("pipeline caches", kBufferCapacity, kBufferLimit, rhi.logger()),
       bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
@@ -1027,6 +1028,9 @@ void VulkanDevice::warnLeftovers() const {
     if (sparseMemories_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} sparse memories were left when the device went", sparseMemories_.size());
     }
+    if (pipelineCaches_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} pipeline caches were left when the device went", pipelineCaches_.size());
+    }
 }
 
 VulkanDevice::~VulkanDevice() {
@@ -1051,6 +1055,7 @@ VulkanDevice::~VulkanDevice() {
     samplers_.clear();
     timestampPools_.clear();
     pipelines_.clear();
+    pipelineCaches_.clear();
     layout_ = {};
     vmaDestroyAllocator(allocator_);
     for (const auto& queue : queues_) {

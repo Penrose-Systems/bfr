@@ -298,6 +298,8 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
         .alphaToOne = on(core.alphaToOne),
         // pSampleMask is core 1.0, with no feature.
         .sampleMask = true,
+        // VkPipelineCache is core 1.0, with no feature.
+        .pipelineCache = true,
         .storageReadWithoutFormat = on(core.shaderStorageImageReadWithoutFormat),
         .storageWriteWithoutFormat = on(core.shaderStorageImageWriteWithoutFormat),
         .timestampsOnAllQueues = on(properties.core.properties.limits.timestampComputeAndGraphics),

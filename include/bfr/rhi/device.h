@@ -384,21 +384,48 @@ public:
     /// is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroySampler(SamplerHandle sampler) = 0;
 
-    /// A compute pipeline as desc says, made before returning. Cold: it
-    /// compiles, and frees pipelines the GPU is done with. Fails with
+    /// A pipeline cache that starts with desc.data. Cold. Data from another
+    /// adapter or driver makes an empty cache or fails with RhiDeviceFailed,
+    /// as the backend does. Fails with RhiUnsupported where the backend makes
+    /// none, as Features::pipelineCache reports, and RhiLimitReached at the
+    /// device's maximum.
+    [[nodiscard]] virtual core::Result<PipelineCacheHandle> createPipelineCache(const PipelineCacheDesc& desc) = 0;
+
+    /// How many bytes pipelineCacheData writes now. Cold. Fails with
+    /// RhiInvalidHandle when the cache is gone.
+    [[nodiscard]] virtual core::Result<std::size_t> pipelineCacheSize(PipelineCacheHandle cache) = 0;
+
+    /// Writes the cache's bytes to data, for a later PipelineCacheDesc, and
+    /// says how many it wrote and whether that is all. A data smaller than
+    /// pipelineCacheSize is written in part or fails with RhiDeviceFailed, as
+    /// the backend does. Cold. Fails with RhiInvalidHandle when the cache is
+    /// gone.
+    [[nodiscard]] virtual core::Result<PipelineCacheWrite> pipelineCacheData(PipelineCacheHandle cache,
+                                                                             std::span<std::byte> data) = 0;
+
+    /// Destroys the cache at once; pipelines made with it stay. Cold. Not
+    /// while another thread is using the cache or creating a pipeline with
+    /// it. A null handle does nothing. Fails with RhiInvalidHandle when it is
+    /// already destroyed.
+    [[nodiscard]] virtual core::Result<void> destroyPipelineCache(PipelineCacheHandle cache) = 0;
+
+    /// A compute pipeline as desc says, made before returning, or loaded from
+    /// desc.cache. Cold: it compiles, and frees pipelines the GPU is done
+    /// with. Fails with RhiInvalidHandle when desc.cache is gone,
     /// RhiLimitReached at the device's maximum, and RhiDeviceFailed when the
-    /// API refuses the code or the desc, with what it said.
+    /// API refuses the code, the desc or the cache, with what it said.
     [[nodiscard]] virtual core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) = 0;
 
-    /// A graphics pipeline as desc says, made before returning. Cold, as
-    /// createComputePipeline is. A target of format Undefined is an unused
-    /// one. Fails with RhiInvalidCall for a desc with an enum value or format
-    /// BFR doesn't have, more than kMaxColorTargets targets or a
-    /// minSampleShading outside 0 to 1, RhiUnsupported for a topology the
+    /// A graphics pipeline as desc says, made before returning, or loaded
+    /// from desc.cache. Cold, as createComputePipeline is. A target of format
+    /// Undefined is an unused one. Fails with RhiInvalidCall for a desc with
+    /// an enum value or format BFR doesn't have, more than kMaxColorTargets
+    /// targets or a minSampleShading outside 0 to 1, RhiUnsupported for a topology the
     /// backend has no form for (Metal's fan), and for an alphaToOne,
     /// minSampleShading or sampleMask whose feature the device lacks,
-    /// RhiLimitReached at the device's maximum, and RhiDeviceFailed when the
-    /// API refuses the code or the desc, with what it said.
+    /// RhiInvalidHandle when desc.cache is gone, RhiLimitReached at the
+    /// device's maximum, and RhiDeviceFailed when the API refuses the code,
+    /// the desc or the cache, with what it said.
     [[nodiscard]] virtual core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) = 0;
 
     /// Destroys the pipeline once the GPU has passed every submit made before

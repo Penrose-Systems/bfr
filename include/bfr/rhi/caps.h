@@ -172,6 +172,8 @@ struct Features {
     bool alphaToOne = false;
     /// A GraphicsPipelineDesc::sampleMask that leaves samples out.
     bool sampleMask = false;
+    /// Device::createPipelineCache makes caches.
+    bool pipelineCache = false;
     bool storageReadWithoutFormat = false;
     bool storageWriteWithoutFormat = false;
     bool timestampsOnAllQueues = false;

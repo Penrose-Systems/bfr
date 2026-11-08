@@ -206,6 +206,7 @@ core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rh
     auto made = std::make_unique<D3D12Device>(rhi, std::move(device), std::move(adapter), heapCount, desc);
     // A runtime without it answers E_NOINTERFACE and leaves device11_ null.
     static_cast<void>(made->device_.As(&made->device11_));
+    static_cast<void>(made->device_.As(&made->device1_));
     made->sparse_ = sparseOf(made->device_.Get());
     made->multiDrawIndirect_ = features.multiDrawIndirect;
     made->drawIndirectCount_ = features.drawIndirectCount;
@@ -278,6 +279,7 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
       timestampPools_("timestamp pools", desc.maxTimestampPools, desc.maxTimestampPools, rhi.logger()),
       sparseMemories_("sparse memories", desc.maxSparseMemories, desc.maxSparseMemories, rhi.logger()),
+      pipelineCaches_("pipeline caches", kBufferCapacity, kBufferLimit, rhi.logger()),
       bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {}
 
@@ -373,6 +375,9 @@ D3D12Device::~D3D12Device() {
     if (sparseMemories_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} sparse memories were left when the device went", sparseMemories_.size());
     }
+    if (pipelineCaches_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} pipeline caches were left when the device went", pipelineCaches_.size());
+    }
     // Every buffer and texture gives its memory back before the allocator goes,
     // and every pipeline goes before the layout it was made on.
     buffers_.clear();
@@ -381,6 +386,7 @@ D3D12Device::~D3D12Device() {
     samplers_.clear();
     timestampPools_.clear();
     pipelines_.clear();
+    pipelineCaches_.clear();
     layout_ = {};
     allocator_.Reset();
     // The slots' vector releases every command allocator and list as it goes.

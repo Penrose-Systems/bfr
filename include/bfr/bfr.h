@@ -477,6 +477,10 @@ typedef enum bfr_call {
     BFR_CALL_DRAW_INDEXED_INDIRECT_COUNT = 67,
     BFR_CALL_DISPATCH_INDIRECT = 68,
     BFR_CALL_RESOLVE_TEXTURE = 69,
+    BFR_CALL_CREATE_PIPELINE_CACHE = 70,
+    BFR_CALL_PIPELINE_CACHE_SIZE = 71,
+    BFR_CALL_PIPELINE_CACHE_DATA = 72,
+    BFR_CALL_DESTROY_PIPELINE_CACHE = 73,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -914,6 +918,13 @@ typedef struct bfr_timestamp_pool {
 typedef struct bfr_sparse_memory {
     uint64_t bits;
 } bfr_sparse_memory;
+
+// Pipelines the backend has compiled, which it reads back as bytes for a later run to start from.
+// Pipelines made with one look in it first and add themselves on a miss. A generational handle; 0
+// is never valid.
+typedef struct bfr_pipeline_cache {
+    uint64_t bits;
+} bfr_pipeline_cache;
 
 // Receives BFR's messages and validation's. Without one, BFR prints nothing. Called on any thread,
 // including threads BFR or the driver owns, until the instance and every device made from it are
@@ -1519,6 +1530,8 @@ typedef struct bfr_compute_pipeline_desc {
     bfr_shader_code compute;
     // Threads in each workgroup, as the shader declares them; a dispatch counts workgroups.
     uint32_t workgroup_size[3];
+    // Where the pipeline is looked for, and added on a miss; null is none.
+    bfr_pipeline_cache cache;
 } bfr_compute_pipeline_desc;
 
 // How to create a graphics pipeline. Vertices are pulled: the vertex shader reads them by index
@@ -1552,7 +1565,18 @@ typedef struct bfr_graphics_pipeline_desc {
     // The fraction of samples, 0 to 1, shaded apart; above 0 shades per sample, where
     // bfr_caps_features.sample_rate_shading.
     float min_sample_shading;
+    // Where the pipeline is looked for, and added on a miss; null is none.
+    bfr_pipeline_cache cache;
 } bfr_graphics_pipeline_desc;
+
+// How to create a pipeline cache.
+typedef struct bfr_pipeline_cache_desc {
+    // Bytes bfr_get_pipeline_cache_data gave before, read during the call only. An array of
+    // data_size elements.
+    const uint8_t* data;
+    // Bytes; 0 is an empty cache.
+    size_t data_size;
+} bfr_pipeline_cache_desc;
 
 // A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was submitted
 // has run. An all-zero token has already completed.
@@ -1727,7 +1751,8 @@ typedef struct bfr_caps_info {
     uint8_t luid[8];
     // Whether luid is set; only on Windows.
     bfr_bool luid_valid;
-    // A pipeline cache loads only on an adapter with the same cache_uuid.
+    // The backend's ID for the adapter and driver whose pipeline cache data loads; all 0 where the
+    // backend states none.
     uint8_t cache_uuid[16];
 } bfr_caps_info;
 
@@ -1945,6 +1970,8 @@ typedef struct bfr_caps_features {
     bfr_bool alpha_to_one;
     // A bfr_graphics_pipeline_desc.sample_mask that leaves samples out.
     bfr_bool sample_mask;
+    // bfr_create_pipeline_cache makes caches.
+    bfr_bool pipeline_cache;
     bfr_bool storage_read_without_format;
     bfr_bool storage_write_without_format;
     // Every graphics and compute queue writes timestamps.
@@ -2733,21 +2760,23 @@ BFR_API bfr_result bfr_get_sampler_slot(bfr_device* device, bfr_sampler sampler,
 BFR_API void bfr_destroy_sampler(bfr_device* device, bfr_sampler sampler);
 
 // Creates a compute pipeline, as desc says, before returning. Not for the frame path: it compiles,
-// and frees pipelines the GPU is done with. Fails with error_limit_reached at the device's maximum
-// of pipelines, and error_device_failed when the backend refuses the code or the desc; the message
-// carries what it said.
+// and frees pipelines the GPU is done with. A desc.cache is looked in first, and the pipeline added
+// on a miss. Fails with error_invalid_handle when desc.cache is gone, error_limit_reached at the
+// device's maximum of pipelines, and error_device_failed when the backend refuses the code, the
+// desc or the cache; the message carries what it said.
 BFR_API bfr_result bfr_create_compute_pipeline(
     bfr_device* device,
     const bfr_compute_pipeline_desc* desc,
     bfr_pipeline* pipeline);
 
 // Creates a graphics pipeline, as desc says, before returning. Not for the frame path, as
-// bfr_create_compute_pipeline is not. A target of format undefined is an unused one. Fails with
-// error_invalid_argument for a desc with more than max_color_targets targets or a
-// min_sample_shading outside 0 to 1, error_unsupported for a topology the backend has no form for
-// (Metal's fan) and for an alpha_to_one, min_sample_shading or sample_mask whose feature the device
-// lacks, error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
-// backend refuses the code or the desc; the message carries what it said.
+// bfr_create_compute_pipeline is not. A desc.cache is used as there. A target of format undefined
+// is an unused one. Fails with error_invalid_argument for a desc with more than max_color_targets
+// targets or a min_sample_shading outside 0 to 1, error_unsupported for a topology the backend has
+// no form for (Metal's fan) and for an alpha_to_one, min_sample_shading or sample_mask whose
+// feature the device lacks, error_invalid_handle when desc.cache is gone, error_limit_reached at
+// the device's maximum of pipelines, and error_device_failed when the backend refuses the code, the
+// desc or the cache; the message carries what it said.
 BFR_API bfr_result bfr_create_graphics_pipeline(
     bfr_device* device,
     const bfr_graphics_pipeline_desc* desc,
@@ -2757,6 +2786,31 @@ BFR_API bfr_result bfr_create_graphics_pipeline(
 // frame path: it records the point the pipeline waits for and frees what the GPU is done with. A
 // handle that is already destroyed does nothing.
 BFR_API void bfr_destroy_pipeline(bfr_device* device, bfr_pipeline pipeline);
+
+// Creates a pipeline cache that starts with desc's data. Not for the frame path. Data from another
+// adapter or driver makes an empty cache or fails with error_device_failed, as the backend does.
+// Fails with error_unsupported where the backend makes none, as bfr_caps_features.pipeline_cache
+// reports, and error_limit_reached at the device's maximum of pipeline caches.
+BFR_API bfr_result bfr_create_pipeline_cache(
+    bfr_device* device,
+    const bfr_pipeline_cache_desc* desc,
+    bfr_pipeline_cache* cache);
+
+// Writes a pipeline cache's bytes, for a later bfr_pipeline_cache_desc. With data null, writes how
+// many there are to size. Otherwise writes up to size of them, sets size to how many it wrote, and
+// returns incomplete if there were more, or fails with error_device_failed, as the backend does.
+// Not for the frame path. Fails with error_invalid_handle when the cache is gone.
+// data: An array of size elements. May be null.
+BFR_API bfr_result bfr_get_pipeline_cache_data(
+    bfr_device* device,
+    bfr_pipeline_cache cache,
+    size_t* size,
+    uint8_t* data);
+
+// Destroys a pipeline cache at once; pipelines made with it stay. Not for the frame path. Not while
+// another thread is using the cache or creating a pipeline with it. A handle that is already
+// destroyed does nothing.
+BFR_API void bfr_destroy_pipeline_cache(bfr_device* device, bfr_pipeline_cache cache);
 
 // Creates a pool of desc's count GPU timestamps, written by lists on desc's queue. Not for the
 // frame path. Fails with error_invalid_argument when the device has no such queue,

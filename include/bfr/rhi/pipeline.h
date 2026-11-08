@@ -20,6 +20,26 @@ struct Pipeline;
 
 using PipelineHandle = core::Handle<Pipeline>;
 
+/// Pipelines the backend has compiled, which it reads back as bytes for a
+/// later run to start from. Pipelines made with one look in it first and add
+/// themselves on a miss. Only named, by a PipelineCacheHandle.
+struct PipelineCache;
+
+using PipelineCacheHandle = core::Handle<PipelineCache>;
+
+/// How to create a pipeline cache: bytes Device::pipelineCacheData gave
+/// before, read during the call only. Empty is an empty cache.
+struct PipelineCacheDesc {
+    std::span<const std::byte> data;
+};
+
+/// What Device::pipelineCacheData wrote: how many bytes, and whether the
+/// backend says that is all of them.
+struct PipelineCacheWrite {
+    std::size_t written = 0;
+    bool complete = false;
+};
+
 /// The most color targets a graphics pipeline renders to.
 inline constexpr std::uint32_t kMaxColorTargets = BFR_MAX_COLOR_TARGETS;
 
@@ -38,6 +58,8 @@ struct ShaderCode {
 struct ComputePipelineDesc {
     ShaderCode compute;
     std::array<std::uint32_t, kWorkgroupDimensions> workgroupSize{};
+    /// Where the pipeline is looked for, and added on a miss; null is none.
+    PipelineCacheHandle cache{};
 };
 
 /// What draws assemble vertices into. Lists take each primitive's vertices
@@ -234,6 +256,8 @@ struct GraphicsPipelineDesc {
     /// The fraction of samples, 0 to 1, shaded apart; above 0 shades per
     /// sample, where Features::sampleRateShading.
     float minSampleShading = 0;
+    /// Where the pipeline is looked for, and added on a miss; null is none.
+    PipelineCacheHandle cache{};
 };
 
 } // namespace bfr::rhi

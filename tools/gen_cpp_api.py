@@ -368,8 +368,11 @@ def initializer(fields: list[str]) -> list[str]:
     return ["    return {"] + [f"        {field}," for field in fields] + ["    };"]
 
 
-def count_check(span: str, what: str) -> list[str]:
-    """Refuses span when its size has no room in the C API's uint32_t count."""
+def count_check(span: str, what: str, count_kind: str) -> list[str]:
+    """Refuses span when its size has no room in the C API's uint32_t count; a
+    size_t count holds any span's."""
+    if count_kind == "size":
+        return []
     return [
         f"    if (!std::in_range<uint32_t>({span}.size())) {{",
         f'        return std::unexpected(detail::tooMany("{what} holds more elements than a uint32_t counts"));',
@@ -757,7 +760,7 @@ class Renderer:
         elif method.returned is None:
             returns = "Expected<void>"
         elif method.count is not None:
-            returns = f"Expected<std::vector<{pascal(method.returned['type'])}>>"
+            returns = f"Expected<std::vector<{cpp_type(api, method.returned['type'], out=True)}>>"
         else:
             returns = f"Expected<{cpp_type(api, method.returned['type'], out=True)}>"
         return template, returns, ", ".join(params)
@@ -802,9 +805,10 @@ class Renderer:
             if param.get("array"):
                 if function.get("returns") is None:
                     raise SpecError(f"{method.function}: an array is refused through the result, which it has not")
-                self.emit(*count_check(name, name))
+                count = next(p for p in function["params"] if p["name"] == param["array"])
+                self.emit(*count_check(name, name, count["type"]))
                 args.append(f"reinterpret_cast<const {c_type(kind)}*>({name}.data())")
-                counts[param["array"]] = f"static_cast<uint32_t>({name}.size())"
+                counts[param["array"]] = f"static_cast<{c_type(count['type'])}>({name}.size())"
                 continue
             if kind in api.handles:
                 args.append(f"{name}.get()")
@@ -816,7 +820,8 @@ class Renderer:
                 if function.get("returns") is None:
                     raise SpecError(f"{method.function}: an array is refused through the result, which it has not")
                 member = f"{name}.{camel(array['name'])}"
-                self.emit(*count_check(member, member))
+                count = next(m for m in api.structs[kind]["members"] if m["name"] == array["array"])
+                self.emit(*count_check(member, member, count["type"]))
             extra = []
             if self.plan.is_extensible(kind):
                 self.emit("    const detail::Chain<decltype(detail::toC(extensions))...> chain{"
@@ -895,14 +900,19 @@ class Renderer:
         asking = self.ordered_args(method, args, {count["name"]: f"&{count_name}", array["name"]: "nullptr"})
         filling = self.ordered_args(method, args, {count["name"]: f"&{count_name}", array["name"]: f"{listed}.data()"})
         element = f"detail::fromC({listed}[i])" if kind in api.structs else from_c(api, kind, f"{listed}[i]")
+        count_type = cpp_type(api, count["type"])
         self.emit(
-            f"    std::vector<{c_name(kind)}> {listed};",
-            f"    std::uint32_t {count_name} = 0;",
+            f"    std::vector<{c_type(kind)}> {listed};",
+            f"    {count_type} {count_name} = 0;",
             "    // Asked again while the list grows between the two calls.",
             "    for (;;) {",
             f"        bfr_result result = {call}({', '.join(asking)});",
             "        if (result < 0) {",
             "            return std::unexpected(detail::failure(result));",
+            "        }",
+            "        // None to fill: a null array would ask the count again.",
+            f"        if ({count_name} == 0) {{",
+            "            break;",
             "        }",
             f"        {listed}.resize({count_name});",
             f"        result = {call}({', '.join(filling)});",
@@ -913,9 +923,9 @@ class Renderer:
             "            break;",
             "        }",
             "    }",
-            f"    std::vector<{pascal(kind)}> {camel(array['name'])};",
+            f"    std::vector<{cpp_type(api, kind, out=True)}> {camel(array['name'])};",
             f"    {camel(array['name'])}.reserve({count_name});",
-            f"    for (std::uint32_t i = 0; i < {count_name}; ++i) {{",
+            f"    for ({count_type} i = 0; i < {count_name}; ++i) {{",
             f"        {camel(array['name'])}.push_back({element});",
             "    }",
             f"    return {camel(array['name'])};",

@@ -6,6 +6,8 @@
 #include "bfr/rhi/pipeline.h"
 #include "d3d12/d3d12_device.h"
 #include "d3d12/d3d12_formats.h"
+#include "d3d12/d3d12_pipeline_cache.h"
+#include "d3d12/d3d12_pipeline_hash.h"
 #include "d3d12/d3d12_result.h"
 #include "rhi/pipeline_check.h"
 
@@ -20,6 +22,7 @@
 #include <cstdint>
 #include <expected>
 #include <limits>
+#include <memory>
 #include <span>
 #include <utility>
 
@@ -288,6 +291,10 @@ core::Result<D3D12BindlessLayout> createD3D12BindlessLayout(ID3D12Device& device
         return failure(core::ErrorCode::RhiDeviceFailed,
                        {.call = "ID3D12Device::CreateRootSignature", .result = result});
     }
+    PipelineHash signatureHash;
+    signatureHash.add(
+        std::span{static_cast<const std::byte*>(serialized->GetBufferPointer()), serialized->GetBufferSize()});
+    layout.signatureHash = signatureHash.value();
     // The three resource tables share one heap, which has a size of its own
     // beyond each table's.
     const std::uint64_t resourceCount = std::uint64_t{desc.maxBindlessTextures} + desc.maxBindlessStorageTextures +
@@ -317,23 +324,26 @@ core::Result<D3D12BindlessLayout> createD3D12BindlessLayout(ID3D12Device& device
     return layout;
 }
 
-core::Result<D3D12Pipeline> createD3D12ComputePipeline(ID3D12Device& device, ID3D12RootSignature& rootSignature,
+core::Result<D3D12Pipeline> createD3D12ComputePipeline(ID3D12Device& device, const D3D12BindlessLayout& layout,
+                                                       std::shared_ptr<D3D12PipelineLibrary> library,
                                                        const ComputePipelineDesc& desc) {
-    const D3D12_COMPUTE_PIPELINE_STATE_DESC info{.pRootSignature = &rootSignature,
+    const D3D12_COMPUTE_PIPELINE_STATE_DESC info{.pRootSignature = layout.rootSignature.Get(),
                                                  .CS = bytecodeFor(desc.compute),
                                                  .NodeMask = 0,
                                                  .CachedPSO = {},
                                                  .Flags = D3D12_PIPELINE_STATE_FLAG_NONE};
-    D3D12Pipeline pipeline{.state = nullptr, .compute = true, .topology = Topology::TriangleList};
-    if (const HRESULT result = device.CreateComputePipelineState(&info, IID_PPV_ARGS(&pipeline.state));
-        FAILED(result)) {
-        return failure(core::ErrorCode::RhiDeviceFailed,
-                       {.call = "ID3D12Device::CreateComputePipelineState", .result = result});
+    auto state = pipelineStateFor(device, library.get(), info, layout.signatureHash);
+    if (!state) {
+        return std::unexpected(std::move(state.error()));
     }
-    return pipeline;
+    return D3D12Pipeline{.library = std::move(library),
+                         .state = std::move(*state),
+                         .compute = true,
+                         .topology = Topology::TriangleList};
 }
 
-core::Result<D3D12Pipeline> createD3D12GraphicsPipeline(ID3D12Device& device, ID3D12RootSignature& rootSignature,
+core::Result<D3D12Pipeline> createD3D12GraphicsPipeline(ID3D12Device& device, const D3D12BindlessLayout& layout,
+                                                        std::shared_ptr<D3D12PipelineLibrary> library,
                                                         const GraphicsPipelineDesc& desc) {
     const StencilFace& front = desc.depthStencil.front;
     const StencilFace& back = desc.depthStencil.back;
@@ -356,7 +366,7 @@ core::Result<D3D12Pipeline> createD3D12GraphicsPipeline(ID3D12Device& device, ID
                              "depth bias {} is not a whole number, which D3D12's rasterizer state holds", depthBias);
     }
     D3D12_GRAPHICS_PIPELINE_STATE_DESC info{};
-    info.pRootSignature = &rootSignature;
+    info.pRootSignature = layout.rootSignature.Get();
     info.VS = bytecodeFor(desc.vertex);
     info.PS = bytecodeFor(desc.fragment);
     info.BlendState.AlphaToCoverageEnable = desc.alphaToCoverage ? TRUE : FALSE;
@@ -401,13 +411,14 @@ core::Result<D3D12Pipeline> createD3D12GraphicsPipeline(ID3D12Device& device, ID
         info.DSVFormat = dxgiFormatsFor(desc.depthStencilFormat).depth;
     }
     info.SampleDesc = {.Count = desc.samples, .Quality = 0};
-    D3D12Pipeline pipeline{.state = nullptr, .compute = false, .topology = desc.topology};
-    if (const HRESULT result = device.CreateGraphicsPipelineState(&info, IID_PPV_ARGS(&pipeline.state));
-        FAILED(result)) {
-        return failure(core::ErrorCode::RhiDeviceFailed,
-                       {.call = "ID3D12Device::CreateGraphicsPipelineState", .result = result});
+    auto state = pipelineStateFor(device, library.get(), info, layout.signatureHash);
+    if (!state) {
+        return std::unexpected(std::move(state.error()));
     }
-    return pipeline;
+    return D3D12Pipeline{.library = std::move(library),
+                         .state = std::move(*state),
+                         .compute = false,
+                         .topology = desc.topology};
 }
 
 // The device's pipeline calls, beside the pipelines they make.
@@ -423,7 +434,11 @@ core::Result<D3D12Pipeline*> D3D12Device::pipelineFor(PipelineHandle pipeline) {
 core::Result<PipelineHandle> D3D12Device::createComputePipeline(const ComputePipelineDesc& desc) {
     // Cold, as createBuffer is: what the GPU is done with is freed here.
     collectBuffers();
-    auto made = createD3D12ComputePipeline(*device_.Get(), *layout_.rootSignature.Get(), desc);
+    auto library = pipelineLibraryFor(desc.cache);
+    if (!library) {
+        return std::unexpected(std::move(library.error()));
+    }
+    auto made = createD3D12ComputePipeline(*device_.Get(), layout_, std::move(*library), desc);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }
@@ -442,7 +457,11 @@ core::Result<PipelineHandle> D3D12Device::createGraphicsPipeline(const GraphicsP
         return std::unexpected(std::move(checked.error()));
     }
     collectBuffers();
-    auto made = createD3D12GraphicsPipeline(*device_.Get(), *layout_.rootSignature.Get(), desc);
+    auto library = pipelineLibraryFor(desc.cache);
+    if (!library) {
+        return std::unexpected(std::move(library.error()));
+    }
+    auto made = createD3D12GraphicsPipeline(*device_.Get(), layout_, std::move(*library), desc);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }

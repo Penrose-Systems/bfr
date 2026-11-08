@@ -17,6 +17,7 @@
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_buffer.h"
 #include "vulkan/vulkan_pipeline.h"
+#include "vulkan/vulkan_pipeline_cache.h"
 #include "vulkan/vulkan_sampler.h"
 #include "vulkan/vulkan_sparse.h"
 #include "vulkan/vulkan_swapchain.h"
@@ -247,6 +248,11 @@ public:
     [[nodiscard]] core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) override;
     [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyPipeline(PipelineHandle pipeline) override;
+    [[nodiscard]] core::Result<PipelineCacheHandle> createPipelineCache(const PipelineCacheDesc& desc) override;
+    [[nodiscard]] core::Result<std::size_t> pipelineCacheSize(PipelineCacheHandle cache) override;
+    [[nodiscard]] core::Result<PipelineCacheWrite> pipelineCacheData(PipelineCacheHandle cache,
+                                                                     std::span<std::byte> data) override;
+    [[nodiscard]] core::Result<void> destroyPipelineCache(PipelineCacheHandle cache) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
     [[nodiscard]] core::Result<TimestampPoolHandle> createTimestampPool(const TimestampPoolDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyTimestampPool(TimestampPoolHandle pool) override;
@@ -293,6 +299,8 @@ private:
     [[nodiscard]] core::Result<VulkanTexture*> textureFor(TextureHandle texture);
     [[nodiscard]] core::Result<VulkanPipeline*> pipelineFor(PipelineHandle pipeline);
     [[nodiscard]] core::Result<VulkanSparseMemory*> sparseMemoryFor(SparseMemoryHandle memory);
+    // VK_NULL_HANDLE for a null handle.
+    [[nodiscard]] core::Result<VkPipelineCache> pipelineCacheFor(PipelineCacheHandle cache);
     // The binds of desc's texture and buffer regions into queue's arrays.
     [[nodiscard]] core::Result<void> addTextureBinds(VulkanQueue& queue, const TileMappingDesc& desc,
                                                      const VulkanSparseMemory* memory);
@@ -342,6 +350,7 @@ private:
     core::Pool<VulkanSampler, Sampler> samplers_;
     core::Pool<VulkanTimestampPool, TimestampPool> timestampPools_;
     core::Pool<VulkanSparseMemory, SparseMemory> sparseMemories_;
+    core::Pool<VulkanPipelineCache, PipelineCache> pipelineCaches_;
     BindlessSlots bindless_;
     // Declared before pipelines_, which are made on it, so it outlives them.
     VulkanBindlessLayout layout_;

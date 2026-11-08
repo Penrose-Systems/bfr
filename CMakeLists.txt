@@ -133,6 +133,7 @@ if(BFR_BACKEND_VULKAN)
         src/backends/vulkan/vulkan_loader.cpp
         src/backends/vulkan/vulkan_instance.cpp
         src/backends/vulkan/vulkan_pipeline.cpp
+        src/backends/vulkan/vulkan_pipeline_cache.cpp
         src/backends/vulkan/vulkan_sampler.cpp
         src/backends/vulkan/vulkan_sparse.cpp
         src/backends/vulkan/vulkan_timestamp.cpp
@@ -186,6 +187,7 @@ if(BFR_BACKEND_D3D12)
         src/backends/d3d12/d3d12_formats.cpp
         src/backends/d3d12/d3d12_instance.cpp
         src/backends/d3d12/d3d12_pipeline.cpp
+        src/backends/d3d12/d3d12_pipeline_cache.cpp
         src/backends/d3d12/d3d12_commands.cpp
         src/backends/d3d12/d3d12_swapchain.cpp
         src/backends/d3d12/d3d12_sampler.cpp

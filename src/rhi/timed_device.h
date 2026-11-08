@@ -145,6 +145,11 @@ public:
     [[nodiscard]] core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) override;
     [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyPipeline(PipelineHandle pipeline) override;
+    [[nodiscard]] core::Result<PipelineCacheHandle> createPipelineCache(const PipelineCacheDesc& desc) override;
+    [[nodiscard]] core::Result<std::size_t> pipelineCacheSize(PipelineCacheHandle cache) override;
+    [[nodiscard]] core::Result<PipelineCacheWrite> pipelineCacheData(PipelineCacheHandle cache,
+                                                                     std::span<std::byte> data) override;
+    [[nodiscard]] core::Result<void> destroyPipelineCache(PipelineCacheHandle cache) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
     [[nodiscard]] core::Result<TimestampPoolHandle> createTimestampPool(const TimestampPoolDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyTimestampPool(TimestampPoolHandle pool) override;

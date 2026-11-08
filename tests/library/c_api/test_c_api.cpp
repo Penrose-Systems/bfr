@@ -777,7 +777,8 @@ TEST_CASE("C API creates and destroys pipelines, and refuses a state value it do
     };
     const bfr_compute_pipeline_desc computeDesc{.next = nullptr,
                                                 .compute = code(bfr::test::spirv::kBindlessComp),
-                                                .workgroup_size = {kWorkgroup, 1, 1}};
+                                                .workgroup_size = {kWorkgroup, 1, 1},
+                                                .cache = {}};
     bfr_pipeline compute{};
     REQUIRE(bfr_create_compute_pipeline(device.device, &computeDesc, &compute) == BFR_RESULT_SUCCESS);
 
@@ -817,6 +818,56 @@ TEST_CASE("C API creates and destroys pipelines, and refuses a state value it do
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("C API writes a pipeline cache's bytes, saying when it wrote only part, and makes a cache of them",
+          "[c_api][gpu]") {
+    const bfr_backend backend = GENERATE(eachBackend());
+    // The shaders checked in are SPIR-V, which only Vulkan takes.
+    if (backend != BFR_BACKEND_VULKAN) {
+        SKIP("no bytecode is checked in for this backend");
+    }
+    constexpr std::uint32_t kWorkgroup = 64;
+    std::vector<std::string> messages;
+    const Instance instance{backend, messages};
+    const HeadlessDevice device{instance.instance};
+    const bfr_pipeline_cache_desc empty{.data = nullptr, .data_size = 0};
+    bfr_pipeline_cache cache{};
+    REQUIRE(bfr_create_pipeline_cache(device.device, &empty, &cache) == BFR_RESULT_SUCCESS);
+    const bfr_compute_pipeline_desc computeDesc{.next = nullptr,
+                                                .compute = {.code = bfr::test::spirv::kBindlessComp.data(),
+                                                            .code_size = bfr::test::spirv::kBindlessComp.size(),
+                                                            .entry_point = {.data = "main", .length = 4}},
+                                                .workgroup_size = {kWorkgroup, 1, 1},
+                                                .cache = cache};
+    bfr_pipeline pipeline{};
+    REQUIRE(bfr_create_compute_pipeline(device.device, &computeDesc, &pipeline) == BFR_RESULT_SUCCESS);
+
+    std::size_t size = 0;
+    REQUIRE(bfr_get_pipeline_cache_data(device.device, cache, &size, nullptr) == BFR_RESULT_SUCCESS);
+    REQUIRE(size > 0);
+    std::vector<std::uint8_t> bytes(size);
+    std::size_t part = size - 1;
+    // Short of room, the backend writes part and says so, or refuses.
+    const bfr_result shortResult = bfr_get_pipeline_cache_data(device.device, cache, &part, bytes.data());
+    CHECK((shortResult == BFR_RESULT_INCOMPLETE || shortResult == BFR_RESULT_ERROR_DEVICE_FAILED));
+    std::size_t whole = size;
+    REQUIRE(bfr_get_pipeline_cache_data(device.device, cache, &whole, bytes.data()) == BFR_RESULT_SUCCESS);
+    CHECK(whole == size);
+
+    const bfr_pipeline_cache_desc saved{.data = bytes.data(), .data_size = whole};
+    bfr_pipeline_cache again{};
+    REQUIRE(bfr_create_pipeline_cache(device.device, &saved, &again) == BFR_RESULT_SUCCESS);
+    const bfr_pipeline_cache_desc stray{.data = nullptr, .data_size = 1};
+    bfr_pipeline_cache none{};
+    CHECK(bfr_create_pipeline_cache(device.device, &stray, &none) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(none.bits == 0);
+
+    bfr_destroy_pipeline_cache(device.device, cache);
+    CHECK(bfr_get_pipeline_cache_data(device.device, cache, &size, nullptr) == BFR_RESULT_ERROR_INVALID_HANDLE);
+    bfr_destroy_pipeline_cache(device.device, again);
+    bfr_destroy_pipeline(device.device, pipeline);
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, directly or indirectly, and refuses a value it "
           "does not have",
           "[c_api][gpu]") {
@@ -834,7 +885,8 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, directly
                                                 .compute = {.code = bfr::test::spirv::kBindlessComp.data(),
                                                             .code_size = bfr::test::spirv::kBindlessComp.size(),
                                                             .entry_point = {.data = "main", .length = 4}},
-                                                .workgroup_size = {kWorkgroup, 1, 1}};
+                                                .workgroup_size = {kWorkgroup, 1, 1},
+                                                .cache = {}};
     bfr_pipeline pipeline{};
     REQUIRE(bfr_create_compute_pipeline(device.device, &computeDesc, &pipeline) == BFR_RESULT_SUCCESS);
     bfr_buffer_desc bufferDesc{.next = nullptr,
@@ -1058,7 +1110,7 @@ TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call tim
 
     std::uint32_t count = 0;
     REQUIRE(bfr_get_call_timings(device.device, &count, nullptr) == BFR_RESULT_SUCCESS);
-    CHECK(count == BFR_CALL_RESOLVE_TEXTURE + 1);
+    CHECK(count == BFR_CALL_DESTROY_PIPELINE_CACHE + 1);
     std::vector<bfr_call_timing> timings(count);
     REQUIRE(bfr_get_call_timings(device.device, &count, timings.data()) == BFR_RESULT_SUCCESS);
     CHECK(timings.at(BFR_CALL_CREATE_TIMESTAMP_POOL).count == 2);

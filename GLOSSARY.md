@@ -36,19 +36,17 @@ _Avoid_: binding, FFI layer
 
 ## Capabilities
 
-**Floor**:
-What every adapter BFR lists must have. An adapter missing any of it is not
-listed, so the floor is never queried.
-_Avoid_: baseline, minimum spec, required features
-
-**Optional feature**:
-Something an adapter may or may not have beyond the floor. It is reported by
-the adapter and asked for when the device is created.
-_Avoid_: extension, capability bit
+**Feature**:
+Something an adapter may or may not have. It is reported by the adapter and
+asked for when the device is created. BFR requires none: every adapter the
+backend lists is listed, and a call that needs a feature the device lacks
+fails with RhiUnsupported.
+_Avoid_: extension, capability bit, floor, baseline, minimum spec, required
+features
 
 **Caps**:
 Everything about an adapter that stays the same while it runs: info, limits,
-optional features, memory, queues. Readable before any device exists. A limit
+features, memory, queues. Readable before any device exists. A limit
 for a feature the adapter lacks is 0.
 _Avoid_: limits (one part of caps), properties, device info
 

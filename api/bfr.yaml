@@ -380,6 +380,10 @@ enums:
       draw_indexed_indirect_count: {value: 67}
       dispatch_indirect: {value: 68}
       resolve_texture: {value: 69}
+      create_pipeline_cache: {value: 70}
+      pipeline_cache_size: {value: 71}
+      pipeline_cache_data: {value: 72}
+      destroy_pipeline_cache: {value: 73}
 
   timestamp_stage:
     doc: >-
@@ -717,6 +721,14 @@ handles:
     parent: device
     destroy: destroy_sparse_memory
     doc: Device memory that sparse textures' and buffers' tiles are mapped into by bfr_update_tile_mappings.
+
+  pipeline_cache:
+    parent: device
+    destroy: destroy_pipeline_cache
+    doc: >-
+      Pipelines the backend has compiled, which it reads back as bytes for a
+      later run to start from. Pipelines made with one look in it first and
+      add themselves on a miss.
 
 callbacks:
   message_callback:
@@ -1303,6 +1315,7 @@ structs:
         type: u32
         fixed: 3
         doc: Threads in each workgroup, as the shader declares them; a dispatch counts workgroups.
+      - {name: cache, type: pipeline_cache, doc: "Where the pipeline is looked for, and added on a miss; null is none."}
 
   graphics_pipeline_desc:
     doc: >-
@@ -1325,6 +1338,13 @@ structs:
       - {name: sample_mask, type: u64, doc: "The samples written, bit i for sample i; bits from samples up are ignored. Leaving one of the low samples bits clear needs bfr_caps_features.sample_mask."}
       - {name: alpha_to_one, type: bool, doc: "The fragment's alpha becomes 1 after coverage is taken from it, where bfr_caps_features.alpha_to_one."}
       - {name: min_sample_shading, type: f32, doc: "The fraction of samples, 0 to 1, shaded apart; above 0 shades per sample, where bfr_caps_features.sample_rate_shading."}
+      - {name: cache, type: pipeline_cache, doc: "Where the pipeline is looked for, and added on a miss; null is none."}
+
+  pipeline_cache_desc:
+    doc: How to create a pipeline cache.
+    members:
+      - {name: data, type: u8, array: data_size, pointer: in, doc: "Bytes bfr_get_pipeline_cache_data gave before, read during the call only."}
+      - {name: data_size, type: size, doc: Bytes; 0 is an empty cache.}
 
   token:
     doc: >-
@@ -1483,7 +1503,7 @@ structs:
       - {name: driver_uuid, type: u8, fixed: 16}
       - {name: luid, type: u8, fixed: 8, doc: "Windows' ID for the GPU, as D3D12 and DXGI give it."}
       - {name: luid_valid, type: bool, doc: Whether luid is set; only on Windows.}
-      - {name: cache_uuid, type: u8, fixed: 16, doc: A pipeline cache loads only on an adapter with the same cache_uuid.}
+      - {name: cache_uuid, type: u8, fixed: 16, doc: "The backend's ID for the adapter and driver whose pipeline cache data loads; all 0 where the backend states none."}
 
   caps_limits:
     doc: The adapter's limits on textures, buffers, rendering and sampling.
@@ -1629,6 +1649,7 @@ structs:
       - {name: list_restart, type: bool, doc: "primitive_restart on list topologies, not only strips."}
       - {name: alpha_to_one, type: bool, doc: bfr_graphics_pipeline_desc.alpha_to_one.}
       - {name: sample_mask, type: bool, doc: A bfr_graphics_pipeline_desc.sample_mask that leaves samples out.}
+      - {name: pipeline_cache, type: bool, doc: bfr_create_pipeline_cache makes caches.}
       - {name: storage_read_without_format, type: bool}
       - {name: storage_write_without_format, type: bool}
       - {name: timestamps_on_all_queues, type: bool, doc: Every graphics and compute queue writes timestamps.}
@@ -2592,9 +2613,12 @@ functions:
   create_compute_pipeline:
     doc: >-
       Creates a compute pipeline, as desc says, before returning. Not for the
-      frame path: it compiles, and frees pipelines the GPU is done with. Fails
-      with error_limit_reached at the device's maximum of pipelines, and error_device_failed when the backend refuses the code or
-      the desc; the message carries what it said.
+      frame path: it compiles, and frees pipelines the GPU is done with. A
+      desc.cache is looked in first, and the pipeline added on a miss. Fails
+      with error_invalid_handle when desc.cache is gone, error_limit_reached
+      at the device's maximum of pipelines, and error_device_failed when the
+      backend refuses the code, the desc or the cache; the message carries
+      what it said.
     returns: result
     params:
       - {name: device, type: device}
@@ -2604,14 +2628,16 @@ functions:
   create_graphics_pipeline:
     doc: >-
       Creates a graphics pipeline, as desc says, before returning. Not for the
-      frame path, as bfr_create_compute_pipeline is not. A target of format
-      undefined is an unused one. Fails with error_invalid_argument for a desc
+      frame path, as bfr_create_compute_pipeline is not. A desc.cache is used
+      as there. A target of format undefined is an unused one. Fails with
+      error_invalid_argument for a desc
       with more than max_color_targets targets or a min_sample_shading outside
       0 to 1, error_unsupported for a topology the backend has no form for
       (Metal's fan) and for an alpha_to_one, min_sample_shading or sample_mask
-      whose feature the device lacks, error_limit_reached
-      at the device's maximum of pipelines, and error_device_failed when the
-      backend refuses the code or the desc; the message carries what it said.
+      whose feature the device lacks, error_invalid_handle when desc.cache is
+      gone, error_limit_reached at the device's maximum of pipelines, and
+      error_device_failed when the backend refuses the code, the desc or the
+      cache; the message carries what it said.
     returns: result
     params:
       - {name: device, type: device}
@@ -2627,6 +2653,44 @@ functions:
     params:
       - {name: device, type: device}
       - {name: pipeline, type: pipeline}
+
+  create_pipeline_cache:
+    doc: >-
+      Creates a pipeline cache that starts with desc's data. Not for the frame
+      path. Data from another adapter or driver makes an empty cache or fails
+      with error_device_failed, as the backend does. Fails with
+      error_unsupported where the backend makes none, as
+      bfr_caps_features.pipeline_cache reports, and error_limit_reached at the
+      device's maximum of pipeline caches.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: pipeline_cache_desc, pointer: in}
+      - {name: cache, type: pipeline_cache, pointer: out}
+
+  get_pipeline_cache_data:
+    doc: >-
+      Writes a pipeline cache's bytes, for a later bfr_pipeline_cache_desc.
+      With data null, writes how many there are to size. Otherwise writes up
+      to size of them, sets size to how many it wrote, and returns incomplete
+      if there were more, or fails with error_device_failed, as the backend
+      does. Not for the frame path. Fails with error_invalid_handle when the
+      cache is gone.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: cache, type: pipeline_cache}
+      - {name: size, type: size, pointer: inout}
+      - {name: data, type: u8, array: size, pointer: out, optional: true}
+
+  destroy_pipeline_cache:
+    doc: >-
+      Destroys a pipeline cache at once; pipelines made with it stay. Not for
+      the frame path. Not while another thread is using the cache or creating
+      a pipeline with it. A handle that is already destroyed does nothing.
+    params:
+      - {name: device, type: device}
+      - {name: cache, type: pipeline_cache}
 
   create_timestamp_pool:
     doc: >-

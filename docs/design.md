@@ -8,12 +8,15 @@ else. [`research.md`](research.md) has what other engines and RHIs do.
 ## Requirements
 
 - Standalone library first. Any C++ renderer is a first-class consumer.
-- Hardware floor: modern desktop and recent mobile. Vulkan 1.3 with
-  descriptor indexing, D3D12 Shader Model 6.6, Metal 3 (Apple GPU family 7+).
-  Bindless is available everywhere; no non-bindless binding path.
+- No floor. BFR lists every adapter the backend lists, and creates the
+  instance and device at the version the caller asks for: Vulkan's API
+  version, D3D12's feature level, Metal's. Caps say what each adapter has; a
+  call that needs what the device lacks fails with RhiUnsupported. Where a
+  backend has a feature both in core and as an extension, BFR uses the form
+  the device has.
+- Binding is bindless only, with no non-bindless path. Where a device lacks
+  what bindless needs, caps say so and the calls that need it fail.
 - Platforms: Windows, Linux, macOS, Android (Vulkan), iOS (Metal).
-- OS floor: macOS/iOS 26+ (Metal 4). Windows 10 1909+ with D3D12 enhanced
-  barriers in the driver.
 - Backends: Vulkan, D3D12, Metal. No WebGPU: it has no explicit barriers, no
   bindless, no push constants and one queue.
 - Workloads: real-time 3D games, GPU-driven rendering (indirect, compute
@@ -104,13 +107,11 @@ encoder switching needs lookahead.
 
 ### Device and queues
 
-- The device is created from an adapter with the queues and optional
-  features it wants. An adapter missing a floor feature (Vulkan: descriptor
-  indexing with update-after-bind, timelines, synchronization2, dynamic
-  rendering, buffer device address) is not listed; every device turns the
-  floor's features on. Optional ones are negotiated and queryable.
+- The device is created from an adapter with the queues and features the
+  caller asks for. No feature is required to list an adapter or open a
+  device; caps report each one.
 - Caps are per adapter and readable before any device exists. Reason:
-  optional features are asked for when the device is created, and choosing
+  features are asked for when the device is created, and choosing
   a GPU shouldn't mean opening each one. One call returns everything fixed
   (info, limits, bindless, compute, mesh, ray tracing, features, memory,
   queues) as one struct. Formats, a window's swapchain caps and formats, the
@@ -141,15 +142,13 @@ encoder switching needs lookahead.
   a full barrier. The caller names the layout a texture is in and the one it
   moves to; BFR keeps no record of it. Metal has no layouts, so there it is
   the full barrier alone.
-- D3D12 requires enhanced barriers; adapters without them are
-  rejected. Reason: a legacy-barrier path doubles the sync code.
-  Enhanced barriers are an optional driver feature checked at runtime; the
-  Agility SDK reaches Windows 10 1909+.
-- Metal backend targets Metal 4 (macOS/iOS 26+). Reason: Metal 4
-  has explicit barriers, residency sets and command allocators, which match
-  this core directly, and runs on Apple GPU family 7+ (A14, M1), the same
-  hardware as our floor. On Metal 3 explicit barriers would be emulated with
-  untracked heaps, fences and memory barriers.
+- D3D12 barriers are enhanced barriers. Reason: a legacy-barrier path
+  doubles the sync code. They are a driver feature, so caps report them,
+  and on an adapter without them barrier calls fail with RhiUnsupported.
+- The Metal backend is written against Metal 4 (macOS/iOS 26+). Reason:
+  Metal 4 has explicit barriers, residency sets and command allocators,
+  which match this core directly. Where the OS or GPU lacks Metal 4, caps
+  say so and the calls that need it fail.
 
 ### Lifetime and residency
 
@@ -191,8 +190,9 @@ encoder switching needs lookahead.
   per-pipeline layouts or descriptor sets. The exact layout the shaders
   declare, per backend, is published in `api/bfr.yaml` under `pipeline`;
   the table sizes are the `DeviceDesc`'s `max_bindless_*` members, made
-  with the device and refused when the adapter holds fewer. No uniform
-  buffer table: its update-after-bind feature is outside the Vulkan floor.
+  with the device and passed to the backend as given. No uniform buffer
+  table yet: Vulkan's update-after-bind for uniform buffers is a feature not
+  every device has.
 - Shaders reach buffers and textures by descriptor index. Reason: HLSL on
   D3D12 has no pointer dereference; indices work on all three backends. GPU
   addresses appear only where the native APIs require them (ray tracing

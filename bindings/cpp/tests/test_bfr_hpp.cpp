@@ -498,6 +498,22 @@ TEST_CASE("C++ API creates and destroys pipelines", "[cpp_api][gpu]") {
         auto graphics = device.createGraphicsPipeline(desc);
         INFO(failureOf(graphics));
         REQUIRE(graphics.has_value());
+
+        // A pipeline kept in a cache, whose bytes make another cache.
+        auto cache = device.createPipelineCache({});
+        INFO(failureOf(cache));
+        REQUIRE(cache.has_value());
+        desc.cache = &*cache;
+        auto cached = device.createGraphicsPipeline(desc);
+        INFO(failureOf(cached));
+        REQUIRE(cached.has_value());
+        const auto bytes = cache->pipelineCacheData();
+        INFO(failureOf(bytes));
+        REQUIRE(bytes.has_value());
+        CHECK_FALSE(bytes->empty());
+        auto again = device.createPipelineCache({.data = *bytes});
+        INFO(failureOf(again));
+        REQUIRE(again.has_value());
     }
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }

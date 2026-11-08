@@ -134,6 +134,74 @@ TEST_CASE("Device creates and destroys compute and graphics pipelines", "[rhi][a
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("Device keeps pipelines in a cache, and a cache made from its bytes makes them again", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    if (!takesSpirv(backend)) {
+        SKIP("no " << backend.name << " bytecode is checked in");
+    }
+    std::vector<std::string> messages;
+    {
+        const PipelineDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const bool cached = made.instance->adapters()[0].caps.features.pipelineCache;
+
+        const auto first = device.createPipelineCache({});
+        // Features::pipelineCache says whether caches are made.
+        CHECK(first.has_value() == cached);
+        if (!first) {
+            CHECK(first.error().code == ErrorCode::RhiUnsupported);
+            SKIP(failureOf(first));
+        }
+        ComputePipelineDesc compute = kCompute;
+        compute.cache = *first;
+        GraphicsPipelineDesc graphics = graphicsDesc();
+        graphics.cache = *first;
+        const auto computeMade = device.createComputePipeline(compute);
+        INFO(failureOf(computeMade));
+        REQUIRE(computeMade.has_value());
+        const auto graphicsMade = device.createGraphicsPipeline(graphics);
+        INFO(failureOf(graphicsMade));
+        REQUIRE(graphicsMade.has_value());
+
+        const auto size = device.pipelineCacheSize(*first);
+        INFO(failureOf(size));
+        REQUIRE(size.has_value());
+        CHECK(*size > 0);
+        std::vector<std::byte> bytes(*size);
+        const auto written = device.pipelineCacheData(*first, bytes);
+        INFO(failureOf(written));
+        REQUIRE(written.has_value());
+        CHECK(written->written == *size);
+        CHECK(written->complete);
+        bytes.resize(written->written);
+
+        // Pipelines made with a cache stay once it goes.
+        CHECK(device.destroyPipelineCache(*first).has_value());
+        CHECK(device.pipelineCacheSize(*first).error().code == ErrorCode::RhiInvalidHandle);
+        CHECK(device.createComputePipeline(compute).error().code == ErrorCode::RhiInvalidHandle);
+        CHECK(device.destroyPipelineCache(*first).error().code == ErrorCode::RhiInvalidHandle);
+        CHECK(device.destroyPipelineCache({}).has_value());
+
+        const auto second = device.createPipelineCache({.data = bytes});
+        INFO(failureOf(second));
+        REQUIRE(second.has_value());
+        compute.cache = *second;
+        graphics.cache = *second;
+        const auto computeAgain = device.createComputePipeline(compute);
+        INFO(failureOf(computeAgain));
+        REQUIRE(computeAgain.has_value());
+        const auto graphicsAgain = device.createGraphicsPipeline(graphics);
+        INFO(failureOf(graphicsAgain));
+        REQUIRE(graphicsAgain.has_value());
+
+        for (const PipelineHandle pipeline : {*computeMade, *graphicsMade, *computeAgain, *graphicsAgain}) {
+            CHECK(device.destroyPipeline(pipeline).has_value());
+        }
+        CHECK(device.destroyPipelineCache(*second).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("Device refuses more color targets than a pipeline holds with RhiInvalidCall", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;

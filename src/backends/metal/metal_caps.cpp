@@ -151,6 +151,12 @@ void addMultisampleFeatures(Features& features) {
     features.sampleMask = false;
 }
 
+// Metal 4 loads an archive only from a file URL (MTLDevice.hpp:396), and
+// writes one only to a URL (MTL4PipelineDataSetSerializer.hpp:51), as
+// MTL::BinaryArchive does (MTLBinaryArchive.hpp:55, 77); the bytes it gives,
+// serializeAsPipelinesScript (MTL4PipelineDataSetSerializer.hpp:53), are
+// descriptors for the offline tool, not pipelines it loads. So Metal has no
+// cache it loads from bytes, and pipelineCache stays false.
 Features featuresOf(MTL::Device* device) {
     Features features;
     features.rayQuery = device->supportsRaytracing();

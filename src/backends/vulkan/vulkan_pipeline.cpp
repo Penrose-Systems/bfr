@@ -458,7 +458,8 @@ VulkanPipeline::~VulkanPipeline() {
 }
 
 core::Result<VulkanPipeline> createVulkanComputePipeline(const VolkDeviceTable& table, VkDevice device,
-                                                         VkPipelineLayout layout, const ComputePipelineDesc& desc) {
+                                                         VkPipelineLayout layout, VkPipelineCache cache,
+                                                         const ComputePipelineDesc& desc) {
     auto module = createModule(table, device, desc.compute.code);
     if (!module) {
         return std::unexpected(std::move(module.error()));
@@ -469,7 +470,7 @@ core::Result<VulkanPipeline> createVulkanComputePipeline(const VolkDeviceTable& 
     info.stage = stageFor(VK_SHADER_STAGE_COMPUTE_BIT, *module, entryPoint.c_str());
     info.layout = layout;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    const VkResult result = table.vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
+    const VkResult result = table.vkCreateComputePipelines(device, cache, 1, &info, nullptr, &pipeline);
     table.vkDestroyShaderModule(device, *module, nullptr);
     if (result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateComputePipelines", .result = result});
@@ -478,7 +479,8 @@ core::Result<VulkanPipeline> createVulkanComputePipeline(const VolkDeviceTable& 
 }
 
 core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable& table, VkDevice device,
-                                                          VkPipelineLayout layout, const GraphicsPipelineDesc& desc) {
+                                                          VkPipelineLayout layout, VkPipelineCache cache,
+                                                          const GraphicsPipelineDesc& desc) {
     const std::span targets{desc.colorTargets.data(), desc.colorTargetCount};
     std::array<VkFormat, kMaxColorTargets> colorFormats{};
     std::array<VkPipelineColorBlendAttachmentState, kMaxColorTargets> blends{};
@@ -590,7 +592,7 @@ core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable&
     info.pDynamicState = &dynamic;
     info.layout = layout;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    const VkResult result = table.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
+    const VkResult result = table.vkCreateGraphicsPipelines(device, cache, 1, &info, nullptr, &pipeline);
     table.vkDestroyShaderModule(device, *vertex, nullptr);
     if (fragment != VK_NULL_HANDLE) {
         table.vkDestroyShaderModule(device, fragment, nullptr);
@@ -615,7 +617,11 @@ core::Result<PipelineHandle> VulkanDevice::createComputePipeline(const ComputePi
     // Cold, so pipelines the GPU is done with are freed here, never on the
     // frame path.
     collectBuffers();
-    auto made = createVulkanComputePipeline(table_, device_, layout_.pipelineLayout(), desc);
+    const auto cache = pipelineCacheFor(desc.cache);
+    if (!cache) {
+        return std::unexpected(std::move(cache.error()));
+    }
+    auto made = createVulkanComputePipeline(table_, device_, layout_.pipelineLayout(), *cache, desc);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }
@@ -634,7 +640,11 @@ core::Result<PipelineHandle> VulkanDevice::createGraphicsPipeline(const Graphics
         return std::unexpected(std::move(checked.error()));
     }
     collectBuffers();
-    auto made = createVulkanGraphicsPipeline(table_, device_, layout_.pipelineLayout(), desc);
+    const auto cache = pipelineCacheFor(desc.cache);
+    if (!cache) {
+        return std::unexpected(std::move(cache.error()));
+    }
+    auto made = createVulkanGraphicsPipeline(table_, device_, layout_.pipelineLayout(), *cache, desc);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }

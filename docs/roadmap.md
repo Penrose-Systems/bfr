@@ -19,13 +19,18 @@ apart, read-only depth-stencil, sample mask, alpha to one, sample shading),
 resolves (color and depth-stencil as rendering ends, into a swapchain's
 image, and by resolveTexture), compute and copy queues in use (what each
 kind of queue runs, the layouts each kind moves a texture between, work
-handed across queues by waits).
+handed across queues by waits), pipeline cache blobs (caches made from bytes
+and read back as bytes, which pipelines are looked for in and added to).
 
-11. Pipeline cache blobs.
-12. Mesh shaders and ray tracing, exposed where the backend has them.
-13. Queries (occlusion, statistics), debug labels, memory heaps and placed
+12. No floor: every adapter the backend lists is listed; the instance and
+    device are made at the version the caller asks for; every feature BFR
+    now assumes (Vulkan 1.3 core, descriptor indexing, enhanced barriers,
+    Metal 4) is reported through caps, and calls that need a missing one
+    fail with RhiUnsupported.
+13. Mesh shaders and ray tracing, exposed where the backend has them.
+14. Queries (occlusion, statistics), debug labels, memory heaps and placed
     resources, formatted buffer views, variable rate shading, programmable
     sample positions, HDR and present timing, and whatever each backend's
     caps turn up as we go.
 
-Next: 11.
+Next: 12.

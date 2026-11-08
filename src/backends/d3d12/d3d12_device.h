@@ -14,6 +14,7 @@
 #include "core/submissions.h"
 #include "d3d12/d3d12_buffer.h"
 #include "d3d12/d3d12_pipeline.h"
+#include "d3d12/d3d12_pipeline_cache.h"
 #include "d3d12/d3d12_sampler.h"
 #include "d3d12/d3d12_sparse.h"
 #include "d3d12/d3d12_swapchain.h"
@@ -255,6 +256,11 @@ public:
     [[nodiscard]] core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) override;
     [[nodiscard]] core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyPipeline(PipelineHandle pipeline) override;
+    [[nodiscard]] core::Result<PipelineCacheHandle> createPipelineCache(const PipelineCacheDesc& desc) override;
+    [[nodiscard]] core::Result<std::size_t> pipelineCacheSize(PipelineCacheHandle cache) override;
+    [[nodiscard]] core::Result<PipelineCacheWrite> pipelineCacheData(PipelineCacheHandle cache,
+                                                                     std::span<std::byte> data) override;
+    [[nodiscard]] core::Result<void> destroyPipelineCache(PipelineCacheHandle cache) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
     [[nodiscard]] core::Result<TimestampPoolHandle> createTimestampPool(const TimestampPoolDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyTimestampPool(TimestampPoolHandle pool) override;
@@ -308,6 +314,8 @@ private:
     [[nodiscard]] core::Result<D3D12Texture*> textureFor(TextureHandle texture);
     [[nodiscard]] core::Result<D3D12Pipeline*> pipelineFor(PipelineHandle pipeline);
     [[nodiscard]] core::Result<D3D12SparseMemory*> sparseMemoryFor(SparseMemoryHandle memory);
+    // Null for a null handle.
+    [[nodiscard]] core::Result<std::shared_ptr<D3D12PipelineLibrary>> pipelineLibraryFor(PipelineCacheHandle cache);
     // desc's texture and buffer regions in tiles, each checked; the resource
     // they map, null when desc has none.
     [[nodiscard]] core::Result<ID3D12Resource*> addTextureTiles(D3D12TileMappings& tiles, const TileMappingDesc& desc,
@@ -330,6 +338,9 @@ private:
     // Null when the runtime has no ID3D12Device11; samplers then go through
     // CreateSampler.
     Microsoft::WRL::ComPtr<ID3D12Device11> device11_;
+    // Null when the runtime has no ID3D12Device1; pipeline caches then fail
+    // with RhiUnsupported, as Features::pipelineCache says.
+    Microsoft::WRL::ComPtr<ID3D12Device1> device1_;
     Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter_;
     std::size_t heapCount_;
     DeviceDesc desc_;
@@ -371,6 +382,7 @@ private:
     core::Pool<D3D12Sampler, Sampler> samplers_;
     core::Pool<D3D12TimestampPool, TimestampPool> timestampPools_;
     core::Pool<D3D12SparseMemory, SparseMemory> sparseMemories_;
+    core::Pool<D3D12PipelineCache, PipelineCache> pipelineCaches_;
     BindlessSlots bindless_;
     // Declared before pipelines_, which are made on it, so it outlives them.
     D3D12BindlessLayout layout_;

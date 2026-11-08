@@ -425,6 +425,9 @@ core::Result<MetalPipeline*> MetalDevice::pipelineFor(PipelineHandle pipeline) {
 }
 
 core::Result<PipelineHandle> MetalDevice::createComputePipeline(const ComputePipelineDesc& desc) {
+    if (!desc.cache.isNull()) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline cache handle is stale");
+    }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
     collectBuffers();
     auto made = createMetalComputePipeline(*device_.get(), *compiler_.get(), desc);
@@ -444,6 +447,9 @@ core::Result<PipelineHandle> MetalDevice::createGraphicsPipeline(const GraphicsP
     }
     if (auto checked = checkMultisample(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
+    }
+    if (!desc.cache.isNull()) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline cache handle is stale");
     }
     collectBuffers();
     auto made = createMetalGraphicsPipeline(*device_.get(), *compiler_.get(), desc);
@@ -472,6 +478,29 @@ core::Result<void> MetalDevice::destroyPipeline(PipelineHandle pipeline) {
     }
     collectBuffers();
     return {};
+}
+
+// Metal makes no pipeline cache, as Features::pipelineCache says, so no cache
+// handle is ever live.
+
+core::Result<PipelineCacheHandle> MetalDevice::createPipelineCache(const PipelineCacheDesc& /*desc*/) {
+    return core::failure(core::ErrorCode::RhiUnsupported, "Metal has no pipeline cache it gives as bytes");
+}
+
+core::Result<std::size_t> MetalDevice::pipelineCacheSize(PipelineCacheHandle /*cache*/) {
+    return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline cache handle is stale");
+}
+
+core::Result<PipelineCacheWrite> MetalDevice::pipelineCacheData(PipelineCacheHandle /*cache*/,
+                                                                std::span<std::byte> /*data*/) {
+    return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline cache handle is stale");
+}
+
+core::Result<void> MetalDevice::destroyPipelineCache(PipelineCacheHandle cache) {
+    if (cache.isNull()) {
+        return {};
+    }
+    return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline cache handle is stale");
 }
 
 } // namespace bfr::rhi::metal

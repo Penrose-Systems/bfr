@@ -97,20 +97,22 @@ private:
     VkPrimitiveTopology topology_;
 };
 
-/// A compute pipeline on layout as desc says, whose code is SPIR-V. Fails with
+/// A compute pipeline on layout as desc says, whose code is SPIR-V, looked
+/// for in cache and added to it, where cache is not VK_NULL_HANDLE. Fails with
 /// RhiInvalidCall when the code is not whole words, and RhiDeviceFailed when
 /// the API refuses the module or the pipeline.
 [[nodiscard]] core::Result<VulkanPipeline> createVulkanComputePipeline(const VolkDeviceTable& table, VkDevice device,
-                                                                       VkPipelineLayout layout,
+                                                                       VkPipelineLayout layout, VkPipelineCache cache,
                                                                        const ComputePipelineDesc& desc);
 
 /// A graphics pipeline on layout as desc says, whose code is SPIR-V, for
 /// dynamic rendering to desc's formats with a dynamic viewport, scissor,
-/// topology, blend constants and stencil reference. Fails
+/// topology, blend constants and stencil reference, using cache as
+/// createVulkanComputePipeline does. Fails
 /// with RhiInvalidCall when code is not whole words, and RhiDeviceFailed when
 /// the API refuses a module or the pipeline.
 [[nodiscard]] core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable& table, VkDevice device,
-                                                                        VkPipelineLayout layout,
+                                                                        VkPipelineLayout layout, VkPipelineCache cache,
                                                                         const GraphicsPipelineDesc& desc);
 
 } // namespace bfr::rhi::vulkan

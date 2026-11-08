@@ -247,6 +247,17 @@ void addDrawFeatures(ID3D12Device* device, Features& features) {
     }
 }
 
+// Whether pipeline caches may be made: ID3D12Device1::CreatePipelineLibrary
+// (d3d12.h:10709-10712), where the driver reports D3D12_SHADER_CACHE_SUPPORT_LIBRARY
+// (d3d12.h:2706, 2715-2718).
+void addPipelineCacheFeatures(ID3D12Device* device, Features& features) {
+    Microsoft::WRL::ComPtr<ID3D12Device1> device1;
+    D3D12_FEATURE_DATA_SHADER_CACHE cache{.SupportFlags = D3D12_SHADER_CACHE_SUPPORT_NONE};
+    features.pipelineCache = SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device1))) &&
+                             query(device, D3D12_FEATURE_SHADER_CACHE, cache) &&
+                             (cache.SupportFlags & D3D12_SHADER_CACHE_SUPPORT_LIBRARY) != 0;
+}
+
 Features featuresOf(ID3D12Device* device, const SamplerFeatures& sampler) {
     Features features;
     addBasicFeatures(device, features);
@@ -255,6 +266,7 @@ Features featuresOf(ID3D12Device* device, const SamplerFeatures& sampler) {
     addFloorFeatures(features);
     addDrawFeatures(device, features);
     addMultisampleFeatures(features);
+    addPipelineCacheFeatures(device, features);
     return features;
 }
 
