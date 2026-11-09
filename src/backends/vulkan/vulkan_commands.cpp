@@ -87,6 +87,9 @@ core::Result<void> VulkanDevice::bindPipeline(CommandListHandle commandList, Pip
         return std::unexpected(std::move(found.error()));
     }
     table_.vkCmdBindPipeline((*list)->buffer, (*found)->bindPoint(), (*found)->pipeline());
+    if ((*found)->bindPoint() == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR) {
+        (*list)->motionPipeline = (*found)->allowMotion();
+    }
     if ((*found)->bindPoint() == VK_PIPELINE_BIND_POINT_GRAPHICS && features_.dynamicTopology &&
         (*found)->topology() != VK_PRIMITIVE_TOPOLOGY_MAX_ENUM) {
         // Topology is dynamic, so a pipeline's own is set as it is bound; a
@@ -391,6 +394,10 @@ core::Result<void> VulkanDevice::traceRaysIndirect(CommandListHandle commandList
         return std::unexpected(std::move(list.error()));
     }
     if (auto checked = checkRunsCompute(**list); !checked) {
+        return checked;
+    }
+    if (auto checked = checkMotionTraceRaysIndirect((*list)->motionPipeline, features_.rayTracingMotionIndirect);
+        !checked) {
         return checked;
     }
     const auto address = addressOf(buffer, offset);

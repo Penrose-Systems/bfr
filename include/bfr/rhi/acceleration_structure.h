@@ -134,8 +134,8 @@ struct TriangleGeometry {
     /// In a structure with motion, the vertices at each keyframe after the
     /// first, which vertices holds: keyframe k's from
     /// motionVertexOffset + (k - 1) * motionKeyframeStride in motionVertices,
-    /// laid out as vertices are. The buffer has accelerationStructureInput
-    /// usage.
+    /// laid out as vertices are. Read only where the inputs' motionKeyframes
+    /// is not 0. The buffer has accelerationStructureInput usage.
     BufferHandle motionVertices{};
     std::uint64_t motionVertexOffset = 0;
     std::uint64_t motionKeyframeStride = 0;
@@ -197,7 +197,7 @@ struct AccelerationStructureSizes {
 };
 
 /// A structure of size bytes, in memory the device allocates. With
-/// motionKeyframes, at least 2 and at most RayTracingLimits::maxMotionKeyframes,
+/// motionKeyframes, at most RayTracingLimits::maxMotionKeyframes,
 /// where Features::rayTracingMotion, its builds have motion: a bottom one's
 /// triangles move between keyframes, a top one holds motion instances, at
 /// most motionInstances of them, passed to backends that take it. 0 is none.
@@ -322,9 +322,9 @@ enum class InstanceMotion : std::uint8_t {
     Srt = 2,
 };
 
-/// A transform as its parts: scale, the shears a (xy), b (xz) and c (yz), a
-/// pivot it scales and shears about, then a rotation quaternion (x, y, z,
-/// w) and a translation. Keyframes between are blended part by part.
+/// A transform as its parts: scale, the shears a (xy), b (xz) and c (yz), and
+/// a pivot added after them, then a rotation quaternion (x, y, z, w) about
+/// the origin and a translation. Keyframes between are blended part by part.
 struct SrtTransform {
     std::array<float, 3> scale{};
     std::array<float, 3> shear{};

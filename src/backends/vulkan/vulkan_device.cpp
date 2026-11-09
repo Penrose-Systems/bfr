@@ -634,8 +634,12 @@ core::Result<CommandListHandle> VulkanDevice::beginCommands(CommandPoolHandle co
     }
     // A new handle for each recording, so last frame's handle never names
     // this one. The list pool was made at its maximum, so this never grows.
-    const CommandListHandle commandList = commandLists_.emplace(VulkanCommandList{
-        .buffer = buffer, .pool = commandPool, .slot = slot, .presenting = {}, .rendered = core::SlotChains::kEnd});
+    const CommandListHandle commandList = commandLists_.emplace(VulkanCommandList{.buffer = buffer,
+                                                                                  .pool = commandPool,
+                                                                                  .slot = slot,
+                                                                                  .presenting = {},
+                                                                                  .rendered = core::SlotChains::kEnd,
+                                                                                  .motionPipeline = false});
     if (commandList.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command lists",
                              desc_.maxCommandLists);

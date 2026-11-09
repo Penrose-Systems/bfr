@@ -36,6 +36,7 @@ VulkanAccelerationStructure::VulkanAccelerationStructure(const VolkDeviceTable& 
       structure_(structure),
       micromap_(micromap),
       type_(desc.type),
+      motion_(desc.motionKeyframes != 0),
       size_(desc.size),
       slot_(slot),
       reference_(reference) {}
@@ -47,6 +48,7 @@ VulkanAccelerationStructure::VulkanAccelerationStructure(VulkanAccelerationStruc
       structure_(std::exchange(other.structure_, VK_NULL_HANDLE)),
       micromap_(std::exchange(other.micromap_, VK_NULL_HANDLE)),
       type_(other.type_),
+      motion_(other.motion_),
       size_(other.size_),
       slot_(other.slot_),
       reference_(other.reference_) {}
@@ -123,10 +125,16 @@ VkBuildMicromapFlagsEXT micromapFlagsFor(const AccelerationStructureFlags& flags
 }
 
 // Fails as checkMotion does, and with RhiInvalidCall for motion keyframes
-// other than the two Vulkan's motion structures hold.
-core::Result<void> checkVulkanMotion(bool rayTracingMotion, std::uint32_t motionKeyframes) {
+// other than the two Vulkan's motion structures hold, or any on an opacity
+// micromap, whose create info has no motion (VkMicromapCreateInfoEXT;
+// VUID-VkAccelerationStructureCreateInfo2KHR-createFlags-11611).
+core::Result<void> checkVulkanMotion(bool rayTracingMotion, AccelerationStructureType type,
+                                     std::uint32_t motionKeyframes) {
     if (auto checked = checkMotion(rayTracingMotion, motionKeyframes); !checked) {
         return checked;
+    }
+    if (motionKeyframes != 0 && type == AccelerationStructureType::OpacityMicromap) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "Vulkan's opacity micromaps have no motion");
     }
     if (motionKeyframes != 0 && motionKeyframes != kVulkanMotionKeyframes) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
@@ -389,7 +397,7 @@ core::Result<AccelerationStructureSizes> VulkanDevice::accelerationStructureSize
     if (auto checked = checkInputs(inputs, features_.opacityMicromap); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    if (auto checked = checkVulkanMotion(features_.rayTracingMotion, inputs.motionKeyframes); !checked) {
+    if (auto checked = checkVulkanMotion(features_.rayTracingMotion, inputs.type, inputs.motionKeyframes); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto counted = countGeometries(inputs, desc_.maxBuildGeometries); !counted) {
@@ -438,7 +446,7 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
         !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    if (auto checked = checkVulkanMotion(features_.rayTracingMotion, desc.motionKeyframes); !checked) {
+    if (auto checked = checkVulkanMotion(features_.rayTracingMotion, desc.type, desc.motionKeyframes); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (desc.size == 0) {
@@ -732,7 +740,8 @@ core::Result<void> VulkanDevice::recordBuild(CommandListHandle commandList, cons
     if (auto checked = checkInputs(build.inputs, features_.opacityMicromap); !checked) {
         return checked;
     }
-    if (auto checked = checkVulkanMotion(features_.rayTracingMotion, build.inputs.motionKeyframes); !checked) {
+    if (auto checked = checkVulkanMotion(features_.rayTracingMotion, build.inputs.type, build.inputs.motionKeyframes);
+        !checked) {
         return checked;
     }
     if (auto counted = countGeometries(build.inputs, desc_.maxBuildGeometries); !counted) {
@@ -758,6 +767,12 @@ core::Result<void> VulkanDevice::recordBuild(CommandListHandle commandList, cons
     if ((*dst)->type() != build.inputs.type) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "a build's inputs are of another type than the structure it builds");
+    }
+    // A structure made with motion is built with it, and one made without,
+    // without (VUID-VkAccelerationStructureBuildGeometryInfoKHR-dstAccelerationStructure-04927, -flags-04928).
+    if ((*dst)->motion() != (build.inputs.motionKeyframes != 0)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "a build's inputs have motion unlike the structure it builds");
     }
     VkAccelerationStructureKHR src = VK_NULL_HANDLE;
     if (build.update) {

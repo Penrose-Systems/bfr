@@ -2920,7 +2920,8 @@ struct TriangleGeometry {
     TriangleOpacityMicromap opacityMicromap{};
     /// In a structure with motion, the vertices at each keyframe after the first, which vertices
     /// holds: keyframe k's from motion_vertex_offset + (k - 1) * motion_keyframe_stride, laid out
-    /// as vertices are. It has acceleration_structure_input usage.
+    /// as vertices are. Read only where the inputs' motion_keyframes is not 0. It has
+    /// acceleration_structure_input usage.
     BufferRef motionVertices{};
     /// Bytes into motion_vertices.
     std::uint64_t motionVertexOffset{};
@@ -3015,7 +3016,7 @@ struct AccelerationStructureSizes {
 };
 
 /// How to create an acceleration structure of size bytes, in memory the device allocates. With
-/// motion_keyframes, at least 2 and at most bfr_caps_ray_tracing.max_motion_keyframes, where
+/// motion_keyframes, at most bfr_caps_ray_tracing.max_motion_keyframes, where
 /// bfr_caps_features.ray_tracing_motion, its builds have motion: a bottom one's triangles move
 /// between keyframes, a top one holds motion instances, at most motion_instances of them, passed to
 /// backends that take it. 0 is none.
@@ -3079,9 +3080,9 @@ static_assert(offsetof(AccelerationStructureInstance, forceOpacityMicromap2State
 static_assert(offsetof(AccelerationStructureInstance, disableOpacityMicromaps) == offsetof(bfr_acceleration_structure_instance, disable_opacity_micromaps));
 static_assert(offsetof(AccelerationStructureInstance, bottomStructure) == offsetof(bfr_acceleration_structure_instance, bottom_structure));
 
-/// A transform as its parts: scale, the shears a (xy), b (xz) and c (yz), a pivot it scales and
-/// shears about, then a rotation quaternion (x, y, z, w) and a translation. Keyframes between are
-/// blended part by part.
+/// A transform as its parts: scale, the shears a (xy), b (xz) and c (yz), and a pivot added after
+/// them, then a rotation quaternion (x, y, z, w) about the origin and a translation. Keyframes
+/// between are blended part by part.
 struct SrtTransform {
     std::array<float, 3> scale{};
     std::array<float, 3> shear{};
@@ -3345,7 +3346,7 @@ struct CapsRayTracing {
     std::uint32_t maxOpacity4StateSubdivisionLevel{};
     /// The most keyframes a structure with motion, or a motion instance, has.
     std::uint32_t maxMotionKeyframes{};
-    /// The bytes of one record bfr_write_motion_instances writes.
+    /// The bytes from one record bfr_write_motion_instances writes to the next.
     std::uint32_t motionInstanceSize{};
 };
 
@@ -5098,8 +5099,9 @@ public:
     /// motion where bfr_caps_features.ray_tracing_motion is, error_invalid_argument for a bottom
     /// structure of both triangles and boxes, an enum value BFR doesn't have, triangles naming a
     /// structure other than an opacity micromap as theirs or usages past micromap_usages, or motion
-    /// keyframes other than the backend takes (Vulkan, two), error_invalid_handle for a micromap
-    /// that is gone, and error_limit_reached past the device's max_build_geometries.
+    /// keyframes other than the backend takes (Vulkan, two) or on an opacity micromap where the
+    /// backend's has none (Vulkan), error_invalid_handle for a micromap that is gone, and
+    /// error_limit_reached past the device's max_build_geometries.
     [[nodiscard]] Expected<AccelerationStructureSizes> accelerationStructureSizes(const AccelerationStructureInputs& inputs) const;
 
     /// Creates an empty acceleration structure of desc's size bytes, which a build fills. Not for
@@ -5108,17 +5110,18 @@ public:
     /// an enum value BFR doesn't have, error_unsupported for motion_keyframes where
     /// bfr_caps_features.ray_tracing_motion is false or for an opacity micromap where
     /// bfr_caps_features.opacity_micromap is, error_invalid_argument for motion_keyframes other
-    /// than the backend takes (Vulkan, two), error_limit_reached at the device's maximum or, for a
-    /// top structure on a device with table slots, when they are all held, error_out_of_memory when
-    /// the backend says memory ran out, and error_device_failed when it refuses.
+    /// than the backend takes (Vulkan, two) or on an opacity micromap where the backend's has none
+    /// (Vulkan), error_limit_reached at the device's maximum or, for a top structure on a device
+    /// with table slots, when they are all held, error_out_of_memory when the backend says memory
+    /// ran out, and error_device_failed when it refuses.
     [[nodiscard]] Expected<AccelerationStructure> createAccelerationStructure(const AccelerationStructureDesc& desc) const;
 
     /// Writes instances to data as the records a top acceleration structure with motion is built
-    /// from, bfr_caps_ray_tracing.motion_instance_size bytes each, their keyframes read from
+    /// from, bfr_caps_ray_tracing.motion_instance_size bytes apart, their keyframes read from
     /// keyframes, on the CPU. On Vulkan a record is VkAccelerationStructureMotionInstanceNV's, 160
     /// bytes apart. Fails as bfr_write_instances does, with error_unsupported where
-    /// bfr_caps_features.ray_tracing_motion is false, and error_invalid_argument for an instance
-    /// whose keyframes run past keyframes, or number other than the backend's record holds
+    /// bfr_caps_features.ray_tracing_motion is false, and error_invalid_argument for a moving
+    /// instance whose keyframes run past keyframes, or number other than the backend's record holds
     /// (Vulkan's, two).
     [[nodiscard]] Expected<void> writeMotionInstances(std::span<const AccelerationStructureMotionInstance> instances, std::span<const MotionKeyframe> keyframes, void* data, std::size_t size) const;
 
@@ -5140,9 +5143,9 @@ public:
     /// work that wrote its inputs before it, and its readers and any reuse of its scratch after.
     /// Fails with error_unsupported where bfr_caps_features.acceleration_structure is false or on a
     /// copy queue, error_invalid_argument for inputs bfr_get_acceleration_structure_sizes refuses,
-    /// of a type unlike its structure's, or an opacity micromap updated where the backend builds
-    /// one only whole (Vulkan), error_limit_reached past the device's max_build_geometries, and
-    /// error_invalid_handle for a structure or buffer that is gone.
+    /// of a type or motion unlike its structure's, or an opacity micromap updated where the backend
+    /// builds one only whole (Vulkan), error_limit_reached past the device's max_build_geometries,
+    /// and error_invalid_handle for a structure or buffer that is gone.
     [[nodiscard]] Expected<void> buildAccelerationStructure(CommandList commandList, const AccelerationStructureBuild& build) const;
 
     /// Records build as bfr_build_acceleration_structure does, but with each geometry's counts read
@@ -5190,7 +5193,8 @@ public:
 
     /// Records a trace as bfr_trace_rays does, of the bfr_trace_rays_indirect_args buffer holds at
     /// offset, a multiple of 4; buffer has indirect usage. Fails with error_unsupported where
-    /// bfr_caps_features.trace_rays_indirect is false, and as bfr_trace_rays does.
+    /// bfr_caps_features.trace_rays_indirect is false, or with a pipeline made with allow_motion
+    /// bound where bfr_caps_features.ray_tracing_motion_indirect is, and as bfr_trace_rays does.
     [[nodiscard]] Expected<void> traceRaysIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset) const;
 
     /// Creates a pool of desc's count entries of its property. Not for the frame path. Fails with

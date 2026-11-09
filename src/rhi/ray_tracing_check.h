@@ -30,6 +30,17 @@ namespace bfr::rhi {
     return {};
 }
 
+/// Fails with RhiUnsupported for an indirect trace with a pipeline made with
+/// allowMotion bound, where Features::rayTracingMotionIndirect is false.
+[[nodiscard]] inline core::Result<void> checkMotionTraceRaysIndirect(bool motionPipeline,
+                                                                     bool rayTracingMotionIndirect) {
+    if (motionPipeline && !rayTracingMotionIndirect) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device has no indirect traces with motion (Features::rayTracingMotionIndirect)");
+    }
+    return {};
+}
+
 /// Fails with RhiUnsupported where the device has no capture-replay
 /// identifiers, as Features::rayTracingCaptureReplay says.
 [[nodiscard]] inline core::Result<void> checkCaptureReplay(bool captureReplay) {

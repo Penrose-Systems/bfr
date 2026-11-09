@@ -1844,6 +1844,40 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
             CHECK(std::equal(one.begin(), one.end(), all.begin() + static_cast<std::ptrdiff_t>(i * size)));
         }
 
+        // Motion instances, still, by matrices and by SRT transforms, through
+        // the same chunks: each record is as the instance written alone.
+        if (caps.features.ray_tracing_motion == BFR_TRUE) {
+            constexpr std::uint32_t kKeyframes = 2;
+            constexpr std::array kMotions{BFR_INSTANCE_MOTION_NONE, BFR_INSTANCE_MOTION_MATRIX,
+                                          BFR_INSTANCE_MOTION_SRT};
+            std::array<bfr_motion_keyframe, kKeyframes> keyframes{};
+            for (std::uint32_t k = 0; k < kKeyframes; ++k) {
+                keyframes.at(k).matrix[0] = 1;
+                keyframes.at(k).matrix[3] = static_cast<float>(k);
+                keyframes.at(k).srt.scale[0] = 1;
+                keyframes.at(k).srt.rotation[3] = 1;
+                keyframes.at(k).srt.translation[0] = static_cast<float>(k);
+            }
+            std::vector<bfr_acceleration_structure_motion_instance> moving(kInstances);
+            for (std::uint32_t i = 0; i < kInstances; ++i) {
+                moving[i] = {.instance = instances[i],
+                             .motion = kMotions.at(i % kMotions.size()),
+                             .first_keyframe = 0,
+                             .keyframe_count = kKeyframes};
+            }
+            const std::size_t stride = caps.ray_tracing.motion_instance_size;
+            std::vector<std::byte> records(stride * kInstances);
+            REQUIRE(bfr_write_motion_instances(device, moving.data(), kInstances, keyframes.data(), kKeyframes,
+                                               records.data(), records.size()) == BFR_RESULT_SUCCESS);
+            std::vector<std::byte> record(stride);
+            for (const std::uint32_t i : {0U, kChunk - 1, kChunk, kInstances - 1}) {
+                REQUIRE(bfr_write_motion_instances(device, &moving[i], 1, keyframes.data(), kKeyframes, record.data(),
+                                                   record.size()) == BFR_RESULT_SUCCESS);
+                CHECK(std::equal(record.begin(), record.end(),
+                                 records.begin() + static_cast<std::ptrdiff_t>(i * stride)));
+            }
+        }
+
         // A build recorded and run through the C arrays.
         bfr_buffer_desc scratchDesc = vertexDesc;
         scratchDesc.size = sizes.build_scratch;

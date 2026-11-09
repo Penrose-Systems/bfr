@@ -506,13 +506,15 @@ void VulkanBindlessLayout::destroy() {
 }
 
 VulkanPipeline::VulkanPipeline(const VolkDeviceTable& table, VkDevice device, VkPipeline pipeline,
-                               VkPipelineBindPoint bindPoint, VkPrimitiveTopology topology, std::uint64_t stackSize)
+                               VkPipelineBindPoint bindPoint, VkPrimitiveTopology topology, std::uint64_t stackSize,
+                               bool allowMotion)
     : table_(&table),
       device_(device),
       pipeline_(pipeline),
       bindPoint_(bindPoint),
       topology_(topology),
-      stackSize_(stackSize) {}
+      stackSize_(stackSize),
+      allowMotion_(allowMotion) {}
 
 VulkanPipeline::VulkanPipeline(VulkanPipeline&& other) noexcept
     : table_(other.table_),
@@ -520,7 +522,8 @@ VulkanPipeline::VulkanPipeline(VulkanPipeline&& other) noexcept
       pipeline_(std::exchange(other.pipeline_, VK_NULL_HANDLE)),
       bindPoint_(other.bindPoint_),
       topology_(other.topology_),
-      stackSize_(other.stackSize_) {}
+      stackSize_(other.stackSize_),
+      allowMotion_(other.allowMotion_) {}
 
 VulkanPipeline::~VulkanPipeline() {
     if (pipeline_ != VK_NULL_HANDLE) {
@@ -810,9 +813,13 @@ core::Result<VulkanPipeline> createVulkanRayTracingPipeline(const VolkDeviceTabl
     if (result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateRayTracingPipelinesKHR", .result = result});
     }
-    return VulkanPipeline{
-        table,         device, pipeline, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, VK_PRIMITIVE_TOPOLOGY_MAX_ENUM,
-        desc.stackSize};
+    return VulkanPipeline{table,
+                          device,
+                          pipeline,
+                          VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+                          VK_PRIMITIVE_TOPOLOGY_MAX_ENUM,
+                          desc.stackSize,
+                          desc.allowMotion};
 }
 
 // The device's pipeline calls, beside the pipelines they make.

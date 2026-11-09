@@ -209,7 +209,8 @@ namespace bfr::rhi {
 
 /// Fails as checkInstances does, with RhiUnsupported where
 /// Features::rayTracingMotion is false, and RhiInvalidCall for a motion
-/// BFR doesn't have or keyframes past keyframes, which BFR reads.
+/// BFR doesn't have or, for a moving instance, keyframes past keyframes,
+/// which BFR reads.
 [[nodiscard]] inline core::Result<void> checkMotionInstances(
     bool rayTracingMotion, std::span<const AccelerationStructureMotionInstance> instances,
     std::span<const MotionKeyframe> keyframes, std::span<const std::byte> out, std::uint32_t instanceSize,
@@ -229,7 +230,8 @@ namespace bfr::rhi {
         if (auto checked = checkKnown(moving.motion, "instance motion"); !checked) {
             return checked;
         }
-        if (moving.firstKeyframe > keyframes.size() || moving.keyframeCount > keyframes.size() - moving.firstKeyframe) {
+        if (moving.motion != InstanceMotion::None && (moving.firstKeyframe > keyframes.size() ||
+                                                      moving.keyframeCount > keyframes.size() - moving.firstKeyframe)) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "{} keyframes from {} run past the {} given",
                                  moving.keyframeCount, moving.firstKeyframe, keyframes.size());
         }

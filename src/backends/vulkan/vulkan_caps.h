@@ -24,7 +24,7 @@ namespace bfr::rhi::vulkan {
 inline constexpr std::uint32_t kMinimumVersion = VK_API_VERSION_1_2;
 
 /// The keyframes a motion structure or instance has on Vulkan, times 0 and 1
-/// (VkAccelerationStructureMatrixMotionInstanceNV::transformT0, transformT1),
+/// (vertices, accelstructures.adoc:1207-1214; instance transforms, 2086-2090 and 2145-2149),
 /// and the bytes between motion instance records (accelstructures.adoc:1796-1797).
 inline constexpr std::uint32_t kVulkanMotionKeyframes = 2;
 inline constexpr std::uint32_t kVulkanMotionInstanceStride = 160;

@@ -163,7 +163,8 @@ struct RayTracingLimits {
     std::uint32_t maxOpacity4StateSubdivisionLevel = 0;
     /// The most keyframes a structure with motion, or a motion instance, has.
     std::uint32_t maxMotionKeyframes = 0;
-    /// The bytes of one record Device::writeMotionInstances writes.
+    /// The bytes from one record Device::writeMotionInstances writes to the
+    /// next.
     std::uint32_t motionInstanceSize = 0;
 };
 

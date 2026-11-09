@@ -2129,7 +2129,8 @@ typedef struct bfr_triangle_geometry {
     bfr_triangle_opacity_micromap opacity_micromap;
     // In a structure with motion, the vertices at each keyframe after the first, which vertices
     // holds: keyframe k's from motion_vertex_offset + (k - 1) * motion_keyframe_stride, laid out as
-    // vertices are. It has acceleration_structure_input usage.
+    // vertices are. Read only where the inputs' motion_keyframes is not 0. It has
+    // acceleration_structure_input usage.
     bfr_buffer motion_vertices;
     // Bytes into motion_vertices.
     uint64_t motion_vertex_offset;
@@ -2200,7 +2201,7 @@ typedef struct bfr_acceleration_structure_sizes {
 } bfr_acceleration_structure_sizes;
 
 // How to create an acceleration structure of size bytes, in memory the device allocates. With
-// motion_keyframes, at least 2 and at most bfr_caps_ray_tracing.max_motion_keyframes, where
+// motion_keyframes, at most bfr_caps_ray_tracing.max_motion_keyframes, where
 // bfr_caps_features.ray_tracing_motion, its builds have motion: a bottom one's triangles move
 // between keyframes, a top one holds motion instances, at most motion_instances of them, passed to
 // backends that take it. 0 is none.
@@ -2265,9 +2266,9 @@ typedef struct bfr_acceleration_structure_instance {
     bfr_acceleration_structure bottom_structure;
 } bfr_acceleration_structure_instance;
 
-// A transform as its parts: scale, the shears a (xy), b (xz) and c (yz), a pivot it scales and
-// shears about, then a rotation quaternion (x, y, z, w) and a translation. Keyframes between are
-// blended part by part.
+// A transform as its parts: scale, the shears a (xy), b (xz) and c (yz), and a pivot added after
+// them, then a rotation quaternion (x, y, z, w) about the origin and a translation. Keyframes
+// between are blended part by part.
 typedef struct bfr_srt_transform {
     float scale[3];
     float shear[3];
@@ -2525,7 +2526,7 @@ typedef struct bfr_caps_ray_tracing {
     uint32_t max_opacity_4_state_subdivision_level;
     // The most keyframes a structure with motion, or a motion instance, has.
     uint32_t max_motion_keyframes;
-    // The bytes of one record bfr_write_motion_instances writes.
+    // The bytes from one record bfr_write_motion_instances writes to the next.
     uint32_t motion_instance_size;
 } bfr_caps_ray_tracing;
 
@@ -3667,8 +3668,9 @@ BFR_API bfr_result bfr_update_tile_mappings(
 // where bfr_caps_features.ray_tracing_motion is, error_invalid_argument for a bottom structure of
 // both triangles and boxes, an enum value BFR doesn't have, triangles naming a structure other than
 // an opacity micromap as theirs or usages past micromap_usages, or motion keyframes other than the
-// backend takes (Vulkan, two), error_invalid_handle for a micromap that is gone, and
-// error_limit_reached past the device's max_build_geometries.
+// backend takes (Vulkan, two) or on an opacity micromap where the backend's has none (Vulkan),
+// error_invalid_handle for a micromap that is gone, and error_limit_reached past the device's
+// max_build_geometries.
 BFR_API bfr_result bfr_get_acceleration_structure_sizes(
     bfr_device* device,
     const bfr_acceleration_structure_inputs* inputs,
@@ -3680,9 +3682,10 @@ BFR_API bfr_result bfr_get_acceleration_structure_sizes(
 // enum value BFR doesn't have, error_unsupported for motion_keyframes where
 // bfr_caps_features.ray_tracing_motion is false or for an opacity micromap where
 // bfr_caps_features.opacity_micromap is, error_invalid_argument for motion_keyframes other than the
-// backend takes (Vulkan, two), error_limit_reached at the device's maximum or, for a top structure
-// on a device with table slots, when they are all held, error_out_of_memory when the backend says
-// memory ran out, and error_device_failed when it refuses.
+// backend takes (Vulkan, two) or on an opacity micromap where the backend's has none (Vulkan),
+// error_limit_reached at the device's maximum or, for a top structure on a device with table slots,
+// when they are all held, error_out_of_memory when the backend says memory ran out, and
+// error_device_failed when it refuses.
 BFR_API bfr_result bfr_create_acceleration_structure(
     bfr_device* device,
     const bfr_acceleration_structure_desc* desc,
@@ -3697,11 +3700,11 @@ BFR_API bfr_result bfr_get_acceleration_structure_slot(
     uint32_t* slot);
 
 // Writes instances to data as the records a top acceleration structure with motion is built from,
-// bfr_caps_ray_tracing.motion_instance_size bytes each, their keyframes read from keyframes, on the
-// CPU. On Vulkan a record is VkAccelerationStructureMotionInstanceNV's, 160 bytes apart. Fails as
-// bfr_write_instances does, with error_unsupported where bfr_caps_features.ray_tracing_motion is
-// false, and error_invalid_argument for an instance whose keyframes run past keyframes, or number
-// other than the backend's record holds (Vulkan's, two).
+// bfr_caps_ray_tracing.motion_instance_size bytes apart, their keyframes read from keyframes, on
+// the CPU. On Vulkan a record is VkAccelerationStructureMotionInstanceNV's, 160 bytes apart. Fails
+// as bfr_write_instances does, with error_unsupported where bfr_caps_features.ray_tracing_motion is
+// false, and error_invalid_argument for a moving instance whose keyframes run past keyframes, or
+// number other than the backend's record holds (Vulkan's, two).
 // instances: An array of instance_count elements. May be null.
 // keyframes: An array of keyframe_count elements. May be null.
 // data: Where the records go.
@@ -3754,10 +3757,10 @@ BFR_API bfr_result bfr_write_instances(
 // Records build, outside rendering, on a queue whose kind runs compute. A barrier orders the work
 // that wrote its inputs before it, and its readers and any reuse of its scratch after. Fails with
 // error_unsupported where bfr_caps_features.acceleration_structure is false or on a copy queue,
-// error_invalid_argument for inputs bfr_get_acceleration_structure_sizes refuses, of a type unlike
-// its structure's, or an opacity micromap updated where the backend builds one only whole (Vulkan),
-// error_limit_reached past the device's max_build_geometries, and error_invalid_handle for a
-// structure or buffer that is gone.
+// error_invalid_argument for inputs bfr_get_acceleration_structure_sizes refuses, of a type or
+// motion unlike its structure's, or an opacity micromap updated where the backend builds one only
+// whole (Vulkan), error_limit_reached past the device's max_build_geometries, and
+// error_invalid_handle for a structure or buffer that is gone.
 BFR_API bfr_result bfr_build_acceleration_structure(
     bfr_device* device,
     bfr_command_list command_list,
@@ -3860,7 +3863,8 @@ BFR_API bfr_result bfr_trace_rays(
 
 // Records a trace as bfr_trace_rays does, of the bfr_trace_rays_indirect_args buffer holds at
 // offset, a multiple of 4; buffer has indirect usage. Fails with error_unsupported where
-// bfr_caps_features.trace_rays_indirect is false, and as bfr_trace_rays does.
+// bfr_caps_features.trace_rays_indirect is false, or with a pipeline made with allow_motion bound
+// where bfr_caps_features.ray_tracing_motion_indirect is, and as bfr_trace_rays does.
 // offset: Bytes into the buffer.
 BFR_API bfr_result bfr_trace_rays_indirect(
     bfr_device* device,

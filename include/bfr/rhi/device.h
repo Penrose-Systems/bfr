@@ -567,7 +567,8 @@ public:
     /// both triangles and boxes, an enum value BFR doesn't have, triangles
     /// naming a structure other than an opacity micromap as theirs or usages
     /// past micromapUsages, or motion keyframes other than the backend takes
-    /// (Vulkan, two), RhiInvalidHandle for a micromap that is gone, and
+    /// (Vulkan, two) or on an opacity micromap where the backend's has none
+    /// (Vulkan), RhiInvalidHandle for a micromap that is gone, and
     /// RhiLimitReached past DeviceDesc::maxBuildGeometries.
     [[nodiscard]] virtual core::Result<AccelerationStructureSizes> accelerationStructureSizes(
         const AccelerationStructureInputs& inputs) = 0;
@@ -578,7 +579,8 @@ public:
     /// 0 or an enum value BFR doesn't have, RhiUnsupported for
     /// motionKeyframes where Features::rayTracingMotion is false or for an
     /// opacity micromap where Features::opacityMicromap is, RhiInvalidCall for
-    /// motionKeyframes other than the backend takes (Vulkan, two),
+    /// motionKeyframes other than the backend takes (Vulkan, two) or on an
+    /// opacity micromap where the backend's has none (Vulkan),
     /// RhiLimitReached at the device's maximum or, for a top structure on a
     /// device with table slots, when they are all held,
     /// RhiOutOfMemory when the API says memory ran out, and RhiDeviceFailed
@@ -619,10 +621,10 @@ public:
                                                             std::span<std::byte> out) = 0;
 
     /// Writes instances to out as the records a top structure with motion is
-    /// built from, RayTracingLimits::motionInstanceSize bytes each, their
+    /// built from, RayTracingLimits::motionInstanceSize bytes apart, their
     /// keyframes read from keyframes, on the CPU. Fails as writeInstances
     /// does, with RhiUnsupported where Features::rayTracingMotion is false,
-    /// and RhiInvalidCall for an instance whose keyframes run past keyframes,
+    /// and RhiInvalidCall for a moving instance whose keyframes run past keyframes,
     /// or number other than the backend's record holds (Vulkan's, two).
     [[nodiscard]] virtual core::Result<void> writeMotionInstances(
         std::span<const AccelerationStructureMotionInstance> instances, std::span<const MotionKeyframe> keyframes,
@@ -633,7 +635,7 @@ public:
     /// readers and any reuse of its scratch after. Fails with RhiUnsupported
     /// where Features::accelerationStructure is false or on a copy queue,
     /// RhiInvalidCall for inputs Device::accelerationStructureSizes refuses,
-    /// of a type unlike its structure's, or an opacity micromap updated
+    /// of a type or motion unlike its structure's, or an opacity micromap updated
     /// where the backend builds one only whole (Vulkan), RhiLimitReached past
     /// DeviceDesc::maxBuildGeometries, and RhiInvalidHandle for a list,
     /// structure or buffer that is gone.
@@ -814,7 +816,8 @@ public:
     /// Records a trace as traceRays does, of the TraceRaysIndirectArgs
     /// buffer holds at offset, a multiple of 4; buffer has indirect usage.
     /// Fails with RhiUnsupported where Features::traceRaysIndirect is false,
-    /// and as traceRays does.
+    /// or with a pipeline made with allowMotion bound where
+    /// Features::rayTracingMotionIndirect is, and as traceRays does.
     [[nodiscard]] virtual core::Result<void> traceRaysIndirect(CommandListHandle commandList, BufferHandle buffer,
                                                                std::uint64_t offset) = 0;
 

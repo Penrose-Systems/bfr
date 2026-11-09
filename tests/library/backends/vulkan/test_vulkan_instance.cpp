@@ -662,6 +662,48 @@ TEST_CASE("Vulkan refuses motion of other than the two keyframes it takes", "[vu
     CHECK(written.error().code == bfr::core::ErrorCode::RhiInvalidCall);
 }
 
+TEST_CASE("Vulkan refuses motion its structures can't take: on a micromap, or unlike the structure built",
+          "[vulkan][gpu]") {
+    auto created = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(created));
+    REQUIRE(created.has_value());
+    const std::unique_ptr<Instance> instance = std::move(*created);
+    const Caps& caps = instance->adapters()[0].caps;
+    if (!caps.features.rayTracingMotion) {
+        SKIP("the adapter has no structures with motion");
+    }
+    auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+    INFO(failureOf(made));
+    REQUIRE(made.has_value());
+    Device& device = **made;
+    const auto code = [](const auto& result) {
+        return result.has_value() ? bfr::core::ErrorCode{} : result.error().code;
+    };
+    constexpr std::uint64_t kSmall = 256;
+    const std::uint32_t keyframes = caps.rayTracing.maxMotionKeyframes;
+    if (caps.features.opacityMicromap) {
+        CHECK(
+            code(device.createAccelerationStructure(
+                {.type = AccelerationStructureType::OpacityMicromap, .size = kSmall, .motionKeyframes = keyframes})) ==
+            bfr::core::ErrorCode::RhiInvalidCall);
+        CHECK(code(device.accelerationStructureSizes(
+                  {.type = AccelerationStructureType::OpacityMicromap, .motionKeyframes = keyframes})) ==
+              bfr::core::ErrorCode::RhiInvalidCall);
+    }
+    const auto still = device.createAccelerationStructure({.size = kSmall});
+    const auto moving = device.createAccelerationStructure({.size = kSmall, .motionKeyframes = keyframes});
+    INFO(failureOf(still) << failureOf(moving));
+    REQUIRE((still.has_value() && moving.has_value()));
+    const auto pool = device.createCommandPool({.queue = 0, .listCount = 1});
+    REQUIRE(pool.has_value());
+    const auto list = device.beginCommands(*pool);
+    REQUIRE(list.has_value());
+    CHECK(code(device.buildAccelerationStructure(*list, {.dst = *still, .inputs = {.motionKeyframes = keyframes}})) ==
+          bfr::core::ErrorCode::RhiInvalidCall);
+    CHECK(code(device.buildAccelerationStructure(*list, {.dst = *moving, .inputs = {}})) ==
+          bfr::core::ErrorCode::RhiInvalidCall);
+}
+
 TEST_CASE("Vulkan refuses opacity micromap work it has no call for", "[vulkan][gpu]") {
     auto created = Instance::create(vulkanDesc(), {});
     INFO(failureOf(created));

@@ -152,6 +152,8 @@ struct VulkanCommandList {
     std::uint32_t slot = 0;
     std::optional<SwapchainHandle> presenting;
     std::uint32_t rendered = core::SlotChains::kEnd;
+    /// Whether the ray tracing pipeline bound last was made with allowMotion.
+    bool motionPipeline = false;
 };
 
 class VulkanDevice final : public Device {

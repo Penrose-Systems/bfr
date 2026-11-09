@@ -31,6 +31,8 @@ public:
     [[nodiscard]] VkMicromapEXT micromap() const { return micromap_; }
     [[nodiscard]] AccelerationStructureType type() const { return type_; }
     [[nodiscard]] bool isMicromap() const { return type_ == AccelerationStructureType::OpacityMicromap; }
+    /// Whether it was made with motion keyframes.
+    [[nodiscard]] bool motion() const { return motion_; }
     [[nodiscard]] std::uint64_t size() const { return size_; }
     [[nodiscard]] std::uint32_t slot() const { return slot_; }
     [[nodiscard]] VkDeviceAddress reference() const { return reference_; }
@@ -42,6 +44,7 @@ private:
     VkAccelerationStructureKHR structure_;
     VkMicromapEXT micromap_;
     AccelerationStructureType type_;
+    bool motion_;
     std::uint64_t size_;
     std::uint32_t slot_;
     VkDeviceAddress reference_;
