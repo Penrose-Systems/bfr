@@ -739,6 +739,8 @@ VkRayTracingShaderGroupTypeKHR groupTypeFor(RayTracingGroupType type) {
 core::Result<VulkanPipeline> createVulkanRayTracingPipeline(const VolkDeviceTable& table, VkDevice device,
                                                             VkPipelineLayout layout, VkPipelineCache cache,
                                                             std::span<const VkPipelineShaderStageCreateInfo> stages,
+                                                            std::span<const VkPipeline> libraries,
+                                                            std::uint32_t replaySize,
                                                             const RayTracingPipelineDesc& desc) {
     // Pipeline creation is cold, so the groups go in a vector. A group's
     // shader indices are the desc's, in the stages' order.
@@ -752,13 +754,34 @@ core::Result<VulkanPipeline> createVulkanRayTracingPipeline(const VolkDeviceTabl
                      .closestHitShader = group.closestHit,
                      .anyHitShader = group.anyHit,
                      .intersectionShader = group.intersection,
-                     .pShaderGroupCaptureReplayHandle = nullptr};
+                     .pShaderGroupCaptureReplayHandle = desc.replayIdentifiers.empty()
+                                                            ? nullptr
+                                                            : desc.replayIdentifiers.subspan(i * replaySize).data()};
     }
-    // Payload and attribute sizes reach Vulkan only through a library
-    // interface (VkRayTracingPipelineInterfaceCreateInfoKHR), which a
-    // pipeline without libraries has none of.
     VkRayTracingPipelineCreateInfoKHR info{};
     info.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
+    if (desc.library) {
+        info.flags |= VK_PIPELINE_CREATE_LIBRARY_BIT_KHR;
+    }
+    if (desc.captureReplay) {
+        info.flags |= VK_PIPELINE_CREATE_RAY_TRACING_SHADER_GROUP_HANDLE_CAPTURE_REPLAY_BIT_KHR;
+    }
+    // Payload and attribute sizes reach Vulkan only through a library
+    // interface, which a library and a pipeline linking libraries take
+    // (VUID-VkRayTracingPipelineCreateInfoKHR-flags-03465, -pLibraryInfo-03590),
+    // and one without the extension may not (-pLibraryInfo-03595).
+    VkPipelineLibraryCreateInfoKHR linked{};
+    linked.sType = VK_STRUCTURE_TYPE_PIPELINE_LIBRARY_CREATE_INFO_KHR;
+    linked.libraryCount = static_cast<std::uint32_t>(libraries.size());
+    linked.pLibraries = libraries.data();
+    VkRayTracingPipelineInterfaceCreateInfoKHR libraryInterface{};
+    libraryInterface.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_INTERFACE_CREATE_INFO_KHR;
+    libraryInterface.maxPipelineRayPayloadSize = desc.maxPayloadSize;
+    libraryInterface.maxPipelineRayHitAttributeSize = desc.maxAttributeSize;
+    if (desc.library || !libraries.empty()) {
+        info.pLibraryInfo = &linked;
+        info.pLibraryInterface = &libraryInterface;
+    }
     info.stageCount = static_cast<std::uint32_t>(stages.size());
     info.pStages = stages.data();
     info.groupCount = static_cast<std::uint32_t>(groups.size());
@@ -890,6 +913,9 @@ core::Result<PipelineHandle> VulkanDevice::createRayTracingPipeline(const RayTra
     if (auto checked = checkEnums(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkPipelineExtras(desc, features_, rayTracing_.captureReplayIdentifierSize); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // vkCmdSetRayTracingPipelineStackSizeKHR takes 32 bits.
     if (!std::in_range<std::uint32_t>(desc.stackSize)) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "a stack size of {} bytes is past what Vulkan takes",
@@ -900,8 +926,8 @@ core::Result<PipelineHandle> VulkanDevice::createRayTracingPipeline(const RayTra
     if (!cache) {
         return std::unexpected(std::move(cache.error()));
     }
-    // Cold, so the stages go in a vector; they point into the shaders, which
-    // stay while the pipeline is made.
+    // Cold, so the stages and libraries go in vectors; the stages point into
+    // the shaders, which stay while the pipeline is made.
     std::vector<VkPipelineShaderStageCreateInfo> stages;
     stages.reserve(desc.shaders.size());
     for (const RayTracingShader& shader : desc.shaders) {
@@ -911,7 +937,17 @@ core::Result<PipelineHandle> VulkanDevice::createRayTracingPipeline(const RayTra
         }
         stages.push_back(stageFor(rayTracingStageFor(shader.stage), found->module(), found->entryPoint().c_str()));
     }
-    auto made = createVulkanRayTracingPipeline(table_, device_, layout_.pipelineLayout(), *cache, stages, desc);
+    std::vector<VkPipeline> libraries;
+    libraries.reserve(desc.libraries.size());
+    for (const PipelineHandle library : desc.libraries) {
+        auto found = pipelineFor(library);
+        if (!found) {
+            return std::unexpected(std::move(found.error()));
+        }
+        libraries.push_back((*found)->pipeline());
+    }
+    auto made = createVulkanRayTracingPipeline(table_, device_, layout_.pipelineLayout(), *cache, stages, libraries,
+                                               rayTracing_.captureReplayIdentifierSize, desc);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }
@@ -938,6 +974,30 @@ core::Result<void> VulkanDevice::shaderIdentifiers(PipelineHandle pipeline, std:
         result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed,
                        {.call = "vkGetRayTracingShaderGroupHandlesKHR", .result = result});
+    }
+    return {};
+}
+
+core::Result<void> VulkanDevice::captureReplayIdentifiers(PipelineHandle pipeline, std::uint32_t first,
+                                                          std::uint32_t count, std::span<std::byte> out) {
+    if (auto checked = checkCaptureReplay(features_.rayTracingCaptureReplay); !checked) {
+        return checked;
+    }
+    auto found = pipelineFor(pipeline);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    const bool rayTracing = (*found)->bindPoint() == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
+    if (auto checked = checkIdentifiers(rayTracing, count, out, rayTracing_.captureReplayIdentifierSize); !checked) {
+        return checked;
+    }
+    const std::size_t bytes = std::size_t{count} * rayTracing_.captureReplayIdentifierSize;
+    if (const VkResult result = table_.vkGetRayTracingCaptureReplayShaderGroupHandlesKHR(device_, (*found)->pipeline(),
+                                                                                         first, count, bytes,
+                                                                                         out.data());
+        result != VK_SUCCESS) {
+        return failure(core::ErrorCode::RhiDeviceFailed,
+                       {.call = "vkGetRayTracingCaptureReplayShaderGroupHandlesKHR", .result = result});
     }
     return {};
 }

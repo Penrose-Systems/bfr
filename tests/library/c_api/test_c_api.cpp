@@ -1193,7 +1193,7 @@ TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call tim
 
     std::uint32_t count = 0;
     REQUIRE(bfr_get_call_timings(device.device, &count, nullptr) == BFR_RESULT_SUCCESS);
-    CHECK(count == BFR_CALL_RAY_TRACING_STACK_SIZE + 1);
+    CHECK(count == BFR_CALL_CAPTURE_REPLAY_IDENTIFIERS + 1);
     std::vector<bfr_call_timing> timings(count);
     REQUIRE(bfr_get_call_timings(device.device, &count, timings.data()) == BFR_RESULT_SUCCESS);
     CHECK(timings.at(BFR_CALL_CREATE_TIMESTAMP_POOL).count == 2);
@@ -1957,8 +1957,17 @@ TEST_CASE("C API makes shaders and a ray tracing pipeline from them, and gives i
                                                  .max_payload_size = sizeof(uint32_t),
                                                  .max_attribute_size = 0,
                                                  .cache = {},
-                                                 .stack_size = 0};
+                                                 .stack_size = 0,
+                                                 .library = BFR_FALSE,
+                                                 .libraries = nullptr,
+                                                 .library_count = 0,
+                                                 .capture_replay = BFR_FALSE,
+                                                 .replay_identifiers = nullptr,
+                                                 .replay_identifiers_size = 0};
         bfr_pipeline pipeline{};
+        bfr_ray_tracing_pipeline_desc unnamed = desc;
+        unnamed.library_count = 1;
+        CHECK(bfr_create_ray_tracing_pipeline(device.device, &unnamed, &pipeline) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
         const bfr_result made = bfr_create_ray_tracing_pipeline(device.device, &desc, &pipeline);
         INFO(lastError());
         REQUIRE(made == BFR_RESULT_SUCCESS);
@@ -1986,5 +1995,9 @@ TEST_CASE("C API refuses acceleration structure property and serialization calls
     CHECK(bfr_get_ray_tracing_stack_size(nullptr, bfr_pipeline{}, 0, BFR_RAY_TRACING_GROUP_SHADER_GENERAL, &stack) ==
           BFR_RESULT_ERROR_INVALID_ARGUMENT);
     CHECK(bfr_write_acceleration_structure_properties(nullptr, bfr_command_list{}, pool, 0, nullptr, 0) ==
+          BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_build_acceleration_structure_indirect(nullptr, bfr_command_list{}, nullptr, bfr_buffer{}, 0, 0) ==
+          BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_get_capture_replay_identifiers(nullptr, bfr_pipeline{}, 0, 0, nullptr, 0) ==
           BFR_RESULT_ERROR_INVALID_ARGUMENT);
 }

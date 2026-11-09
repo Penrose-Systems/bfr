@@ -154,6 +154,9 @@ struct RayTracingLimits {
     std::uint32_t maxBindingTableRecordIndex = 0;
     /// The bytes of one record Device::writeInstances writes.
     std::uint32_t instanceSize = 0;
+    /// The bytes of one group's identifier Device::captureReplayIdentifiers
+    /// writes.
+    std::uint32_t captureReplayIdentifierSize = 0;
 };
 
 struct Features {
@@ -179,6 +182,15 @@ struct Features {
     bool serializedBottomCount = false;
     /// Shaders reorder ray tracing invocations.
     bool rayInvocationReorder = false;
+    /// Ray tracing pipeline libraries, RayTracingPipelineDesc::library.
+    bool rayTracingPipelineLibrary = false;
+    /// Device::shaderIdentifiers of a library, the same as a pipeline that
+    /// links it gives for its groups.
+    bool pipelineLibraryIdentifiers = false;
+    /// RayTracingPipelineDesc::captureReplay.
+    bool rayTracingCaptureReplay = false;
+    /// Device::buildAccelerationStructureIndirect.
+    bool accelerationStructureIndirectBuild = false;
     bool meshShader = false;
     bool taskShader = false;
     bool shadingRate = false;

@@ -757,6 +757,8 @@ enum class Call : std::int32_t {
     DeserializeAccelerationStructure = BFR_CALL_DESERIALIZE_ACCELERATION_STRUCTURE,
     SerializedCompatible = BFR_CALL_SERIALIZED_COMPATIBLE,
     RayTracingStackSize = BFR_CALL_RAY_TRACING_STACK_SIZE,
+    BuildAccelerationStructureIndirect = BFR_CALL_BUILD_ACCELERATION_STRUCTURE_INDIRECT,
+    CaptureReplayIdentifiers = BFR_CALL_CAPTURE_REPLAY_IDENTIFIERS,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -864,6 +866,8 @@ enum class Call : std::int32_t {
     case Call::DeserializeAccelerationStructure: return "deserialize_acceleration_structure";
     case Call::SerializedCompatible: return "serialized_compatible";
     case Call::RayTracingStackSize: return "ray_tracing_stack_size";
+    case Call::BuildAccelerationStructureIndirect: return "build_acceleration_structure_indirect";
+    case Call::CaptureReplayIdentifiers: return "capture_replay_identifiers";
     }
     return {};
 }
@@ -2500,10 +2504,15 @@ static_assert(offsetof(RayTracingGroup, closestHit) == offsetof(bfr_ray_tracing_
 static_assert(offsetof(RayTracingGroup, anyHit) == offsetof(bfr_ray_tracing_group, any_hit));
 static_assert(offsetof(RayTracingGroup, intersection) == offsetof(bfr_ray_tracing_group, intersection));
 
-/// How to create a ray tracing pipeline: at least one ray generation shader. max_payload_size and
-/// max_attribute_size are the largest payload and hit attributes its shaders declare, passed to
-/// backends that take them. Rays trace recursively to max_recursion_depth, at most
-/// bfr_caps_ray_tracing's; at 0 ray generation traces none.
+/// How to create a ray tracing pipeline: at least one ray generation shader, its own or a
+/// library's. max_payload_size and max_attribute_size are the largest payload and hit attributes
+/// its shaders declare, passed to backends that take them. Rays trace recursively to
+/// max_recursion_depth, at most bfr_caps_ray_tracing's; at 0 ray generation traces none. With
+/// library, it is a pipeline library, where bfr_caps_features.ray_tracing_pipeline_library: never
+/// bound, only linked into pipelines that name it in libraries. A linked library's shaders and
+/// groups follow the pipeline's own, in the order libraries names them, so group indices count on
+/// past its groups; each library was made with the same max_recursion_depth, max_payload_size,
+/// max_attribute_size and capture_replay.
 struct RayTracingPipelineDesc {
     /// Read during the call only.
     std::span<const RayTracingShader> shaders{};
@@ -2517,6 +2526,17 @@ struct RayTracingPipelineDesc {
     /// The bytes of stack its traces take, large enough for every trace it makes
     /// (bfr_get_ray_tracing_stack_size gives each shader's); 0 leaves the backend's own size.
     std::uint64_t stackSize{};
+    bool library{};
+    /// Read during the call only.
+    std::span<const PipelineRef> libraries{};
+    /// Its groups' identifiers may be captured, by bfr_get_capture_replay_identifiers, and
+    /// replayed, where bfr_caps_features.ray_tracing_capture_replay.
+    bool captureReplay{};
+    /// None, or the identifiers bfr_get_capture_replay_identifiers gave for every group of groups,
+    /// in order, bfr_caps_ray_tracing.capture_replay_identifier_size bytes each, of a pipeline made
+    /// from the same desc: its groups then have the identifiers that pipeline's had. With
+    /// capture_replay. Read during the call only.
+    std::span<const std::uint8_t> replayIdentifiers{};
 };
 
 /// Records in a shader binding table: size bytes from offset in buffer, which has
@@ -3125,6 +3145,8 @@ struct CapsRayTracing {
     std::uint32_t maxBindingTableRecordIndex{};
     /// The bytes of one record bfr_write_instances writes.
     std::uint32_t instanceSize{};
+    /// The bytes of one group's identifier bfr_get_capture_replay_identifiers writes.
+    std::uint32_t captureReplayIdentifierSize{};
 };
 
 /// Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and
@@ -3153,6 +3175,15 @@ struct CapsFeatures {
     bool serializedBottomCount{};
     /// Shaders reorder ray tracing invocations.
     bool rayInvocationReorder{};
+    /// Ray tracing pipeline libraries, bfr_ray_tracing_pipeline_desc.library.
+    bool rayTracingPipelineLibrary{};
+    /// bfr_get_shader_identifiers of a library, the same as a pipeline that links it gives for its
+    /// groups.
+    bool pipelineLibraryIdentifiers{};
+    /// bfr_ray_tracing_pipeline_desc.capture_replay.
+    bool rayTracingCaptureReplay{};
+    /// bfr_build_acceleration_structure_indirect.
+    bool accelerationStructureIndirectBuild{};
     bool meshShader{};
     bool taskShader{};
     /// A shading rate per draw.
@@ -4129,6 +4160,7 @@ inline CapsRayTracing fromC(const bfr_caps_ray_tracing& value) {
         .reordersInvocations = value.reorders_invocations != BFR_FALSE,
         .maxBindingTableRecordIndex = value.max_binding_table_record_index,
         .instanceSize = value.instance_size,
+        .captureReplayIdentifierSize = value.capture_replay_identifier_size,
     };
 }
 
@@ -4146,6 +4178,10 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .accelerationStructureCurrentSize = value.acceleration_structure_current_size != BFR_FALSE,
         .serializedBottomCount = value.serialized_bottom_count != BFR_FALSE,
         .rayInvocationReorder = value.ray_invocation_reorder != BFR_FALSE,
+        .rayTracingPipelineLibrary = value.ray_tracing_pipeline_library != BFR_FALSE,
+        .pipelineLibraryIdentifiers = value.pipeline_library_identifiers != BFR_FALSE,
+        .rayTracingCaptureReplay = value.ray_tracing_capture_replay != BFR_FALSE,
+        .accelerationStructureIndirectBuild = value.acceleration_structure_indirect_build != BFR_FALSE,
         .meshShader = value.mesh_shader != BFR_FALSE,
         .taskShader = value.task_shader != BFR_FALSE,
         .shadingRate = value.shading_rate != BFR_FALSE,
@@ -4842,6 +4878,14 @@ public:
     /// max_build_geometries, and error_invalid_handle for a structure or buffer that is gone.
     [[nodiscard]] Expected<void> buildAccelerationStructure(CommandList commandList, const AccelerationStructureBuild& build) const;
 
+    /// Records build as bfr_build_acceleration_structure does, but with each geometry's counts read
+    /// by the GPU as it runs: one bfr_acceleration_structure_build_range per geometry of build's
+    /// inputs, in order, stride bytes apart from offset in ranges, which has indirect usage; offset
+    /// and stride are multiples of 4. The inputs' counts are the most a range names. Fails with
+    /// error_unsupported where bfr_caps_features.acceleration_structure_indirect_build is false,
+    /// and as bfr_build_acceleration_structure does.
+    [[nodiscard]] Expected<void> buildAccelerationStructureIndirect(CommandList commandList, const AccelerationStructureBuild& build, const Buffer& ranges, std::uint64_t offset, std::uint32_t stride) const;
+
     /// Records a copy of src into dst, at least src's size, or its current_size where
     /// bfr_caps_features.acceleration_structure_current_size, not overlapping, as builds are
     /// recorded. Fails with error_unsupported as bfr_build_acceleration_structure does, and
@@ -4857,11 +4901,14 @@ public:
 
     /// Creates a ray tracing pipeline, as desc says, before returning. Not for the frame path. A
     /// desc.cache is looked in first, and the pipeline added on a miss. Fails with
-    /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false,
-    /// error_invalid_argument for an enum value BFR doesn't have or a stack_size past 32 bits on
-    /// Vulkan, which takes no more, error_invalid_handle for a shader or desc.cache that is gone,
-    /// error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
-    /// backend refuses the desc; the message carries what it said.
+    /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false, or for library or
+    /// libraries where bfr_caps_features.ray_tracing_pipeline_library is, or capture_replay where
+    /// bfr_caps_features.ray_tracing_capture_replay is, error_invalid_argument for an enum value
+    /// BFR doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or
+    /// replay_identifiers neither none nor of every group, error_invalid_handle for a shader,
+    /// library or desc.cache that is gone, error_limit_reached at the device's maximum of
+    /// pipelines, and error_device_failed when the backend refuses the desc; the message carries
+    /// what it said.
     [[nodiscard]] Expected<Pipeline> createRayTracingPipeline(const RayTracingPipelineDesc& desc) const;
 
     /// Records a trace of desc's rays with the bound ray tracing pipeline, outside rendering, on a
@@ -5214,6 +5261,14 @@ public:
     /// each, into data, for binding table records. Fails with error_invalid_argument when size is
     /// too small or the pipeline is not a ray tracing one.
     [[nodiscard]] Expected<void> shaderIdentifiers(std::uint32_t first, std::uint32_t count, void* data, std::size_t size);
+
+    /// Writes count groups' capture-replay identifiers from first,
+    /// bfr_caps_ray_tracing.capture_replay_identifier_size bytes each, into data, of a pipeline
+    /// made with capture_replay, for bfr_ray_tracing_pipeline_desc.replay_identifiers; of a
+    /// library, where bfr_caps_features.pipeline_library_identifiers. Fails with error_unsupported
+    /// where bfr_caps_features.ray_tracing_capture_replay is false, and as
+    /// bfr_get_shader_identifiers does.
+    [[nodiscard]] Expected<void> captureReplayIdentifiers(std::uint32_t first, std::uint32_t count, void* data, std::size_t size);
 
     /// Writes the bytes of stack one shader of group takes, for
     /// bfr_ray_tracing_pipeline_desc.stack_size. The group has that shader. Fails with
@@ -5584,6 +5639,12 @@ inline bfr_ray_tracing_pipeline_desc toC(const RayTracingPipelineDesc& value, co
         .max_attribute_size = value.maxAttributeSize,
         .cache = value.cache.get(),
         .stack_size = value.stackSize,
+        .library = static_cast<bfr_bool>(value.library),
+        .libraries = reinterpret_cast<const bfr_pipeline*>(value.libraries.data()),
+        .library_count = static_cast<uint32_t>(value.libraries.size()),
+        .capture_replay = static_cast<bfr_bool>(value.captureReplay),
+        .replay_identifiers = reinterpret_cast<const uint8_t*>(value.replayIdentifiers.data()),
+        .replay_identifiers_size = static_cast<size_t>(value.replayIdentifiers.size()),
     };
 }
 
@@ -6370,6 +6431,14 @@ inline Expected<void> Device::buildAccelerationStructure(CommandList commandList
     return {};
 }
 
+inline Expected<void> Device::buildAccelerationStructureIndirect(CommandList commandList, const AccelerationStructureBuild& build, const Buffer& ranges, std::uint64_t offset, std::uint32_t stride) const {
+    const bfr_acceleration_structure_build cBuild = detail::toC(build);
+    if (const bfr_result result = bfr_build_acceleration_structure_indirect(device_, commandList.get(), &cBuild, ranges.get(), offset, stride); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
 inline Expected<void> Device::copyAccelerationStructure(CommandList commandList, const AccelerationStructure& dst, const AccelerationStructure& src) const {
     if (const bfr_result result = bfr_copy_acceleration_structure(device_, commandList.get(), dst.get(), src.get()); result < 0) {
         return std::unexpected(detail::failure(result));
@@ -6392,6 +6461,9 @@ inline Expected<Pipeline> Device::createRayTracingPipeline(const RayTracingPipel
     }
     if (!std::in_range<uint32_t>(desc.groups.size())) {
         return std::unexpected(detail::tooMany("desc.groups holds more elements than a uint32_t counts"));
+    }
+    if (!std::in_range<uint32_t>(desc.libraries.size())) {
+        return std::unexpected(detail::tooMany("desc.libraries holds more elements than a uint32_t counts"));
     }
     const bfr_ray_tracing_pipeline_desc cDesc = detail::toC(desc, nullptr);
     bfr_pipeline pipeline{};
@@ -6597,6 +6669,13 @@ inline Expected<TextureTiling> Texture::textureTiling(TextureAspect aspect) {
 
 inline Expected<void> Pipeline::shaderIdentifiers(std::uint32_t first, std::uint32_t count, void* data, std::size_t size) {
     if (const bfr_result result = bfr_get_shader_identifiers(device_, pipeline_, first, count, data, size); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Pipeline::captureReplayIdentifiers(std::uint32_t first, std::uint32_t count, void* data, std::size_t size) {
+    if (const bfr_result result = bfr_get_capture_replay_identifiers(device_, pipeline_, first, count, data, size); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return {};

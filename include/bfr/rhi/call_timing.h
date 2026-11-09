@@ -113,10 +113,12 @@ enum class Call : std::uint32_t {
     DeserializeAccelerationStructure = 99,
     SerializedCompatible = 100,
     RayTracingStackSize = 101,
+    BuildAccelerationStructureIndirect = 102,
+    CaptureReplayIdentifiers = 103,
 };
 
 /// How many values Call has.
-inline constexpr std::size_t kCallCount = 102;
+inline constexpr std::size_t kCallCount = 104;
 
 /// The CPU time one kind of call has taken, read from std::chrono::steady_clock
 /// around each call: how many there were, their nanoseconds in all, and the

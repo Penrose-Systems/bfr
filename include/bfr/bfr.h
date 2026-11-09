@@ -524,6 +524,8 @@ typedef enum bfr_call {
     BFR_CALL_DESERIALIZE_ACCELERATION_STRUCTURE = 99,
     BFR_CALL_SERIALIZED_COMPATIBLE = 100,
     BFR_CALL_RAY_TRACING_STACK_SIZE = 101,
+    BFR_CALL_BUILD_ACCELERATION_STRUCTURE_INDIRECT = 102,
+    BFR_CALL_CAPTURE_REPLAY_IDENTIFIERS = 103,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -1718,10 +1720,15 @@ typedef struct bfr_ray_tracing_group {
     uint32_t intersection;
 } bfr_ray_tracing_group;
 
-// How to create a ray tracing pipeline: at least one ray generation shader. max_payload_size and
-// max_attribute_size are the largest payload and hit attributes its shaders declare, passed to
-// backends that take them. Rays trace recursively to max_recursion_depth, at most
-// bfr_caps_ray_tracing's; at 0 ray generation traces none.
+// How to create a ray tracing pipeline: at least one ray generation shader, its own or a library's.
+// max_payload_size and max_attribute_size are the largest payload and hit attributes its shaders
+// declare, passed to backends that take them. Rays trace recursively to max_recursion_depth, at
+// most bfr_caps_ray_tracing's; at 0 ray generation traces none. With library, it is a pipeline
+// library, where bfr_caps_features.ray_tracing_pipeline_library: never bound, only linked into
+// pipelines that name it in libraries. A linked library's shaders and groups follow the pipeline's
+// own, in the order libraries names them, so group indices count on past its groups; each library
+// was made with the same max_recursion_depth, max_payload_size, max_attribute_size and
+// capture_replay.
 typedef struct bfr_ray_tracing_pipeline_desc {
     const bfr_chain* next;
     // Read during the call only. An array of shader_count elements. May be null.
@@ -1738,6 +1745,21 @@ typedef struct bfr_ray_tracing_pipeline_desc {
     // The bytes of stack its traces take, large enough for every trace it makes
     // (bfr_get_ray_tracing_stack_size gives each shader's); 0 leaves the backend's own size.
     uint64_t stack_size;
+    bfr_bool library;
+    // Read during the call only. An array of library_count elements. May be null.
+    const bfr_pipeline* libraries;
+    uint32_t library_count;
+    // Its groups' identifiers may be captured, by bfr_get_capture_replay_identifiers, and replayed,
+    // where bfr_caps_features.ray_tracing_capture_replay.
+    bfr_bool capture_replay;
+    // None, or the identifiers bfr_get_capture_replay_identifiers gave for every group of groups,
+    // in order, bfr_caps_ray_tracing.capture_replay_identifier_size bytes each, of a pipeline made
+    // from the same desc: its groups then have the identifiers that pipeline's had. With
+    // capture_replay. Read during the call only. An array of replay_identifiers_size elements. May
+    // be null.
+    const uint8_t* replay_identifiers;
+    // Bytes.
+    size_t replay_identifiers_size;
 } bfr_ray_tracing_pipeline_desc;
 
 // Records in a shader binding table: size bytes from offset in buffer, which has
@@ -2077,6 +2099,18 @@ typedef struct bfr_acceleration_structure_desc {
     uint64_t size;
 } bfr_acceleration_structure_desc;
 
+// One geometry's counts, as a buffer holds them for bfr_build_acceleration_structure_indirect:
+// primitive_count triangles, boxes or instances, from primitive_offset bytes into the geometry's
+// indices, or its vertices, boxes or instances where it has none. A triangle's vertices are
+// first_vertex on from its indices, or from primitive_offset; its transform is transform_offset
+// bytes in. The layout every backend reads.
+typedef struct bfr_acceleration_structure_build_range {
+    uint32_t primitive_count;
+    uint32_t primitive_offset;
+    uint32_t first_vertex;
+    uint32_t transform_offset;
+} bfr_acceleration_structure_build_range;
+
 // A build of dst, of inputs' type, from inputs; or, with update, an update of src into dst (they
 // may be the same), src built with allow_update and inputs as its last build gave them but for the
 // data the buffers hold. Scratch is scratch_offset bytes into scratch, which has
@@ -2331,6 +2365,8 @@ typedef struct bfr_caps_ray_tracing {
     uint32_t max_binding_table_record_index;
     // The bytes of one record bfr_write_instances writes.
     uint32_t instance_size;
+    // The bytes of one group's identifier bfr_get_capture_replay_identifiers writes.
+    uint32_t capture_replay_identifier_size;
 } bfr_caps_ray_tracing;
 
 // Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and
@@ -2359,6 +2395,15 @@ typedef struct bfr_caps_features {
     bfr_bool serialized_bottom_count;
     // Shaders reorder ray tracing invocations.
     bfr_bool ray_invocation_reorder;
+    // Ray tracing pipeline libraries, bfr_ray_tracing_pipeline_desc.library.
+    bfr_bool ray_tracing_pipeline_library;
+    // bfr_get_shader_identifiers of a library, the same as a pipeline that links it gives for its
+    // groups.
+    bfr_bool pipeline_library_identifiers;
+    // bfr_ray_tracing_pipeline_desc.capture_replay.
+    bfr_bool ray_tracing_capture_replay;
+    // bfr_build_acceleration_structure_indirect.
+    bfr_bool acceleration_structure_indirect_build;
     bfr_bool mesh_shader;
     bfr_bool task_shader;
     // A shading rate per draw.
@@ -3521,6 +3566,22 @@ BFR_API bfr_result bfr_build_acceleration_structure(
     bfr_command_list command_list,
     const bfr_acceleration_structure_build* build);
 
+// Records build as bfr_build_acceleration_structure does, but with each geometry's counts read by
+// the GPU as it runs: one bfr_acceleration_structure_build_range per geometry of build's inputs, in
+// order, stride bytes apart from offset in ranges, which has indirect usage; offset and stride are
+// multiples of 4. The inputs' counts are the most a range names. Fails with error_unsupported where
+// bfr_caps_features.acceleration_structure_indirect_build is false, and as
+// bfr_build_acceleration_structure does.
+// offset: Bytes into ranges.
+// stride: Bytes from one range to the next.
+BFR_API bfr_result bfr_build_acceleration_structure_indirect(
+    bfr_device* device,
+    bfr_command_list command_list,
+    const bfr_acceleration_structure_build* build,
+    bfr_buffer ranges,
+    uint64_t offset,
+    uint32_t stride);
+
 // Records a copy of src into dst, at least src's size, or its current_size where
 // bfr_caps_features.acceleration_structure_current_size, not overlapping, as builds are recorded.
 // Fails with error_unsupported as bfr_build_acceleration_structure does, and error_invalid_handle
@@ -3547,11 +3608,13 @@ BFR_API void bfr_destroy_shader(bfr_device* device, bfr_shader shader);
 
 // Creates a ray tracing pipeline, as desc says, before returning. Not for the frame path. A
 // desc.cache is looked in first, and the pipeline added on a miss. Fails with error_unsupported
-// where bfr_caps_features.ray_tracing_pipeline is false, error_invalid_argument for an enum value
-// BFR doesn't have or a stack_size past 32 bits on Vulkan, which takes no more,
-// error_invalid_handle for a shader or desc.cache that is gone, error_limit_reached at the device's
-// maximum of pipelines, and error_device_failed when the backend refuses the desc; the message
-// carries what it said.
+// where bfr_caps_features.ray_tracing_pipeline is false, or for library or libraries where
+// bfr_caps_features.ray_tracing_pipeline_library is, or capture_replay where
+// bfr_caps_features.ray_tracing_capture_replay is, error_invalid_argument for an enum value BFR
+// doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or replay_identifiers
+// neither none nor of every group, error_invalid_handle for a shader, library or desc.cache that is
+// gone, error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
+// backend refuses the desc; the message carries what it said.
 BFR_API bfr_result bfr_create_ray_tracing_pipeline(
     bfr_device* device,
     const bfr_ray_tracing_pipeline_desc* desc,
@@ -3563,6 +3626,21 @@ BFR_API bfr_result bfr_create_ray_tracing_pipeline(
 // data: Where the identifiers go.
 // size: Bytes of data.
 BFR_API bfr_result bfr_get_shader_identifiers(
+    bfr_device* device,
+    bfr_pipeline pipeline,
+    uint32_t first,
+    uint32_t count,
+    void* data,
+    size_t size);
+
+// Writes count groups' capture-replay identifiers from first,
+// bfr_caps_ray_tracing.capture_replay_identifier_size bytes each, into data, of a pipeline made
+// with capture_replay, for bfr_ray_tracing_pipeline_desc.replay_identifiers; of a library, where
+// bfr_caps_features.pipeline_library_identifiers. Fails with error_unsupported where
+// bfr_caps_features.ray_tracing_capture_replay is false, and as bfr_get_shader_identifiers does.
+// data: Where the identifiers go.
+// size: Bytes of data.
+BFR_API bfr_result bfr_get_capture_replay_identifiers(
     bfr_device* device,
     bfr_pipeline pipeline,
     uint32_t first,

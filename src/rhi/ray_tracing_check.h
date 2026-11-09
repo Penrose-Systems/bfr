@@ -1,6 +1,8 @@
 #pragma once
 
 #include "bfr/core/error.h"
+#include "bfr/rhi/caps.h"
+#include "bfr/rhi/pipeline.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -24,6 +26,39 @@ namespace bfr::rhi {
     if (!traceRaysIndirect) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "the device has no indirect traces (Features::traceRaysIndirect)");
+    }
+    return {};
+}
+
+/// Fails with RhiUnsupported where the device has no capture-replay
+/// identifiers, as Features::rayTracingCaptureReplay says.
+[[nodiscard]] inline core::Result<void> checkCaptureReplay(bool captureReplay) {
+    if (!captureReplay) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device captures no ray tracing identifiers (Features::rayTracingCaptureReplay)");
+    }
+    return {};
+}
+
+/// Fails with RhiUnsupported for a library, or libraries linked, where
+/// Features::rayTracingPipelineLibrary is false, or captureReplay where
+/// Features::rayTracingCaptureReplay is, and RhiInvalidCall for
+/// replayIdentifiers neither empty nor replaySize bytes for each group.
+[[nodiscard]] inline core::Result<void> checkPipelineExtras(const RayTracingPipelineDesc& desc,
+                                                            const Features& features, std::uint32_t replaySize) {
+    if ((desc.library || !desc.libraries.empty()) && !features.rayTracingPipelineLibrary) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device has no ray tracing pipeline libraries (Features::rayTracingPipelineLibrary)");
+    }
+    if (desc.captureReplay) {
+        if (auto checked = checkCaptureReplay(features.rayTracingCaptureReplay); !checked) {
+            return checked;
+        }
+    }
+    if (!desc.replayIdentifiers.empty() && desc.replayIdentifiers.size() != desc.groups.size() * replaySize) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "{} bytes of replay identifiers are not {} groups' of {} bytes",
+                             desc.replayIdentifiers.size(), desc.groups.size(), replaySize);
     }
     return {};
 }

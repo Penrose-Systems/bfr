@@ -125,6 +125,20 @@ struct AccelerationStructureBuild {
     std::uint64_t scratchOffset = 0;
 };
 
+/// One geometry's counts, as a buffer holds them for
+/// Device::buildAccelerationStructureIndirect: primitiveCount triangles,
+/// boxes or instances, from primitiveOffset bytes into the geometry's
+/// indices, or its vertices, boxes or instances where it has none. A
+/// triangle's vertices are firstVertex on from its indices, or from
+/// primitiveOffset; its transform is transformOffset bytes in. The layout
+/// every backend reads.
+struct AccelerationStructureBuildRange {
+    std::uint32_t primitiveCount = 0;
+    std::uint32_t primitiveOffset = 0;
+    std::uint32_t firstVertex = 0;
+    std::uint32_t transformOffset = 0;
+};
+
 /// The floats of a 3x4 row-major transform.
 inline constexpr std::size_t kTransformFloats = 12;
 

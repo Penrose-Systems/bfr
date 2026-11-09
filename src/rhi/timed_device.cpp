@@ -437,6 +437,15 @@ core::Result<void> TimedDevice::buildAccelerationStructure(CommandListHandle com
                           [&] { return device_->buildAccelerationStructure(commandList, build); });
 }
 
+core::Result<void> TimedDevice::buildAccelerationStructureIndirect(CommandListHandle commandList,
+                                                                   const AccelerationStructureBuild& build,
+                                                                   BufferHandle ranges, std::uint64_t offset,
+                                                                   std::uint32_t stride) {
+    return counters_.time(Call::BuildAccelerationStructureIndirect, [&] {
+        return device_->buildAccelerationStructureIndirect(commandList, build, ranges, offset, stride);
+    });
+}
+
 core::Result<void> TimedDevice::copyAccelerationStructure(CommandListHandle commandList,
                                                           AccelerationStructureHandle dst,
                                                           AccelerationStructureHandle src) {
@@ -528,6 +537,12 @@ core::Result<void> TimedDevice::shaderIdentifiers(PipelineHandle pipeline, std::
                                                   std::span<std::byte> out) {
     return counters_.time(Call::ShaderIdentifiers,
                           [&] { return device_->shaderIdentifiers(pipeline, first, count, out); });
+}
+
+core::Result<void> TimedDevice::captureReplayIdentifiers(PipelineHandle pipeline, std::uint32_t first,
+                                                         std::uint32_t count, std::span<std::byte> out) {
+    return counters_.time(Call::CaptureReplayIdentifiers,
+                          [&] { return device_->captureReplayIdentifiers(pipeline, first, count, out); });
 }
 
 core::Result<void> TimedDevice::traceRays(CommandListHandle commandList, const TraceRaysDesc& desc) {

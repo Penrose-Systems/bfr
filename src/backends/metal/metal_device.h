@@ -294,6 +294,10 @@ public:
                                                     std::span<std::byte> out) override;
     [[nodiscard]] core::Result<void> buildAccelerationStructure(CommandListHandle commandList,
                                                                 const AccelerationStructureBuild& build) override;
+    [[nodiscard]] core::Result<void> buildAccelerationStructureIndirect(CommandListHandle commandList,
+                                                                        const AccelerationStructureBuild& build,
+                                                                        BufferHandle ranges, std::uint64_t offset,
+                                                                        std::uint32_t stride) override;
     [[nodiscard]] core::Result<void> copyAccelerationStructure(CommandListHandle commandList,
                                                                AccelerationStructureHandle dst,
                                                                AccelerationStructureHandle src) override;
@@ -329,6 +333,8 @@ public:
     [[nodiscard]] core::Result<PipelineHandle> createRayTracingPipeline(const RayTracingPipelineDesc& desc) override;
     [[nodiscard]] core::Result<void> shaderIdentifiers(PipelineHandle pipeline, std::uint32_t first,
                                                        std::uint32_t count, std::span<std::byte> out) override;
+    [[nodiscard]] core::Result<void> captureReplayIdentifiers(PipelineHandle pipeline, std::uint32_t first,
+                                                              std::uint32_t count, std::span<std::byte> out) override;
     [[nodiscard]] core::Result<void> traceRays(CommandListHandle commandList, const TraceRaysDesc& desc) override;
     [[nodiscard]] core::Result<void> traceRaysIndirect(CommandListHandle commandList, BufferHandle buffer,
                                                        std::uint64_t offset) override;

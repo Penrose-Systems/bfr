@@ -343,12 +343,23 @@ ShaderCode spirv(std::span<const std::uint8_t> bytes) {
     return {.code = std::as_bytes(bytes), .entryPoint = "main"};
 }
 
+// How a RayTracing's pipeline is made: with stackSize; with linked, its
+// miss and hit groups in a library it links, which follow its ray generation
+// group as they would in the pipeline itself; with captureReplay and the
+// groups' replayIdentifiers.
+struct TracingOptions {
+    std::uint64_t stackSize = 0;
+    bool linked = false;
+    bool captureReplay = false;
+    std::span<const std::byte> replayIdentifiers{};
+};
+
 // trace.rgen, trace.rmiss, and hit groups of trace.rchit for triangles and
 // with box.rint for boxes, in a pipeline, and a binding table of their
 // records: ray generation, then miss, then the two hit groups, each region at
 // a table alignment.
 struct RayTracing {
-    RayTracing(Device& device, const Caps& caps, std::uint64_t stackSize = 0) : device(&device) {
+    RayTracing(Device& device, const Caps& caps, const TracingOptions& options = {}) : device(&device) {
         const std::array codes{spirv(bfr::test::spirv::kTraceRgen), spirv(bfr::test::spirv::kTraceRmiss),
                                spirv(bfr::test::spirv::kTraceRchit), spirv(bfr::test::spirv::kBoxRint)};
         std::array<ShaderHandle, kShaders> shaders{};
@@ -370,11 +381,36 @@ struct RayTracing {
             {.type = RayTracingGroupType::TriangleHit, .closestHit = 2},
             {.type = RayTracingGroupType::BoxHit, .closestHit = 2, .intersection = 3},
         }};
-        const auto made = device.createRayTracingPipeline({.shaders = stages,
-                                                           .groups = groups,
-                                                           .maxRecursionDepth = 1,
-                                                           .maxPayloadSize = sizeof(std::uint32_t),
-                                                           .stackSize = stackSize});
+        const RayTracingPipelineDesc whole{.shaders = stages,
+                                           .groups = groups,
+                                           .maxRecursionDepth = 1,
+                                           .maxPayloadSize = sizeof(std::uint32_t),
+                                           .stackSize = options.stackSize,
+                                           .captureReplay = options.captureReplay,
+                                           .replayIdentifiers = options.replayIdentifiers};
+        if (options.linked) {
+            // The library's shader indices are its own, from the miss shader.
+            const std::array<RayTracingGroup, kGroups - 1> libraryGroups{{
+                {.type = RayTracingGroupType::General, .general = 0},
+                {.type = RayTracingGroupType::TriangleHit, .closestHit = 1},
+                {.type = RayTracingGroupType::BoxHit, .closestHit = 1, .intersection = 2},
+            }};
+            RayTracingPipelineDesc part = whole;
+            part.shaders = std::span{stages}.subspan(1);
+            part.groups = libraryGroups;
+            part.library = true;
+            const auto linked = device.createRayTracingPipeline(part);
+            INFO(failureOf(linked));
+            REQUIRE(linked.has_value());
+            library = *linked;
+        }
+        RayTracingPipelineDesc desc = whole;
+        if (options.linked) {
+            desc.shaders = std::span{stages}.first(1);
+            desc.groups = std::span{groups}.first(1);
+            desc.libraries = std::span{&library, 1};
+        }
+        const auto made = device.createRayTracingPipeline(desc);
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         pipeline = *made;
@@ -407,6 +443,7 @@ struct RayTracing {
     RayTracing& operator=(RayTracing&&) = delete;
     ~RayTracing() {
         CHECK(device->destroyPipeline(pipeline).has_value());
+        CHECK(device->destroyPipeline(library).has_value());
         CHECK(device->destroyBuffer(table).has_value());
     }
 
@@ -423,6 +460,7 @@ struct RayTracing {
     static constexpr std::size_t kShaders = 4;
     static constexpr std::uint32_t kGroups = 4;
     Device* device;
+    PipelineHandle library;
     PipelineHandle pipeline;
     BufferHandle table;
     std::uint64_t stride = 0;
@@ -583,11 +621,61 @@ TEST_CASE("Device traces rays through a ray tracing pipeline's binding table, di
                 REQUIRE(size.has_value());
                 stack += *size;
             }
-            const RayTracing sized{device, made.caps, std::max<std::uint64_t>(stack, 1)};
+            const RayTracing sized{device, made.caps, {.stackSize = std::max<std::uint64_t>(stack, 1)}};
             const auto trace = [&](CommandListHandle list, std::span<const std::byte> push) {
                 CHECK(device.bindPipeline(list, sized.pipeline).has_value());
                 CHECK(device.pushConstants(list, push).has_value());
                 CHECK(device.traceRays(list, sized.desc()).has_value());
+            };
+            CHECK(traced(device, scene.top.structure, built, trace) == kPlaced);
+        }
+        SECTION("a trace through a pipeline that links a library of its miss and hit groups, where the device has "
+                "them") {
+            if (!made.caps.features.rayTracingPipelineLibrary) {
+                SKIP("the adapter has no ray tracing pipeline libraries");
+            }
+            const RayTracing linked{device, made.caps, {.linked = true}};
+            const auto trace = [&](CommandListHandle list, std::span<const std::byte> push) {
+                CHECK(device.bindPipeline(list, linked.pipeline).has_value());
+                CHECK(device.pushConstants(list, push).has_value());
+                CHECK(device.traceRays(list, linked.desc()).has_value());
+            };
+            CHECK(traced(device, scene.top.structure, built, trace) == kPlaced);
+            if (made.caps.features.pipelineLibraryIdentifiers) {
+                // The library's groups have the identifiers the pipeline
+                // gives them, after its ray generation group.
+                const std::size_t size = made.caps.rayTracing.identifierSize;
+                std::vector<std::byte> fromLibrary(size * (RayTracing::kGroups - 1));
+                std::vector<std::byte> fromPipeline(size * (RayTracing::kGroups - 1));
+                CHECK(device.shaderIdentifiers(linked.library, 0, RayTracing::kGroups - 1, fromLibrary).has_value());
+                CHECK(device.shaderIdentifiers(linked.pipeline, 1, RayTracing::kGroups - 1, fromPipeline).has_value());
+                CHECK(fromLibrary == fromPipeline);
+            }
+        }
+        SECTION("a trace through a pipeline replaying another's identifiers, where the device has them") {
+            if (!made.caps.features.rayTracingCaptureReplay) {
+                SKIP("the adapter captures no ray tracing identifiers");
+            }
+            const std::size_t replaySize = made.caps.rayTracing.captureReplayIdentifierSize;
+            const std::size_t size = made.caps.rayTracing.identifierSize;
+            std::vector<std::byte> captured(replaySize * RayTracing::kGroups);
+            std::vector<std::byte> first(size * RayTracing::kGroups);
+            {
+                const RayTracing capturing{device, made.caps, {.captureReplay = true}};
+                const auto written = device.captureReplayIdentifiers(capturing.pipeline, 0, RayTracing::kGroups,
+                                                                     captured);
+                INFO(failureOf(written));
+                REQUIRE(written.has_value());
+                CHECK(device.shaderIdentifiers(capturing.pipeline, 0, RayTracing::kGroups, first).has_value());
+            }
+            const RayTracing replayed{device, made.caps, {.captureReplay = true, .replayIdentifiers = captured}};
+            std::vector<std::byte> again(size * RayTracing::kGroups);
+            CHECK(device.shaderIdentifiers(replayed.pipeline, 0, RayTracing::kGroups, again).has_value());
+            CHECK(again == first);
+            const auto trace = [&](CommandListHandle list, std::span<const std::byte> push) {
+                CHECK(device.bindPipeline(list, replayed.pipeline).has_value());
+                CHECK(device.pushConstants(list, push).has_value());
+                CHECK(device.traceRays(list, replayed.desc()).has_value());
             };
             CHECK(traced(device, scene.top.structure, built, trace) == kPlaced);
         }
@@ -763,6 +851,16 @@ TEST_CASE("Device refuses ray tracing pipeline work it can't pass on", "[rhi][ag
         if (!made.caps.features.traceRaysIndirect) {
             CHECK(code(device.traceRaysIndirect(*list, {}, 0)) == ErrorCode::RhiUnsupported);
         }
+        if (made.caps.features.rayTracingPipeline && !made.caps.features.rayTracingPipelineLibrary) {
+            CHECK(code(device.createRayTracingPipeline({.library = true})) == ErrorCode::RhiUnsupported);
+        }
+        if (!made.caps.features.rayTracingCaptureReplay) {
+            std::vector<std::byte> out(1);
+            CHECK(code(device.captureReplayIdentifiers({}, 0, 1, out)) == ErrorCode::RhiUnsupported);
+            if (made.caps.features.rayTracingPipeline) {
+                CHECK(code(device.createRayTracingPipeline({.captureReplay = true})) == ErrorCode::RhiUnsupported);
+            }
+        }
         // An address only of a buffer with a usage that has one.
         CHECK(code(device.bufferAddress(readback)) ==
               (made.caps.features.bufferAddress ? ErrorCode::RhiInvalidCall : ErrorCode::RhiUnsupported));
@@ -776,6 +874,14 @@ TEST_CASE("Device refuses ray tracing pipeline work it can't pass on", "[rhi][ag
             CHECK(code(device.shaderIdentifiers(query.pipeline, 0, 1, out)) == ErrorCode::RhiInvalidCall);
             CHECK(code(device.rayTracingStackSize(query.pipeline, 0, RayTracingGroupShader::General)) ==
                   ErrorCode::RhiInvalidCall);
+            // Replay identifiers BFR would read past.
+            const RayTracingGroup group{.type = RayTracingGroupType::General, .general = 0};
+            const std::array<std::byte, 1> tooFew{};
+            CHECK(code(device.createRayTracingPipeline(
+                      {.groups = std::span{&group, 1}, .replayIdentifiers = tooFew})) == ErrorCode::RhiInvalidCall);
+            if (made.caps.features.rayTracingCaptureReplay) {
+                CHECK(code(device.captureReplayIdentifiers(query.pipeline, 0, 1, out)) == ErrorCode::RhiInvalidCall);
+            }
             // An enum value BFR doesn't have.
             const RayTracingShader unknown{.stage = static_cast<RayTracingStage>(0xFF)};
             CHECK(code(device.createRayTracingPipeline({.shaders = std::span{&unknown, 1}})) ==
@@ -941,6 +1047,9 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
             CHECK(code(device.writeInstances({}, out)) == ErrorCode::RhiUnsupported);
             CHECK(code(device.buildAccelerationStructure(*list, {})) == ErrorCode::RhiUnsupported);
             CHECK(code(device.copyAccelerationStructure(*list, {}, {})) == ErrorCode::RhiUnsupported);
+        }
+        if (!made.caps.features.accelerationStructureIndirectBuild) {
+            CHECK(code(device.buildAccelerationStructureIndirect(*list, {}, {}, 0, 0)) == ErrorCode::RhiUnsupported);
         }
         else {
             const BufferHandle vertices = input(device, std::array<float, kVertexFloats * kTriangleVertices>{});

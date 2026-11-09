@@ -402,6 +402,18 @@ core::Result<void> D3D12Device::shaderIdentifiers(PipelineHandle /*pipeline*/, s
     return checkRayTracingPipelines(features_.rayTracingPipeline);
 }
 
+core::Result<void> D3D12Device::captureReplayIdentifiers(PipelineHandle /*pipeline*/, std::uint32_t /*first*/,
+                                                         std::uint32_t /*count*/, std::span<std::byte> /*out*/) {
+    return checkCaptureReplay(features_.rayTracingCaptureReplay);
+}
+
+core::Result<void> D3D12Device::buildAccelerationStructureIndirect(CommandListHandle /*commandList*/,
+                                                                   const AccelerationStructureBuild& /*build*/,
+                                                                   BufferHandle /*ranges*/, std::uint64_t /*offset*/,
+                                                                   std::uint32_t /*stride*/) {
+    return checkIndirectBuilds(features_.accelerationStructureIndirectBuild);
+}
+
 core::Result<void> D3D12Device::traceRays(CommandListHandle /*commandList*/, const TraceRaysDesc& /*desc*/) {
     return checkRayTracingPipelines(features_.rayTracingPipeline);
 }

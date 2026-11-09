@@ -619,6 +619,20 @@ public:
     [[nodiscard]] virtual core::Result<void> buildAccelerationStructure(CommandListHandle commandList,
                                                                         const AccelerationStructureBuild& build) = 0;
 
+    /// Records build as buildAccelerationStructure does, but with each
+    /// geometry's counts read by the GPU as it runs: one
+    /// AccelerationStructureBuildRange per geometry of build.inputs, in
+    /// order, stride bytes apart from offset in ranges, which has indirect
+    /// usage; offset and stride are multiples of 4. build.inputs' counts are
+    /// the most a range names. Fails with RhiUnsupported where
+    /// Features::accelerationStructureIndirectBuild is false, and as
+    /// buildAccelerationStructure does.
+    [[nodiscard]] virtual core::Result<void> buildAccelerationStructureIndirect(CommandListHandle commandList,
+                                                                                const AccelerationStructureBuild& build,
+                                                                                BufferHandle ranges,
+                                                                                std::uint64_t offset,
+                                                                                std::uint32_t stride) = 0;
+
     /// Records a copy of src into dst, at least src's size, or its CurrentSize where
     /// Features::accelerationStructureCurrentSize, not overlapping, as builds are recorded. Fails with RhiUnsupported
     /// as buildAccelerationStructure does, and RhiInvalidHandle for a list or structure that is gone.
@@ -727,10 +741,13 @@ public:
 
     /// A ray tracing pipeline as desc says, made before returning, or loaded
     /// from desc.cache. Cold, as createComputePipeline is. Fails with
-    /// RhiUnsupported where Features::rayTracingPipeline is false,
-    /// RhiInvalidCall for an enum value BFR doesn't have or a stackSize past
-    /// 32 bits on Vulkan, which takes no more, RhiInvalidHandle
-    /// for a shader or desc.cache that is gone, RhiLimitReached at the
+    /// RhiUnsupported where Features::rayTracingPipeline is false, or for
+    /// library or libraries where Features::rayTracingPipelineLibrary is, or
+    /// captureReplay where Features::rayTracingCaptureReplay is,
+    /// RhiInvalidCall for an enum value BFR doesn't have, a stackSize past 32
+    /// bits on Vulkan, which takes no more, or replayIdentifiers neither empty
+    /// nor of every group, RhiInvalidHandle for a shader, library or
+    /// desc.cache that is gone, RhiLimitReached at the
     /// device's maximum, and RhiDeviceFailed when the API refuses the desc,
     /// with what it said.
     [[nodiscard]] virtual core::Result<PipelineHandle> createRayTracingPipeline(const RayTracingPipelineDesc& desc) = 0;
@@ -741,6 +758,17 @@ public:
     /// tracing one, and RhiInvalidHandle when it is gone.
     [[nodiscard]] virtual core::Result<void> shaderIdentifiers(PipelineHandle pipeline, std::uint32_t first,
                                                                std::uint32_t count, std::span<std::byte> out) = 0;
+
+    /// Writes count groups' capture-replay identifiers from first,
+    /// RayTracingLimits::captureReplayIdentifierSize bytes each, into out, of
+    /// a pipeline made with captureReplay, for RayTracingPipelineDesc::
+    /// replayIdentifiers; of a library, where
+    /// Features::pipelineLibraryIdentifiers. Fails with RhiUnsupported where
+    /// Features::rayTracingCaptureReplay is false, and as shaderIdentifiers
+    /// does.
+    [[nodiscard]] virtual core::Result<void> captureReplayIdentifiers(PipelineHandle pipeline, std::uint32_t first,
+                                                                      std::uint32_t count,
+                                                                      std::span<std::byte> out) = 0;
 
     /// Records a trace of desc's rays with the bound ray tracing pipeline,
     /// outside rendering, on a queue whose kind runs compute; commands after

@@ -552,6 +552,35 @@ TEST_CASE("Vulkan without VK_KHR_ray_tracing_position_fetch reports no position 
     CHECK_FALSE(instance->adapters()[0].caps.features.rayPositionFetch);
 }
 
+TEST_CASE("Vulkan without VK_KHR_pipeline_library reports no pipeline libraries, and refuses them", "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
+    const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_KHR_pipeline_library");
+    std::vector<std::string> errors;
+    {
+        auto created = Instance::create(recordingErrorsInto(errors), kValidation);
+        INFO(failureOf(created));
+        REQUIRE(created.has_value());
+        const std::unique_ptr<Instance> instance = std::move(*created);
+        const Caps& caps = instance->adapters()[0].caps;
+        CHECK_FALSE(caps.features.rayTracingPipelineLibrary);
+        CHECK_FALSE(caps.features.pipelineLibraryIdentifiers);
+        if (!caps.features.rayTracingPipeline) {
+            SKIP("the adapter has no ray tracing pipelines");
+        }
+        auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+        INFO(failureOf(made));
+        REQUIRE(made.has_value());
+        const auto library = (**made).createRayTracingPipeline({.library = true});
+        REQUIRE_FALSE(library.has_value());
+        CHECK(library.error().code == bfr::core::ErrorCode::RhiUnsupported);
+        const PipelineHandle named{};
+        const auto linking = (**made).createRayTracingPipeline({.libraries = std::span{&named, 1}});
+        REQUIRE_FALSE(linking.has_value());
+        CHECK(linking.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    }
+    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("Vulkan refuses a ray tracing stack size past the 32 bits it takes", "[vulkan][gpu]") {
     auto created = Instance::create(vulkanDesc(), {});
     INFO(failureOf(created));

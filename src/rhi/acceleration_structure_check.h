@@ -41,6 +41,18 @@ namespace bfr::rhi {
     return {};
 }
 
+/// Fails with RhiUnsupported where the device builds no acceleration
+/// structures from counts the GPU reads, as
+/// Features::accelerationStructureIndirectBuild says.
+[[nodiscard]] inline core::Result<void> checkIndirectBuilds(bool indirectBuild) {
+    if (!indirectBuild) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device has no indirect acceleration structure builds "
+                             "(Features::accelerationStructureIndirectBuild)");
+    }
+    return {};
+}
+
 /// Fails with RhiUnsupported where the device serializes no acceleration
 /// structures, as Features::accelerationStructureSerialization says.
 [[nodiscard]] inline core::Result<void> checkSerialization(bool serialization) {

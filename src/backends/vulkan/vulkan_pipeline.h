@@ -136,12 +136,14 @@ private:
                                                             const ShaderCode& code);
 
 /// A ray tracing pipeline on layout of stages, which point at the shaders'
-/// modules, and desc's groups and recursion depth, using cache as
+/// modules, and desc's groups and recursion depth, linking libraries, with
+/// desc's replay identifiers of replaySize bytes each, using cache as
 /// createVulkanComputePipeline does. Fails with RhiDeviceFailed when the API
 /// refuses it.
 [[nodiscard]] core::Result<VulkanPipeline> createVulkanRayTracingPipeline(
     const VolkDeviceTable& table, VkDevice device, VkPipelineLayout layout, VkPipelineCache cache,
-    std::span<const VkPipelineShaderStageCreateInfo> stages, const RayTracingPipelineDesc& desc);
+    std::span<const VkPipelineShaderStageCreateInfo> stages, std::span<const VkPipeline> libraries,
+    std::uint32_t replaySize, const RayTracingPipelineDesc& desc);
 
 /// The Vulkan stage of a ray tracing shader at stage.
 [[nodiscard]] VkShaderStageFlagBits rayTracingStageFor(RayTracingStage stage);

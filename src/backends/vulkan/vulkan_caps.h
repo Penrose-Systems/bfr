@@ -104,6 +104,9 @@ struct DeviceFeatures {
     /// The cross-vendor reorder; VK_NV_ray_tracing_invocation_reorder's is not
     /// enabled, so NV-only adapters report none.
     VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT invocationReorder{};
+    VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT libraryGroupHandles{};
+    /// VK_KHR_pipeline_library, which has no features struct, is enabled.
+    bool pipelineLibrary = false;
     /// The extensions whose structs are chained, which the device enables.
     std::vector<const char*> enabledExtensions;
     std::uint32_t version = 0;

@@ -292,6 +292,16 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
         .rayInvocationReorder = hasAccelerationStructures(features) &&
                                 on(features.rayTracingPipeline.rayTracingPipeline) &&
                                 on(features.invocationReorder.rayTracingInvocationReorder),
+        .rayTracingPipelineLibrary = hasAccelerationStructures(features) &&
+                                     on(features.rayTracingPipeline.rayTracingPipeline) && features.pipelineLibrary,
+        .pipelineLibraryIdentifiers = hasAccelerationStructures(features) &&
+                                      on(features.rayTracingPipeline.rayTracingPipeline) && features.pipelineLibrary &&
+                                      on(features.libraryGroupHandles.pipelineLibraryGroupHandles),
+        .rayTracingCaptureReplay = hasAccelerationStructures(features) &&
+                                   on(features.rayTracingPipeline.rayTracingPipeline) &&
+                                   on(features.rayTracingPipeline.rayTracingPipelineShaderGroupHandleCaptureReplay),
+        .accelerationStructureIndirectBuild = hasAccelerationStructures(features) &&
+                                              on(features.accelerationStructure.accelerationStructureIndirectBuild),
         .meshShader = on(features.mesh.meshShader),
         .taskShader = on(features.mesh.taskShader),
         // BFR has no call for shading rates or conservative raster yet (roadmap step
@@ -798,6 +808,7 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     rayTracingMaintenance1.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_MAINTENANCE_1_FEATURES_KHR;
     rayTracingPositionFetch.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_POSITION_FETCH_FEATURES_KHR;
     invocationReorder.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_EXT;
+    libraryGroupHandles.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_LIBRARY_GROUP_HANDLES_FEATURES_EXT;
 
     void** tail = &core.pNext;
     link(tail, vulkan11);
@@ -872,6 +883,15 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
         linkIfListed(VK_KHR_RAY_TRACING_MAINTENANCE_1_EXTENSION_NAME, rayTracingMaintenance1);
         linkIfListed(VK_KHR_RAY_TRACING_POSITION_FETCH_EXTENSION_NAME, rayTracingPositionFetch);
         linkIfListed(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME, invocationReorder);
+        // VK_EXT_pipeline_library_group_handles needs VK_KHR_pipeline_library
+        // and VK_KHR_ray_tracing_pipeline (vkdocs xml/vk.xml:29884).
+        if (lists(extensions, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME)) {
+            pipelineLibrary = true;
+            enabledExtensions.push_back(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+            if (lists(extensions, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
+                linkIfListed(VK_EXT_PIPELINE_LIBRARY_GROUP_HANDLES_EXTENSION_NAME, libraryGroupHandles);
+            }
+        }
     }
     vk.vkGetPhysicalDeviceFeatures2(adapter, &core);
 }
@@ -969,6 +989,9 @@ RayTracingLimits rayTracingFrom(const PropertyQuery& properties, const Features&
         limits.maxShaderGroupStride = pipeline.maxShaderGroupStride;
         limits.maxTraceRays = pipeline.maxRayDispatchInvocationCount;
         limits.maxHitAttributeSize = pipeline.maxRayHitAttributeSize;
+    }
+    if (reported.rayTracingCaptureReplay) {
+        limits.captureReplayIdentifierSize = properties.rayTracingPipeline.shaderGroupHandleCaptureReplaySize;
     }
     if (reported.rayInvocationReorder) {
         const VkPhysicalDeviceRayTracingInvocationReorderPropertiesEXT& reorder = properties.invocationReorder;

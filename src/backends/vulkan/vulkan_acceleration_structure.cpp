@@ -395,6 +395,26 @@ core::Result<void> VulkanDevice::buildAccelerationStructure(CommandListHandle co
     if (auto checked = checkAccelerationStructures(features_.accelerationStructure); !checked) {
         return checked;
     }
+    return recordBuild(commandList, build, nullptr);
+}
+
+core::Result<void> VulkanDevice::buildAccelerationStructureIndirect(CommandListHandle commandList,
+                                                                    const AccelerationStructureBuild& build,
+                                                                    BufferHandle ranges, std::uint64_t offset,
+                                                                    std::uint32_t stride) {
+    if (auto checked = checkIndirectBuilds(features_.accelerationStructureIndirectBuild); !checked) {
+        return checked;
+    }
+    auto found = bufferFor(ranges);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    const std::pair<VkDeviceAddress, std::uint32_t> read{(*found)->address() + offset, stride};
+    return recordBuild(commandList, build, &read);
+}
+
+core::Result<void> VulkanDevice::recordBuild(CommandListHandle commandList, const AccelerationStructureBuild& build,
+                                             const std::pair<VkDeviceAddress, std::uint32_t>* ranges) {
     if (auto checked = checkInputs(build.inputs); !checked) {
         return checked;
     }
@@ -440,8 +460,14 @@ core::Result<void> VulkanDevice::buildAccelerationStructure(CommandListHandle co
     info->srcAccelerationStructure = src;
     info->dstAccelerationStructure = (*dst)->structure();
     info->scratchData.deviceAddress = *scratch;
-    const VkAccelerationStructureBuildRangeInfoKHR* ranges = builds_.ranges.data();
-    table_.vkCmdBuildAccelerationStructuresKHR((*list)->buffer, 1, &*info, &ranges);
+    if (ranges != nullptr) {
+        const std::uint32_t* maxCounts = builds_.primitiveCounts.data();
+        table_.vkCmdBuildAccelerationStructuresIndirectKHR((*list)->buffer, 1, &*info, &ranges->first, &ranges->second,
+                                                           &maxCounts);
+        return {};
+    }
+    const VkAccelerationStructureBuildRangeInfoKHR* counts = builds_.ranges.data();
+    table_.vkCmdBuildAccelerationStructuresKHR((*list)->buffer, 1, &*info, &counts);
     return {};
 }
 

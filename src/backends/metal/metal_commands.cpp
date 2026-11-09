@@ -513,6 +513,18 @@ core::Result<void> MetalDevice::shaderIdentifiers(PipelineHandle /*pipeline*/, s
     return checkRayTracingPipelines(features_.rayTracingPipeline);
 }
 
+core::Result<void> MetalDevice::captureReplayIdentifiers(PipelineHandle /*pipeline*/, std::uint32_t /*first*/,
+                                                         std::uint32_t /*count*/, std::span<std::byte> /*out*/) {
+    return checkCaptureReplay(features_.rayTracingCaptureReplay);
+}
+
+core::Result<void> MetalDevice::buildAccelerationStructureIndirect(CommandListHandle /*commandList*/,
+                                                                   const AccelerationStructureBuild& /*build*/,
+                                                                   BufferHandle /*ranges*/, std::uint64_t /*offset*/,
+                                                                   std::uint32_t /*stride*/) {
+    return checkIndirectBuilds(features_.accelerationStructureIndirectBuild);
+}
+
 core::Result<void> MetalDevice::traceRays(CommandListHandle /*commandList*/, const TraceRaysDesc& /*desc*/) {
     return checkRayTracingPipelines(features_.rayTracingPipeline);
 }

@@ -84,6 +84,13 @@ std::vector<std::string> limitsWithoutFeatures(const Caps& caps) {
         {features.rayInvocationReorder ||
              (!caps.rayTracing.reordersInvocations && caps.rayTracing.maxBindingTableRecordIndex == 0),
          "invocation reorder"},
+        {features.rayTracingPipeline || !(features.rayTracingPipelineLibrary || features.pipelineLibraryIdentifiers ||
+                                          features.rayTracingCaptureReplay),
+         "ray tracing pipeline features"},
+        {features.rayTracingPipelineLibrary || !features.pipelineLibraryIdentifiers, "library identifiers"},
+        {features.rayTracingCaptureReplay || caps.rayTracing.captureReplayIdentifierSize == 0,
+         "capture-replay identifiers"},
+        {features.accelerationStructure || !features.accelerationStructureIndirectBuild, "indirect builds"},
         {features.accelerationStructure || caps.bindless.maxAccelerationStructures == 0,
          "acceleration structure table"},
         {features.accelerationStructure || !(features.rayQuery || features.rayQueryGraphics), "ray queries"},

@@ -421,6 +421,8 @@ enums:
       deserialize_acceleration_structure: {value: 99}
       serialized_compatible: {value: 100}
       ray_tracing_stack_size: {value: 101}
+      build_acceleration_structure_indirect: {value: 102}
+      capture_replay_identifiers: {value: 103}
 
   timestamp_stage:
     doc: >-
@@ -1495,10 +1497,17 @@ structs:
   ray_tracing_pipeline_desc:
     doc: >-
       How to create a ray tracing pipeline: at least one ray generation
-      shader. max_payload_size and max_attribute_size are the largest payload
-      and hit attributes its shaders declare, passed to backends that take
-      them. Rays trace recursively to max_recursion_depth, at most
-      bfr_caps_ray_tracing's; at 0 ray generation traces none.
+      shader, its own or a library's. max_payload_size and max_attribute_size
+      are the largest payload and hit attributes its shaders declare, passed
+      to backends that take them. Rays trace recursively to
+      max_recursion_depth, at most bfr_caps_ray_tracing's; at 0 ray generation
+      traces none. With library, it is a pipeline library, where
+      bfr_caps_features.ray_tracing_pipeline_library: never bound, only linked
+      into pipelines that name it in libraries. A linked library's shaders and
+      groups follow the pipeline's own, in the order libraries names them, so
+      group indices count on past its groups; each library was made with the
+      same max_recursion_depth, max_payload_size, max_attribute_size and
+      capture_replay.
     extensible: true
     members:
       - {name: shaders, type: ray_tracing_shader, array: shader_count, pointer: in, optional: true, doc: Read during the call only.}
@@ -1515,6 +1524,28 @@ structs:
           The bytes of stack its traces take, large enough for every trace it
           makes (bfr_get_ray_tracing_stack_size gives each shader's); 0 leaves
           the backend's own size.
+      - {name: library, type: bool}
+      - {name: libraries, type: pipeline, array: library_count, pointer: in, optional: true, doc: Read during the call only.}
+      - {name: library_count, type: u32}
+      - name: capture_replay
+        type: bool
+        doc: >-
+          Its groups' identifiers may be captured, by
+          bfr_get_capture_replay_identifiers, and replayed, where
+          bfr_caps_features.ray_tracing_capture_replay.
+      - name: replay_identifiers
+        type: u8
+        array: replay_identifiers_size
+        pointer: in
+        optional: true
+        doc: >-
+          None, or the identifiers bfr_get_capture_replay_identifiers gave for
+          every group of groups, in order,
+          bfr_caps_ray_tracing.capture_replay_identifier_size bytes each, of a
+          pipeline made from the same desc: its groups then have the
+          identifiers that pipeline's had. With capture_replay. Read during the
+          call only.
+      - {name: replay_identifiers_size, type: size, doc: Bytes.}
 
   shader_table_region:
     doc: >-
@@ -1830,6 +1861,21 @@ structs:
       - {name: type, type: acceleration_structure_type, doc: 0 is bottom.}
       - {name: size, type: u64, doc: "Bytes, as bfr_get_acceleration_structure_sizes gives them."}
 
+  acceleration_structure_build_range:
+    doc: >-
+      One geometry's counts, as a buffer holds them for
+      bfr_build_acceleration_structure_indirect: primitive_count triangles,
+      boxes or instances, from primitive_offset bytes into the geometry's
+      indices, or its vertices, boxes or instances where it has none. A
+      triangle's vertices are first_vertex on from its indices, or from
+      primitive_offset; its transform is transform_offset bytes in. The layout
+      every backend reads.
+    members:
+      - {name: primitive_count, type: u32}
+      - {name: primitive_offset, type: u32}
+      - {name: first_vertex, type: u32}
+      - {name: transform_offset, type: u32}
+
   acceleration_structure_build:
     doc: >-
       A build of dst, of inputs' type, from inputs; or, with update, an update
@@ -2014,6 +2060,7 @@ structs:
       - {name: reorders_invocations, type: bool, doc: "Shaders that reorder invocations may see them reordered: the backend says it reorders."}
       - {name: max_binding_table_record_index, type: u32, doc: The highest binding table record index a reordered hit names.}
       - {name: instance_size, type: u32, doc: The bytes of one record bfr_write_instances writes.}
+      - {name: capture_replay_identifier_size, type: u32, doc: The bytes of one group's identifier bfr_get_capture_replay_identifiers writes.}
 
   caps_features:
     doc: Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and not listed.
@@ -2030,6 +2077,10 @@ structs:
       - {name: acceleration_structure_current_size, type: bool, doc: The current_size property.}
       - {name: serialized_bottom_count, type: bool, doc: The serialized_bottom_count property.}
       - {name: ray_invocation_reorder, type: bool, doc: Shaders reorder ray tracing invocations.}
+      - {name: ray_tracing_pipeline_library, type: bool, doc: "Ray tracing pipeline libraries, bfr_ray_tracing_pipeline_desc.library."}
+      - {name: pipeline_library_identifiers, type: bool, doc: "bfr_get_shader_identifiers of a library, the same as a pipeline that links it gives for its groups."}
+      - {name: ray_tracing_capture_replay, type: bool, doc: bfr_ray_tracing_pipeline_desc.capture_replay.}
+      - {name: acceleration_structure_indirect_build, type: bool, doc: bfr_build_acceleration_structure_indirect.}
       - {name: mesh_shader, type: bool}
       - {name: task_shader, type: bool}
       - {name: shading_rate, type: bool, doc: A shading rate per draw.}
@@ -3455,6 +3506,25 @@ functions:
       - {name: command_list, type: command_list}
       - {name: build, type: acceleration_structure_build, pointer: in}
 
+  build_acceleration_structure_indirect:
+    doc: >-
+      Records build as bfr_build_acceleration_structure does, but with each
+      geometry's counts read by the GPU as it runs: one
+      bfr_acceleration_structure_build_range per geometry of build's inputs,
+      in order, stride bytes apart from offset in ranges, which has indirect
+      usage; offset and stride are multiples of 4. The inputs' counts are the
+      most a range names. Fails with error_unsupported where
+      bfr_caps_features.acceleration_structure_indirect_build is false, and as
+      bfr_build_acceleration_structure does.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: build, type: acceleration_structure_build, pointer: in}
+      - {name: ranges, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into ranges.}
+      - {name: stride, type: u32, doc: Bytes from one range to the next.}
+
   copy_acceleration_structure:
     doc: >-
       Records a copy of src into dst, at least src's size, or its current_size
@@ -3497,10 +3567,13 @@ functions:
       Creates a ray tracing pipeline, as desc says, before returning. Not for
       the frame path. A desc.cache is looked in first, and the pipeline added
       on a miss. Fails with error_unsupported where
-      bfr_caps_features.ray_tracing_pipeline is false, error_invalid_argument
-      for an enum value BFR doesn't have or a stack_size past 32 bits on
-      Vulkan, which takes no more, error_invalid_handle for a shader or
-      desc.cache that is gone, error_limit_reached at the device's maximum of
+      bfr_caps_features.ray_tracing_pipeline is false, or for library or
+      libraries where bfr_caps_features.ray_tracing_pipeline_library is, or
+      capture_replay where bfr_caps_features.ray_tracing_capture_replay is,
+      error_invalid_argument for an enum value BFR doesn't have, a stack_size
+      past 32 bits on Vulkan, which takes no more, or replay_identifiers
+      neither none nor of every group, error_invalid_handle for a shader,
+      library or desc.cache that is gone, error_limit_reached at the device's maximum of
       pipelines, and error_device_failed when the backend refuses the desc;
       the message carries what it said.
     returns: result
@@ -3515,6 +3588,24 @@ functions:
       bfr_caps_ray_tracing.identifier_size bytes each, into data, for binding
       table records. Fails with error_invalid_argument when size is too small
       or the pipeline is not a ray tracing one.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: pipeline, type: pipeline}
+      - {name: first, type: u32}
+      - {name: count, type: u32}
+      - {name: data, type: opaque, doc: Where the identifiers go.}
+      - {name: size, type: size, doc: Bytes of data.}
+
+  get_capture_replay_identifiers:
+    doc: >-
+      Writes count groups' capture-replay identifiers from first,
+      bfr_caps_ray_tracing.capture_replay_identifier_size bytes each, into
+      data, of a pipeline made with capture_replay, for
+      bfr_ray_tracing_pipeline_desc.replay_identifiers; of a library, where
+      bfr_caps_features.pipeline_library_identifiers. Fails with
+      error_unsupported where bfr_caps_features.ray_tracing_capture_replay is
+      false, and as bfr_get_shader_identifiers does.
     returns: result
     params:
       - {name: device, type: device}

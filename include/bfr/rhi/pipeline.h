@@ -324,11 +324,19 @@ enum class RayTracingGroupShader : std::uint8_t {
     Intersection = 3,
 };
 
-/// How to create a ray tracing pipeline: at least one ray generation shader.
-/// maxPayloadSize and maxAttributeSize are the largest payload and hit
-/// attributes its shaders declare, passed to backends that take them. Rays
-/// trace recursively to maxRecursionDepth, at most RayTracingLimits'; at 0
-/// ray generation traces none. The spans are read during the call only.
+/// How to create a ray tracing pipeline: at least one ray generation shader,
+/// its own or a library's. maxPayloadSize and maxAttributeSize are the largest
+/// payload and hit attributes its shaders declare, passed to backends that
+/// take them. Rays trace recursively to maxRecursionDepth, at most
+/// RayTracingLimits'; at 0 ray generation traces none. The spans are read
+/// during the call only.
+///
+/// With library, it is a pipeline library, where
+/// Features::rayTracingPipelineLibrary: never bound, only linked into
+/// pipelines that name it in libraries. A linked library's shaders and groups
+/// follow the pipeline's own, in the order libraries names them, so group
+/// indices count on past its groups; each library was made with the same
+/// maxRecursionDepth, maxPayloadSize, maxAttributeSize and captureReplay.
 struct RayTracingPipelineDesc {
     std::span<const RayTracingShader> shaders{};
     std::span<const RayTracingGroup> groups{};
@@ -341,6 +349,17 @@ struct RayTracingPipelineDesc {
     /// makes (Device::rayTracingStackSize gives each shader's); 0 leaves the
     /// backend's own size.
     std::uint64_t stackSize = 0;
+    bool library = false;
+    std::span<const PipelineHandle> libraries{};
+    /// Its groups' identifiers may be captured, by
+    /// Device::captureReplayIdentifiers, and replayed, where
+    /// Features::rayTracingCaptureReplay.
+    bool captureReplay = false;
+    /// Empty, or the identifiers captureReplayIdentifiers gave for every group
+    /// of groups, in order, RayTracingLimits::captureReplayIdentifierSize bytes
+    /// each, of a pipeline made from the same desc: its groups then have the
+    /// identifiers that pipeline's had. With captureReplay.
+    std::span<const std::byte> replayIdentifiers{};
 };
 
 } // namespace bfr::rhi
