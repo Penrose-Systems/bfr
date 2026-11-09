@@ -37,6 +37,7 @@ constants:
   no_slot: {value: 4294967295, doc: "A bindless slot a texture doesn't have, in a table its usage doesn't set; no table has a slot this high."}
   instance_index_limit: {value: 16777216, doc: "Instance custom indices and hit group offsets are below this: every backend's record holds them in 24 bits."}
   transform_floats: {value: 12, doc: The floats of a 3x4 row-major transform.}
+  no_shader: {value: 4294967295, doc: No shader in a bfr_ray_tracing_group's slot.}
   max_message_length: {value: 1024, doc: The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".}
 
 enums:
@@ -402,6 +403,13 @@ enums:
       write_instances: {value: 82}
       build_acceleration_structure: {value: 83}
       copy_acceleration_structure: {value: 84}
+      create_shader: {value: 85}
+      destroy_shader: {value: 86}
+      create_ray_tracing_pipeline: {value: 87}
+      shader_identifiers: {value: 88}
+      trace_rays: {value: 89}
+      trace_rays_indirect: {value: 90}
+      buffer_address: {value: 91}
 
   timestamp_stage:
     doc: >-
@@ -661,6 +669,23 @@ enums:
       force_opaque: {value: 1}
       force_non_opaque: {value: 2}
 
+  ray_tracing_stage:
+    doc: The stage a ray tracing pipeline's shader runs at.
+    values:
+      ray_generation: {value: 0}
+      miss: {value: 1}
+      closest_hit: {value: 2}
+      any_hit: {value: 3}
+      intersection: {value: 4}
+      callable: {value: 5}
+
+  ray_tracing_group_type:
+    doc: What a ray tracing pipeline's group holds.
+    values:
+      general: {value: 0, doc: "general: one ray generation, miss or callable shader."}
+      triangle_hit: {value: 1, doc: "closest_hit and any_hit, either no_shader, for triangles."}
+      box_hit: {value: 2, doc: "intersection, and closest_hit and any_hit, either no_shader, for boxes."}
+
   window_system:
     doc: >-
       Which window system a bfr_window comes from, for the platforms that have
@@ -777,6 +802,13 @@ handles:
       the device allocates. A bottom structure holds triangles or boxes; a
       top one holds instances of bottom ones, and is what shaders trace rays
       against.
+
+  shader:
+    parent: device
+    destroy: destroy_shader
+    doc: >-
+      Code compiled once and named by the ray tracing pipelines made from it,
+      which keep what they need of it: it may be destroyed once they are made.
 
   pipeline_cache:
     parent: device
@@ -1125,7 +1157,7 @@ structs:
       - {name: uniform, type: bool, doc: Shaders read it as constants.}
       - {name: storage, type: bool, doc: "Shaders read and write it. D3D12 views it in 32-bit values, so there its size must be a multiple of 4."}
       - {name: index, type: bool, doc: Indexed draws read it.}
-      - {name: indirect, type: bool, doc: Indirect draws and dispatches read their arguments from it.}
+      - {name: indirect, type: bool, doc: "Indirect draws, dispatches and traces read their arguments from it."}
       - name: acceleration_structure_input
         type: bool
         doc: >-
@@ -1137,6 +1169,11 @@ structs:
         doc: >-
           Acceleration structure builds use it as scratch. It starts at an
           address that is a multiple of bfr_caps_ray_tracing.scratch_alignment.
+      - name: shader_binding_table
+        type: bool
+        doc: >-
+          It holds shader binding table records. It starts at an address that
+          is a multiple of bfr_caps_ray_tracing.table_alignment.
 
   buffer_desc:
     doc: How to create a buffer.
@@ -1394,6 +1431,90 @@ structs:
     members:
       - {name: format, type: format}
       - {name: blend, type: blend_state}
+
+  ray_tracing_shader:
+    doc: One shader of a ray tracing pipeline, run at stage.
+    members:
+      - {name: stage, type: ray_tracing_stage}
+      - {name: shader, type: shader}
+
+  ray_tracing_group:
+    doc: >-
+      Shaders, by index into the pipeline's shaders, that a binding table
+      record names by its group's identifier; no_shader is none.
+    members:
+      - {name: type, type: ray_tracing_group_type}
+      - {name: general, type: u32}
+      - {name: closest_hit, type: u32}
+      - {name: any_hit, type: u32}
+      - {name: intersection, type: u32}
+
+  ray_tracing_pipeline_desc:
+    doc: >-
+      How to create a ray tracing pipeline: at least one ray generation
+      shader. max_payload_size and max_attribute_size are the largest payload
+      and hit attributes its shaders declare, passed to backends that take
+      them. Rays trace recursively to max_recursion_depth, at most
+      bfr_caps_ray_tracing's; at 0 ray generation traces none.
+    extensible: true
+    members:
+      - {name: shaders, type: ray_tracing_shader, array: shader_count, pointer: in, optional: true, doc: Read during the call only.}
+      - {name: shader_count, type: u32}
+      - {name: groups, type: ray_tracing_group, array: group_count, pointer: in, optional: true, doc: Read during the call only.}
+      - {name: group_count, type: u32}
+      - {name: max_recursion_depth, type: u32}
+      - {name: max_payload_size, type: u32}
+      - {name: max_attribute_size, type: u32}
+      - {name: cache, type: pipeline_cache, doc: "Where the pipeline is looked for, and added on a miss; null is none."}
+
+  shader_table_region:
+    doc: >-
+      Records in a shader binding table: size bytes from offset in buffer,
+      which has shader_binding_table usage, stride bytes apart. offset is a
+      multiple of bfr_caps_ray_tracing.table_alignment, stride of
+      identifier_alignment and at most max_shader_group_stride. A null buffer
+      is no region.
+    members:
+      - {name: buffer, type: buffer}
+      - {name: offset, type: u64}
+      - {name: size, type: u64}
+      - {name: stride, type: u64}
+
+  trace_rays_desc:
+    doc: >-
+      width by height by depth rays, within bfr_caps_ray_tracing.max_trace_rays
+      and bfr_caps_compute's max_workgroup_count times max_workgroup_size in
+      each dimension. ray_generation is given, one record, its size equal to
+      its stride.
+    members:
+      - {name: ray_generation, type: shader_table_region}
+      - {name: miss, type: shader_table_region}
+      - {name: hit, type: shader_table_region}
+      - {name: callable, type: shader_table_region}
+      - {name: width, type: u32}
+      - {name: height, type: u32}
+      - {name: depth, type: u32}
+
+  shader_table_address_region:
+    doc: A region of a shader binding table by bfr_get_buffer_address, as bfr_trace_rays_indirect_args holds it.
+    members:
+      - {name: address, type: u64}
+      - {name: size, type: u64}
+      - {name: stride, type: u64}
+
+  trace_rays_indirect_args:
+    doc: >-
+      One indirect trace, as a buffer holds it for bfr_trace_rays_indirect:
+      bfr_trace_rays_desc's regions by address. The layout every backend reads.
+    members:
+      - {name: ray_generation_address, type: u64}
+      - {name: ray_generation_size, type: u64}
+      - {name: miss, type: shader_table_address_region}
+      - {name: hit, type: shader_table_address_region}
+      - {name: callable, type: shader_table_address_region}
+      - {name: width, type: u32}
+      - {name: height, type: u32}
+      - {name: depth, type: u32}
 
   compute_pipeline_desc:
     doc: How to create a compute pipeline.
@@ -1825,9 +1946,12 @@ structs:
       - {name: max_primitives, type: u64, doc: Most primitives in a bottom-level structure.}
       - {name: scratch_alignment, type: u32, doc: Alignment in bytes of a build's scratch memory.}
       - {name: max_recursion_depth, type: u32, doc: Deepest ray recursion; 0 without ray tracing pipelines.}
-      - {name: handle_size, type: u32, doc: Bytes in a shader binding table record's handle.}
-      - {name: handle_alignment, type: u32, doc: Alignment in bytes of a handle in the table.}
-      - {name: table_alignment, type: u32, doc: Alignment in bytes of the table's start.}
+      - {name: identifier_size, type: u32, doc: "The bytes of a shader group's identifier, which a binding table record starts with."}
+      - {name: identifier_alignment, type: u32, doc: The alignment in bytes of a binding table record's start.}
+      - {name: table_alignment, type: u32, doc: The alignment in bytes of a binding table region's start.}
+      - {name: max_shader_group_stride, type: u32}
+      - {name: max_trace_rays, type: u32, doc: The most rays one trace makes.}
+      - {name: max_hit_attribute_size, type: u32}
       - {name: instance_size, type: u32, doc: The bytes of one record bfr_write_instances writes.}
 
   caps_features:
@@ -1836,7 +1960,10 @@ structs:
       - {name: ray_query, type: bool, doc: Rays traced inline from compute shaders.}
       - {name: ray_query_graphics, type: bool, doc: "Rays traced inline from vertex, fragment, task and mesh shaders."}
       - {name: ray_tracing_pipeline, type: bool, doc: Ray tracing pipelines and shader binding tables.}
+      - {name: trace_rays_indirect, type: bool, doc: bfr_trace_rays_indirect.}
+      - {name: ray_primitive_culling, type: bool, doc: Rays that skip triangles or boxes.}
       - {name: acceleration_structure, type: bool}
+      - {name: buffer_address, type: bool, doc: bfr_get_buffer_address.}
       - {name: mesh_shader, type: bool}
       - {name: task_shader, type: bool}
       - {name: shading_rate, type: bool, doc: A shading rate per draw.}
@@ -3275,6 +3402,100 @@ functions:
       - {name: command_list, type: command_list}
       - {name: dst, type: acceleration_structure}
       - {name: src, type: acceleration_structure}
+
+  create_shader:
+    doc: >-
+      Creates a shader from code, compiled once, for the ray tracing pipelines
+      made from it. Not for the frame path. Fails with error_invalid_argument
+      when the code is not what the backend takes in whole units (SPIR-V's
+      words), error_unsupported where the backend has no shader objects yet
+      (D3D12, Metal), error_limit_reached at the device's maximum, and
+      error_device_failed when the backend refuses the code.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: code, type: shader_code, pointer: in}
+      - {name: shader, type: shader, pointer: out}
+
+  destroy_shader:
+    doc: >-
+      Destroys a shader at once; pipelines made from it stay. Not for the
+      frame path. Not while another thread is making a pipeline from it. A
+      handle that is already destroyed does nothing.
+    params:
+      - {name: device, type: device}
+      - {name: shader, type: shader}
+
+  create_ray_tracing_pipeline:
+    doc: >-
+      Creates a ray tracing pipeline, as desc says, before returning. Not for
+      the frame path. A desc.cache is looked in first, and the pipeline added
+      on a miss. Fails with error_unsupported where
+      bfr_caps_features.ray_tracing_pipeline is false, error_invalid_argument
+      for an enum value BFR doesn't have, error_invalid_handle for a shader or
+      desc.cache that is gone, error_limit_reached at the device's maximum of
+      pipelines, and error_device_failed when the backend refuses the desc;
+      the message carries what it said.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: ray_tracing_pipeline_desc, pointer: in}
+      - {name: pipeline, type: pipeline, pointer: out}
+
+  get_shader_identifiers:
+    doc: >-
+      Writes count groups' identifiers from first,
+      bfr_caps_ray_tracing.identifier_size bytes each, into data, for binding
+      table records. Fails with error_invalid_argument when size is too small
+      or the pipeline is not a ray tracing one.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: pipeline, type: pipeline}
+      - {name: first, type: u32}
+      - {name: count, type: u32}
+      - {name: data, type: opaque, doc: Where the identifiers go.}
+      - {name: size, type: size, doc: Bytes of data.}
+
+  trace_rays:
+    doc: >-
+      Records a trace of desc's rays with the bound ray tracing pipeline,
+      outside rendering, on a queue whose kind runs compute; commands after a
+      barrier see what it wrote. Fails with error_unsupported where
+      bfr_caps_features.ray_tracing_pipeline is false or on a copy queue, and
+      error_invalid_handle for a buffer that is gone.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: desc, type: trace_rays_desc, pointer: in}
+
+  trace_rays_indirect:
+    doc: >-
+      Records a trace as bfr_trace_rays does, of the
+      bfr_trace_rays_indirect_args buffer holds at offset, a multiple of 4;
+      buffer has indirect usage. Fails with error_unsupported where
+      bfr_caps_features.trace_rays_indirect is false, and as bfr_trace_rays
+      does.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: buffer, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into the buffer.}
+
+  get_buffer_address:
+    doc: >-
+      Writes the buffer's GPU address, for the addresses
+      bfr_trace_rays_indirect_args and shaders read. The buffer has indirect,
+      shader_binding_table or acceleration_structure_input usage. Fails with
+      error_unsupported where bfr_caps_features.buffer_address is false, and
+      error_invalid_argument for a buffer of none of those usages.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: buffer, type: buffer}
+      - {name: address, type: u64, pointer: out}
 
   get_call_timings:
     doc: >-

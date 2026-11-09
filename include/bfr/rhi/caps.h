@@ -135,9 +135,16 @@ struct RayTracingLimits {
     std::uint64_t maxPrimitives = 0;
     std::uint32_t scratchAlignment = 0;
     std::uint32_t maxRecursionDepth = 0;
-    std::uint32_t handleSize = 0;
-    std::uint32_t handleAlignment = 0;
+    /// The bytes of a shader group's identifier, which a binding table
+    /// record starts with, and the alignment of a record's start.
+    std::uint32_t identifierSize = 0;
+    std::uint32_t identifierAlignment = 0;
+    /// The alignment of a binding table region's start.
     std::uint32_t tableAlignment = 0;
+    std::uint32_t maxShaderGroupStride = 0;
+    /// The most rays one trace makes.
+    std::uint32_t maxTraceRays = 0;
+    std::uint32_t maxHitAttributeSize = 0;
     /// The bytes of one record Device::writeInstances writes.
     std::uint32_t instanceSize = 0;
 };
@@ -148,7 +155,13 @@ struct Features {
     /// Rays traced inline from vertex, fragment, task and mesh shaders.
     bool rayQueryGraphics = false;
     bool rayTracingPipeline = false;
+    /// Device::traceRaysIndirect.
+    bool traceRaysIndirect = false;
+    /// Rays that skip triangles or boxes.
+    bool rayPrimitiveCulling = false;
     bool accelerationStructure = false;
+    /// Device::bufferAddress.
+    bool bufferAddress = false;
     bool meshShader = false;
     bool taskShader = false;
     bool shadingRate = false;

@@ -149,9 +149,9 @@ public:
     [[nodiscard]] virtual core::Result<void> setStencilReference(CommandListHandle commandList,
                                                                  std::uint32_t reference) = 0;
 
-    /// Makes pipeline the one draws or dispatches after it run, a graphics
-    /// pipeline for draws and a compute one for dispatches, until another of
-    /// its kind is bound. Draws assemble the pipeline's topology until
+    /// Makes pipeline the one draws, dispatches or traces after it run, a
+    /// graphics pipeline for draws, a compute one for dispatches and a ray
+    /// tracing one for traces, until another of its kind is bound. Draws assemble the pipeline's topology until
     /// setTopology. Fails with RhiInvalidHandle when the list or pipeline is
     /// gone.
     [[nodiscard]] virtual core::Result<void> bindPipeline(CommandListHandle commandList, PipelineHandle pipeline) = 0;
@@ -627,6 +627,55 @@ public:
     [[nodiscard]] virtual core::Result<void> copyAccelerationStructure(CommandListHandle commandList,
                                                                        AccelerationStructureHandle dst,
                                                                        AccelerationStructureHandle src) = 0;
+
+    /// Code compiled once, for the ray tracing pipelines made from it. Cold.
+    /// Fails with RhiInvalidCall when the code is not what the backend takes
+    /// in whole units (SPIR-V's words), RhiUnsupported where the backend has
+    /// no shader objects yet (D3D12, Metal), RhiLimitReached at the device's
+    /// maximum, and RhiDeviceFailed when the API refuses the code.
+    [[nodiscard]] virtual core::Result<ShaderHandle> createShader(const ShaderCode& code) = 0;
+
+    /// Destroys the shader at once; pipelines made from it stay. Cold. Not
+    /// while another thread is making a pipeline from it. A null handle does
+    /// nothing. Fails with RhiInvalidHandle when it is already destroyed.
+    [[nodiscard]] virtual core::Result<void> destroyShader(ShaderHandle shader) = 0;
+
+    /// A ray tracing pipeline as desc says, made before returning, or loaded
+    /// from desc.cache. Cold, as createComputePipeline is. Fails with
+    /// RhiUnsupported where Features::rayTracingPipeline is false,
+    /// RhiInvalidCall for an enum value BFR doesn't have, RhiInvalidHandle
+    /// for a shader or desc.cache that is gone, RhiLimitReached at the
+    /// device's maximum, and RhiDeviceFailed when the API refuses the desc,
+    /// with what it said.
+    [[nodiscard]] virtual core::Result<PipelineHandle> createRayTracingPipeline(const RayTracingPipelineDesc& desc) = 0;
+
+    /// Writes count groups' identifiers from first, RayTracingLimits::
+    /// identifierSize bytes each, into out, for binding table records. Fails
+    /// with RhiInvalidCall when out is too small or the pipeline is not a ray
+    /// tracing one, and RhiInvalidHandle when it is gone.
+    [[nodiscard]] virtual core::Result<void> shaderIdentifiers(PipelineHandle pipeline, std::uint32_t first,
+                                                               std::uint32_t count, std::span<std::byte> out) = 0;
+
+    /// Records a trace of desc's rays with the bound ray tracing pipeline,
+    /// outside rendering, on a queue whose kind runs compute; commands after
+    /// a barrier see what it wrote. Fails with RhiUnsupported where
+    /// Features::rayTracingPipeline is false or on a copy queue, and
+    /// RhiInvalidHandle for a list or buffer that is gone.
+    [[nodiscard]] virtual core::Result<void> traceRays(CommandListHandle commandList, const TraceRaysDesc& desc) = 0;
+
+    /// Records a trace as traceRays does, of the TraceRaysIndirectArgs
+    /// buffer holds at offset, a multiple of 4; buffer has indirect usage.
+    /// Fails with RhiUnsupported where Features::traceRaysIndirect is false,
+    /// and as traceRays does.
+    [[nodiscard]] virtual core::Result<void> traceRaysIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                               std::uint64_t offset) = 0;
+
+    /// The buffer's GPU address, for the addresses TraceRaysIndirectArgs and
+    /// shaders read. The buffer has indirect, shaderBindingTable or
+    /// accelerationStructureInput usage. Fails with RhiUnsupported where
+    /// Features::bufferAddress is false, RhiInvalidCall for a buffer of none
+    /// of those usages, and RhiInvalidHandle when it is gone.
+    [[nodiscard]] virtual core::Result<std::uint64_t> bufferAddress(BufferHandle buffer) = 0;
 
     /// The CPU time spent in each of the device's calls since it was made,
     /// written to timings by Call, as many as it holds. Fails with

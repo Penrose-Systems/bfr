@@ -97,6 +97,9 @@ struct DeviceFeatures {
     /// the extension needs and which has no struct.
     VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructure{};
     VkPhysicalDeviceRayQueryFeaturesKHR rayQuery{};
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipeline{};
+    /// Its rayTracingPipelineTraceRaysIndirect2 is traceRaysIndirect's.
+    VkPhysicalDeviceRayTracingMaintenance1FeaturesKHR rayTracingMaintenance1{};
     /// The extensions whose structs are chained, which the device enables.
     std::vector<const char*> enabledExtensions;
     std::uint32_t version = 0;

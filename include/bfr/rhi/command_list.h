@@ -2,6 +2,7 @@
 
 #include "bfr/bfr.h"
 #include "bfr/core/handle.h"
+#include "bfr/rhi/buffer.h"
 #include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/texture.h"
 
@@ -159,6 +160,53 @@ struct DispatchIndirectArgs {
     std::uint32_t x = 0;
     std::uint32_t y = 0;
     std::uint32_t z = 0;
+};
+
+/// Records in a shader binding table: size bytes from offset in buffer,
+/// which has shaderBindingTable usage, stride bytes apart. offset is a
+/// multiple of RayTracingLimits::tableAlignment, stride of
+/// identifierAlignment and at most maxShaderGroupStride. A null buffer is no
+/// region.
+struct ShaderTableRegion {
+    BufferHandle buffer{};
+    std::uint64_t offset = 0;
+    std::uint64_t size = 0;
+    std::uint64_t stride = 0;
+};
+
+/// width by height by depth rays, within RayTracingLimits::maxTraceRays and
+/// ComputeLimits::maxWorkgroupCount times maxWorkgroupSize in each
+/// dimension. rayGeneration is given, one record, its size equal to its
+/// stride.
+struct TraceRaysDesc {
+    ShaderTableRegion rayGeneration{};
+    ShaderTableRegion miss{};
+    ShaderTableRegion hit{};
+    ShaderTableRegion callable{};
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint32_t depth = 0;
+};
+
+/// A region of a shader binding table by Device::bufferAddress, as
+/// TraceRaysIndirectArgs holds it.
+struct ShaderTableAddressRegion {
+    std::uint64_t address = 0;
+    std::uint64_t size = 0;
+    std::uint64_t stride = 0;
+};
+
+/// One indirect trace, as a buffer holds it for Device::traceRaysIndirect:
+/// TraceRaysDesc's regions by address. The layout every backend reads.
+struct TraceRaysIndirectArgs {
+    std::uint64_t rayGenerationAddress = 0;
+    std::uint64_t rayGenerationSize = 0;
+    ShaderTableAddressRegion miss{};
+    ShaderTableAddressRegion hit{};
+    ShaderTableAddressRegion callable{};
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint32_t depth = 0;
 };
 
 /// What an attachment holds when rendering begins.

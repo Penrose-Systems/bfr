@@ -183,8 +183,10 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       features_(setup.features),
       resolve_(setup.resolve),
       rayTracing_(setup.rayTracing),
-      alignments_{.scratch = setup.rayTracing.scratchAlignment,
-                  .input = setup.features.accelerationStructure ? kInputAlignment : 0},
+      addressing_{.indirectAddresses = setup.deviceAddresses,
+                  .scratch = setup.rayTracing.scratchAlignment,
+                  .input = setup.features.accelerationStructure ? kInputAlignment : 0,
+                  .table = setup.rayTracing.tableAlignment},
       formats13_(setup.formats13),
       desc_(heldPart(desc)),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
@@ -204,6 +206,7 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       accelerationStructures_("acceleration structures", kBufferCapacity, kBufferLimit, rhi.logger()),
       builds_(desc.maxBuildGeometries),
       bindless_(desc),
+      shaders_("shaders", kBufferCapacity, kBufferLimit, rhi.logger()),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
     // A core command above the version the device uses must not be called
@@ -608,6 +611,12 @@ core::Result<CommandListHandle> VulkanDevice::beginCommands(CommandPoolHandle co
     if (type != QueueType::Copy) {
         table_.vkCmdBindDescriptorSets(buffer, VK_PIPELINE_BIND_POINT_COMPUTE, layout_.pipelineLayout(), 0, 1, &set, 0,
                                        nullptr);
+    }
+    // Ray tracing pipelines bind at a point of their own, which takes the set
+    // apart (VUID-vkCmdTraceRaysKHR-None-08600), on a queue that runs compute.
+    if (features_.rayTracingPipeline && queues_[(*pool)->queue]->compute) {
+        table_.vkCmdBindDescriptorSets(buffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, layout_.pipelineLayout(), 0, 1,
+                                       &set, 0, nullptr);
     }
     // A new handle for each recording, so last frame's handle never names
     // this one. The list pool was made at its maximum, so this never grows.
@@ -1064,6 +1073,9 @@ void VulkanDevice::warnLeftovers() const {
         BFR_LOG_WARN(instance_->logger(), "{} acceleration structures were left when the device went",
                      accelerationStructures_.size());
     }
+    if (shaders_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} shaders were left when the device went", shaders_.size());
+    }
     if (pipelineCaches_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} pipeline caches were left when the device went", pipelineCaches_.size());
     }
@@ -1092,6 +1104,7 @@ VulkanDevice::~VulkanDevice() {
     samplers_.clear();
     timestampPools_.clear();
     pipelines_.clear();
+    shaders_.clear();
     pipelineCaches_.clear();
     layout_ = {};
     vmaDestroyAllocator(allocator_);

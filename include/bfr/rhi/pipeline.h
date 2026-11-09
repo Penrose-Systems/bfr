@@ -51,6 +51,13 @@ struct ShaderCode {
     std::string_view entryPoint;
 };
 
+/// Code compiled once, as ShaderCode gives it, and named by the ray tracing
+/// pipelines made from it, which keep what they need of it: it may be
+/// destroyed once they are made. Only named, by a ShaderHandle.
+struct Shader;
+
+using ShaderHandle = core::Handle<Shader>;
+
 /// How to create a compute pipeline. workgroupSize is the threads in each
 /// workgroup, as the shader declares them.
 struct ComputePipelineDesc {
@@ -264,6 +271,61 @@ struct GraphicsPipelineDesc {
     /// The fraction of samples, 0 to 1, shaded apart; above 0 shades per
     /// sample, where Features::sampleRateShading.
     float minSampleShading = 0;
+    /// Where the pipeline is looked for, and added on a miss; null is none.
+    PipelineCacheHandle cache{};
+};
+
+/// The stage a ray tracing pipeline's shader runs at. The values are the C
+/// API's.
+enum class RayTracingStage : std::uint8_t {
+    RayGeneration = 0,
+    Miss = 1,
+    ClosestHit = 2,
+    AnyHit = 3,
+    Intersection = 4,
+    Callable = 5,
+};
+
+/// One shader of a ray tracing pipeline, run at stage.
+struct RayTracingShader {
+    RayTracingStage stage = RayTracingStage::RayGeneration;
+    ShaderHandle shader{};
+};
+
+/// What a ray tracing pipeline's group holds. The values are the C API's.
+enum class RayTracingGroupType : std::uint8_t {
+    /// general: one ray generation, miss or callable shader.
+    General = 0,
+    /// closestHit and anyHit, either kNoShader, for triangles.
+    TriangleHit = 1,
+    /// intersection, and closestHit and anyHit, either kNoShader, for boxes.
+    BoxHit = 2,
+};
+
+/// No shader in a RayTracingGroup's slot.
+inline constexpr std::uint32_t kNoShader = BFR_NO_SHADER;
+
+/// Shaders, by index into RayTracingPipelineDesc::shaders, that a binding
+/// table record names by its group's identifier.
+struct RayTracingGroup {
+    RayTracingGroupType type = RayTracingGroupType::General;
+    std::uint32_t general = kNoShader;
+    std::uint32_t closestHit = kNoShader;
+    std::uint32_t anyHit = kNoShader;
+    std::uint32_t intersection = kNoShader;
+};
+
+/// How to create a ray tracing pipeline: at least one ray generation shader.
+/// maxPayloadSize and maxAttributeSize are the largest payload and hit
+/// attributes its shaders declare, passed to backends that take them. Rays
+/// trace recursively to maxRecursionDepth, at most RayTracingLimits'; at 0
+/// ray generation traces none. The spans are read during the call only.
+struct RayTracingPipelineDesc {
+    std::span<const RayTracingShader> shaders{};
+    std::span<const RayTracingGroup> groups{};
+    std::uint32_t maxRecursionDepth = 0;
+    std::uint32_t maxPayloadSize = 0;
+    std::uint32_t maxAttributeSize = 0;
     /// Where the pipeline is looked for, and added on a miss; null is none.
     PipelineCacheHandle cache{};
 };

@@ -20,13 +20,18 @@ namespace bfr::rhi::vulkan {
 [[nodiscard]] core::Result<VmaAllocator> createAllocator(VkInstance instance, VkPhysicalDevice adapter, VkDevice device,
                                                          std::uint32_t apiVersion, bool deviceAddresses);
 
-/// The address alignment a buffer of each usage starts at, beyond what its
-/// memory requirements give; 0 where the device has none of that usage.
-struct BufferAlignments {
+/// How a device's buffers are addressed: whether an indirect buffer gets a
+/// device address (the device has bufferDeviceAddress), and the address
+/// alignment a buffer of each usage starts at, beyond what its memory
+/// requirements give; 0 where the device has none of that usage.
+struct BufferAddressing {
+    bool indirectAddresses = false;
     /// RayTracingLimits::scratchAlignment.
     VkDeviceSize scratch = 0;
     /// The largest a build input's address keeps.
     VkDeviceSize input = 0;
+    /// RayTracingLimits::tableAlignment.
+    VkDeviceSize table = 0;
 };
 
 /// A VkBuffer and the memory VMA placed it in, which it frees when it goes:
@@ -80,7 +85,7 @@ private:
                                                            std::span<const std::uint32_t> families,
                                                            VkDeviceSize alignment, std::uint32_t slot);
 
-/// A buffer as desc says, starting at the alignments its usage takes, with
+/// A buffer as desc says, addressed and aligned as its usage takes, with
 /// no memory when it is sparse, shared by the
 /// queue families in families when there is more than one, so any of the
 /// device's queues may use it without an ownership transfer, holding slot.
@@ -91,6 +96,6 @@ private:
 [[nodiscard]] core::Result<VulkanBuffer> createVulkanBuffer(const VolkDeviceTable& table, VkDevice device,
                                                             VmaAllocator allocator, const BufferDesc& desc,
                                                             std::span<const std::uint32_t> families,
-                                                            const BufferAlignments& alignments, std::uint32_t slot);
+                                                            const BufferAddressing& addressing, std::uint32_t slot);
 
 } // namespace bfr::rhi::vulkan

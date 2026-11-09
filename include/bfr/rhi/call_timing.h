@@ -96,10 +96,17 @@ enum class Call : std::uint32_t {
     WriteInstances = 82,
     BuildAccelerationStructure = 83,
     CopyAccelerationStructure = 84,
+    CreateShader = 85,
+    DestroyShader = 86,
+    CreateRayTracingPipeline = 87,
+    ShaderIdentifiers = 88,
+    TraceRays = 89,
+    TraceRaysIndirect = 90,
+    BufferAddress = 91,
 };
 
 /// How many values Call has.
-inline constexpr std::size_t kCallCount = 85;
+inline constexpr std::size_t kCallCount = 92;
 
 /// The CPU time one kind of call has taken, read from std::chrono::steady_clock
 /// around each call: how many there were, their nanoseconds in all, and the

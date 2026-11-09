@@ -444,6 +444,38 @@ core::Result<void> TimedDevice::copyAccelerationStructure(CommandListHandle comm
                           [&] { return device_->copyAccelerationStructure(commandList, dst, src); });
 }
 
+core::Result<ShaderHandle> TimedDevice::createShader(const ShaderCode& code) {
+    return counters_.time(Call::CreateShader, [&] { return device_->createShader(code); });
+}
+
+core::Result<void> TimedDevice::destroyShader(ShaderHandle shader) {
+    return counters_.time(Call::DestroyShader, [&] { return device_->destroyShader(shader); });
+}
+
+core::Result<PipelineHandle> TimedDevice::createRayTracingPipeline(const RayTracingPipelineDesc& desc) {
+    return counters_.time(Call::CreateRayTracingPipeline, [&] { return device_->createRayTracingPipeline(desc); });
+}
+
+core::Result<void> TimedDevice::shaderIdentifiers(PipelineHandle pipeline, std::uint32_t first, std::uint32_t count,
+                                                  std::span<std::byte> out) {
+    return counters_.time(Call::ShaderIdentifiers,
+                          [&] { return device_->shaderIdentifiers(pipeline, first, count, out); });
+}
+
+core::Result<void> TimedDevice::traceRays(CommandListHandle commandList, const TraceRaysDesc& desc) {
+    return counters_.time(Call::TraceRays, [&] { return device_->traceRays(commandList, desc); });
+}
+
+core::Result<void> TimedDevice::traceRaysIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                  std::uint64_t offset) {
+    return counters_.time(Call::TraceRaysIndirect,
+                          [&] { return device_->traceRaysIndirect(commandList, buffer, offset); });
+}
+
+core::Result<std::uint64_t> TimedDevice::bufferAddress(BufferHandle buffer) {
+    return counters_.time(Call::BufferAddress, [&] { return device_->bufferAddress(buffer); });
+}
+
 core::Result<void> TimedDevice::callTimings(std::span<CallTiming> timings) const {
     counters_.write(timings);
     return {};

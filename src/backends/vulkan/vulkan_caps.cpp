@@ -268,12 +268,19 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
         // Vulkan's ray queries run in every stage.
         .rayQuery = hasAccelerationStructures(features) && on(features.rayQuery.rayQuery),
         .rayQueryGraphics = hasAccelerationStructures(features) && on(features.rayQuery.rayQuery),
-        // BFR has no call for these, or conservative raster, yet (roadmap
-        // steps 13 and 14), so the device enables none of their extensions.
-        .rayTracingPipeline = false,
+        .rayTracingPipeline = hasAccelerationStructures(features) && on(features.rayTracingPipeline.rayTracingPipeline),
+        // BFR's indirect trace is vkCmdTraceRaysIndirect2KHR.
+        .traceRaysIndirect = hasAccelerationStructures(features) &&
+                             on(features.rayTracingPipeline.rayTracingPipeline) &&
+                             on(features.rayTracingMaintenance1.rayTracingPipelineTraceRaysIndirect2),
+        .rayPrimitiveCulling = hasAccelerationStructures(features) &&
+                               on(features.rayTracingPipeline.rayTraversalPrimitiveCulling),
         .accelerationStructure = hasAccelerationStructures(features),
+        .bufferAddress = on(features.vulkan12.bufferDeviceAddress),
         .meshShader = on(features.mesh.meshShader),
         .taskShader = on(features.mesh.taskShader),
+        // BFR has no call for shading rates or conservative raster yet (roadmap step
+        // 14), so the device enables none of their extensions.
         .shadingRate = false,
         .shadingRateTexture = false,
         .shaderFloat16 = on(features.vulkan12.shaderFloat16),
@@ -772,6 +779,8 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     mesh.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
     accelerationStructure.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
     rayQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+    rayTracingPipeline.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+    rayTracingMaintenance1.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_MAINTENANCE_1_FEATURES_KHR;
 
     void** tail = &core.pNext;
     link(tail, vulkan11);
@@ -836,11 +845,14 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     linkIfListed(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME, listRestart);
     linkIfListed(VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh);
     // VK_KHR_acceleration_structure needs VK_KHR_deferred_host_operations
-    // (vkdocs xml/vk.xml:24210); ray queries need acceleration structures.
+    // (vkdocs xml/vk.xml:24210); ray queries and pipelines, and their
+    // maintenance, need acceleration structures.
     if (lists(extensions, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)) {
         enableIfListed(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
         linkIfListed(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, accelerationStructure);
         linkIfListed(VK_KHR_RAY_QUERY_EXTENSION_NAME, rayQuery);
+        linkIfListed(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, rayTracingPipeline);
+        linkIfListed(VK_KHR_RAY_TRACING_MAINTENANCE_1_EXTENSION_NAME, rayTracingMaintenance1);
     }
     vk.vkGetPhysicalDeviceFeatures2(adapter, &core);
 }
@@ -882,8 +894,8 @@ std::vector<std::string> missingRequirements(const DeviceFeatures& features) {
 }
 
 // The limits of what reported says the device has: none while a feature
-// reports false, as ray tracing pipelines and shading rate textures do until BFR has a
-// call for them (roadmap steps 13 and 14).
+// reports false, as shading rate textures do until BFR has a
+// call for them (roadmap step 14).
 MeshLimits meshFrom(const PropertyQuery& properties, const Features& reported) {
     if (!reported.meshShader) {
         return {};
@@ -930,9 +942,12 @@ RayTracingLimits rayTracingFrom(const PropertyQuery& properties, const Features&
     if (reported.rayTracingPipeline) {
         const VkPhysicalDeviceRayTracingPipelinePropertiesKHR& pipeline = properties.rayTracingPipeline;
         limits.maxRecursionDepth = pipeline.maxRayRecursionDepth;
-        limits.handleSize = pipeline.shaderGroupHandleSize;
-        limits.handleAlignment = pipeline.shaderGroupHandleAlignment;
+        limits.identifierSize = pipeline.shaderGroupHandleSize;
+        limits.identifierAlignment = pipeline.shaderGroupHandleAlignment;
         limits.tableAlignment = pipeline.shaderGroupBaseAlignment;
+        limits.maxShaderGroupStride = pipeline.maxShaderGroupStride;
+        limits.maxTraceRays = pipeline.maxRayDispatchInvocationCount;
+        limits.maxHitAttributeSize = pipeline.maxRayHitAttributeSize;
     }
     return limits;
 }

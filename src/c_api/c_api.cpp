@@ -293,7 +293,8 @@ std::optional<bfr::rhi::BufferDesc> bufferIn(const bfr_buffer_desc& desc, bfr::c
                                 .index = desc.usage.index != BFR_FALSE,
                                 .indirect = desc.usage.indirect != BFR_FALSE,
                                 .accelerationStructureInput = desc.usage.acceleration_structure_input != BFR_FALSE,
-                                .accelerationStructureScratch = desc.usage.acceleration_structure_scratch != BFR_FALSE},
+                                .accelerationStructureScratch = desc.usage.acceleration_structure_scratch != BFR_FALSE,
+                                .shaderBindingTable = desc.usage.shader_binding_table != BFR_FALSE},
                       .sparse = desc.sparse != BFR_FALSE,
                       .sparseAliased = desc.sparse_aliased != BFR_FALSE,
                       .tileBytes = desc.tile_bytes};
@@ -374,6 +375,25 @@ bfr::rhi::PipelineHandle fromC(bfr_pipeline handle) {
 bfr_pipeline_cache toC(bfr::rhi::PipelineCacheHandle handle) {
     return {.bits = handle.bits};
 }
+
+bfr::rhi::ShaderHandle fromC(bfr_shader handle) {
+    return bfr::rhi::ShaderHandle::fromBits(handle.bits);
+}
+
+bfr_shader toC(bfr::rhi::ShaderHandle handle) {
+    return {.bits = handle.bits};
+}
+
+static_assert(static_cast<int>(bfr::rhi::RayTracingStage::Callable) == BFR_RAY_TRACING_STAGE_CALLABLE);
+static_assert(static_cast<int>(bfr::rhi::RayTracingGroupType::BoxHit) == BFR_RAY_TRACING_GROUP_TYPE_BOX_HIT);
+// bfr_trace_rays_indirect's arguments are read in place on the GPU, so the C
+// and C++ layouts are one.
+static_assert(sizeof(bfr_trace_rays_indirect_args) == sizeof(bfr::rhi::TraceRaysIndirectArgs) &&
+              offsetof(bfr_trace_rays_indirect_args, miss) == offsetof(bfr::rhi::TraceRaysIndirectArgs, miss) &&
+              offsetof(bfr_trace_rays_indirect_args, hit) == offsetof(bfr::rhi::TraceRaysIndirectArgs, hit) &&
+              offsetof(bfr_trace_rays_indirect_args, callable) == offsetof(bfr::rhi::TraceRaysIndirectArgs, callable) &&
+              offsetof(bfr_trace_rays_indirect_args, width) == offsetof(bfr::rhi::TraceRaysIndirectArgs, width) &&
+              offsetof(bfr_trace_rays_indirect_args, depth) == offsetof(bfr::rhi::TraceRaysIndirectArgs, depth));
 
 bfr::rhi::PipelineCacheHandle fromC(bfr_pipeline_cache handle) {
     return bfr::rhi::PipelineCacheHandle::fromBits(handle.bits);
@@ -490,7 +510,8 @@ static_assert(static_cast<int>(bfr::rhi::Call::ResolveTexture) == BFR_CALL_RESOL
 static_assert(static_cast<int>(bfr::rhi::Call::DrawMeshIndirectCount) == BFR_CALL_DRAW_MESH_INDIRECT_COUNT);
 static_assert(static_cast<int>(bfr::rhi::Call::BuildAccelerationStructure) == BFR_CALL_BUILD_ACCELERATION_STRUCTURE);
 static_assert(static_cast<int>(bfr::rhi::Call::CopyAccelerationStructure) == BFR_CALL_COPY_ACCELERATION_STRUCTURE);
-static_assert(bfr::rhi::kCallCount == BFR_CALL_COPY_ACCELERATION_STRUCTURE + 1);
+static_assert(static_cast<int>(bfr::rhi::Call::BufferAddress) == BFR_CALL_BUFFER_ADDRESS);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_BUFFER_ADDRESS + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
@@ -1149,9 +1170,12 @@ bfr_caps_ray_tracing toC(const bfr::rhi::RayTracingLimits& rayTracing) {
         .max_primitives = rayTracing.maxPrimitives,
         .scratch_alignment = rayTracing.scratchAlignment,
         .max_recursion_depth = rayTracing.maxRecursionDepth,
-        .handle_size = rayTracing.handleSize,
-        .handle_alignment = rayTracing.handleAlignment,
+        .identifier_size = rayTracing.identifierSize,
+        .identifier_alignment = rayTracing.identifierAlignment,
         .table_alignment = rayTracing.tableAlignment,
+        .max_shader_group_stride = rayTracing.maxShaderGroupStride,
+        .max_trace_rays = rayTracing.maxTraceRays,
+        .max_hit_attribute_size = rayTracing.maxHitAttributeSize,
         .instance_size = rayTracing.instanceSize,
     };
 }
@@ -1161,7 +1185,10 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .ray_query = toC(features.rayQuery),
         .ray_query_graphics = toC(features.rayQueryGraphics),
         .ray_tracing_pipeline = toC(features.rayTracingPipeline),
+        .trace_rays_indirect = toC(features.traceRaysIndirect),
+        .ray_primitive_culling = toC(features.rayPrimitiveCulling),
         .acceleration_structure = toC(features.accelerationStructure),
+        .buffer_address = toC(features.bufferAddress),
         .mesh_shader = toC(features.meshShader),
         .task_shader = toC(features.taskShader),
         .shading_rate = toC(features.shadingRate),
@@ -3075,6 +3102,152 @@ bfr_result bfr_copy_acceleration_structure(bfr_device* device, bfr_command_list 
         }
         const auto copied = device->device->copyAccelerationStructure(fromC(command_list), fromC(dst), fromC(src));
         return copied ? BFR_RESULT_SUCCESS : fail(copied.error());
+    });
+}
+
+bfr_result bfr_create_shader(bfr_device* device, const bfr_shader_code* code, bfr_shader* shader) {
+    return guarded([&] {
+        if (device == nullptr || code == nullptr || shader == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, code and shader must not be null");
+        }
+        *shader = {};
+        if ((code->code == nullptr && code->code_size != 0) ||
+            (code->entry_point.data == nullptr && code->entry_point.length != 0)) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "code or entry_point is null with a size");
+        }
+        const auto made = device->device->createShader(shaderIn(*code));
+        if (!made) {
+            return fail(made.error());
+        }
+        *shader = toC(*made);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+void bfr_destroy_shader(bfr_device* device, bfr_shader shader) {
+    quietly([&] {
+        if (device == nullptr) {
+            return;
+        }
+        if (const auto destroyed = device->device->destroyShader(fromC(shader)); !destroyed) {
+            lastError() = destroyed.error().message;
+        }
+    });
+}
+
+bfr_result bfr_create_ray_tracing_pipeline(bfr_device* device, const bfr_ray_tracing_pipeline_desc* desc,
+                                           bfr_pipeline* pipeline) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr || pipeline == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and pipeline must not be null");
+        }
+        *pipeline = {};
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_ray_tracing_pipeline_desc takes no chained structs");
+        }
+        if ((desc->shaders == nullptr && desc->shader_count != 0) ||
+            (desc->groups == nullptr && desc->group_count != 0)) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "shaders or groups is null with a count");
+        }
+        using namespace bfr::rhi;
+        bfr::core::Message error;
+        // Cold, so the converted arrays are vectors.
+        std::vector<RayTracingShader> shaders;
+        shaders.reserve(desc->shader_count);
+        for (const bfr_ray_tracing_shader& shader : std::span{desc->shaders, desc->shader_count}) {
+            const auto stage = enumIn(shader.stage, RayTracingStage::Callable, "ray tracing stage", error);
+            if (!stage) {
+                return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+            }
+            shaders.push_back({.stage = *stage, .shader = fromC(shader.shader)});
+        }
+        std::vector<RayTracingGroup> groups;
+        groups.reserve(desc->group_count);
+        for (const bfr_ray_tracing_group& group : std::span{desc->groups, desc->group_count}) {
+            const auto type = enumIn(group.type, RayTracingGroupType::BoxHit, "ray tracing group type", error);
+            if (!type) {
+                return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+            }
+            groups.push_back({.type = *type,
+                              .general = group.general,
+                              .closestHit = group.closest_hit,
+                              .anyHit = group.any_hit,
+                              .intersection = group.intersection});
+        }
+        const auto created = device->device->createRayTracingPipeline({.shaders = shaders,
+                                                                       .groups = groups,
+                                                                       .maxRecursionDepth = desc->max_recursion_depth,
+                                                                       .maxPayloadSize = desc->max_payload_size,
+                                                                       .maxAttributeSize = desc->max_attribute_size,
+                                                                       .cache = fromC(desc->cache)});
+        if (!created) {
+            return fail(created.error());
+        }
+        *pipeline = toC(*created);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_get_shader_identifiers(bfr_device* device, bfr_pipeline pipeline, uint32_t first, uint32_t count,
+                                      void* data, size_t size) {
+    return guarded([&] {
+        if (device == nullptr || (data == nullptr && size != 0)) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null, nor data with a size");
+        }
+        const auto written = device->device->shaderIdentifiers(fromC(pipeline), first, count,
+                                                               {static_cast<std::byte*>(data), size});
+        return written ? BFR_RESULT_SUCCESS : fail(written.error());
+    });
+}
+
+namespace {
+
+bfr::rhi::ShaderTableRegion regionIn(const bfr_shader_table_region& region) {
+    return {.buffer = fromC(region.buffer), .offset = region.offset, .size = region.size, .stride = region.stride};
+}
+
+} // namespace
+
+bfr_result bfr_trace_rays(bfr_device* device, bfr_command_list command_list, const bfr_trace_rays_desc* desc) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and desc must not be null");
+        }
+        const auto traced = device->device->traceRays(fromC(command_list),
+                                                      {.rayGeneration = regionIn(desc->ray_generation),
+                                                       .miss = regionIn(desc->miss),
+                                                       .hit = regionIn(desc->hit),
+                                                       .callable = regionIn(desc->callable),
+                                                       .width = desc->width,
+                                                       .height = desc->height,
+                                                       .depth = desc->depth});
+        return traced ? BFR_RESULT_SUCCESS : fail(traced.error());
+    });
+}
+
+bfr_result bfr_trace_rays_indirect(bfr_device* device, bfr_command_list command_list, bfr_buffer buffer,
+                                   uint64_t offset) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto traced = device->device->traceRaysIndirect(fromC(command_list), fromC(buffer), offset);
+        return traced ? BFR_RESULT_SUCCESS : fail(traced.error());
+    });
+}
+
+bfr_result bfr_get_buffer_address(bfr_device* device, bfr_buffer buffer, uint64_t* address) {
+    return guarded([&] {
+        if (device == nullptr || address == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and address must not be null");
+        }
+        *address = 0;
+        const auto found = device->device->bufferAddress(fromC(buffer));
+        if (!found) {
+            return fail(found.error());
+        }
+        *address = *found;
+        return BFR_RESULT_SUCCESS;
     });
 }
 

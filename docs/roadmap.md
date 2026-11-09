@@ -26,7 +26,9 @@ requirements (Vulkan 1.2 with dynamic rendering and synchronization2); mesh
 and task shaders (mesh pipelines, direct, indirect and counted mesh draws,
 mesh limits, task and mesh timestamps); acceleration structures and inline
 ray queries (builds of triangles, boxes and instances, updates, copies,
-instance records, the acceleration structure table).
+instance records, the acceleration structure table); ray tracing pipelines
+(shader objects, shader groups and their identifiers, binding tables, direct
+and indirect traces, buffer addresses).
 
 D3D12 and Metal are paused while Vulkan takes shape (owner, 2026-11-08); they
 still type-check.

@@ -524,15 +524,19 @@ void printAllShaders(const bfr::Caps& caps) {
     const bfr::CapsRayTracing& r = caps.rayTracing;
     group("rayTracing", {field("maxGeometries", r.maxGeometries), field("maxInstances", r.maxInstances),
                          field("maxPrimitives", r.maxPrimitives), field("scratchAlignment", r.scratchAlignment),
-                         field("maxRecursionDepth", r.maxRecursionDepth), field("handleSize", r.handleSize),
-                         field("handleAlignment", r.handleAlignment), field("tableAlignment", r.tableAlignment),
-                         field("instanceSize", r.instanceSize)});
+                         field("maxRecursionDepth", r.maxRecursionDepth), field("identifierSize", r.identifierSize),
+                         field("identifierAlignment", r.identifierAlignment), field("tableAlignment", r.tableAlignment),
+                         field("maxShaderGroupStride", r.maxShaderGroupStride), field("maxTraceRays", r.maxTraceRays),
+                         field("maxHitAttributeSize", r.maxHitAttributeSize), field("instanceSize", r.instanceSize)});
 }
 
 void printAllFeatures(const bfr::CapsFeatures& f) {
     group("features", {field("rayQuery", f.rayQuery),
                        field("rayQueryGraphics", f.rayQueryGraphics),
                        field("rayTracingPipeline", f.rayTracingPipeline),
+                       field("traceRaysIndirect", f.traceRaysIndirect),
+                       field("rayPrimitiveCulling", f.rayPrimitiveCulling),
+                       field("bufferAddress", f.bufferAddress),
                        field("accelerationStructure", f.accelerationStructure),
                        field("meshShader", f.meshShader),
                        field("taskShader", f.taskShader),

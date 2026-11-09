@@ -9,6 +9,7 @@
 #include "rhi/acceleration_structure_check.h"
 #include "rhi/command_check.h"
 #include "rhi/enum_check.h"
+#include "rhi/ray_tracing_check.h"
 
 #include <Foundation/NSTypes.hpp>
 #include <Metal/MTL4ArgumentTable.hpp>
@@ -486,6 +487,43 @@ core::Result<void> MetalDevice::copyAccelerationStructure(CommandListHandle /*co
                                                           AccelerationStructureHandle /*dst*/,
                                                           AccelerationStructureHandle /*src*/) {
     return checkAccelerationStructures(features_.accelerationStructure);
+}
+
+// BFR has no Metal shader objects or ray tracing pipelines yet, and
+// Features::rayTracingPipeline, traceRaysIndirect and bufferAddress are false
+// until it does (owner, 2026-11-08).
+
+core::Result<ShaderHandle> MetalDevice::createShader(const ShaderCode& /*code*/) {
+    return core::failure(core::ErrorCode::RhiUnsupported, "BFR has no Metal shader objects yet");
+}
+
+core::Result<void> MetalDevice::destroyShader(ShaderHandle shader) {
+    if (shader.isNull()) {
+        return {};
+    }
+    return core::failure(core::ErrorCode::RhiInvalidHandle, "the shader handle is stale");
+}
+
+core::Result<PipelineHandle> MetalDevice::createRayTracingPipeline(const RayTracingPipelineDesc& /*desc*/) {
+    return std::unexpected(checkRayTracingPipelines(features_.rayTracingPipeline).error());
+}
+
+core::Result<void> MetalDevice::shaderIdentifiers(PipelineHandle /*pipeline*/, std::uint32_t /*first*/,
+                                                  std::uint32_t /*count*/, std::span<std::byte> /*out*/) {
+    return checkRayTracingPipelines(features_.rayTracingPipeline);
+}
+
+core::Result<void> MetalDevice::traceRays(CommandListHandle /*commandList*/, const TraceRaysDesc& /*desc*/) {
+    return checkRayTracingPipelines(features_.rayTracingPipeline);
+}
+
+core::Result<void> MetalDevice::traceRaysIndirect(CommandListHandle /*commandList*/, BufferHandle /*buffer*/,
+                                                  std::uint64_t /*offset*/) {
+    return checkTraceRaysIndirect(features_.traceRaysIndirect);
+}
+
+core::Result<std::uint64_t> MetalDevice::bufferAddress(BufferHandle /*buffer*/) {
+    return std::unexpected(checkBufferAddress(features_.bufferAddress, false).error());
 }
 
 } // namespace bfr::rhi::metal

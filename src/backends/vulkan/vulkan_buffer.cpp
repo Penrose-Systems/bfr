@@ -7,6 +7,7 @@
 #include "core/slot_chains.h"
 #include "rhi/buffer_check.h"
 #include "rhi/enum_check.h"
+#include "rhi/ray_tracing_check.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_result.h"
@@ -29,7 +30,7 @@ namespace bfr::rhi::vulkan {
 
 namespace {
 
-VkBufferUsageFlags usageFor(const BufferUsage& usage) {
+VkBufferUsageFlags usageFor(const BufferUsage& usage, const BufferAddressing& addressing) {
     const auto flag = [](bool set, VkBufferUsageFlagBits bit) {
         return set ? VkBufferUsageFlags{bit} : 0U;
     };
@@ -43,14 +44,19 @@ VkBufferUsageFlags usageFor(const BufferUsage& usage) {
            // storage buffer (VUID-vkCmdBuildAccelerationStructuresKHR-pInfos-12260, -12261).
            flag(usage.accelerationStructureInput,
                 VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR) |
-           flag(usage.accelerationStructureInput || usage.accelerationStructureScratch,
-                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) |
-           flag(usage.accelerationStructureScratch, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+           flag(usage.accelerationStructureScratch, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) |
+           // Traces read binding tables, and indirect traces their
+           // arguments, by address (VUID-vkCmdTraceRaysIndirect2KHR-indirectDeviceAddress-03633).
+           flag(usage.shaderBindingTable, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR) |
+           flag(usage.accelerationStructureInput || usage.accelerationStructureScratch || usage.shaderBindingTable ||
+                    (usage.indirect && addressing.indirectAddresses),
+                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
 }
 
-VkDeviceSize alignmentFor(const BufferUsage& usage, const BufferAlignments& alignments) {
-    return std::max(usage.accelerationStructureScratch ? alignments.scratch : 0,
-                    usage.accelerationStructureInput ? alignments.input : 0);
+VkDeviceSize alignmentFor(const BufferUsage& usage, const BufferAddressing& addressing) {
+    return std::max({usage.accelerationStructureScratch ? addressing.scratch : 0,
+                     usage.accelerationStructureInput ? addressing.input : 0,
+                     usage.shaderBindingTable ? addressing.table : 0});
 }
 
 // The memory properties each BufferMemory requires, and the ones it would
@@ -193,7 +199,7 @@ core::Result<VulkanBuffer> placeVulkanBuffer(const VolkDeviceTable& table, VkDev
 
 core::Result<VulkanBuffer> createVulkanBuffer(const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator,
                                               const BufferDesc& desc, std::span<const std::uint32_t> families,
-                                              const BufferAlignments& alignments, std::uint32_t slot) {
+                                              const BufferAddressing& addressing, std::uint32_t slot) {
     if (desc.sparse && desc.memory != BufferMemory::Device) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "a sparse buffer's memory is the sparse memory mapped into it, so it is device");
@@ -203,12 +209,12 @@ core::Result<VulkanBuffer> createVulkanBuffer(const VolkDeviceTable& table, VkDe
                              "Vulkan sets a sparse buffer's tile size itself; tileBytes is 0");
     }
     if (!desc.sparse) {
-        return placeVulkanBuffer(table, device, allocator, desc.size, usageFor(desc.usage), desc.memory, families,
-                                 alignmentFor(desc.usage, alignments), slot);
+        return placeVulkanBuffer(table, device, allocator, desc.size, usageFor(desc.usage, addressing), desc.memory,
+                                 families, alignmentFor(desc.usage, addressing), slot);
     }
     // Bound tile by tile, partly resident, and aliased where asked; no
     // memory is placed now.
-    VkBufferCreateInfo info = bufferInfo(desc.size, usageFor(desc.usage), families);
+    VkBufferCreateInfo info = bufferInfo(desc.size, usageFor(desc.usage, addressing), families);
     info.flags = VK_BUFFER_CREATE_SPARSE_BINDING_BIT | VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT |
                  (desc.sparseAliased ? VkBufferCreateFlags{VK_BUFFER_CREATE_SPARSE_ALIASED_BIT} : 0U);
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -260,7 +266,7 @@ core::Result<BufferHandle> VulkanDevice::createBuffer(const BufferDesc& desc) {
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
     }
-    auto made = createVulkanBuffer(table_, device_, allocator_, desc, families_, alignments_, *slot);
+    auto made = createVulkanBuffer(table_, device_, allocator_, desc, families_, addressing_, *slot);
     if (!made) {
         bindless_.giveBuffer(*slot);
         return std::unexpected(std::move(made.error()));
@@ -316,6 +322,17 @@ core::Result<void> VulkanDevice::copyBuffer(CommandListHandle commandList, Buffe
         table_.vkCmdCopyBuffer((*list)->buffer, (*from)->buffer(), (*to)->buffer(), 1, &copy);
     }
     return {};
+}
+
+core::Result<std::uint64_t> VulkanDevice::bufferAddress(BufferHandle buffer) {
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    if (auto checked = checkBufferAddress(features_.bufferAddress, (*found)->address() != 0); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    return (*found)->address();
 }
 
 core::Result<void> VulkanDevice::destroyBuffer(BufferHandle buffer) {

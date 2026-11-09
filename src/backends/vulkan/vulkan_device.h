@@ -314,6 +314,15 @@ public:
     [[nodiscard]] core::Result<void> copyAccelerationStructure(CommandListHandle commandList,
                                                                AccelerationStructureHandle dst,
                                                                AccelerationStructureHandle src) override;
+    [[nodiscard]] core::Result<ShaderHandle> createShader(const ShaderCode& code) override;
+    [[nodiscard]] core::Result<void> destroyShader(ShaderHandle shader) override;
+    [[nodiscard]] core::Result<PipelineHandle> createRayTracingPipeline(const RayTracingPipelineDesc& desc) override;
+    [[nodiscard]] core::Result<void> shaderIdentifiers(PipelineHandle pipeline, std::uint32_t first,
+                                                       std::uint32_t count, std::span<std::byte> out) override;
+    [[nodiscard]] core::Result<void> traceRays(CommandListHandle commandList, const TraceRaysDesc& desc) override;
+    [[nodiscard]] core::Result<void> traceRaysIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                       std::uint64_t offset) override;
+    [[nodiscard]] core::Result<std::uint64_t> bufferAddress(BufferHandle buffer) override;
 
 private:
     [[nodiscard]] core::Result<void> openQueues(const QueueFamilies& families, const DeviceDesc& desc);
@@ -351,6 +360,9 @@ private:
     // buffer's device address, offset bytes in; 0 for a null buffer. Fails
     // with RhiInvalidHandle when the buffer is gone.
     [[nodiscard]] core::Result<VkDeviceAddress> addressOf(BufferHandle buffer, std::uint64_t offset);
+    // region as Vulkan takes it, by its buffer's address; none for a null
+    // buffer. Fails as addressOf does.
+    [[nodiscard]] core::Result<VkStridedDeviceAddressRegionKHR> regionOf(const ShaderTableRegion& region);
     // VK_NULL_HANDLE for a null handle.
     [[nodiscard]] core::Result<VkPipelineCache> pipelineCacheFor(PipelineCacheHandle cache);
     // The binds of desc's texture and buffer regions into queue's arrays.
@@ -375,7 +387,7 @@ private:
     Features features_;
     ResolveCaps resolve_;
     RayTracingLimits rayTracing_;
-    BufferAlignments alignments_;
+    BufferAddressing addressing_;
     Formats13 formats13_;
     DeviceDesc desc_;
     std::vector<std::unique_ptr<VulkanQueue>> queues_;
@@ -412,6 +424,8 @@ private:
     std::mutex buildLock_;
     VulkanBuildArrays builds_;
     BindlessSlots bindless_;
+    // Shaders' modules, which pipelines are made from and outlive.
+    core::Pool<VulkanShader, Shader> shaders_;
     // Declared before pipelines_, which are made on it, so it outlives them.
     VulkanBindlessLayout layout_;
     core::Pool<VulkanPipeline, Pipeline> pipelines_;

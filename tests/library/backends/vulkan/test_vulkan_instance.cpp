@@ -496,6 +496,52 @@ TEST_CASE("Vulkan without VK_KHR_acceleration_structure reports none, and refuse
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("Vulkan without VK_KHR_ray_tracing_pipeline reports none, and refuses pipelines and traces",
+          "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
+    const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_KHR_ray_tracing_pipeline");
+    std::vector<std::string> errors;
+    {
+        auto created = Instance::create(recordingErrorsInto(errors), kValidation);
+        INFO(failureOf(created));
+        REQUIRE(created.has_value());
+        const std::unique_ptr<Instance> instance = std::move(*created);
+        const Caps& caps = instance->adapters()[0].caps;
+        CHECK_FALSE(caps.features.rayTracingPipeline);
+        CHECK_FALSE(caps.features.traceRaysIndirect);
+        CHECK_FALSE(caps.features.rayPrimitiveCulling);
+        CHECK(caps.rayTracing.identifierSize == 0);
+        CHECK(caps.rayTracing.maxRecursionDepth == 0);
+        CHECK_FALSE(caps.timestamps.outsideRendering.rayTracing);
+        auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+        INFO(failureOf(made));
+        REQUIRE(made.has_value());
+        Device& device = **made;
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+
+        const auto pipeline = device.createRayTracingPipeline({});
+        const auto traced = device.traceRays(*list, {});
+        const auto indirect = device.traceRaysIndirect(*list, BufferHandle{}, 0);
+        const auto timestamps = device.createTimestampPool({.queue = 0, .count = 1});
+        REQUIRE(timestamps.has_value());
+        const auto timed = device.writeTimestamp(*list, *timestamps, 0, TimestampStage::RayTracing,
+                                                 TimestampGranularity::Relaxed);
+
+        CHECK(pipeline.error().code == bfr::core::ErrorCode::RhiUnsupported);
+        for (const auto* result : {&traced, &indirect, &timed}) {
+            REQUIRE_FALSE(result->has_value());
+            CHECK(result->error().code == bfr::core::ErrorCode::RhiUnsupported);
+        }
+        CHECK(device.destroyTimestampPool(*timestamps).has_value());
+        CHECK(device.destroyCommandList(*list).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("Vulkan with acceleration structures but no table updated after bind has no table, and makes top structures "
           "with no slot",
           "[vulkan][gpu]") {

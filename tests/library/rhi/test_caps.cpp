@@ -79,7 +79,8 @@ std::vector<std::string> limitsWithoutFeatures(const Caps& caps) {
         {features.accelerationStructure || caps.bindless.maxAccelerationStructures == 0,
          "acceleration structure table"},
         {features.accelerationStructure || !(features.rayQuery || features.rayQueryGraphics), "ray queries"},
-        {features.rayTracingPipeline || caps.rayTracing.handleSize == 0, "ray tracing pipeline"},
+        {features.rayTracingPipeline || caps.rayTracing.identifierSize == 0, "ray tracing pipeline"},
+        {features.rayTracingPipeline || !features.traceRaysIndirect, "indirect traces"},
         {features.shadingRateTexture || caps.limits.maxShadingRateTile == std::array<std::uint32_t, 2>{},
          "shading rate texture"},
     });

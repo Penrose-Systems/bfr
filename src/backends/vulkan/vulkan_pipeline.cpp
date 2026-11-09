@@ -4,8 +4,10 @@
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/pipeline.h"
+#include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
 #include "rhi/pipeline_check.h"
+#include "rhi/ray_tracing_check.h"
 #include "vulkan/vulkan_caps.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_result.h"
@@ -668,6 +670,105 @@ core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable&
                           meshes ? VK_PRIMITIVE_TOPOLOGY_MAX_ENUM : topologyFor(desc.topology)};
 }
 
+VulkanShader::VulkanShader(const VolkDeviceTable& table, VkDevice device, VkShaderModule module, std::string entryPoint)
+    : table_(&table), device_(device), module_(module), entryPoint_(std::move(entryPoint)) {}
+
+VulkanShader::VulkanShader(VulkanShader&& other) noexcept
+    : table_(other.table_),
+      device_(other.device_),
+      module_(std::exchange(other.module_, VK_NULL_HANDLE)),
+      entryPoint_(std::move(other.entryPoint_)) {}
+
+VulkanShader::~VulkanShader() {
+    if (module_ != VK_NULL_HANDLE) {
+        table_->vkDestroyShaderModule(device_, module_, nullptr);
+    }
+}
+
+core::Result<VulkanShader> createVulkanShader(const VolkDeviceTable& table, VkDevice device, const ShaderCode& code) {
+    auto module = createModule(table, device, code.code);
+    if (!module) {
+        return std::unexpected(std::move(module.error()));
+    }
+    return VulkanShader{table, device, *module, std::string{code.entryPoint}};
+}
+
+VkShaderStageFlagBits rayTracingStageFor(RayTracingStage stage) {
+    switch (stage) {
+        case RayTracingStage::Miss:
+            return VK_SHADER_STAGE_MISS_BIT_KHR;
+        case RayTracingStage::ClosestHit:
+            return VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        case RayTracingStage::AnyHit:
+            return VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+        case RayTracingStage::Intersection:
+            return VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+        case RayTracingStage::Callable:
+            return VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+        case RayTracingStage::RayGeneration:
+        default:
+            return VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+    }
+}
+
+namespace {
+
+// BFR's no-shader index is Vulkan's.
+static_assert(kNoShader == VK_SHADER_UNUSED_KHR);
+
+VkRayTracingShaderGroupTypeKHR groupTypeFor(RayTracingGroupType type) {
+    switch (type) {
+        case RayTracingGroupType::TriangleHit:
+            return VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+        case RayTracingGroupType::BoxHit:
+            return VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR;
+        case RayTracingGroupType::General:
+        default:
+            return VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+    }
+}
+
+} // namespace
+
+core::Result<VulkanPipeline> createVulkanRayTracingPipeline(const VolkDeviceTable& table, VkDevice device,
+                                                            VkPipelineLayout layout, VkPipelineCache cache,
+                                                            std::span<const VkPipelineShaderStageCreateInfo> stages,
+                                                            const RayTracingPipelineDesc& desc) {
+    // Pipeline creation is cold, so the groups go in a vector. A group's
+    // shader indices are the desc's, in the stages' order.
+    std::vector<VkRayTracingShaderGroupCreateInfoKHR> groups(desc.groups.size());
+    for (std::size_t i = 0; i < groups.size(); ++i) {
+        const RayTracingGroup& group = desc.groups[i];
+        groups[i] = {.sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
+                     .pNext = nullptr,
+                     .type = groupTypeFor(group.type),
+                     .generalShader = group.general,
+                     .closestHitShader = group.closestHit,
+                     .anyHitShader = group.anyHit,
+                     .intersectionShader = group.intersection,
+                     .pShaderGroupCaptureReplayHandle = nullptr};
+    }
+    // Payload and attribute sizes reach Vulkan only through a library
+    // interface (VkRayTracingPipelineInterfaceCreateInfoKHR), which a
+    // pipeline without libraries has none of.
+    VkRayTracingPipelineCreateInfoKHR info{};
+    info.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
+    info.stageCount = static_cast<std::uint32_t>(stages.size());
+    info.pStages = stages.data();
+    info.groupCount = static_cast<std::uint32_t>(groups.size());
+    info.pGroups = groups.data();
+    info.maxPipelineRayRecursionDepth = desc.maxRecursionDepth;
+    info.layout = layout;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    const VkResult result = table.vkCreateRayTracingPipelinesKHR(device, VK_NULL_HANDLE, cache, 1, &info, nullptr,
+                                                                 &pipeline);
+    if (result != VK_SUCCESS) {
+        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateRayTracingPipelinesKHR", .result = result});
+    }
+    return VulkanPipeline{table, device, pipeline, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+                          VK_PRIMITIVE_TOPOLOGY_MAX_ENUM};
+}
+
 // The device's pipeline calls, beside the pipelines they make.
 
 core::Result<VulkanPipeline*> VulkanDevice::pipelineFor(PipelineHandle pipeline) {
@@ -739,6 +840,83 @@ core::Result<void> VulkanDevice::destroyPipeline(PipelineHandle pipeline) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline handle is stale");
     }
     collectBuffers();
+    return {};
+}
+
+core::Result<ShaderHandle> VulkanDevice::createShader(const ShaderCode& code) {
+    auto made = createVulkanShader(table_, device_, code);
+    if (!made) {
+        return std::unexpected(std::move(made.error()));
+    }
+    const ShaderHandle shader = shaders_.emplace(std::move(*made));
+    if (shader.isNull()) {
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} shaders", kBufferLimit);
+    }
+    return shader;
+}
+
+core::Result<void> VulkanDevice::destroyShader(ShaderHandle shader) {
+    if (shader.isNull()) {
+        return {};
+    }
+    // No GPU work reads a module, so it goes at once.
+    if (!shaders_.erase(shader)) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the shader handle is stale");
+    }
+    return {};
+}
+
+core::Result<PipelineHandle> VulkanDevice::createRayTracingPipeline(const RayTracingPipelineDesc& desc) {
+    if (auto checked = checkRayTracingPipelines(features_.rayTracingPipeline); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    collectBuffers();
+    const auto cache = pipelineCacheFor(desc.cache);
+    if (!cache) {
+        return std::unexpected(std::move(cache.error()));
+    }
+    // Cold, so the stages go in a vector; they point into the shaders, which
+    // stay while the pipeline is made.
+    std::vector<VkPipelineShaderStageCreateInfo> stages;
+    stages.reserve(desc.shaders.size());
+    for (const RayTracingShader& shader : desc.shaders) {
+        const VulkanShader* found = shaders_.find(shader.shader);
+        if (found == nullptr) {
+            return core::failure(core::ErrorCode::RhiInvalidHandle, "a shader handle is stale");
+        }
+        stages.push_back(stageFor(rayTracingStageFor(shader.stage), found->module(), found->entryPoint().c_str()));
+    }
+    auto made = createVulkanRayTracingPipeline(table_, device_, layout_.pipelineLayout(), *cache, stages, desc);
+    if (!made) {
+        return std::unexpected(std::move(made.error()));
+    }
+    const PipelineHandle pipeline = pipelines_.emplace(std::move(*made));
+    if (pipeline.isNull()) {
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines", kBufferLimit);
+    }
+    return pipeline;
+}
+
+core::Result<void> VulkanDevice::shaderIdentifiers(PipelineHandle pipeline, std::uint32_t first, std::uint32_t count,
+                                                   std::span<std::byte> out) {
+    auto found = pipelineFor(pipeline);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    const bool rayTracing = (*found)->bindPoint() == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
+    if (auto checked = checkIdentifiers(rayTracing, count, out, rayTracing_.identifierSize); !checked) {
+        return checked;
+    }
+    const std::size_t bytes = std::size_t{count} * rayTracing_.identifierSize;
+    if (const VkResult result = table_.vkGetRayTracingShaderGroupHandlesKHR(device_, (*found)->pipeline(), first, count,
+                                                                            bytes, out.data());
+        result != VK_SUCCESS) {
+        return failure(core::ErrorCode::RhiDeviceFailed,
+                       {.call = "vkGetRayTracingShaderGroupHandlesKHR", .result = result});
+    }
     return {};
 }
 

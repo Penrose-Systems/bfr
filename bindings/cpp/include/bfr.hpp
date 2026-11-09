@@ -740,6 +740,13 @@ enum class Call : std::int32_t {
     WriteInstances = BFR_CALL_WRITE_INSTANCES,
     BuildAccelerationStructure = BFR_CALL_BUILD_ACCELERATION_STRUCTURE,
     CopyAccelerationStructure = BFR_CALL_COPY_ACCELERATION_STRUCTURE,
+    CreateShader = BFR_CALL_CREATE_SHADER,
+    DestroyShader = BFR_CALL_DESTROY_SHADER,
+    CreateRayTracingPipeline = BFR_CALL_CREATE_RAY_TRACING_PIPELINE,
+    ShaderIdentifiers = BFR_CALL_SHADER_IDENTIFIERS,
+    TraceRays = BFR_CALL_TRACE_RAYS,
+    TraceRaysIndirect = BFR_CALL_TRACE_RAYS_INDIRECT,
+    BufferAddress = BFR_CALL_BUFFER_ADDRESS,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -830,6 +837,13 @@ enum class Call : std::int32_t {
     case Call::WriteInstances: return "write_instances";
     case Call::BuildAccelerationStructure: return "build_acceleration_structure";
     case Call::CopyAccelerationStructure: return "copy_acceleration_structure";
+    case Call::CreateShader: return "create_shader";
+    case Call::DestroyShader: return "destroy_shader";
+    case Call::CreateRayTracingPipeline: return "create_ray_tracing_pipeline";
+    case Call::ShaderIdentifiers: return "shader_identifiers";
+    case Call::TraceRays: return "trace_rays";
+    case Call::TraceRaysIndirect: return "trace_rays_indirect";
+    case Call::BufferAddress: return "buffer_address";
     }
     return {};
 }
@@ -1480,6 +1494,49 @@ enum class InstanceOpacity : std::int32_t {
     return {};
 }
 
+/// The stage a ray tracing pipeline's shader runs at.
+enum class RayTracingStage : std::int32_t {
+    RayGeneration = BFR_RAY_TRACING_STAGE_RAY_GENERATION,
+    Miss = BFR_RAY_TRACING_STAGE_MISS,
+    ClosestHit = BFR_RAY_TRACING_STAGE_CLOSEST_HIT,
+    AnyHit = BFR_RAY_TRACING_STAGE_ANY_HIT,
+    Intersection = BFR_RAY_TRACING_STAGE_INTERSECTION,
+    Callable = BFR_RAY_TRACING_STAGE_CALLABLE,
+};
+
+/// value's name in bfr.yaml; empty for a value RayTracingStage doesn't have.
+[[nodiscard]] constexpr std::string_view name(RayTracingStage value) {
+    switch (value) {
+    case RayTracingStage::RayGeneration: return "ray_generation";
+    case RayTracingStage::Miss: return "miss";
+    case RayTracingStage::ClosestHit: return "closest_hit";
+    case RayTracingStage::AnyHit: return "any_hit";
+    case RayTracingStage::Intersection: return "intersection";
+    case RayTracingStage::Callable: return "callable";
+    }
+    return {};
+}
+
+/// What a ray tracing pipeline's group holds.
+enum class RayTracingGroupType : std::int32_t {
+    /// general: one ray generation, miss or callable shader.
+    General = BFR_RAY_TRACING_GROUP_TYPE_GENERAL,
+    /// closest_hit and any_hit, either no_shader, for triangles.
+    TriangleHit = BFR_RAY_TRACING_GROUP_TYPE_TRIANGLE_HIT,
+    /// intersection, and closest_hit and any_hit, either no_shader, for boxes.
+    BoxHit = BFR_RAY_TRACING_GROUP_TYPE_BOX_HIT,
+};
+
+/// value's name in bfr.yaml; empty for a value RayTracingGroupType doesn't have.
+[[nodiscard]] constexpr std::string_view name(RayTracingGroupType value) {
+    switch (value) {
+    case RayTracingGroupType::General: return "general";
+    case RayTracingGroupType::TriangleHit: return "triangle_hit";
+    case RayTracingGroupType::BoxHit: return "box_hit";
+    }
+    return {};
+}
+
 /// Which window system a bfr_window comes from, for the platforms that have more than one.
 enum class WindowSystem : std::int32_t {
     /// The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -1540,6 +1597,8 @@ class TimestampPool;
 class SparseMemory;
 
 class AccelerationStructure;
+
+class Shader;
 
 class PipelineCache;
 
@@ -1686,6 +1745,22 @@ private:
 };
 static_assert(sizeof(AccelerationStructureRef) == sizeof(bfr_acceleration_structure) && alignof(AccelerationStructureRef) == alignof(bfr_acceleration_structure) &&
               std::is_standard_layout_v<AccelerationStructureRef> && std::is_trivially_copyable_v<AccelerationStructureRef>);
+
+/// A borrowed Shader, laid out as bfr_shader: what a struct names one by. It owns nothing;
+/// the Shader outlives the call it is passed to. Null by default.
+class ShaderRef {
+public:
+    ShaderRef() = default;
+    ShaderRef(const Shader& shader); // NOLINT(google-explicit-constructor): a Shader is passed as one
+
+    [[nodiscard]] bfr_shader get() const { return shader_; }
+    [[nodiscard]] explicit operator bool() const { return shader_.bits != 0; }
+
+private:
+    bfr_shader shader_{};
+};
+static_assert(sizeof(ShaderRef) == sizeof(bfr_shader) && alignof(ShaderRef) == alignof(bfr_shader) &&
+              std::is_standard_layout_v<ShaderRef> && std::is_trivially_copyable_v<ShaderRef>);
 
 /// A borrowed PipelineCache, laid out as bfr_pipeline_cache: what a struct names one by. It owns nothing;
 /// the PipelineCache outlives the call it is passed to. Null by default.
@@ -1989,7 +2064,7 @@ struct BufferUsage {
     bool storage{};
     /// Indexed draws read it.
     bool index{};
-    /// Indirect draws and dispatches read their arguments from it.
+    /// Indirect draws, dispatches and traces read their arguments from it.
     bool indirect{};
     /// Acceleration structure builds read vertices, indices, transforms, boxes or instances from
     /// it. It starts at an address of the alignment those take.
@@ -1997,6 +2072,9 @@ struct BufferUsage {
     /// Acceleration structure builds use it as scratch. It starts at an address that is a multiple
     /// of bfr_caps_ray_tracing.scratch_alignment.
     bool accelerationStructureScratch{};
+    /// It holds shader binding table records. It starts at an address that is a multiple of
+    /// bfr_caps_ray_tracing.table_alignment.
+    bool shaderBindingTable{};
 };
 
 /// How to create a buffer.
@@ -2303,6 +2381,73 @@ struct BlendState {
 struct ColorTarget {
     Format format{};
     BlendState blend{};
+};
+
+/// One shader of a ray tracing pipeline, run at stage.
+struct RayTracingShader {
+    RayTracingStage stage{};
+    ShaderRef shader{};
+};
+static_assert(sizeof(RayTracingShader) == sizeof(bfr_ray_tracing_shader) && alignof(RayTracingShader) == alignof(bfr_ray_tracing_shader) &&
+              std::is_standard_layout_v<RayTracingShader> && std::is_trivially_copyable_v<RayTracingShader>);
+static_assert(offsetof(RayTracingShader, stage) == offsetof(bfr_ray_tracing_shader, stage));
+static_assert(offsetof(RayTracingShader, shader) == offsetof(bfr_ray_tracing_shader, shader));
+
+/// Shaders, by index into the pipeline's shaders, that a binding table record names by its group's
+/// identifier; no_shader is none.
+struct RayTracingGroup {
+    RayTracingGroupType type{};
+    std::uint32_t general{};
+    std::uint32_t closestHit{};
+    std::uint32_t anyHit{};
+    std::uint32_t intersection{};
+};
+static_assert(sizeof(RayTracingGroup) == sizeof(bfr_ray_tracing_group) && alignof(RayTracingGroup) == alignof(bfr_ray_tracing_group) &&
+              std::is_standard_layout_v<RayTracingGroup> && std::is_trivially_copyable_v<RayTracingGroup>);
+static_assert(offsetof(RayTracingGroup, type) == offsetof(bfr_ray_tracing_group, type));
+static_assert(offsetof(RayTracingGroup, general) == offsetof(bfr_ray_tracing_group, general));
+static_assert(offsetof(RayTracingGroup, closestHit) == offsetof(bfr_ray_tracing_group, closest_hit));
+static_assert(offsetof(RayTracingGroup, anyHit) == offsetof(bfr_ray_tracing_group, any_hit));
+static_assert(offsetof(RayTracingGroup, intersection) == offsetof(bfr_ray_tracing_group, intersection));
+
+/// How to create a ray tracing pipeline: at least one ray generation shader. max_payload_size and
+/// max_attribute_size are the largest payload and hit attributes its shaders declare, passed to
+/// backends that take them. Rays trace recursively to max_recursion_depth, at most
+/// bfr_caps_ray_tracing's; at 0 ray generation traces none.
+struct RayTracingPipelineDesc {
+    /// Read during the call only.
+    std::span<const RayTracingShader> shaders{};
+    /// Read during the call only.
+    std::span<const RayTracingGroup> groups{};
+    std::uint32_t maxRecursionDepth{};
+    std::uint32_t maxPayloadSize{};
+    std::uint32_t maxAttributeSize{};
+    /// Where the pipeline is looked for, and added on a miss; null is none.
+    PipelineCacheRef cache{};
+};
+
+/// Records in a shader binding table: size bytes from offset in buffer, which has
+/// shader_binding_table usage, stride bytes apart. offset is a multiple of
+/// bfr_caps_ray_tracing.table_alignment, stride of identifier_alignment and at most
+/// max_shader_group_stride. A null buffer is no region.
+struct ShaderTableRegion {
+    BufferRef buffer{};
+    std::uint64_t offset{};
+    std::uint64_t size{};
+    std::uint64_t stride{};
+};
+
+/// width by height by depth rays, within bfr_caps_ray_tracing.max_trace_rays and bfr_caps_compute's
+/// max_workgroup_count times max_workgroup_size in each dimension. ray_generation is given, one
+/// record, its size equal to its stride.
+struct TraceRaysDesc {
+    ShaderTableRegion rayGeneration{};
+    ShaderTableRegion miss{};
+    ShaderTableRegion hit{};
+    ShaderTableRegion callable{};
+    std::uint32_t width{};
+    std::uint32_t height{};
+    std::uint32_t depth{};
 };
 
 /// How to create a compute pipeline.
@@ -2858,12 +3003,16 @@ struct CapsRayTracing {
     std::uint32_t scratchAlignment{};
     /// Deepest ray recursion; 0 without ray tracing pipelines.
     std::uint32_t maxRecursionDepth{};
-    /// Bytes in a shader binding table record's handle.
-    std::uint32_t handleSize{};
-    /// Alignment in bytes of a handle in the table.
-    std::uint32_t handleAlignment{};
-    /// Alignment in bytes of the table's start.
+    /// The bytes of a shader group's identifier, which a binding table record starts with.
+    std::uint32_t identifierSize{};
+    /// The alignment in bytes of a binding table record's start.
+    std::uint32_t identifierAlignment{};
+    /// The alignment in bytes of a binding table region's start.
     std::uint32_t tableAlignment{};
+    std::uint32_t maxShaderGroupStride{};
+    /// The most rays one trace makes.
+    std::uint32_t maxTraceRays{};
+    std::uint32_t maxHitAttributeSize{};
     /// The bytes of one record bfr_write_instances writes.
     std::uint32_t instanceSize{};
 };
@@ -2877,7 +3026,13 @@ struct CapsFeatures {
     bool rayQueryGraphics{};
     /// Ray tracing pipelines and shader binding tables.
     bool rayTracingPipeline{};
+    /// bfr_trace_rays_indirect.
+    bool traceRaysIndirect{};
+    /// Rays that skip triangles or boxes.
+    bool rayPrimitiveCulling{};
     bool accelerationStructure{};
+    /// bfr_get_buffer_address.
+    bool bufferAddress{};
     bool meshShader{};
     bool taskShader{};
     /// A shading rate per draw.
@@ -3378,6 +3533,7 @@ inline bfr_buffer_usage toC(const BufferUsage& value) {
         .indirect = static_cast<bfr_bool>(value.indirect),
         .acceleration_structure_input = static_cast<bfr_bool>(value.accelerationStructureInput),
         .acceleration_structure_scratch = static_cast<bfr_bool>(value.accelerationStructureScratch),
+        .shader_binding_table = static_cast<bfr_bool>(value.shaderBindingTable),
     };
 }
 
@@ -3545,6 +3701,16 @@ inline bfr_blend_state toC(const BlendState& value) {
 
 inline bfr_color_target toC(const ColorTarget& value) {
     return {.format = static_cast<bfr_format>(value.format), .blend = toC(value.blend)};
+}
+
+inline bfr_ray_tracing_group toC(const RayTracingGroup& value) {
+    return {
+        .type = static_cast<bfr_ray_tracing_group_type>(value.type),
+        .general = value.general,
+        .closest_hit = value.closestHit,
+        .any_hit = value.anyHit,
+        .intersection = value.intersection,
+    };
 }
 
 inline bfr_pipeline_cache_desc toC(const PipelineCacheDesc& value) {
@@ -3821,9 +3987,12 @@ inline CapsRayTracing fromC(const bfr_caps_ray_tracing& value) {
         .maxPrimitives = value.max_primitives,
         .scratchAlignment = value.scratch_alignment,
         .maxRecursionDepth = value.max_recursion_depth,
-        .handleSize = value.handle_size,
-        .handleAlignment = value.handle_alignment,
+        .identifierSize = value.identifier_size,
+        .identifierAlignment = value.identifier_alignment,
         .tableAlignment = value.table_alignment,
+        .maxShaderGroupStride = value.max_shader_group_stride,
+        .maxTraceRays = value.max_trace_rays,
+        .maxHitAttributeSize = value.max_hit_attribute_size,
         .instanceSize = value.instance_size,
     };
 }
@@ -3833,7 +4002,10 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .rayQuery = value.ray_query != BFR_FALSE,
         .rayQueryGraphics = value.ray_query_graphics != BFR_FALSE,
         .rayTracingPipeline = value.ray_tracing_pipeline != BFR_FALSE,
+        .traceRaysIndirect = value.trace_rays_indirect != BFR_FALSE,
+        .rayPrimitiveCulling = value.ray_primitive_culling != BFR_FALSE,
         .accelerationStructure = value.acceleration_structure != BFR_FALSE,
+        .bufferAddress = value.buffer_address != BFR_FALSE,
         .meshShader = value.mesh_shader != BFR_FALSE,
         .taskShader = value.task_shader != BFR_FALSE,
         .shadingRate = value.shading_rate != BFR_FALSE,
@@ -4193,7 +4365,7 @@ public:
     Device() = default;
     /// Destroys a device once the GPU has finished with it, with every handle it still owns. Null
     /// does nothing. A Device with AccelerationStructure or Buffer or CommandList or CommandPool or
-    /// Pipeline or PipelineCache or Sampler or SparseMemory or Swapchain or Texture or
+    /// Pipeline or PipelineCache or Sampler or Shader or SparseMemory or Swapchain or Texture or
     /// TimestampPool objects left lives on until the last of them is destroyed, so they may be
     /// destroyed in any order.
     ~Device() = default;
@@ -4536,6 +4708,32 @@ public:
     /// for a structure that is gone.
     [[nodiscard]] Expected<void> copyAccelerationStructure(CommandList commandList, const AccelerationStructure& dst, const AccelerationStructure& src) const;
 
+    /// Creates a shader from code, compiled once, for the ray tracing pipelines made from it. Not
+    /// for the frame path. Fails with error_invalid_argument when the code is not what the backend
+    /// takes in whole units (SPIR-V's words), error_unsupported where the backend has no shader
+    /// objects yet (D3D12, Metal), error_limit_reached at the device's maximum, and
+    /// error_device_failed when the backend refuses the code.
+    [[nodiscard]] Expected<Shader> createShader(const ShaderCode& code) const;
+
+    /// Creates a ray tracing pipeline, as desc says, before returning. Not for the frame path. A
+    /// desc.cache is looked in first, and the pipeline added on a miss. Fails with
+    /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false,
+    /// error_invalid_argument for an enum value BFR doesn't have, error_invalid_handle for a shader
+    /// or desc.cache that is gone, error_limit_reached at the device's maximum of pipelines, and
+    /// error_device_failed when the backend refuses the desc; the message carries what it said.
+    [[nodiscard]] Expected<Pipeline> createRayTracingPipeline(const RayTracingPipelineDesc& desc) const;
+
+    /// Records a trace of desc's rays with the bound ray tracing pipeline, outside rendering, on a
+    /// queue whose kind runs compute; commands after a barrier see what it wrote. Fails with
+    /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false or on a copy queue,
+    /// and error_invalid_handle for a buffer that is gone.
+    [[nodiscard]] Expected<void> traceRays(CommandList commandList, const TraceRaysDesc& desc) const;
+
+    /// Records a trace as bfr_trace_rays does, of the bfr_trace_rays_indirect_args buffer holds at
+    /// offset, a multiple of 4; buffer has indirect usage. Fails with error_unsupported where
+    /// bfr_caps_features.trace_rays_indirect is false, and as bfr_trace_rays does.
+    [[nodiscard]] Expected<void> traceRaysIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset) const;
+
     /// Lists the CPU time spent in each of the device's calls since it was made, indexed by
     /// bfr_call.
     [[nodiscard]] Expected<std::vector<CallTiming>> callTimings() const;
@@ -4715,6 +4913,12 @@ public:
     /// not sparse.
     [[nodiscard]] Expected<BufferTiling> bufferTiling();
 
+    /// Writes the buffer's GPU address, for the addresses bfr_trace_rays_indirect_args and shaders
+    /// read. The buffer has indirect, shader_binding_table or acceleration_structure_input usage.
+    /// Fails with error_unsupported where bfr_caps_features.buffer_address is false, and
+    /// error_invalid_argument for a buffer of none of those usages.
+    [[nodiscard]] Expected<std::uint64_t> bufferAddress();
+
 private:
     Buffer(bfr_device* device, bfr_buffer buffer, detail::KeepAlive keepAlive) : device_(device), buffer_(buffer), keepAlive_(std::move(keepAlive)) {}
     friend class Device;
@@ -4814,6 +5018,11 @@ public:
     /// The C value, for calls bfr.hpp does not wrap; this still owns it.
     [[nodiscard]] bfr_pipeline get() const { return pipeline_; }
     [[nodiscard]] explicit operator bool() const { return pipeline_.bits != 0; }
+
+    /// Writes count groups' identifiers from first, bfr_caps_ray_tracing.identifier_size bytes
+    /// each, into data, for binding table records. Fails with error_invalid_argument when size is
+    /// too small or the pipeline is not a ray tracing one.
+    [[nodiscard]] Expected<void> shaderIdentifiers(std::uint32_t first, std::uint32_t count, void* data, std::size_t size);
 
 private:
     Pipeline(bfr_device* device, bfr_pipeline pipeline, detail::KeepAlive keepAlive) : device_(device), pipeline_(pipeline), keepAlive_(std::move(keepAlive)) {}
@@ -4985,6 +5194,43 @@ private:
     detail::KeepAlive keepAlive_;
 };
 
+/// Code compiled once and named by the ray tracing pipelines made from it, which keep what they
+/// need of it: it may be destroyed once they are made.
+class Shader {
+public:
+    /// Owns nothing, as a moved-from Shader does.
+    Shader() = default;
+    /// Destroys a shader at once; pipelines made from it stay. Not for the frame path. Not while
+    /// another thread is making a pipeline from it. A handle that is already destroyed does
+    /// nothing.
+    ~Shader() { bfr_destroy_shader(device_, shader_); }
+    Shader(const Shader&) = delete;
+    Shader& operator=(const Shader&) = delete;
+    Shader(Shader&& other) noexcept : device_(std::exchange(other.device_, nullptr)), shader_(std::exchange(other.shader_, {})), keepAlive_(std::move(other.keepAlive_)) {}
+    Shader& operator=(Shader&& other) noexcept {
+        if (this != &other) {
+            bfr_destroy_shader(device_, shader_);
+            device_ = std::exchange(other.device_, nullptr);
+            shader_ = std::exchange(other.shader_, {});
+            keepAlive_ = std::move(other.keepAlive_);
+        }
+        return *this;
+    }
+
+    /// The C value, for calls bfr.hpp does not wrap; this still owns it.
+    [[nodiscard]] bfr_shader get() const { return shader_; }
+    [[nodiscard]] explicit operator bool() const { return shader_.bits != 0; }
+
+private:
+    Shader(bfr_device* device, bfr_shader shader, detail::KeepAlive keepAlive) : device_(device), shader_(shader), keepAlive_(std::move(keepAlive)) {}
+    friend class Device;
+
+    bfr_device* device_ = nullptr;
+    bfr_shader shader_{};
+    // Keeps the Device that made this alive until this is destroyed.
+    detail::KeepAlive keepAlive_;
+};
+
 /// Pipelines the backend has compiled, which it reads back as bytes for a later run to start from.
 /// Pipelines made with one look in it first and add themselves on a miss.
 class PipelineCache {
@@ -5043,6 +5289,8 @@ inline SparseMemoryRef::SparseMemoryRef(const SparseMemory& sparseMemory) : spar
 
 inline AccelerationStructureRef::AccelerationStructureRef(const AccelerationStructure& accelerationStructure) : accelerationStructure_(accelerationStructure.get()) {}
 
+inline ShaderRef::ShaderRef(const Shader& shader) : shader_(shader.get()) {}
+
 inline PipelineCacheRef::PipelineCacheRef(const PipelineCache& pipelineCache) : pipelineCache_(pipelineCache.get()) {}
 
 namespace detail {
@@ -5081,6 +5329,45 @@ inline bfr_rendering_desc toC(const RenderingDesc& value, const bfr_chain* next)
         .color_attachment_count = value.colorAttachmentCount,
         .color_attachments = {toC(value.colorAttachments[0]), toC(value.colorAttachments[1]), toC(value.colorAttachments[2]), toC(value.colorAttachments[3]), toC(value.colorAttachments[4]), toC(value.colorAttachments[5]), toC(value.colorAttachments[6]), toC(value.colorAttachments[7])},
         .depth_stencil = toC(value.depthStencil),
+    };
+}
+
+inline bfr_ray_tracing_shader toC(const RayTracingShader& value) {
+    return {.stage = static_cast<bfr_ray_tracing_stage>(value.stage), .shader = value.shader.get()};
+}
+
+inline bfr_ray_tracing_pipeline_desc toC(const RayTracingPipelineDesc& value, const bfr_chain* next) {
+    return {
+        .next = next,
+        .shaders = reinterpret_cast<const bfr_ray_tracing_shader*>(value.shaders.data()),
+        .shader_count = static_cast<uint32_t>(value.shaders.size()),
+        .groups = reinterpret_cast<const bfr_ray_tracing_group*>(value.groups.data()),
+        .group_count = static_cast<uint32_t>(value.groups.size()),
+        .max_recursion_depth = value.maxRecursionDepth,
+        .max_payload_size = value.maxPayloadSize,
+        .max_attribute_size = value.maxAttributeSize,
+        .cache = value.cache.get(),
+    };
+}
+
+inline bfr_shader_table_region toC(const ShaderTableRegion& value) {
+    return {
+        .buffer = value.buffer.get(),
+        .offset = value.offset,
+        .size = value.size,
+        .stride = value.stride,
+    };
+}
+
+inline bfr_trace_rays_desc toC(const TraceRaysDesc& value) {
+    return {
+        .ray_generation = toC(value.rayGeneration),
+        .miss = toC(value.miss),
+        .hit = toC(value.hit),
+        .callable = toC(value.callable),
+        .width = value.width,
+        .height = value.height,
+        .depth = value.depth,
     };
 }
 
@@ -5853,6 +6140,45 @@ inline Expected<void> Device::copyAccelerationStructure(CommandList commandList,
     return {};
 }
 
+inline Expected<Shader> Device::createShader(const ShaderCode& code) const {
+    const bfr_shader_code cCode = detail::toC(code);
+    bfr_shader shader{};
+    if (const bfr_result result = bfr_create_shader(device_, &cCode, &shader); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return Shader{device_, shader, keepAlive_};
+}
+
+inline Expected<Pipeline> Device::createRayTracingPipeline(const RayTracingPipelineDesc& desc) const {
+    if (!std::in_range<uint32_t>(desc.shaders.size())) {
+        return std::unexpected(detail::tooMany("desc.shaders holds more elements than a uint32_t counts"));
+    }
+    if (!std::in_range<uint32_t>(desc.groups.size())) {
+        return std::unexpected(detail::tooMany("desc.groups holds more elements than a uint32_t counts"));
+    }
+    const bfr_ray_tracing_pipeline_desc cDesc = detail::toC(desc, nullptr);
+    bfr_pipeline pipeline{};
+    if (const bfr_result result = bfr_create_ray_tracing_pipeline(device_, &cDesc, &pipeline); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return Pipeline{device_, pipeline, keepAlive_};
+}
+
+inline Expected<void> Device::traceRays(CommandList commandList, const TraceRaysDesc& desc) const {
+    const bfr_trace_rays_desc cDesc = detail::toC(desc);
+    if (const bfr_result result = bfr_trace_rays(device_, commandList.get(), &cDesc); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::traceRaysIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset) const {
+    if (const bfr_result result = bfr_trace_rays_indirect(device_, commandList.get(), buffer.get(), offset); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
 inline Expected<std::vector<CallTiming>> Device::callTimings() const {
     std::vector<bfr_call_timing> timingsC;
     std::uint32_t count = 0;
@@ -5946,6 +6272,14 @@ inline Expected<BufferTiling> Buffer::bufferTiling() {
     return detail::fromC(tiling);
 }
 
+inline Expected<std::uint64_t> Buffer::bufferAddress() {
+    uint64_t address{};
+    if (const bfr_result result = bfr_get_buffer_address(device_, buffer_, &address); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return address;
+}
+
 inline Expected<TextureSlots> Texture::textureSlots() {
     bfr_texture_slots slots{};
     if (const bfr_result result = bfr_get_texture_slots(device_, texture_, &slots); result < 0) {
@@ -5960,6 +6294,13 @@ inline Expected<TextureTiling> Texture::textureTiling(TextureAspect aspect) {
         return std::unexpected(detail::failure(result));
     }
     return detail::fromC(tiling);
+}
+
+inline Expected<void> Pipeline::shaderIdentifiers(std::uint32_t first, std::uint32_t count, void* data, std::size_t size) {
+    if (const bfr_result result = bfr_get_shader_identifiers(device_, pipeline_, first, count, data, size); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
 }
 
 inline Expected<std::uint32_t> Sampler::samplerSlot() {

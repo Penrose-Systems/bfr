@@ -118,6 +118,12 @@ constexpr std::pair<BuildPreference, BuildPreference> rangeOf(BuildPreference /*
 constexpr std::pair<InstanceOpacity, InstanceOpacity> rangeOf(InstanceOpacity /*unused*/) {
     return {InstanceOpacity::AsGeometry, InstanceOpacity::ForceNonOpaque};
 }
+constexpr std::pair<RayTracingStage, RayTracingStage> rangeOf(RayTracingStage /*unused*/) {
+    return {RayTracingStage::RayGeneration, RayTracingStage::Callable};
+}
+constexpr std::pair<RayTracingGroupType, RayTracingGroupType> rangeOf(RayTracingGroupType /*unused*/) {
+    return {RayTracingGroupType::General, RayTracingGroupType::BoxHit};
+}
 
 /// Fails with RhiInvalidCall when value is not one its enum has, such as a
 /// number cast to it; what names it in the message. Every backend's switch
@@ -173,6 +179,22 @@ template <class Enum>
             return checked;
         }
         if (auto checked = checkKnown(triangles.indexType, "index type"); !checked) {
+            return checked;
+        }
+    }
+    return {};
+}
+
+/// Fails with RhiInvalidCall when a shader's stage or a group's type in desc
+/// is not one BFR has.
+[[nodiscard]] inline core::Result<void> checkEnums(const RayTracingPipelineDesc& desc) {
+    for (const RayTracingShader& shader : desc.shaders) {
+        if (auto checked = checkKnown(shader.stage, "ray tracing stage"); !checked) {
+            return checked;
+        }
+    }
+    for (const RayTracingGroup& group : desc.groups) {
+        if (auto checked = checkKnown(group.type, "ray tracing group type"); !checked) {
             return checked;
         }
     }

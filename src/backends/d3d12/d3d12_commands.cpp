@@ -7,6 +7,7 @@
 #include "rhi/acceleration_structure_check.h"
 #include "rhi/command_check.h"
 #include "rhi/enum_check.h"
+#include "rhi/ray_tracing_check.h"
 
 #include <d3d12.h>
 #include <dxgiformat.h>
@@ -375,6 +376,43 @@ core::Result<void> D3D12Device::copyAccelerationStructure(CommandListHandle /*co
                                                           AccelerationStructureHandle /*dst*/,
                                                           AccelerationStructureHandle /*src*/) {
     return checkAccelerationStructures(features_.accelerationStructure);
+}
+
+// BFR has no D3D12 shader objects or ray tracing pipelines yet, and
+// Features::rayTracingPipeline, traceRaysIndirect and bufferAddress are false
+// until it does (owner, 2026-11-08).
+
+core::Result<ShaderHandle> D3D12Device::createShader(const ShaderCode& /*code*/) {
+    return core::failure(core::ErrorCode::RhiUnsupported, "BFR has no D3D12 shader objects yet");
+}
+
+core::Result<void> D3D12Device::destroyShader(ShaderHandle shader) {
+    if (shader.isNull()) {
+        return {};
+    }
+    return core::failure(core::ErrorCode::RhiInvalidHandle, "the shader handle is stale");
+}
+
+core::Result<PipelineHandle> D3D12Device::createRayTracingPipeline(const RayTracingPipelineDesc& /*desc*/) {
+    return std::unexpected(checkRayTracingPipelines(features_.rayTracingPipeline).error());
+}
+
+core::Result<void> D3D12Device::shaderIdentifiers(PipelineHandle /*pipeline*/, std::uint32_t /*first*/,
+                                                  std::uint32_t /*count*/, std::span<std::byte> /*out*/) {
+    return checkRayTracingPipelines(features_.rayTracingPipeline);
+}
+
+core::Result<void> D3D12Device::traceRays(CommandListHandle /*commandList*/, const TraceRaysDesc& /*desc*/) {
+    return checkRayTracingPipelines(features_.rayTracingPipeline);
+}
+
+core::Result<void> D3D12Device::traceRaysIndirect(CommandListHandle /*commandList*/, BufferHandle /*buffer*/,
+                                                  std::uint64_t /*offset*/) {
+    return checkTraceRaysIndirect(features_.traceRaysIndirect);
+}
+
+core::Result<std::uint64_t> D3D12Device::bufferAddress(BufferHandle /*buffer*/) {
+    return std::unexpected(checkBufferAddress(features_.bufferAddress, false).error());
 }
 
 } // namespace bfr::rhi::d3d12

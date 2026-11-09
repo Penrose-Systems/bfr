@@ -32,7 +32,7 @@ struct BufferUsage {
     bool storage = false;
     /// Indexed draws read it.
     bool index = false;
-    /// Indirect draws and dispatches read their arguments from it.
+    /// Indirect draws, dispatches and traces read their arguments from it.
     bool indirect = false;
     /// Acceleration structure builds read vertices, indices, transforms,
     /// boxes or instances from it. It starts at an address of the alignment
@@ -41,6 +41,9 @@ struct BufferUsage {
     /// Acceleration structure builds use it as scratch. It starts at an
     /// address that is a multiple of RayTracingLimits::scratchAlignment.
     bool accelerationStructureScratch = false;
+    /// It holds shader binding table records. It starts at an address that is
+    /// a multiple of RayTracingLimits::tableAlignment.
+    bool shaderBindingTable = false;
 };
 
 /// How to create a buffer.

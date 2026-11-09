@@ -305,6 +305,15 @@ public:
     [[nodiscard]] core::Result<void> copyAccelerationStructure(CommandListHandle commandList,
                                                                AccelerationStructureHandle dst,
                                                                AccelerationStructureHandle src) override;
+    [[nodiscard]] core::Result<ShaderHandle> createShader(const ShaderCode& code) override;
+    [[nodiscard]] core::Result<void> destroyShader(ShaderHandle shader) override;
+    [[nodiscard]] core::Result<PipelineHandle> createRayTracingPipeline(const RayTracingPipelineDesc& desc) override;
+    [[nodiscard]] core::Result<void> shaderIdentifiers(PipelineHandle pipeline, std::uint32_t first,
+                                                       std::uint32_t count, std::span<std::byte> out) override;
+    [[nodiscard]] core::Result<void> traceRays(CommandListHandle commandList, const TraceRaysDesc& desc) override;
+    [[nodiscard]] core::Result<void> traceRaysIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                       std::uint64_t offset) override;
+    [[nodiscard]] core::Result<std::uint64_t> bufferAddress(BufferHandle buffer) override;
 
 private:
     [[nodiscard]] core::Result<void> open(const DeviceDesc& desc);

@@ -4,6 +4,7 @@
 #include "bfr/rhi/pipeline.h"
 #include "rhi/command_check.h"
 #include "rhi/enum_check.h"
+#include "rhi/ray_tracing_check.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_pipeline.h"
 
@@ -335,6 +336,65 @@ core::Result<void> VulkanDevice::drawMeshIndirectCount(CommandListHandle command
     }
     table_.vkCmdDrawMeshTasksIndirectCountEXT((*list)->buffer, (*found)->buffer(), offset, (*count)->buffer(),
                                               countOffset, maxDrawCount, stride);
+    return {};
+}
+
+core::Result<VkStridedDeviceAddressRegionKHR> VulkanDevice::regionOf(const ShaderTableRegion& region) {
+    if (region.buffer.isNull()) {
+        return VkStridedDeviceAddressRegionKHR{};
+    }
+    const auto address = addressOf(region.buffer, region.offset);
+    if (!address) {
+        return std::unexpected(address.error());
+    }
+    return VkStridedDeviceAddressRegionKHR{.deviceAddress = *address, .stride = region.stride, .size = region.size};
+}
+
+core::Result<void> VulkanDevice::traceRays(CommandListHandle commandList, const TraceRaysDesc& desc) {
+    if (auto checked = checkRayTracingPipelines(features_.rayTracingPipeline); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    if (auto checked = checkRunsCompute(**list); !checked) {
+        return checked;
+    }
+    std::array<VkStridedDeviceAddressRegionKHR, 4> regions{};
+    const std::array tables{&desc.rayGeneration, &desc.miss, &desc.hit, &desc.callable};
+    for (std::size_t i = 0; i < regions.size(); ++i) {
+        const auto region = regionOf(*tables.at(i));
+        if (!region) {
+            return std::unexpected(region.error());
+        }
+        regions.at(i) = *region;
+    }
+    table_.vkCmdTraceRaysKHR((*list)->buffer, &regions[0], &regions[1], &regions[2], &regions[3], desc.width,
+                             desc.height, desc.depth);
+    return {};
+}
+
+core::Result<void> VulkanDevice::traceRaysIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                   std::uint64_t offset) {
+    if (auto checked = checkTraceRaysIndirect(features_.traceRaysIndirect); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    if (auto checked = checkRunsCompute(**list); !checked) {
+        return checked;
+    }
+    const auto address = addressOf(buffer, offset);
+    if (!address) {
+        return std::unexpected(address.error());
+    }
+    // The 2 form reads the regions with the dimensions, as
+    // TraceRaysIndirectArgs holds them.
+    static_assert(sizeof(TraceRaysIndirectArgs) == sizeof(VkTraceRaysIndirectCommand2KHR));
+    table_.vkCmdTraceRaysIndirect2KHR((*list)->buffer, *address);
     return {};
 }
 

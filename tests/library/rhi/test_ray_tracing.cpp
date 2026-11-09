@@ -6,6 +6,7 @@
 // checked in, and one that needs acceleration structures skips where the
 // adapter has none.
 
+#include "allocation/allocation_counter.h"
 #include "bfr/core/error.h"
 #include "bfr/rhi/acceleration_structure.h"
 #include "bfr/rhi/buffer.h"
@@ -15,6 +16,7 @@
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/pipeline.h"
+#include "bfr/rhi/rhi_config.h"
 #include "rhi_test_support.h"
 #include "shaders/spirv.h"
 
@@ -64,8 +66,9 @@ constexpr std::uint8_t kAllRays = 0xFF;
 // An Instance and a device on its first adapter, presenting nowhere, with an
 // acceleration structure table where the adapter has one.
 struct RayDevice {
-    explicit RayDevice(const InstanceDesc& desc, std::uint32_t tableSlots = kTableSlots) {
-        auto created = createInstance(desc, kValidation);
+    explicit RayDevice(const InstanceDesc& desc, std::uint32_t tableSlots = kTableSlots,
+                       const RhiConfig& config = kValidation) {
+        auto created = createInstance(desc, config);
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         instance = std::move(*created);
@@ -200,9 +203,11 @@ struct Scene {
              .customIndex = kSecond,
              .mask = kAllRays,
              .bottomStructure = triangles.structure},
+            // A ray tracing pipeline's second hit group is the box's.
             {.transform = movedBy(4 * kSpacing),
              .customIndex = kBox,
              .mask = kAllRays,
+             .hitGroupOffset = 1,
              .bottomStructure = box.structure},
         }};
         const auto mapped = device->mapBuffer(instances);
@@ -252,19 +257,15 @@ struct Scene {
     Built top;
 };
 
-// Runs ray_query.comp against structure, after record, and returns what each
-// ray hit.
-template <class Record>
-std::array<std::uint32_t, kRays> traced(Device& device, AccelerationStructureHandle structure, Record record) {
+// Records record, then trace, given the push constants the test shaders
+// read, that sends rays against structure, and returns what each ray hit.
+template <class Record, class Trace>
+std::array<std::uint32_t, kRays> traced(Device& device, AccelerationStructureHandle structure, const Record& record,
+                                        const Trace& trace) {
     constexpr std::uint64_t kBytes = sizeof(std::uint32_t) * kRays;
     const BufferHandle results = created(device, {.size = kBytes, .usage = {.copySrc = true, .storage = true}});
     const BufferHandle readback =
         created(device, {.size = kBytes, .memory = BufferMemory::Readback, .usage = {.copyDst = true}});
-    const auto pipeline = device.createComputePipeline(
-        {.compute = {.code = std::as_bytes(std::span{bfr::test::spirv::kRayQueryComp}), .entryPoint = "main"},
-         .workgroupSize = {kRays, 1, 1}});
-    INFO(failureOf(pipeline));
-    REQUIRE(pipeline.has_value());
     const auto slot = device.accelerationStructureSlot(structure);
     INFO(failureOf(slot));
     REQUIRE(slot.has_value());
@@ -276,10 +277,8 @@ std::array<std::uint32_t, kRays> traced(Device& device, AccelerationStructureHan
     REQUIRE(list.has_value());
 
     record(*list);
-    CHECK(device.bindPipeline(*list, *pipeline).has_value());
     const std::array<std::uint32_t, 2> push{*slot, *resultSlot};
-    CHECK(device.pushConstants(*list, std::as_bytes(std::span{push})).has_value());
-    CHECK(device.dispatch(*list, 1, 1, 1).has_value());
+    trace(*list, std::as_bytes(std::span{push}));
     CHECK(device.barrier(*list).has_value());
     const BufferCopy whole{.srcOffset = 0, .dstOffset = 0, .size = kBytes};
     CHECK(device.copyBuffer(*list, results, readback, std::span{&whole, 1}).has_value());
@@ -292,12 +291,128 @@ std::array<std::uint32_t, kRays> traced(Device& device, AccelerationStructureHan
     const auto read = device.mapBuffer(readback);
     REQUIRE(read.has_value());
     std::memcpy(hits.data(), read->data(), kBytes);
-    CHECK(device.destroyPipeline(*pipeline).has_value());
     CHECK(device.destroyBuffer(results).has_value());
     CHECK(device.destroyBuffer(readback).has_value());
     CHECK(device.destroyCommandPool(*pool).has_value());
     return hits;
 }
+
+// ray_query.comp, which traces from a compute shader.
+struct RayQuery {
+    explicit RayQuery(Device& device) : device(&device) {
+        const auto made = device.createComputePipeline(
+            {.compute = {.code = std::as_bytes(std::span{bfr::test::spirv::kRayQueryComp}), .entryPoint = "main"},
+             .workgroupSize = {kRays, 1, 1}});
+        INFO(failureOf(made));
+        REQUIRE(made.has_value());
+        pipeline = *made;
+    }
+    RayQuery(const RayQuery&) = delete;
+    RayQuery& operator=(const RayQuery&) = delete;
+    RayQuery(RayQuery&&) = delete;
+    RayQuery& operator=(RayQuery&&) = delete;
+    ~RayQuery() { CHECK(device->destroyPipeline(pipeline).has_value()); }
+
+    void operator()(CommandListHandle list, std::span<const std::byte> push) const {
+        CHECK(device->bindPipeline(list, pipeline).has_value());
+        CHECK(device->pushConstants(list, push).has_value());
+        CHECK(device->dispatch(list, 1, 1, 1).has_value());
+    }
+
+    Device* device;
+    PipelineHandle pipeline;
+};
+
+std::uint64_t alignUp(std::uint64_t value, std::uint64_t alignment) {
+    return (value + alignment - 1) / alignment * alignment;
+}
+
+ShaderCode spirv(std::span<const std::uint8_t> bytes) {
+    return {.code = std::as_bytes(bytes), .entryPoint = "main"};
+}
+
+// trace.rgen, trace.rmiss, and hit groups of trace.rchit for triangles and
+// with box.rint for boxes, in a pipeline, and a binding table of their
+// records: ray generation, then miss, then the two hit groups, each region at
+// a table alignment.
+struct RayTracing {
+    RayTracing(Device& device, const Caps& caps) : device(&device) {
+        const std::array codes{spirv(bfr::test::spirv::kTraceRgen), spirv(bfr::test::spirv::kTraceRmiss),
+                               spirv(bfr::test::spirv::kTraceRchit), spirv(bfr::test::spirv::kBoxRint)};
+        std::array<ShaderHandle, kShaders> shaders{};
+        for (std::size_t i = 0; i < kShaders; ++i) {
+            const auto shader = device.createShader(codes.at(i));
+            INFO(failureOf(shader));
+            REQUIRE(shader.has_value());
+            shaders.at(i) = *shader;
+        }
+        const std::array<RayTracingShader, kShaders> stages{{
+            {.stage = RayTracingStage::RayGeneration, .shader = shaders[0]},
+            {.stage = RayTracingStage::Miss, .shader = shaders[1]},
+            {.stage = RayTracingStage::ClosestHit, .shader = shaders[2]},
+            {.stage = RayTracingStage::Intersection, .shader = shaders[3]},
+        }};
+        const std::array<RayTracingGroup, kGroups> groups{{
+            {.type = RayTracingGroupType::General, .general = 0},
+            {.type = RayTracingGroupType::General, .general = 1},
+            {.type = RayTracingGroupType::TriangleHit, .closestHit = 2},
+            {.type = RayTracingGroupType::BoxHit, .closestHit = 2, .intersection = 3},
+        }};
+        const auto made = device.createRayTracingPipeline(
+            {.shaders = stages, .groups = groups, .maxRecursionDepth = 1, .maxPayloadSize = sizeof(std::uint32_t)});
+        INFO(failureOf(made));
+        REQUIRE(made.has_value());
+        pipeline = *made;
+        // A pipeline keeps what it needs of its shaders.
+        for (const ShaderHandle shader : shaders) {
+            CHECK(device.destroyShader(shader).has_value());
+        }
+
+        const RayTracingLimits& limits = caps.rayTracing;
+        stride = alignUp(limits.identifierSize, limits.identifierAlignment);
+        spacing = alignUp(2 * stride, limits.tableAlignment);
+        std::vector<std::byte> identifiers(std::size_t{limits.identifierSize} * kGroups);
+        const auto written = device.shaderIdentifiers(pipeline, 0, kGroups, identifiers);
+        INFO(failureOf(written));
+        REQUIRE(written.has_value());
+        table = created(device,
+                        {.size = 3 * spacing, .memory = BufferMemory::Upload, .usage = {.shaderBindingTable = true}});
+        const auto mapped = device.mapBuffer(table);
+        REQUIRE(mapped.has_value());
+        // Group i at its region's start, the two hit groups a stride apart.
+        const std::array<std::uint64_t, kGroups> at{0, spacing, 2 * spacing, 2 * spacing + stride};
+        for (std::size_t i = 0; i < kGroups; ++i) {
+            std::memcpy(mapped->data() + at.at(i), identifiers.data() + i * limits.identifierSize,
+                        limits.identifierSize);
+        }
+    }
+    RayTracing(const RayTracing&) = delete;
+    RayTracing& operator=(const RayTracing&) = delete;
+    RayTracing(RayTracing&&) = delete;
+    RayTracing& operator=(RayTracing&&) = delete;
+    ~RayTracing() {
+        CHECK(device->destroyPipeline(pipeline).has_value());
+        CHECK(device->destroyBuffer(table).has_value());
+    }
+
+    [[nodiscard]] TraceRaysDesc desc() const {
+        return {.rayGeneration = {.buffer = table, .offset = 0, .size = stride, .stride = stride},
+                .miss = {.buffer = table, .offset = spacing, .size = stride, .stride = stride},
+                .hit = {.buffer = table, .offset = 2 * spacing, .size = 2 * stride, .stride = stride},
+                .callable = {},
+                .width = kRays,
+                .height = 1,
+                .depth = 1};
+    }
+
+    static constexpr std::size_t kShaders = 4;
+    static constexpr std::uint32_t kGroups = 4;
+    Device* device;
+    PipelineHandle pipeline;
+    BufferHandle table;
+    std::uint64_t stride = 0;
+    std::uint64_t spacing = 0;
+};
 
 constexpr std::array<std::uint32_t, kRays> kPlaced{kFirst, kMiss, kSecond, kMiss, kBox, kMiss, kMiss, kMiss};
 
@@ -317,11 +432,17 @@ TEST_CASE("Device builds triangles, boxes and instances, and rays traced inline 
             SKIP("no " << backend.name << " bytecode is checked in");
         }
         REQUIRE(made.caps.bindless.maxAccelerationStructures != 0);
+        const RayQuery query{device};
+        const auto built = [](Scene& scene) {
+            return [&scene](CommandListHandle list) {
+                scene.build(list);
+            };
+        };
 
         SECTION("a build") {
             Scene scene{device};
             scene.place(made.caps, 2 * kSpacing);
-            CHECK(traced(device, scene.top.structure, [&](CommandListHandle list) { scene.build(list); }) == kPlaced);
+            CHECK(traced(device, scene.top.structure, built(scene), query) == kPlaced);
         }
         SECTION("a copy of a top structure traces as it does") {
             Scene scene{device};
@@ -330,23 +451,230 @@ TEST_CASE("Device builds triangles, boxes and instances, and rays traced inline 
             REQUIRE(sizes.has_value());
             const AccelerationStructureHandle copy = created(device, {.type = AccelerationStructureType::Top,
                                                                       .size = sizes->size});
-            CHECK(traced(device, copy, [&](CommandListHandle list) {
-                      scene.build(list);
-                      CHECK(device.copyAccelerationStructure(list, copy, scene.top.structure).has_value());
-                      CHECK(device.barrier(list).has_value());
-                  }) == kPlaced);
+            const auto copied = [&](CommandListHandle list) {
+                scene.build(list);
+                CHECK(device.copyAccelerationStructure(list, copy, scene.top.structure).has_value());
+                CHECK(device.barrier(list).has_value());
+            };
+            CHECK(traced(device, copy, copied, query) == kPlaced);
             CHECK(device.destroyAccelerationStructure(copy).has_value());
         }
         SECTION("an update moves an instance") {
             Scene scene{device, true};
             scene.place(made.caps, 2 * kSpacing);
-            CHECK(traced(device, scene.top.structure, [&](CommandListHandle list) { scene.build(list); }) == kPlaced);
+            CHECK(traced(device, scene.top.structure, built(scene), query) == kPlaced);
             // The second triangle moves from ray 2 to ray 1.
             scene.place(made.caps, kSpacing);
             constexpr std::array<std::uint32_t, kRays> kMoved{kFirst, kSecond, kMiss, kMiss, kBox, kMiss, kMiss, kMiss};
-            CHECK(traced(device, scene.top.structure, [&](CommandListHandle list) { scene.buildTop(list, true); }) ==
-                  kMoved);
+            const auto updated = [&](CommandListHandle list) {
+                scene.buildTop(list, true);
+            };
+            CHECK(traced(device, scene.top.structure, updated, query) == kMoved);
         }
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device traces rays through a ray tracing pipeline's binding table, directly and indirectly, where it has "
+          "them",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const RayDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        if (!made.caps.features.rayTracingPipeline) {
+            SKIP("the adapter has no ray tracing pipelines");
+        }
+        if (!takesSpirv(backend)) {
+            SKIP("no " << backend.name << " bytecode is checked in");
+        }
+        const RayTracing tracing{device, made.caps};
+        Scene scene{device};
+        scene.place(made.caps, 2 * kSpacing);
+        const auto built = [&](CommandListHandle list) {
+            scene.build(list);
+        };
+        const auto bind = [&](CommandListHandle list, std::span<const std::byte> push) {
+            CHECK(device.bindPipeline(list, tracing.pipeline).has_value());
+            CHECK(device.pushConstants(list, push).has_value());
+        };
+
+        SECTION("a trace") {
+            const auto trace = [&](CommandListHandle list, std::span<const std::byte> push) {
+                bind(list, push);
+                const auto traced = device.traceRays(list, tracing.desc());
+                INFO(failureOf(traced));
+                CHECK(traced.has_value());
+            };
+            CHECK(traced(device, scene.top.structure, built, trace) == kPlaced);
+        }
+        SECTION("an indirect trace, of regions by address, where the device has it") {
+            if (!made.caps.features.traceRaysIndirect) {
+                SKIP("the adapter has no indirect traces");
+            }
+            const auto table = device.bufferAddress(tracing.table);
+            INFO(failureOf(table));
+            REQUIRE(table.has_value());
+            const TraceRaysDesc direct = tracing.desc();
+            const auto region = [&](const ShaderTableRegion& from) {
+                return ShaderTableAddressRegion{.address = *table + from.offset,
+                                                .size = from.size,
+                                                .stride = from.stride};
+            };
+            const std::array<TraceRaysIndirectArgs, 1> args{{{.rayGenerationAddress = *table,
+                                                              .rayGenerationSize = direct.rayGeneration.size,
+                                                              .miss = region(direct.miss),
+                                                              .hit = region(direct.hit),
+                                                              .callable = {},
+                                                              .width = kRays,
+                                                              .height = 1,
+                                                              .depth = 1}}};
+            const BufferHandle argsBuffer =
+                created(device, {.size = sizeof(args), .memory = BufferMemory::Upload, .usage = {.indirect = true}});
+            const auto mapped = device.mapBuffer(argsBuffer);
+            REQUIRE(mapped.has_value());
+            std::memcpy(mapped->data(), args.data(), sizeof(args));
+            const auto trace = [&](CommandListHandle list, std::span<const std::byte> push) {
+                bind(list, push);
+                const auto traced = device.traceRaysIndirect(list, argsBuffer, 0);
+                INFO(failureOf(traced));
+                CHECK(traced.has_value());
+            };
+            CHECK(traced(device, scene.top.structure, built, trace) == kPlaced);
+            CHECK(device.destroyBuffer(argsBuffer).has_value());
+        }
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+// A scene that moves: its instances written, its top structure rebuilt and
+// rays traced against it each frame. Validation stays off: its layer
+// allocates through the operator new this program counts.
+TEST_CASE("Device allocates nothing tracing rays frame after frame", "[rhi][agnostic]") {
+    if (!bfr::test::AllocationCounter::counts()) {
+        SKIP("a sanitizer replaces operator new, so allocations are not counted");
+    }
+    constexpr int kFrames = 8;
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const RayDevice made{recordingInto(backend, messages), kTableSlots, RhiConfig{}};
+        Device& device = *made.device;
+        if (!made.caps.features.rayTracingPipeline) {
+            SKIP("the adapter has no ray tracing pipelines");
+        }
+        if (!takesSpirv(backend)) {
+            SKIP("no " << backend.name << " bytecode is checked in");
+        }
+        const RayTracing tracing{device, made.caps};
+        Scene scene{device};
+        scene.place(made.caps, 2 * kSpacing);
+        const BufferHandle results = created(device,
+                                             {.size = sizeof(std::uint32_t) * kRays, .usage = {.storage = true}});
+        const auto slot = device.accelerationStructureSlot(scene.top.structure);
+        const auto resultSlot = device.bufferSlot(results);
+        REQUIRE(slot.has_value());
+        REQUIRE(resultSlot.has_value());
+        const std::array<std::uint32_t, 2> push{*slot, *resultSlot};
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = 1, .pushConstantUpdates = 1});
+        REQUIRE(pool.has_value());
+        const auto mapped = device.mapBuffer(scene.instances);
+        REQUIRE(mapped.has_value());
+        const AccelerationStructureInputs topInputs = scene.topInputs();
+
+        const char* failed = nullptr;
+        std::size_t allocations = 0;
+        std::size_t frees = 0;
+        {
+            const bfr::test::AllocationCounter counter;
+            Token last;
+            const auto check = [&failed](const char* call, const auto& result) {
+                if (!result.has_value() && failed == nullptr) {
+                    failed = call;
+                }
+                return result.has_value();
+            };
+            for (int frame = 0; frame < kFrames && failed == nullptr; ++frame) {
+                check("wait", device.wait(last, kTestWait));
+                check("resetCommandPool", device.resetCommandPool(*pool));
+                const AccelerationStructureInstance placed{.transform = movedBy(static_cast<float>(frame)),
+                                                           .mask = kAllRays,
+                                                           .bottomStructure = scene.triangles.structure};
+                check("writeInstances", device.writeInstances(std::span{&placed, 1}, *mapped));
+                const auto list = device.beginCommands(*pool);
+                if (!check("beginCommands", list)) {
+                    break;
+                }
+                check("buildAccelerationStructure",
+                      device.buildAccelerationStructure(
+                          *list, {.dst = scene.top.structure, .inputs = topInputs, .scratch = scene.top.scratch}));
+                check("barrier", device.barrier(*list));
+                check("bindPipeline", device.bindPipeline(*list, tracing.pipeline));
+                check("pushConstants", device.pushConstants(*list, std::as_bytes(std::span{push})));
+                check("traceRays", device.traceRays(*list, tracing.desc()));
+                const auto submitted = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+                if (check("submit", submitted)) {
+                    last = *submitted;
+                }
+            }
+            check("wait", device.wait(last, kTestWait));
+            allocations = counter.allocations();
+            frees = counter.frees();
+        }
+        INFO("first failure: " << (failed == nullptr ? "none" : failed));
+        CHECK(failed == nullptr);
+        CHECK(allocations == 0);
+        CHECK(frees == 0);
+        CHECK(device.destroyCommandPool(*pool).has_value());
+        CHECK(device.destroyBuffer(results).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device refuses ray tracing pipeline work it can't pass on", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const RayDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+        const auto code = [](const auto& result) {
+            return result.has_value() ? ErrorCode{} : result.error().code;
+        };
+        CHECK(device.destroyShader(ShaderHandle{}).has_value());
+        const BufferHandle readback = created(device, {.size = sizeof(std::uint32_t),
+                                                       .memory = BufferMemory::Readback,
+                                                       .usage = {.copyDst = true}});
+        if (!made.caps.features.rayTracingPipeline) {
+            CHECK(code(device.createRayTracingPipeline({})) == ErrorCode::RhiUnsupported);
+            CHECK(code(device.traceRays(*list, {})) == ErrorCode::RhiUnsupported);
+        }
+        if (!made.caps.features.traceRaysIndirect) {
+            CHECK(code(device.traceRaysIndirect(*list, {}, 0)) == ErrorCode::RhiUnsupported);
+        }
+        // An address only of a buffer with a usage that has one.
+        CHECK(code(device.bufferAddress(readback)) ==
+              (made.caps.features.bufferAddress ? ErrorCode::RhiInvalidCall : ErrorCode::RhiUnsupported));
+        if (made.caps.features.rayTracingPipeline && takesSpirv(backend)) {
+            const RayTracing tracing{device, made.caps};
+            // Room for every identifier, of a ray tracing pipeline.
+            std::vector<std::byte> out(made.caps.rayTracing.identifierSize);
+            CHECK(device.shaderIdentifiers(tracing.pipeline, 0, 1, out).has_value());
+            CHECK(code(device.shaderIdentifiers(tracing.pipeline, 0, 2, out)) == ErrorCode::RhiInvalidCall);
+            const RayQuery query{device};
+            CHECK(code(device.shaderIdentifiers(query.pipeline, 0, 1, out)) == ErrorCode::RhiInvalidCall);
+            // An enum value BFR doesn't have.
+            const RayTracingShader unknown{.stage = static_cast<RayTracingStage>(0xFF)};
+            CHECK(code(device.createRayTracingPipeline({.shaders = std::span{&unknown, 1}})) ==
+                  ErrorCode::RhiInvalidCall);
+        }
+        CHECK(device.destroyBuffer(readback).has_value());
+        CHECK(device.destroyCommandList(*list).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -494,7 +822,9 @@ TEST_CASE("Device refuses acceleration structure work on a copy queue", "[rhi][a
         REQUIRE(structure.has_value());
         const auto built = device.buildAccelerationStructure(*list, {.dst = *structure});
         const auto copied = device.copyAccelerationStructure(*list, *structure, *structure);
-        for (const auto* result : {&built, &copied}) {
+        // A trace, where the device has them, as builds.
+        const auto traced = caps.features.rayTracingPipeline ? device.traceRays(*list, {}) : copied;
+        for (const auto* result : {&built, &copied, &traced}) {
             REQUIRE_FALSE(result->has_value());
             CHECK(result->error().code == ErrorCode::RhiUnsupported);
         }

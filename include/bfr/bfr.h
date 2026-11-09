@@ -52,6 +52,9 @@ typedef uint8_t bfr_bool;
 // The floats of a 3x4 row-major transform.
 #define BFR_TRANSFORM_FLOATS 12u
 
+// No shader in a bfr_ray_tracing_group's slot.
+#define BFR_NO_SHADER 4294967295u
+
 // The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".
 #define BFR_MAX_MESSAGE_LENGTH 1024u
 
@@ -500,6 +503,13 @@ typedef enum bfr_call {
     BFR_CALL_WRITE_INSTANCES = 82,
     BFR_CALL_BUILD_ACCELERATION_STRUCTURE = 83,
     BFR_CALL_COPY_ACCELERATION_STRUCTURE = 84,
+    BFR_CALL_CREATE_SHADER = 85,
+    BFR_CALL_DESTROY_SHADER = 86,
+    BFR_CALL_CREATE_RAY_TRACING_PIPELINE = 87,
+    BFR_CALL_SHADER_IDENTIFIERS = 88,
+    BFR_CALL_TRACE_RAYS = 89,
+    BFR_CALL_TRACE_RAYS_INDIRECT = 90,
+    BFR_CALL_BUFFER_ADDRESS = 91,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -865,6 +875,28 @@ typedef enum bfr_instance_opacity {
     BFR_INSTANCE_OPACITY_FORCE32 = 0x7FFFFFFF
 } bfr_instance_opacity;
 
+// The stage a ray tracing pipeline's shader runs at.
+typedef enum bfr_ray_tracing_stage {
+    BFR_RAY_TRACING_STAGE_RAY_GENERATION = 0,
+    BFR_RAY_TRACING_STAGE_MISS = 1,
+    BFR_RAY_TRACING_STAGE_CLOSEST_HIT = 2,
+    BFR_RAY_TRACING_STAGE_ANY_HIT = 3,
+    BFR_RAY_TRACING_STAGE_INTERSECTION = 4,
+    BFR_RAY_TRACING_STAGE_CALLABLE = 5,
+    BFR_RAY_TRACING_STAGE_FORCE32 = 0x7FFFFFFF
+} bfr_ray_tracing_stage;
+
+// What a ray tracing pipeline's group holds.
+typedef enum bfr_ray_tracing_group_type {
+    // general: one ray generation, miss or callable shader.
+    BFR_RAY_TRACING_GROUP_TYPE_GENERAL = 0,
+    // closest_hit and any_hit, either no_shader, for triangles.
+    BFR_RAY_TRACING_GROUP_TYPE_TRIANGLE_HIT = 1,
+    // intersection, and closest_hit and any_hit, either no_shader, for boxes.
+    BFR_RAY_TRACING_GROUP_TYPE_BOX_HIT = 2,
+    BFR_RAY_TRACING_GROUP_TYPE_FORCE32 = 0x7FFFFFFF
+} bfr_ray_tracing_group_type;
+
 // Which window system a bfr_window comes from, for the platforms that have more than one.
 typedef enum bfr_window_system {
     // The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -981,6 +1013,12 @@ typedef struct bfr_sparse_memory {
 typedef struct bfr_acceleration_structure {
     uint64_t bits;
 } bfr_acceleration_structure;
+
+// Code compiled once and named by the ray tracing pipelines made from it, which keep what they need
+// of it: it may be destroyed once they are made. A generational handle; 0 is never valid.
+typedef struct bfr_shader {
+    uint64_t bits;
+} bfr_shader;
 
 // Pipelines the backend has compiled, which it reads back as bytes for a later run to start from.
 // Pipelines made with one look in it first and add themselves on a miss. A generational handle; 0
@@ -1297,7 +1335,7 @@ typedef struct bfr_buffer_usage {
     bfr_bool storage;
     // Indexed draws read it.
     bfr_bool index;
-    // Indirect draws and dispatches read their arguments from it.
+    // Indirect draws, dispatches and traces read their arguments from it.
     bfr_bool indirect;
     // Acceleration structure builds read vertices, indices, transforms, boxes or instances from it.
     // It starts at an address of the alignment those take.
@@ -1305,6 +1343,9 @@ typedef struct bfr_buffer_usage {
     // Acceleration structure builds use it as scratch. It starts at an address that is a multiple
     // of bfr_caps_ray_tracing.scratch_alignment.
     bfr_bool acceleration_structure_scratch;
+    // It holds shader binding table records. It starts at an address that is a multiple of
+    // bfr_caps_ray_tracing.table_alignment.
+    bfr_bool shader_binding_table;
 } bfr_buffer_usage;
 
 // How to create a buffer.
@@ -1608,6 +1649,86 @@ typedef struct bfr_color_target {
     bfr_format format;
     bfr_blend_state blend;
 } bfr_color_target;
+
+// One shader of a ray tracing pipeline, run at stage.
+typedef struct bfr_ray_tracing_shader {
+    bfr_ray_tracing_stage stage;
+    bfr_shader shader;
+} bfr_ray_tracing_shader;
+
+// Shaders, by index into the pipeline's shaders, that a binding table record names by its group's
+// identifier; no_shader is none.
+typedef struct bfr_ray_tracing_group {
+    bfr_ray_tracing_group_type type;
+    uint32_t general;
+    uint32_t closest_hit;
+    uint32_t any_hit;
+    uint32_t intersection;
+} bfr_ray_tracing_group;
+
+// How to create a ray tracing pipeline: at least one ray generation shader. max_payload_size and
+// max_attribute_size are the largest payload and hit attributes its shaders declare, passed to
+// backends that take them. Rays trace recursively to max_recursion_depth, at most
+// bfr_caps_ray_tracing's; at 0 ray generation traces none.
+typedef struct bfr_ray_tracing_pipeline_desc {
+    const bfr_chain* next;
+    // Read during the call only. An array of shader_count elements. May be null.
+    const bfr_ray_tracing_shader* shaders;
+    uint32_t shader_count;
+    // Read during the call only. An array of group_count elements. May be null.
+    const bfr_ray_tracing_group* groups;
+    uint32_t group_count;
+    uint32_t max_recursion_depth;
+    uint32_t max_payload_size;
+    uint32_t max_attribute_size;
+    // Where the pipeline is looked for, and added on a miss; null is none.
+    bfr_pipeline_cache cache;
+} bfr_ray_tracing_pipeline_desc;
+
+// Records in a shader binding table: size bytes from offset in buffer, which has
+// shader_binding_table usage, stride bytes apart. offset is a multiple of
+// bfr_caps_ray_tracing.table_alignment, stride of identifier_alignment and at most
+// max_shader_group_stride. A null buffer is no region.
+typedef struct bfr_shader_table_region {
+    bfr_buffer buffer;
+    uint64_t offset;
+    uint64_t size;
+    uint64_t stride;
+} bfr_shader_table_region;
+
+// width by height by depth rays, within bfr_caps_ray_tracing.max_trace_rays and bfr_caps_compute's
+// max_workgroup_count times max_workgroup_size in each dimension. ray_generation is given, one
+// record, its size equal to its stride.
+typedef struct bfr_trace_rays_desc {
+    bfr_shader_table_region ray_generation;
+    bfr_shader_table_region miss;
+    bfr_shader_table_region hit;
+    bfr_shader_table_region callable;
+    uint32_t width;
+    uint32_t height;
+    uint32_t depth;
+} bfr_trace_rays_desc;
+
+// A region of a shader binding table by bfr_get_buffer_address, as bfr_trace_rays_indirect_args
+// holds it.
+typedef struct bfr_shader_table_address_region {
+    uint64_t address;
+    uint64_t size;
+    uint64_t stride;
+} bfr_shader_table_address_region;
+
+// One indirect trace, as a buffer holds it for bfr_trace_rays_indirect: bfr_trace_rays_desc's
+// regions by address. The layout every backend reads.
+typedef struct bfr_trace_rays_indirect_args {
+    uint64_t ray_generation_address;
+    uint64_t ray_generation_size;
+    bfr_shader_table_address_region miss;
+    bfr_shader_table_address_region hit;
+    bfr_shader_table_address_region callable;
+    uint32_t width;
+    uint32_t height;
+    uint32_t depth;
+} bfr_trace_rays_indirect_args;
 
 // How to create a compute pipeline.
 typedef struct bfr_compute_pipeline_desc {
@@ -2125,12 +2246,16 @@ typedef struct bfr_caps_ray_tracing {
     uint32_t scratch_alignment;
     // Deepest ray recursion; 0 without ray tracing pipelines.
     uint32_t max_recursion_depth;
-    // Bytes in a shader binding table record's handle.
-    uint32_t handle_size;
-    // Alignment in bytes of a handle in the table.
-    uint32_t handle_alignment;
-    // Alignment in bytes of the table's start.
+    // The bytes of a shader group's identifier, which a binding table record starts with.
+    uint32_t identifier_size;
+    // The alignment in bytes of a binding table record's start.
+    uint32_t identifier_alignment;
+    // The alignment in bytes of a binding table region's start.
     uint32_t table_alignment;
+    uint32_t max_shader_group_stride;
+    // The most rays one trace makes.
+    uint32_t max_trace_rays;
+    uint32_t max_hit_attribute_size;
     // The bytes of one record bfr_write_instances writes.
     uint32_t instance_size;
 } bfr_caps_ray_tracing;
@@ -2144,7 +2269,13 @@ typedef struct bfr_caps_features {
     bfr_bool ray_query_graphics;
     // Ray tracing pipelines and shader binding tables.
     bfr_bool ray_tracing_pipeline;
+    // bfr_trace_rays_indirect.
+    bfr_bool trace_rays_indirect;
+    // Rays that skip triangles or boxes.
+    bfr_bool ray_primitive_culling;
     bfr_bool acceleration_structure;
+    // bfr_get_buffer_address.
+    bfr_bool buffer_address;
     bfr_bool mesh_shader;
     bfr_bool task_shader;
     // A shading rate per draw.
@@ -3316,6 +3447,69 @@ BFR_API bfr_result bfr_copy_acceleration_structure(
     bfr_command_list command_list,
     bfr_acceleration_structure dst,
     bfr_acceleration_structure src);
+
+// Creates a shader from code, compiled once, for the ray tracing pipelines made from it. Not for
+// the frame path. Fails with error_invalid_argument when the code is not what the backend takes in
+// whole units (SPIR-V's words), error_unsupported where the backend has no shader objects yet
+// (D3D12, Metal), error_limit_reached at the device's maximum, and error_device_failed when the
+// backend refuses the code.
+BFR_API bfr_result bfr_create_shader(
+    bfr_device* device,
+    const bfr_shader_code* code,
+    bfr_shader* shader);
+
+// Destroys a shader at once; pipelines made from it stay. Not for the frame path. Not while another
+// thread is making a pipeline from it. A handle that is already destroyed does nothing.
+BFR_API void bfr_destroy_shader(bfr_device* device, bfr_shader shader);
+
+// Creates a ray tracing pipeline, as desc says, before returning. Not for the frame path. A
+// desc.cache is looked in first, and the pipeline added on a miss. Fails with error_unsupported
+// where bfr_caps_features.ray_tracing_pipeline is false, error_invalid_argument for an enum value
+// BFR doesn't have, error_invalid_handle for a shader or desc.cache that is gone,
+// error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
+// backend refuses the desc; the message carries what it said.
+BFR_API bfr_result bfr_create_ray_tracing_pipeline(
+    bfr_device* device,
+    const bfr_ray_tracing_pipeline_desc* desc,
+    bfr_pipeline* pipeline);
+
+// Writes count groups' identifiers from first, bfr_caps_ray_tracing.identifier_size bytes each,
+// into data, for binding table records. Fails with error_invalid_argument when size is too small or
+// the pipeline is not a ray tracing one.
+// data: Where the identifiers go.
+// size: Bytes of data.
+BFR_API bfr_result bfr_get_shader_identifiers(
+    bfr_device* device,
+    bfr_pipeline pipeline,
+    uint32_t first,
+    uint32_t count,
+    void* data,
+    size_t size);
+
+// Records a trace of desc's rays with the bound ray tracing pipeline, outside rendering, on a queue
+// whose kind runs compute; commands after a barrier see what it wrote. Fails with error_unsupported
+// where bfr_caps_features.ray_tracing_pipeline is false or on a copy queue, and
+// error_invalid_handle for a buffer that is gone.
+BFR_API bfr_result bfr_trace_rays(
+    bfr_device* device,
+    bfr_command_list command_list,
+    const bfr_trace_rays_desc* desc);
+
+// Records a trace as bfr_trace_rays does, of the bfr_trace_rays_indirect_args buffer holds at
+// offset, a multiple of 4; buffer has indirect usage. Fails with error_unsupported where
+// bfr_caps_features.trace_rays_indirect is false, and as bfr_trace_rays does.
+// offset: Bytes into the buffer.
+BFR_API bfr_result bfr_trace_rays_indirect(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_buffer buffer,
+    uint64_t offset);
+
+// Writes the buffer's GPU address, for the addresses bfr_trace_rays_indirect_args and shaders read.
+// The buffer has indirect, shader_binding_table or acceleration_structure_input usage. Fails with
+// error_unsupported where bfr_caps_features.buffer_address is false, and error_invalid_argument for
+// a buffer of none of those usages.
+BFR_API bfr_result bfr_get_buffer_address(bfr_device* device, bfr_buffer buffer, uint64_t* address);
 
 // Lists the CPU time spent in each of the device's calls since it was made, indexed by bfr_call.
 // With timings null, writes how many there are to count. Otherwise writes up to count of them, sets

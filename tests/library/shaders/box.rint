@@ -1,0 +1,10 @@
+// An intersection shader that reports a hit on every box a ray meets, at
+// trace.rgen's distance to z = 0.
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+const float kDistance = 5.0;
+
+void main() {
+    reportIntersectionEXT(kDistance, 0u);
+}

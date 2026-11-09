@@ -7,6 +7,8 @@
 #include <volk.h>
 
 #include <cstdint>
+#include <span>
+#include <string>
 
 namespace bfr::rhi::vulkan {
 
@@ -103,6 +105,43 @@ private:
     VkPipelineBindPoint bindPoint_;
     VkPrimitiveTopology topology_;
 };
+
+/// A VkShaderModule and the entry point its pipelines run, destroyed when
+/// this goes: pipelines made from it keep what they need of it.
+class VulkanShader {
+public:
+    VulkanShader(const VolkDeviceTable& table, VkDevice device, VkShaderModule module, std::string entryPoint);
+    ~VulkanShader();
+    VulkanShader(const VulkanShader&) = delete;
+    VulkanShader& operator=(const VulkanShader&) = delete;
+    VulkanShader(VulkanShader&& other) noexcept;
+    VulkanShader& operator=(VulkanShader&&) = delete;
+
+    [[nodiscard]] VkShaderModule module() const { return module_; }
+    [[nodiscard]] const std::string& entryPoint() const { return entryPoint_; }
+
+private:
+    const VolkDeviceTable* table_;
+    VkDevice device_;
+    VkShaderModule module_;
+    std::string entryPoint_;
+};
+
+/// A shader of code, which is SPIR-V. Fails with RhiInvalidCall when the
+/// code is not whole words, and RhiDeviceFailed when the API refuses it.
+[[nodiscard]] core::Result<VulkanShader> createVulkanShader(const VolkDeviceTable& table, VkDevice device,
+                                                            const ShaderCode& code);
+
+/// A ray tracing pipeline on layout of stages, which point at the shaders'
+/// modules, and desc's groups and recursion depth, using cache as
+/// createVulkanComputePipeline does. Fails with RhiDeviceFailed when the API
+/// refuses it.
+[[nodiscard]] core::Result<VulkanPipeline> createVulkanRayTracingPipeline(
+    const VolkDeviceTable& table, VkDevice device, VkPipelineLayout layout, VkPipelineCache cache,
+    std::span<const VkPipelineShaderStageCreateInfo> stages, const RayTracingPipelineDesc& desc);
+
+/// The Vulkan stage of a ray tracing shader at stage.
+[[nodiscard]] VkShaderStageFlagBits rayTracingStageFor(RayTracingStage stage);
 
 /// A compute pipeline on layout as desc says, whose code is SPIR-V, looked
 /// for in cache and added to it, where cache is not VK_NULL_HANDLE. Fails with

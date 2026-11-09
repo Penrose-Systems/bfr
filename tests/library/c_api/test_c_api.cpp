@@ -679,7 +679,9 @@ TEST_CASE("C API passes sparse calls through, and refuses what is not sparse or 
 
                                    .acceleration_structure_input = BFR_FALSE,
 
-                                   .acceleration_structure_scratch = BFR_FALSE},
+                                   .acceleration_structure_scratch = BFR_FALSE,
+
+                                   .shader_binding_table = BFR_FALSE},
                          .sparse = BFR_FALSE,
                          .sparse_aliased = BFR_FALSE,
                          .tile_bytes = 0};
@@ -740,7 +742,9 @@ TEST_CASE("C API creates, maps and destroys a buffer, and refuses what it can't 
 
                                    .acceleration_structure_input = BFR_FALSE,
 
-                                   .acceleration_structure_scratch = BFR_FALSE},
+                                   .acceleration_structure_scratch = BFR_FALSE,
+
+                                   .shader_binding_table = BFR_FALSE},
                          .sparse = BFR_FALSE,
                          .sparse_aliased = BFR_FALSE,
                          .tile_bytes = 0};
@@ -949,7 +953,9 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, directly
 
                                          .acceleration_structure_input = BFR_FALSE,
 
-                                         .acceleration_structure_scratch = BFR_FALSE},
+                                         .acceleration_structure_scratch = BFR_FALSE,
+
+                                         .shader_binding_table = BFR_FALSE},
                                .sparse = BFR_FALSE,
                                .sparse_aliased = BFR_FALSE,
                                .tile_bytes = 0};
@@ -965,7 +971,9 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, directly
 
                         .acceleration_structure_input = BFR_FALSE,
 
-                        .acceleration_structure_scratch = BFR_FALSE};
+                        .acceleration_structure_scratch = BFR_FALSE,
+
+                        .shader_binding_table = BFR_FALSE};
     bfr_buffer readback{};
     REQUIRE(bfr_create_buffer(device.device, &bufferDesc, &readback) == BFR_RESULT_SUCCESS);
     std::uint32_t slot = 0;
@@ -984,7 +992,9 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, directly
 
                         .acceleration_structure_input = BFR_FALSE,
 
-                        .acceleration_structure_scratch = BFR_FALSE};
+                        .acceleration_structure_scratch = BFR_FALSE,
+
+                        .shader_binding_table = BFR_FALSE};
     bfr_buffer args{};
     REQUIRE(bfr_create_buffer(device.device, &bufferDesc, &args) == BFR_RESULT_SUCCESS);
     void* argsData = nullptr;
@@ -1170,7 +1180,7 @@ TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call tim
 
     std::uint32_t count = 0;
     REQUIRE(bfr_get_call_timings(device.device, &count, nullptr) == BFR_RESULT_SUCCESS);
-    CHECK(count == BFR_CALL_COPY_ACCELERATION_STRUCTURE + 1);
+    CHECK(count == BFR_CALL_BUFFER_ADDRESS + 1);
     std::vector<bfr_call_timing> timings(count);
     REQUIRE(bfr_get_call_timings(device.device, &count, timings.data()) == BFR_RESULT_SUCCESS);
     CHECK(timings.at(BFR_CALL_CREATE_TIMESTAMP_POOL).count == 2);
@@ -1753,7 +1763,8 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
                                                    .index = BFR_FALSE,
                                                    .indirect = BFR_FALSE,
                                                    .acceleration_structure_input = BFR_TRUE,
-                                                   .acceleration_structure_scratch = BFR_FALSE},
+                                                   .acceleration_structure_scratch = BFR_FALSE,
+                                                   .shader_binding_table = BFR_FALSE},
                                          .sparse = BFR_FALSE,
                                          .sparse_aliased = BFR_FALSE,
                                          .tile_bytes = 0};
@@ -1844,6 +1855,105 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
         bfr_destroy_buffer(device, scratch);
         bfr_destroy_buffer(device, vertices);
         bfr_destroy_device(device);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C API makes shaders and a ray tracing pipeline from them, and gives its identifiers, where the adapter has "
+          "them",
+          "[c_api][gpu]") {
+    const bfr_backend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const Instance instance{backend, messages};
+        bfr_caps caps{};
+        REQUIRE(bfr_get_caps(instance.instance, 0, &caps) == BFR_RESULT_SUCCESS);
+        CHECK(bfr_create_ray_tracing_pipeline(nullptr, nullptr, nullptr) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+        if (caps.features.ray_tracing_pipeline == BFR_FALSE || backend != BFR_BACKEND_VULKAN) {
+            SKIP("the adapter has no ray tracing pipelines, or no bytecode for it is checked in");
+        }
+        // trace.rgen reads the acceleration structure table.
+        const bfr_device_desc deviceDesc{.next = nullptr,
+                                         .adapter = 0,
+                                         .window = {},
+                                         .graphics_queues = &kOneQueue,
+                                         .graphics_queue_count = 1,
+                                         .compute_queues = nullptr,
+                                         .compute_queue_count = 0,
+                                         .copy_queues = nullptr,
+                                         .copy_queue_count = 0,
+                                         .max_command_lists = kDeviceLists,
+                                         .max_command_pools = kDevicePools,
+                                         .max_swapchains = 0,
+                                         .max_bindless_textures = 0,
+                                         .max_bindless_storage_textures = 0,
+                                         .max_bindless_storage_buffers = kDeviceTableSlots,
+                                         .max_bindless_samplers = 0,
+                                         .max_timestamp_pools = 0,
+                                         .max_sparse_memories = 0,
+                                         .max_tile_mappings = 0,
+                                         .max_bindless_acceleration_structures = 1,
+                                         .max_build_geometries = 0,
+                                         .indirect_strides = nullptr,
+                                         .indirect_stride_count = 0};
+        struct Device {
+            bfr_device* device = nullptr;
+            Device(const Device&) = delete;
+            Device& operator=(const Device&) = delete;
+            Device(Device&&) = delete;
+            Device& operator=(Device&&) = delete;
+            Device() = default;
+            ~Device() { bfr_destroy_device(device); }
+        } device;
+        REQUIRE(bfr_create_device(instance.instance, &deviceDesc, &device.device) == BFR_RESULT_SUCCESS);
+        const auto code = [](const auto& bytes) {
+            return bfr_shader_code{.code = bytes.data(),
+                                   .code_size = bytes.size(),
+                                   .entry_point = {.data = "main", .length = 4}};
+        };
+        const std::array codes{code(bfr::test::spirv::kTraceRgen), code(bfr::test::spirv::kTraceRmiss)};
+        std::array<bfr_shader, 2> shaders{};
+        for (std::size_t i = 0; i < shaders.size(); ++i) {
+            REQUIRE(bfr_create_shader(device.device, &codes.at(i), &shaders.at(i)) == BFR_RESULT_SUCCESS);
+        }
+        const std::array<bfr_ray_tracing_shader, 2> stages{{
+            {.stage = BFR_RAY_TRACING_STAGE_RAY_GENERATION, .shader = shaders[0]},
+            {.stage = BFR_RAY_TRACING_STAGE_MISS, .shader = shaders[1]},
+        }};
+        const std::array<bfr_ray_tracing_group, 2> groups{{
+            {.type = BFR_RAY_TRACING_GROUP_TYPE_GENERAL,
+             .general = 0,
+             .closest_hit = BFR_NO_SHADER,
+             .any_hit = BFR_NO_SHADER,
+             .intersection = BFR_NO_SHADER},
+            {.type = BFR_RAY_TRACING_GROUP_TYPE_GENERAL,
+             .general = 1,
+             .closest_hit = BFR_NO_SHADER,
+             .any_hit = BFR_NO_SHADER,
+             .intersection = BFR_NO_SHADER},
+        }};
+        const bfr_ray_tracing_pipeline_desc desc{.next = nullptr,
+                                                 .shaders = stages.data(),
+                                                 .shader_count = static_cast<uint32_t>(stages.size()),
+                                                 .groups = groups.data(),
+                                                 .group_count = static_cast<uint32_t>(groups.size()),
+                                                 .max_recursion_depth = 1,
+                                                 .max_payload_size = sizeof(uint32_t),
+                                                 .max_attribute_size = 0,
+                                                 .cache = {}};
+        bfr_pipeline pipeline{};
+        const bfr_result made = bfr_create_ray_tracing_pipeline(device.device, &desc, &pipeline);
+        INFO(lastError());
+        REQUIRE(made == BFR_RESULT_SUCCESS);
+        for (const bfr_shader shader : shaders) {
+            bfr_destroy_shader(device.device, shader);
+        }
+        std::vector<std::byte> identifiers(std::size_t{caps.ray_tracing.identifier_size} * groups.size());
+        CHECK(bfr_get_shader_identifiers(device.device, pipeline, 0, 2, identifiers.data(), identifiers.size()) ==
+              BFR_RESULT_SUCCESS);
+        CHECK(bfr_get_shader_identifiers(device.device, pipeline, 0, 2, identifiers.data(), identifiers.size() - 1) ==
+              BFR_RESULT_ERROR_INVALID_ARGUMENT);
+        bfr_destroy_pipeline(device.device, pipeline);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
