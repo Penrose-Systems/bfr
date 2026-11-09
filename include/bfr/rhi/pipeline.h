@@ -336,7 +336,8 @@ enum class RayTracingGroupShader : std::uint8_t {
 /// pipelines that name it in libraries. A linked library's shaders and groups
 /// follow the pipeline's own, in the order libraries names them, so group
 /// indices count on past its groups; each library was made with the same
-/// maxRecursionDepth, maxPayloadSize, maxAttributeSize and captureReplay.
+/// maxRecursionDepth, maxPayloadSize and maxAttributeSize, and with
+/// captureReplay where the pipeline is.
 struct RayTracingPipelineDesc {
     std::span<const RayTracingShader> shaders{};
     std::span<const RayTracingGroup> groups{};
@@ -358,7 +359,10 @@ struct RayTracingPipelineDesc {
     /// Empty, or the identifiers captureReplayIdentifiers gave for every group
     /// of groups, in order, RayTracingLimits::captureReplayIdentifierSize bytes
     /// each, of a pipeline made from the same desc: its groups then have the
-    /// identifiers that pipeline's had. With captureReplay.
+    /// identifiers that pipeline's had. With captureReplay. Where
+    /// Features::rayTracingCaptureReplayMixed is false, a device makes none
+    /// with them unless its first ray tracing pipeline had them, and none with
+    /// them while it makes one without.
     std::span<const std::byte> replayIdentifiers{};
 };
 

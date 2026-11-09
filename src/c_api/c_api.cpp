@@ -1235,6 +1235,7 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .ray_tracing_pipeline_library = toC(features.rayTracingPipelineLibrary),
         .pipeline_library_identifiers = toC(features.pipelineLibraryIdentifiers),
         .ray_tracing_capture_replay = toC(features.rayTracingCaptureReplay),
+        .ray_tracing_capture_replay_mixed = toC(features.rayTracingCaptureReplayMixed),
         .acceleration_structure_indirect_build = toC(features.accelerationStructureIndirectBuild),
         .mesh_shader = toC(features.meshShader),
         .task_shader = toC(features.taskShader),

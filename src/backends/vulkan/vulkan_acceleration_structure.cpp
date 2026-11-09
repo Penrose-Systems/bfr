@@ -415,6 +415,14 @@ core::Result<void> VulkanDevice::buildAccelerationStructureIndirect(CommandListH
 
 core::Result<void> VulkanDevice::recordBuild(CommandListHandle commandList, const AccelerationStructureBuild& build,
                                              const std::pair<VkDeviceAddress, std::uint32_t>* ranges) {
+    // An indirect build's ranges are read in place on the GPU.
+    static_assert(sizeof(AccelerationStructureBuildRange) == sizeof(VkAccelerationStructureBuildRangeInfoKHR) &&
+                  offsetof(AccelerationStructureBuildRange, primitiveOffset) ==
+                      offsetof(VkAccelerationStructureBuildRangeInfoKHR, primitiveOffset) &&
+                  offsetof(AccelerationStructureBuildRange, firstVertex) ==
+                      offsetof(VkAccelerationStructureBuildRangeInfoKHR, firstVertex) &&
+                  offsetof(AccelerationStructureBuildRange, transformOffset) ==
+                      offsetof(VkAccelerationStructureBuildRangeInfoKHR, transformOffset));
     if (auto checked = checkInputs(build.inputs); !checked) {
         return checked;
     }

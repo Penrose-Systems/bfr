@@ -2511,8 +2511,8 @@ static_assert(offsetof(RayTracingGroup, intersection) == offsetof(bfr_ray_tracin
 /// library, it is a pipeline library, where bfr_caps_features.ray_tracing_pipeline_library: never
 /// bound, only linked into pipelines that name it in libraries. A linked library's shaders and
 /// groups follow the pipeline's own, in the order libraries names them, so group indices count on
-/// past its groups; each library was made with the same max_recursion_depth, max_payload_size,
-/// max_attribute_size and capture_replay.
+/// past its groups; each library was made with the same max_recursion_depth, max_payload_size and
+/// max_attribute_size, and with capture_replay where the pipeline is.
 struct RayTracingPipelineDesc {
     /// Read during the call only.
     std::span<const RayTracingShader> shaders{};
@@ -2535,7 +2535,9 @@ struct RayTracingPipelineDesc {
     /// None, or the identifiers bfr_get_capture_replay_identifiers gave for every group of groups,
     /// in order, bfr_caps_ray_tracing.capture_replay_identifier_size bytes each, of a pipeline made
     /// from the same desc: its groups then have the identifiers that pipeline's had. With
-    /// capture_replay. Read during the call only.
+    /// capture_replay. Where bfr_caps_features.ray_tracing_capture_replay_mixed is false, a device
+    /// makes none with them unless its first ray tracing pipeline had them, and none with them
+    /// while it makes one without. Read during the call only.
     std::span<const std::uint8_t> replayIdentifiers{};
 };
 
@@ -3182,6 +3184,9 @@ struct CapsFeatures {
     bool pipelineLibraryIdentifiers{};
     /// bfr_ray_tracing_pipeline_desc.capture_replay.
     bool rayTracingCaptureReplay{};
+    /// A device makes pipelines with replayed identifiers and pipelines without them in any order,
+    /// at once.
+    bool rayTracingCaptureReplayMixed{};
     /// bfr_build_acceleration_structure_indirect.
     bool accelerationStructureIndirectBuild{};
     bool meshShader{};
@@ -4181,6 +4186,7 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .rayTracingPipelineLibrary = value.ray_tracing_pipeline_library != BFR_FALSE,
         .pipelineLibraryIdentifiers = value.pipeline_library_identifiers != BFR_FALSE,
         .rayTracingCaptureReplay = value.ray_tracing_capture_replay != BFR_FALSE,
+        .rayTracingCaptureReplayMixed = value.ray_tracing_capture_replay_mixed != BFR_FALSE,
         .accelerationStructureIndirectBuild = value.acceleration_structure_indirect_build != BFR_FALSE,
         .meshShader = value.mesh_shader != BFR_FALSE,
         .taskShader = value.task_shader != BFR_FALSE,
@@ -4902,11 +4908,11 @@ public:
     /// Creates a ray tracing pipeline, as desc says, before returning. Not for the frame path. A
     /// desc.cache is looked in first, and the pipeline added on a miss. Fails with
     /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false, or for library or
-    /// libraries where bfr_caps_features.ray_tracing_pipeline_library is, or capture_replay where
-    /// bfr_caps_features.ray_tracing_capture_replay is, error_invalid_argument for an enum value
-    /// BFR doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or
-    /// replay_identifiers neither none nor of every group, error_invalid_handle for a shader,
-    /// library or desc.cache that is gone, error_limit_reached at the device's maximum of
+    /// libraries where bfr_caps_features.ray_tracing_pipeline_library is false, or capture_replay
+    /// where bfr_caps_features.ray_tracing_capture_replay is false, error_invalid_argument for an
+    /// enum value BFR doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or
+    /// replay_identifiers neither none nor holding every group's, error_invalid_handle for a
+    /// shader, library or desc.cache that is gone, error_limit_reached at the device's maximum of
     /// pipelines, and error_device_failed when the backend refuses the desc; the message carries
     /// what it said.
     [[nodiscard]] Expected<Pipeline> createRayTracingPipeline(const RayTracingPipelineDesc& desc) const;

@@ -189,6 +189,9 @@ struct Features {
     bool pipelineLibraryIdentifiers = false;
     /// RayTracingPipelineDesc::captureReplay.
     bool rayTracingCaptureReplay = false;
+    /// A device makes pipelines with replayed identifiers and pipelines
+    /// without them in any order, at once.
+    bool rayTracingCaptureReplayMixed = false;
     /// Device::buildAccelerationStructureIndirect.
     bool accelerationStructureIndirectBuild = false;
     bool meshShader = false;

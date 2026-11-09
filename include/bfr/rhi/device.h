@@ -742,11 +742,11 @@ public:
     /// A ray tracing pipeline as desc says, made before returning, or loaded
     /// from desc.cache. Cold, as createComputePipeline is. Fails with
     /// RhiUnsupported where Features::rayTracingPipeline is false, or for
-    /// library or libraries where Features::rayTracingPipelineLibrary is, or
-    /// captureReplay where Features::rayTracingCaptureReplay is,
+    /// library or libraries where Features::rayTracingPipelineLibrary is
+    /// false, or captureReplay where Features::rayTracingCaptureReplay is false,
     /// RhiInvalidCall for an enum value BFR doesn't have, a stackSize past 32
     /// bits on Vulkan, which takes no more, or replayIdentifiers neither empty
-    /// nor of every group, RhiInvalidHandle for a shader, library or
+    /// nor holding every group's, RhiInvalidHandle for a shader, library or
     /// desc.cache that is gone, RhiLimitReached at the
     /// device's maximum, and RhiDeviceFailed when the API refuses the desc,
     /// with what it said.

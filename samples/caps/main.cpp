@@ -549,6 +549,7 @@ void printAllFeatures(const bfr::CapsFeatures& f) {
                        field("rayTracingPipelineLibrary", f.rayTracingPipelineLibrary),
                        field("pipelineLibraryIdentifiers", f.pipelineLibraryIdentifiers),
                        field("rayTracingCaptureReplay", f.rayTracingCaptureReplay),
+                       field("rayTracingCaptureReplayMixed", f.rayTracingCaptureReplayMixed),
                        field("accelerationStructureIndirectBuild", f.accelerationStructureIndirectBuild),
                        field("accelerationStructure", f.accelerationStructure),
                        field("meshShader", f.meshShader),

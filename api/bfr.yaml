@@ -1506,8 +1506,8 @@ structs:
       into pipelines that name it in libraries. A linked library's shaders and
       groups follow the pipeline's own, in the order libraries names them, so
       group indices count on past its groups; each library was made with the
-      same max_recursion_depth, max_payload_size, max_attribute_size and
-      capture_replay.
+      same max_recursion_depth, max_payload_size and max_attribute_size, and
+      with capture_replay where the pipeline is.
     extensible: true
     members:
       - {name: shaders, type: ray_tracing_shader, array: shader_count, pointer: in, optional: true, doc: Read during the call only.}
@@ -1543,8 +1543,11 @@ structs:
           every group of groups, in order,
           bfr_caps_ray_tracing.capture_replay_identifier_size bytes each, of a
           pipeline made from the same desc: its groups then have the
-          identifiers that pipeline's had. With capture_replay. Read during the
-          call only.
+          identifiers that pipeline's had. With capture_replay. Where
+          bfr_caps_features.ray_tracing_capture_replay_mixed is false, a device
+          makes none with them unless its first ray tracing pipeline had them,
+          and none with them while it makes one without. Read during the call
+          only.
       - {name: replay_identifiers_size, type: size, doc: Bytes.}
 
   shader_table_region:
@@ -2080,6 +2083,7 @@ structs:
       - {name: ray_tracing_pipeline_library, type: bool, doc: "Ray tracing pipeline libraries, bfr_ray_tracing_pipeline_desc.library."}
       - {name: pipeline_library_identifiers, type: bool, doc: "bfr_get_shader_identifiers of a library, the same as a pipeline that links it gives for its groups."}
       - {name: ray_tracing_capture_replay, type: bool, doc: bfr_ray_tracing_pipeline_desc.capture_replay.}
+      - {name: ray_tracing_capture_replay_mixed, type: bool, doc: "A device makes pipelines with replayed identifiers and pipelines without them in any order, at once."}
       - {name: acceleration_structure_indirect_build, type: bool, doc: bfr_build_acceleration_structure_indirect.}
       - {name: mesh_shader, type: bool}
       - {name: task_shader, type: bool}
@@ -3568,11 +3572,12 @@ functions:
       the frame path. A desc.cache is looked in first, and the pipeline added
       on a miss. Fails with error_unsupported where
       bfr_caps_features.ray_tracing_pipeline is false, or for library or
-      libraries where bfr_caps_features.ray_tracing_pipeline_library is, or
-      capture_replay where bfr_caps_features.ray_tracing_capture_replay is,
+      libraries where bfr_caps_features.ray_tracing_pipeline_library is false,
+      or capture_replay where bfr_caps_features.ray_tracing_capture_replay is
+      false,
       error_invalid_argument for an enum value BFR doesn't have, a stack_size
       past 32 bits on Vulkan, which takes no more, or replay_identifiers
-      neither none nor of every group, error_invalid_handle for a shader,
+      neither none nor holding every group's, error_invalid_handle for a shader,
       library or desc.cache that is gone, error_limit_reached at the device's maximum of
       pipelines, and error_device_failed when the backend refuses the desc;
       the message carries what it said.

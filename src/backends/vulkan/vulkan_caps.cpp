@@ -300,6 +300,10 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
         .rayTracingCaptureReplay = hasAccelerationStructures(features) &&
                                    on(features.rayTracingPipeline.rayTracingPipeline) &&
                                    on(features.rayTracingPipeline.rayTracingPipelineShaderGroupHandleCaptureReplay),
+        .rayTracingCaptureReplayMixed =
+            hasAccelerationStructures(features) && on(features.rayTracingPipeline.rayTracingPipeline) &&
+            on(features.rayTracingPipeline.rayTracingPipelineShaderGroupHandleCaptureReplay) &&
+            on(features.rayTracingPipeline.rayTracingPipelineShaderGroupHandleCaptureReplayMixed),
         .accelerationStructureIndirectBuild = hasAccelerationStructures(features) &&
                                               on(features.accelerationStructure.accelerationStructureIndirectBuild),
         .meshShader = on(features.mesh.meshShader),

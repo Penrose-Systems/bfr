@@ -88,6 +88,7 @@ std::vector<std::string> limitsWithoutFeatures(const Caps& caps) {
                                           features.rayTracingCaptureReplay),
          "ray tracing pipeline features"},
         {features.rayTracingPipelineLibrary || !features.pipelineLibraryIdentifiers, "library identifiers"},
+        {features.rayTracingCaptureReplay || !features.rayTracingCaptureReplayMixed, "mixed capture replay"},
         {features.rayTracingCaptureReplay || caps.rayTracing.captureReplayIdentifierSize == 0,
          "capture-replay identifiers"},
         {features.accelerationStructure || !features.accelerationStructureIndirectBuild, "indirect builds"},

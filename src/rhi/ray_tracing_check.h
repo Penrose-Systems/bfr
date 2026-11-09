@@ -43,7 +43,8 @@ namespace bfr::rhi {
 /// Fails with RhiUnsupported for a library, or libraries linked, where
 /// Features::rayTracingPipelineLibrary is false, or captureReplay where
 /// Features::rayTracingCaptureReplay is, and RhiInvalidCall for
-/// replayIdentifiers neither empty nor replaySize bytes for each group.
+/// replayIdentifiers neither empty nor at least replaySize bytes for each
+/// group, which BFR reads.
 [[nodiscard]] inline core::Result<void> checkPipelineExtras(const RayTracingPipelineDesc& desc,
                                                             const Features& features, std::uint32_t replaySize) {
     if ((desc.library || !desc.libraries.empty()) && !features.rayTracingPipelineLibrary) {
@@ -55,9 +56,9 @@ namespace bfr::rhi {
             return checked;
         }
     }
-    if (!desc.replayIdentifiers.empty() && desc.replayIdentifiers.size() != desc.groups.size() * replaySize) {
+    if (!desc.replayIdentifiers.empty() && desc.replayIdentifiers.size() < desc.groups.size() * replaySize) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "{} bytes of replay identifiers are not {} groups' of {} bytes",
+                             "{} bytes of replay identifiers hold fewer than {} groups' of {} bytes",
                              desc.replayIdentifiers.size(), desc.groups.size(), replaySize);
     }
     return {};
