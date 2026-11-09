@@ -309,6 +309,9 @@ public:
     [[nodiscard]] core::Result<void> destroyAccelerationStructure(AccelerationStructureHandle structure) override;
     [[nodiscard]] core::Result<void> writeInstances(std::span<const AccelerationStructureInstance> instances,
                                                     std::span<std::byte> out) override;
+    [[nodiscard]] core::Result<void> writeMotionInstances(
+        std::span<const AccelerationStructureMotionInstance> instances, std::span<const MotionKeyframe> keyframes,
+        std::span<std::byte> out) override;
     [[nodiscard]] core::Result<void> buildAccelerationStructure(CommandListHandle commandList,
                                                                 const AccelerationStructureBuild& build) override;
     [[nodiscard]] core::Result<void> buildAccelerationStructureIndirect(CommandListHandle commandList,
@@ -400,6 +403,10 @@ private:
     // RhiInvalidCall for a structure that is not an opacity micromap, and
     // RhiInvalidHandle for one that is gone.
     [[nodiscard]] core::Result<VkMicromapEXT> micromapOf(AccelerationStructureHandle structure);
+    // instance's record, the index-th written; fails as writeInstances does
+    // for a structure that is gone or not a bottom one.
+    [[nodiscard]] core::Result<VkAccelerationStructureInstanceKHR> instanceRecord(
+        const AccelerationStructureInstance& instance, std::size_t index);
     // A copy of src into dst in mode, on a queue that runs compute.
     [[nodiscard]] core::Result<void> copyStructure(CommandListHandle commandList, AccelerationStructureHandle dst,
                                                    AccelerationStructureHandle src,

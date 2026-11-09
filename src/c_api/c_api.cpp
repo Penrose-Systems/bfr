@@ -56,9 +56,11 @@ struct bfr_device {
     std::mutex conversions;
     std::vector<bfr::rhi::TriangleGeometry> triangles;
     std::vector<bfr::rhi::BoxGeometry> boxes;
-    // The adapter's bfr_caps_ray_tracing.instance_size: the bytes each record
-    // bfr_write_instances writes takes.
+    // The adapter's bfr_caps_ray_tracing.instance_size and
+    // motion_instance_size: the bytes each record bfr_write_instances, and
+    // bfr_write_motion_instances, writes takes.
     std::uint32_t instanceSize = 0;
+    std::uint32_t motionInstanceSize = 0;
 };
 
 namespace {
@@ -542,8 +544,8 @@ static_assert(static_cast<int>(bfr::rhi::Call::DrawMeshIndirectCount) == BFR_CAL
 static_assert(static_cast<int>(bfr::rhi::Call::BuildAccelerationStructure) == BFR_CALL_BUILD_ACCELERATION_STRUCTURE);
 static_assert(static_cast<int>(bfr::rhi::Call::CopyAccelerationStructure) == BFR_CALL_COPY_ACCELERATION_STRUCTURE);
 static_assert(static_cast<int>(bfr::rhi::Call::RayTracingStackSize) == BFR_CALL_RAY_TRACING_STACK_SIZE);
-static_assert(static_cast<int>(bfr::rhi::Call::CaptureReplayIdentifiers) == BFR_CALL_CAPTURE_REPLAY_IDENTIFIERS);
-static_assert(bfr::rhi::kCallCount == BFR_CALL_CAPTURE_REPLAY_IDENTIFIERS + 1);
+static_assert(static_cast<int>(bfr::rhi::Call::WriteMotionInstances) == BFR_CALL_WRITE_MOTION_INSTANCES);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_WRITE_MOTION_INSTANCES + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
@@ -615,7 +617,8 @@ std::optional<bfr::rhi::AccelerationStructureInputs> inputsIn(const bfr_accelera
         .micromapDataOffset = inputs.micromap_data_offset,
         .micromapRecords = fromC(inputs.micromap_records),
         .micromapRecordOffset = inputs.micromap_record_offset,
-        .micromapRecordStride = inputs.micromap_record_stride};
+        .micromapRecordStride = inputs.micromap_record_stride,
+        .motionKeyframes = inputs.motion_keyframes};
     if (inputs.micromap_usages == nullptr && inputs.micromap_usage_count != 0) {
         error.format("micromap_usages is null with a count");
         return std::nullopt;
@@ -672,7 +675,10 @@ std::optional<bfr::rhi::AccelerationStructureInputs> inputsIn(const bfr_accelera
                                               .indexStride = micromap.index_stride,
                                               .baseTriangle = micromap.base_triangle,
                                               .firstUsage = micromap.first_usage,
-                                              .usageCount = micromap.usage_count}};
+                                              .usageCount = micromap.usage_count},
+                          .motionVertices = fromC(from.motion_vertices),
+                          .motionVertexOffset = from.motion_vertex_offset,
+                          .motionKeyframeStride = from.motion_keyframe_stride};
     }
     const std::span boxOut = std::span{device.boxes}.subspan(boxes, inputs.box_count);
     for (std::size_t i = 0; i < boxOut.size(); ++i) {
@@ -1262,6 +1268,8 @@ bfr_caps_ray_tracing toC(const bfr::rhi::RayTracingLimits& rayTracing) {
         .capture_replay_identifier_size = rayTracing.captureReplayIdentifierSize,
         .max_opacity_2_state_subdivision_level = rayTracing.maxOpacity2StateSubdivisionLevel,
         .max_opacity_4_state_subdivision_level = rayTracing.maxOpacity4StateSubdivisionLevel,
+        .max_motion_keyframes = rayTracing.maxMotionKeyframes,
+        .motion_instance_size = rayTracing.motionInstanceSize,
     };
 }
 
@@ -1285,6 +1293,8 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .ray_tracing_capture_replay_mixed = toC(features.rayTracingCaptureReplayMixed),
         .acceleration_structure_indirect_build = toC(features.accelerationStructureIndirectBuild),
         .opacity_micromap = toC(features.opacityMicromap),
+        .ray_tracing_motion = toC(features.rayTracingMotion),
+        .ray_tracing_motion_indirect = toC(features.rayTracingMotionIndirect),
         .mesh_shader = toC(features.meshShader),
         .task_shader = toC(features.taskShader),
         .shading_rate = toC(features.shadingRate),
@@ -1738,6 +1748,7 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
         made->triangles.resize(desc->max_build_geometries);
         made->boxes.resize(desc->max_build_geometries);
         made->instanceSize = instance->instance->adapters()[desc->adapter].caps.rayTracing.instanceSize;
+        made->motionInstanceSize = instance->instance->adapters()[desc->adapter].caps.rayTracing.motionInstanceSize;
         // The caller owns it until bfr_destroy_device.
         *device = made.release();
         return BFR_RESULT_SUCCESS;
@@ -3064,7 +3075,10 @@ bfr_result bfr_create_acceleration_structure(bfr_device* device, const bfr_accel
         if (!type) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
-        const auto made = device->device->createAccelerationStructure({.type = *type, .size = desc->size});
+        const auto made = device->device->createAccelerationStructure({.type = *type,
+                                                                       .size = desc->size,
+                                                                       .motionKeyframes = desc->motion_keyframes,
+                                                                       .motionInstances = desc->motion_instances});
         if (!made) {
             return fail(made.error());
         }
@@ -3116,6 +3130,32 @@ void bfr_destroy_acceleration_structure(bfr_device* device, bfr_acceleration_str
     });
 }
 
+namespace {
+
+// instance as C++ has it; nothing when its opacity is not one BFR has, and
+// error says so.
+std::optional<bfr::rhi::AccelerationStructureInstance> instanceIn(const bfr_acceleration_structure_instance& instance,
+                                                                  bfr::core::Message& error) {
+    using namespace bfr::rhi;
+    const auto opacity = enumIn(instance.opacity, InstanceOpacity::ForceNonOpaque, "instance opacity", error);
+    if (!opacity) {
+        return std::nullopt;
+    }
+    return AccelerationStructureInstance{.transform = std::to_array(instance.transform),
+                                         .customIndex = instance.custom_index,
+                                         .mask = instance.mask,
+                                         .hitGroupOffset = instance.hit_group_offset,
+                                         .cullDisable = instance.cull_disable != BFR_FALSE,
+                                         .frontCounterClockwise = instance.front_counter_clockwise != BFR_FALSE,
+                                         .opacity = *opacity,
+                                         .forceOpacityMicromap2State = instance.force_opacity_micromap_2_state !=
+                                                                       BFR_FALSE,
+                                         .disableOpacityMicromaps = instance.disable_opacity_micromaps != BFR_FALSE,
+                                         .bottomStructure = fromC(instance.bottom_structure)};
+}
+
+} // namespace
+
 bfr_result bfr_write_instances(bfr_device* device, const bfr_acceleration_structure_instance* instances,
                                uint32_t instance_count, void* data, size_t size) {
     return guarded([&] {
@@ -3141,26 +3181,77 @@ bfr_result bfr_write_instances(bfr_device* device, const bfr_acceleration_struct
         do {
             const std::size_t count = std::min(kChunk, from.size() - done);
             for (std::size_t i = 0; i < count; ++i) {
-                const bfr_acceleration_structure_instance& instance = from[done + i];
                 bfr::core::Message error;
-                const auto opacity = enumIn(instance.opacity, InstanceOpacity::ForceNonOpaque, "instance opacity",
-                                            error);
-                if (!opacity) {
+                const auto converted = instanceIn(from[done + i], error);
+                if (!converted) {
                     return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
                 }
-                chunk.at(i) = {.transform = std::to_array(instance.transform),
-                               .customIndex = instance.custom_index,
-                               .mask = instance.mask,
-                               .hitGroupOffset = instance.hit_group_offset,
-                               .cullDisable = instance.cull_disable != BFR_FALSE,
-                               .frontCounterClockwise = instance.front_counter_clockwise != BFR_FALSE,
-                               .opacity = *opacity,
-                               .forceOpacityMicromap2State = instance.force_opacity_micromap_2_state != BFR_FALSE,
-                               .disableOpacityMicromaps = instance.disable_opacity_micromaps != BFR_FALSE,
-                               .bottomStructure = fromC(instance.bottom_structure)};
+                chunk.at(i) = *converted;
             }
             const auto written = device->device->writeInstances(std::span{chunk}.first(count),
                                                                 out.subspan(std::min(done * recordSize, out.size())));
+            if (!written) {
+                return fail(written.error());
+            }
+            done += count;
+        } while (done < from.size());
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+// Keyframes are read in place: the C and C++ layouts are one, all floats.
+static_assert(sizeof(bfr_motion_keyframe) == sizeof(bfr::rhi::MotionKeyframe) &&
+              offsetof(bfr_motion_keyframe, srt) == offsetof(bfr::rhi::MotionKeyframe, srt) &&
+              sizeof(bfr_srt_transform) == sizeof(bfr::rhi::SrtTransform) &&
+              offsetof(bfr_srt_transform, rotation) == offsetof(bfr::rhi::SrtTransform, rotation) &&
+              offsetof(bfr_srt_transform, translation) == offsetof(bfr::rhi::SrtTransform, translation));
+static_assert(static_cast<int>(bfr::rhi::InstanceMotion::Srt) == BFR_INSTANCE_MOTION_SRT);
+
+bfr_result bfr_write_motion_instances(bfr_device* device, const bfr_acceleration_structure_motion_instance* instances,
+                                      uint32_t instance_count, const bfr_motion_keyframe* keyframes,
+                                      uint32_t keyframe_count, void* data, size_t size) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        if ((instances == nullptr && instance_count != 0) || (keyframes == nullptr && keyframe_count != 0) ||
+            (data == nullptr && size != 0)) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT,
+                        "instances, keyframes and data must not be null with a count");
+        }
+        using namespace bfr::rhi;
+        const std::span out{static_cast<std::byte*>(data), size};
+        const std::span from{instances, instance_count};
+        const std::span<const MotionKeyframe> frames{reinterpret_cast<const MotionKeyframe*>(keyframes),
+                                                     keyframe_count};
+        const std::size_t recordSize = device->motionInstanceSize;
+        // Converted a chunk at a time on the stack, as bfr_write_instances
+        // does.
+        constexpr std::size_t kChunk = 64;
+        std::array<AccelerationStructureMotionInstance, kChunk> chunk{};
+        if (recordSize != 0 && size / recordSize < from.size()) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "{} bytes hold fewer than {} motion instance records of {}",
+                        size, from.size(), recordSize);
+        }
+        std::size_t done = 0;
+        do {
+            const std::size_t count = std::min(kChunk, from.size() - done);
+            for (std::size_t i = 0; i < count; ++i) {
+                const bfr_acceleration_structure_motion_instance& moving = from[done + i];
+                bfr::core::Message error;
+                const auto instance = instanceIn(moving.instance, error);
+                const auto motion = enumIn(moving.motion, InstanceMotion::Srt, "instance motion", error);
+                if (!instance || !motion) {
+                    return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+                }
+                chunk.at(i) = {.instance = *instance,
+                               .motion = *motion,
+                               .firstKeyframe = moving.first_keyframe,
+                               .keyframeCount = moving.keyframe_count};
+            }
+            const auto written = device->device->writeMotionInstances(std::span{chunk}.first(count), frames,
+                                                                      out.subspan(
+                                                                          std::min(done * recordSize, out.size())));
             if (!written) {
                 return fail(written.error());
             }
@@ -3328,7 +3419,8 @@ bfr_result bfr_create_ray_tracing_pipeline(bfr_device* device, const bfr_ray_tra
              .libraries = libraries,
              .captureReplay = desc->capture_replay != BFR_FALSE,
              .replayIdentifiers = std::as_bytes(std::span{desc->replay_identifiers, desc->replay_identifiers_size}),
-             .allowOpacityMicromaps = desc->allow_opacity_micromaps != BFR_FALSE});
+             .allowOpacityMicromaps = desc->allow_opacity_micromaps != BFR_FALSE,
+             .allowMotion = desc->allow_motion != BFR_FALSE});
         if (!created) {
             return fail(created.error());
         }

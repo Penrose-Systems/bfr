@@ -594,6 +594,47 @@ TEST_CASE("Vulkan without VK_EXT_opacity_micromap reports no micromaps", "[vulka
     CHECK(caps.rayTracing.maxOpacity4StateSubdivisionLevel == 0);
 }
 
+TEST_CASE("Vulkan without VK_NV_ray_tracing_motion_blur reports no motion", "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride;
+    const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_NV_ray_tracing_motion_blur");
+    auto created = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(created));
+    REQUIRE(created.has_value());
+    const std::unique_ptr<Instance> instance = std::move(*created);
+    const Caps& caps = instance->adapters()[0].caps;
+    CHECK_FALSE(caps.features.rayTracingMotion);
+    CHECK_FALSE(caps.features.rayTracingMotionIndirect);
+    CHECK(caps.rayTracing.maxMotionKeyframes == 0);
+    CHECK(caps.rayTracing.motionInstanceSize == 0);
+}
+
+TEST_CASE("Vulkan refuses motion of other than the two keyframes it takes", "[vulkan][gpu]") {
+    auto created = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(created));
+    REQUIRE(created.has_value());
+    const std::unique_ptr<Instance> instance = std::move(*created);
+    const Caps& caps = instance->adapters()[0].caps;
+    if (!caps.features.rayTracingMotion) {
+        SKIP("the adapter has no structures with motion");
+    }
+    CHECK(caps.rayTracing.maxMotionKeyframes == 2);
+    auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+    INFO(failureOf(made));
+    REQUIRE(made.has_value());
+    Device& device = **made;
+    constexpr std::uint64_t kSmall = 256;
+    constexpr std::uint32_t kThree = 3;
+    const auto structure = device.createAccelerationStructure({.size = kSmall, .motionKeyframes = kThree});
+    REQUIRE_FALSE(structure.has_value());
+    CHECK(structure.error().code == bfr::core::ErrorCode::RhiInvalidCall);
+    const std::array<MotionKeyframe, kThree> keyframes{};
+    const AccelerationStructureMotionInstance moving{.motion = InstanceMotion::Matrix, .keyframeCount = kThree};
+    std::vector<std::byte> out(caps.rayTracing.motionInstanceSize);
+    const auto written = device.writeMotionInstances(std::span{&moving, 1}, keyframes, out);
+    REQUIRE_FALSE(written.has_value());
+    CHECK(written.error().code == bfr::core::ErrorCode::RhiInvalidCall);
+}
+
 TEST_CASE("Vulkan refuses opacity micromap work it has no call for", "[vulkan][gpu]") {
     auto created = Instance::create(vulkanDesc(), {});
     INFO(failureOf(created));

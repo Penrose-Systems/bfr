@@ -42,8 +42,9 @@ namespace bfr::rhi {
 
 /// Fails with RhiUnsupported for a library, or libraries linked, where
 /// Features::rayTracingPipelineLibrary is false, captureReplay where
-/// Features::rayTracingCaptureReplay is, or allowOpacityMicromaps where
-/// Features::opacityMicromap is, and RhiInvalidCall for
+/// Features::rayTracingCaptureReplay is, allowOpacityMicromaps where
+/// Features::opacityMicromap is, or allowMotion where Features::rayTracingMotion
+/// is, and RhiInvalidCall for
 /// replayIdentifiers neither empty nor at least replaySize bytes for each
 /// group, which BFR reads.
 [[nodiscard]] inline core::Result<void> checkPipelineExtras(const RayTracingPipelineDesc& desc,
@@ -56,6 +57,10 @@ namespace bfr::rhi {
         if (auto checked = checkCaptureReplay(features.rayTracingCaptureReplay); !checked) {
             return checked;
         }
+    }
+    if (desc.allowMotion && !features.rayTracingMotion) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device has no structures with motion (Features::rayTracingMotion)");
     }
     if (desc.allowOpacityMicromaps && !features.opacityMicromap) {
         return core::failure(core::ErrorCode::RhiUnsupported,

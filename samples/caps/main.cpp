@@ -522,18 +522,26 @@ void printAllShaders(const bfr::Caps& caps) {
                    field("maxMeshOutputComponents", m.maxMeshOutputComponents),
                    field("maxMeshOutputLayers", m.maxMeshOutputLayers)});
     const bfr::CapsRayTracing& r = caps.rayTracing;
-    group("rayTracing",
-          {field("maxGeometries", r.maxGeometries), field("maxInstances", r.maxInstances),
-           field("maxPrimitives", r.maxPrimitives), field("scratchAlignment", r.scratchAlignment),
-           field("maxRecursionDepth", r.maxRecursionDepth), field("identifierSize", r.identifierSize),
-           field("identifierAlignment", r.identifierAlignment), field("tableAlignment", r.tableAlignment),
-           field("maxShaderGroupStride", r.maxShaderGroupStride), field("maxTraceRays", r.maxTraceRays),
-           field("maxHitAttributeSize", r.maxHitAttributeSize), field("propertyEntryBytes", r.propertyEntryBytes),
-           field("reordersInvocations", r.reordersInvocations),
-           field("maxBindingTableRecordIndex", r.maxBindingTableRecordIndex), field("instanceSize", r.instanceSize),
-           field("captureReplayIdentifierSize", r.captureReplayIdentifierSize),
-           field("maxOpacity2StateSubdivisionLevel", r.maxOpacity2StateSubdivisionLevel),
-           field("maxOpacity4StateSubdivisionLevel", r.maxOpacity4StateSubdivisionLevel)});
+    group("rayTracing", {field("maxGeometries", r.maxGeometries),
+                         field("maxInstances", r.maxInstances),
+                         field("maxPrimitives", r.maxPrimitives),
+                         field("scratchAlignment", r.scratchAlignment),
+                         field("maxRecursionDepth", r.maxRecursionDepth),
+                         field("identifierSize", r.identifierSize),
+                         field("identifierAlignment", r.identifierAlignment),
+                         field("tableAlignment", r.tableAlignment),
+                         field("maxShaderGroupStride", r.maxShaderGroupStride),
+                         field("maxTraceRays", r.maxTraceRays),
+                         field("maxHitAttributeSize", r.maxHitAttributeSize),
+                         field("propertyEntryBytes", r.propertyEntryBytes),
+                         field("reordersInvocations", r.reordersInvocations),
+                         field("maxBindingTableRecordIndex", r.maxBindingTableRecordIndex),
+                         field("instanceSize", r.instanceSize),
+                         field("captureReplayIdentifierSize", r.captureReplayIdentifierSize),
+                         field("maxOpacity2StateSubdivisionLevel", r.maxOpacity2StateSubdivisionLevel),
+                         field("maxOpacity4StateSubdivisionLevel", r.maxOpacity4StateSubdivisionLevel),
+                         field("maxMotionKeyframes", r.maxMotionKeyframes),
+                         field("motionInstanceSize", r.motionInstanceSize)});
 }
 
 void printAllFeatures(const bfr::CapsFeatures& f) {
@@ -554,6 +562,8 @@ void printAllFeatures(const bfr::CapsFeatures& f) {
                        field("rayTracingCaptureReplayMixed", f.rayTracingCaptureReplayMixed),
                        field("accelerationStructureIndirectBuild", f.accelerationStructureIndirectBuild),
                        field("opacityMicromap", f.opacityMicromap),
+                       field("rayTracingMotion", f.rayTracingMotion),
+                       field("rayTracingMotionIndirect", f.rayTracingMotionIndirect),
                        field("accelerationStructure", f.accelerationStructure),
                        field("meshShader", f.meshShader),
                        field("taskShader", f.taskShader),

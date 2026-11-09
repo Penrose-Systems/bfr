@@ -759,6 +759,7 @@ enum class Call : std::int32_t {
     RayTracingStackSize = BFR_CALL_RAY_TRACING_STACK_SIZE,
     BuildAccelerationStructureIndirect = BFR_CALL_BUILD_ACCELERATION_STRUCTURE_INDIRECT,
     CaptureReplayIdentifiers = BFR_CALL_CAPTURE_REPLAY_IDENTIFIERS,
+    WriteMotionInstances = BFR_CALL_WRITE_MOTION_INSTANCES,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -868,6 +869,7 @@ enum class Call : std::int32_t {
     case Call::RayTracingStackSize: return "ray_tracing_stack_size";
     case Call::BuildAccelerationStructureIndirect: return "build_acceleration_structure_indirect";
     case Call::CaptureReplayIdentifiers: return "capture_replay_identifiers";
+    case Call::WriteMotionInstances: return "write_motion_instances";
     }
     return {};
 }
@@ -1519,6 +1521,23 @@ enum class OpacityMicromapSpecialIndex : std::int32_t {
     case OpacityMicromapSpecialIndex::FullyOpaque: return "fully_opaque";
     case OpacityMicromapSpecialIndex::FullyUnknownTransparent: return "fully_unknown_transparent";
     case OpacityMicromapSpecialIndex::FullyUnknownOpaque: return "fully_unknown_opaque";
+    }
+    return {};
+}
+
+/// How a motion instance moves: not at all, by its keyframes' matrices, or by their SRT transforms.
+enum class InstanceMotion : std::int32_t {
+    None = BFR_INSTANCE_MOTION_NONE,
+    Matrix = BFR_INSTANCE_MOTION_MATRIX,
+    Srt = BFR_INSTANCE_MOTION_SRT,
+};
+
+/// value's name in bfr.yaml; empty for a value InstanceMotion doesn't have.
+[[nodiscard]] constexpr std::string_view name(InstanceMotion value) {
+    switch (value) {
+    case InstanceMotion::None: return "none";
+    case InstanceMotion::Matrix: return "matrix";
+    case InstanceMotion::Srt: return "srt";
     }
     return {};
 }
@@ -2582,6 +2601,9 @@ struct RayTracingPipelineDesc {
     /// Its traces take the opacity micromaps structures hold, where
     /// bfr_caps_features.opacity_micromap.
     bool allowOpacityMicromaps{};
+    /// Its traces are at a time, of structures with motion, where
+    /// bfr_caps_features.ray_tracing_motion.
+    bool allowMotion{};
 };
 
 /// Records in a shader binding table: size bytes from offset in buffer, which has
@@ -2895,6 +2917,14 @@ struct TriangleGeometry {
     bool noDuplicateAnyHit{};
     /// Where bfr_caps_features.opacity_micromap.
     TriangleOpacityMicromap opacityMicromap{};
+    /// In a structure with motion, the vertices at each keyframe after the first, which vertices
+    /// holds: keyframe k's from motion_vertex_offset + (k - 1) * motion_keyframe_stride, laid out
+    /// as vertices are. It has acceleration_structure_input usage.
+    BufferRef motionVertices{};
+    /// Bytes into motion_vertices.
+    std::uint64_t motionVertexOffset{};
+    /// Bytes from one keyframe's vertices to the next.
+    std::uint64_t motionKeyframeStride{};
 };
 static_assert(sizeof(TriangleGeometry) == sizeof(bfr_triangle_geometry) && alignof(TriangleGeometry) == alignof(bfr_triangle_geometry) &&
               std::is_standard_layout_v<TriangleGeometry> && std::is_trivially_copyable_v<TriangleGeometry>);
@@ -2912,6 +2942,9 @@ static_assert(offsetof(TriangleGeometry, transformOffset) == offsetof(bfr_triang
 static_assert(offsetof(TriangleGeometry, opaque) == offsetof(bfr_triangle_geometry, opaque));
 static_assert(offsetof(TriangleGeometry, noDuplicateAnyHit) == offsetof(bfr_triangle_geometry, no_duplicate_any_hit));
 static_assert(offsetof(TriangleGeometry, opacityMicromap) == offsetof(bfr_triangle_geometry, opacity_micromap));
+static_assert(offsetof(TriangleGeometry, motionVertices) == offsetof(bfr_triangle_geometry, motion_vertices));
+static_assert(offsetof(TriangleGeometry, motionVertexOffset) == offsetof(bfr_triangle_geometry, motion_vertex_offset));
+static_assert(offsetof(TriangleGeometry, motionKeyframeStride) == offsetof(bfr_triangle_geometry, motion_keyframe_stride));
 
 /// Boxes in a bottom acceleration structure: six floats each, min xyz then max xyz, min at most
 /// max, stride bytes apart; offset and stride multiples of 8. The buffer has
@@ -2965,6 +2998,9 @@ struct AccelerationStructureInputs {
     /// Bytes into micromap_records.
     std::uint64_t micromapRecordOffset{};
     std::uint32_t micromapRecordStride{};
+    /// The structure's bfr_acceleration_structure_desc.motion_keyframes: its triangles' motion
+    /// vertices are read, or its instance records are bfr_write_motion_instances'.
+    std::uint32_t motionKeyframes{};
 };
 
 /// The bytes an acceleration structure takes, and the scratch bytes its build and its update take.
@@ -2977,12 +3013,18 @@ struct AccelerationStructureSizes {
     bool discardable{};
 };
 
-/// How to create an acceleration structure of size bytes, in memory the device allocates.
+/// How to create an acceleration structure of size bytes, in memory the device allocates. With
+/// motion_keyframes, at least 2 and at most bfr_caps_ray_tracing.max_motion_keyframes, where
+/// bfr_caps_features.ray_tracing_motion, its builds have motion: a bottom one's triangles move
+/// between keyframes, a top one holds motion instances, at most motion_instances of them, passed to
+/// backends that take it. 0 is none.
 struct AccelerationStructureDesc {
     /// 0 is bottom.
     AccelerationStructureType type{};
     /// Bytes, as bfr_get_acceleration_structure_sizes gives them.
     std::uint64_t size{};
+    std::uint32_t motionKeyframes{};
+    std::uint32_t motionInstances{};
 };
 
 /// A build of dst, of inputs' type, from inputs; or, with update, an update of src into dst (they
@@ -3034,6 +3076,45 @@ static_assert(offsetof(AccelerationStructureInstance, opacity) == offsetof(bfr_a
 static_assert(offsetof(AccelerationStructureInstance, forceOpacityMicromap2State) == offsetof(bfr_acceleration_structure_instance, force_opacity_micromap_2_state));
 static_assert(offsetof(AccelerationStructureInstance, disableOpacityMicromaps) == offsetof(bfr_acceleration_structure_instance, disable_opacity_micromaps));
 static_assert(offsetof(AccelerationStructureInstance, bottomStructure) == offsetof(bfr_acceleration_structure_instance, bottom_structure));
+
+/// A transform as its parts: scale, the shears a (xy), b (xz) and c (yz), a pivot it scales and
+/// shears about, then a rotation quaternion (x, y, z, w) and a translation. Keyframes between are
+/// blended part by part.
+struct SrtTransform {
+    std::array<float, 3> scale{};
+    std::array<float, 3> shear{};
+    std::array<float, 3> pivot{};
+    std::array<float, 4> rotation{};
+    std::array<float, 3> translation{};
+};
+
+/// One keyframe of a motion instance's transform: matrix for matrix motion, srt for srt motion.
+struct MotionKeyframe {
+    /// 3x4 row-major transform.
+    std::array<float, BFR_TRANSFORM_FLOATS> matrix{};
+    SrtTransform srt{};
+};
+static_assert(sizeof(MotionKeyframe) == sizeof(bfr_motion_keyframe) && alignof(MotionKeyframe) == alignof(bfr_motion_keyframe) &&
+              std::is_standard_layout_v<MotionKeyframe> && std::is_trivially_copyable_v<MotionKeyframe>);
+static_assert(offsetof(MotionKeyframe, matrix) == offsetof(bfr_motion_keyframe, matrix));
+static_assert(offsetof(MotionKeyframe, srt) == offsetof(bfr_motion_keyframe, srt));
+
+/// An instance in a top structure with motion: instance, whose transform is the instance's where
+/// motion is none, and keyframe_count keyframes from first_keyframe in the keyframes
+/// bfr_write_motion_instances is given, the first at time 0 and the last at 1, where it moves.
+struct AccelerationStructureMotionInstance {
+    AccelerationStructureInstance instance{};
+    /// 0 is none.
+    InstanceMotion motion{};
+    std::uint32_t firstKeyframe{};
+    std::uint32_t keyframeCount{};
+};
+static_assert(sizeof(AccelerationStructureMotionInstance) == sizeof(bfr_acceleration_structure_motion_instance) && alignof(AccelerationStructureMotionInstance) == alignof(bfr_acceleration_structure_motion_instance) &&
+              std::is_standard_layout_v<AccelerationStructureMotionInstance> && std::is_trivially_copyable_v<AccelerationStructureMotionInstance>);
+static_assert(offsetof(AccelerationStructureMotionInstance, instance) == offsetof(bfr_acceleration_structure_motion_instance, instance));
+static_assert(offsetof(AccelerationStructureMotionInstance, motion) == offsetof(bfr_acceleration_structure_motion_instance, motion));
+static_assert(offsetof(AccelerationStructureMotionInstance, firstKeyframe) == offsetof(bfr_acceleration_structure_motion_instance, first_keyframe));
+static_assert(offsetof(AccelerationStructureMotionInstance, keyframeCount) == offsetof(bfr_acceleration_structure_motion_instance, keyframe_count));
 
 /// How to create a property pool of count entries of property, at least 1, of opacity micromaps
 /// where opacity_micromaps, and of other structures where not.
@@ -3260,6 +3341,10 @@ struct CapsRayTracing {
     std::uint32_t maxOpacity2StateSubdivisionLevel{};
     /// The highest subdivision level of a four-state opacity micromap.
     std::uint32_t maxOpacity4StateSubdivisionLevel{};
+    /// The most keyframes a structure with motion, or a motion instance, has.
+    std::uint32_t maxMotionKeyframes{};
+    /// The bytes of one record bfr_write_motion_instances writes.
+    std::uint32_t motionInstanceSize{};
 };
 
 /// Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and
@@ -3302,6 +3387,10 @@ struct CapsFeatures {
     bool accelerationStructureIndirectBuild{};
     /// Opacity micromap structures, which bottom structures' triangles take their opacity from.
     bool opacityMicromap{};
+    /// Structures with motion, traced at a time by pipelines made with allow_motion.
+    bool rayTracingMotion{};
+    /// bfr_trace_rays_indirect with a pipeline made with allow_motion.
+    bool rayTracingMotionIndirect{};
     bool meshShader{};
     bool taskShader{};
     /// A shading rate per draw.
@@ -4059,6 +4148,25 @@ inline bfr_acceleration_structure_desc toC(const AccelerationStructureDesc& valu
         .next = next,
         .type = static_cast<bfr_acceleration_structure_type>(value.type),
         .size = value.size,
+        .motion_keyframes = value.motionKeyframes,
+        .motion_instances = value.motionInstances,
+    };
+}
+
+inline bfr_srt_transform toC(const SrtTransform& value) {
+    return {
+        .scale = {value.scale[0], value.scale[1], value.scale[2]},
+        .shear = {value.shear[0], value.shear[1], value.shear[2]},
+        .pivot = {value.pivot[0], value.pivot[1], value.pivot[2]},
+        .rotation = {value.rotation[0], value.rotation[1], value.rotation[2], value.rotation[3]},
+        .translation = {value.translation[0], value.translation[1], value.translation[2]},
+    };
+}
+
+inline bfr_motion_keyframe toC(const MotionKeyframe& value) {
+    return {
+        .matrix = {value.matrix[0], value.matrix[1], value.matrix[2], value.matrix[3], value.matrix[4], value.matrix[5], value.matrix[6], value.matrix[7], value.matrix[8], value.matrix[9], value.matrix[10], value.matrix[11]},
+        .srt = toC(value.srt),
     };
 }
 
@@ -4294,6 +4402,8 @@ inline CapsRayTracing fromC(const bfr_caps_ray_tracing& value) {
         .captureReplayIdentifierSize = value.capture_replay_identifier_size,
         .maxOpacity2StateSubdivisionLevel = value.max_opacity_2_state_subdivision_level,
         .maxOpacity4StateSubdivisionLevel = value.max_opacity_4_state_subdivision_level,
+        .maxMotionKeyframes = value.max_motion_keyframes,
+        .motionInstanceSize = value.motion_instance_size,
     };
 }
 
@@ -4317,6 +4427,8 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .rayTracingCaptureReplayMixed = value.ray_tracing_capture_replay_mixed != BFR_FALSE,
         .accelerationStructureIndirectBuild = value.acceleration_structure_indirect_build != BFR_FALSE,
         .opacityMicromap = value.opacity_micromap != BFR_FALSE,
+        .rayTracingMotion = value.ray_tracing_motion != BFR_FALSE,
+        .rayTracingMotionIndirect = value.ray_tracing_motion_indirect != BFR_FALSE,
         .meshShader = value.mesh_shader != BFR_FALSE,
         .taskShader = value.task_shader != BFR_FALSE,
         .shadingRate = value.shading_rate != BFR_FALSE,
@@ -4987,17 +5099,30 @@ public:
     /// Creates an empty acceleration structure of desc's size bytes, which a build fills. Not for
     /// the frame path: it frees structures the GPU is done with. Fails with error_unsupported where
     /// bfr_caps_features.acceleration_structure is false, error_invalid_argument for a size of 0 or
-    /// an enum value BFR doesn't have, error_limit_reached at the device's maximum or, for a top
-    /// structure on a device with table slots, when they are all held, error_out_of_memory when the
-    /// backend says memory ran out, and error_device_failed when it refuses.
+    /// an enum value BFR doesn't have, error_unsupported for motion_keyframes where
+    /// bfr_caps_features.ray_tracing_motion is false or for an opacity micromap where
+    /// bfr_caps_features.opacity_micromap is, error_invalid_argument for motion_keyframes other
+    /// than the backend takes (Vulkan, two), error_limit_reached at the device's maximum or, for a
+    /// top structure on a device with table slots, when they are all held, error_out_of_memory when
+    /// the backend says memory ran out, and error_device_failed when it refuses.
     [[nodiscard]] Expected<AccelerationStructure> createAccelerationStructure(const AccelerationStructureDesc& desc) const;
+
+    /// Writes instances to data as the records a top acceleration structure with motion is built
+    /// from, bfr_caps_ray_tracing.motion_instance_size bytes each, their keyframes read from
+    /// keyframes, on the CPU. On Vulkan a record is VkAccelerationStructureMotionInstanceNV's, 160
+    /// bytes apart. Fails as bfr_write_instances does, with error_unsupported where
+    /// bfr_caps_features.ray_tracing_motion is false, and error_invalid_argument for an instance
+    /// whose keyframes run past keyframes, or number other than the backend's record holds
+    /// (Vulkan's, two).
+    [[nodiscard]] Expected<void> writeMotionInstances(std::span<const AccelerationStructureMotionInstance> instances, std::span<const MotionKeyframe> keyframes, void* data, std::size_t size) const;
 
     /// Writes instances to data as the records a top acceleration structure is built from,
     /// bfr_caps_ray_tracing.instance_size bytes each, on the CPU. On Vulkan a record is
     /// VkAccelerationStructureInstanceKHR's 64 bytes: the transform's 12 floats, then the custom
     /// index in the low 24 bits of a 32-bit value and the mask in its high 8, then the hit group
     /// offset in the low 24 bits of another and the flags in its high 8 (1 cull disable, 2 front
-    /// counter-clockwise, 4 force opaque, 8 force non-opaque), then the 64-bit reference
+    /// counter-clockwise, 4 force opaque, 8 force non-opaque, 16 force opacity micromap 2-state, 32
+    /// disable opacity micromaps), then the 64-bit reference
     /// bfr_get_acceleration_structure_reference gives, 0 for an instance no ray hits. Fails with
     /// error_unsupported where bfr_caps_features.acceleration_structure is false,
     /// error_invalid_argument when size is too small, an index or offset is instance_index_limit or
@@ -5038,9 +5163,10 @@ public:
     /// desc.cache is looked in first, and the pipeline added on a miss. Fails with
     /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false, or for library or
     /// libraries where bfr_caps_features.ray_tracing_pipeline_library is false, capture_replay
-    /// where bfr_caps_features.ray_tracing_capture_replay is false, or allow_opacity_micromaps
-    /// where bfr_caps_features.opacity_micromap is false, error_invalid_argument for an enum value
-    /// BFR doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or
+    /// where bfr_caps_features.ray_tracing_capture_replay is false, allow_opacity_micromaps where
+    /// bfr_caps_features.opacity_micromap is false, or allow_motion where
+    /// bfr_caps_features.ray_tracing_motion is false, error_invalid_argument for an enum value BFR
+    /// doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or
     /// replay_identifiers neither none nor holding every group's, error_invalid_handle for a
     /// shader, library or desc.cache that is gone, error_limit_reached at the device's maximum of
     /// pipelines, and error_device_failed when the backend refuses the desc; the message carries
@@ -5784,6 +5910,7 @@ inline bfr_ray_tracing_pipeline_desc toC(const RayTracingPipelineDesc& value, co
         .replay_identifiers = reinterpret_cast<const uint8_t*>(value.replayIdentifiers.data()),
         .replay_identifiers_size = static_cast<size_t>(value.replayIdentifiers.size()),
         .allow_opacity_micromaps = static_cast<bfr_bool>(value.allowOpacityMicromaps),
+        .allow_motion = static_cast<bfr_bool>(value.allowMotion),
     };
 }
 
@@ -5907,6 +6034,9 @@ inline bfr_triangle_geometry toC(const TriangleGeometry& value) {
         .opaque = static_cast<bfr_bool>(value.opaque),
         .no_duplicate_any_hit = static_cast<bfr_bool>(value.noDuplicateAnyHit),
         .opacity_micromap = toC(value.opacityMicromap),
+        .motion_vertices = value.motionVertices.get(),
+        .motion_vertex_offset = value.motionVertexOffset,
+        .motion_keyframe_stride = value.motionKeyframeStride,
     };
 }
 
@@ -5939,6 +6069,7 @@ inline bfr_acceleration_structure_inputs toC(const AccelerationStructureInputs& 
         .micromap_records = value.micromapRecords.get(),
         .micromap_record_offset = value.micromapRecordOffset,
         .micromap_record_stride = value.micromapRecordStride,
+        .motion_keyframes = value.motionKeyframes,
     };
 }
 
@@ -5965,6 +6096,15 @@ inline bfr_acceleration_structure_instance toC(const AccelerationStructureInstan
         .force_opacity_micromap_2_state = static_cast<bfr_bool>(value.forceOpacityMicromap2State),
         .disable_opacity_micromaps = static_cast<bfr_bool>(value.disableOpacityMicromaps),
         .bottom_structure = value.bottomStructure.get(),
+    };
+}
+
+inline bfr_acceleration_structure_motion_instance toC(const AccelerationStructureMotionInstance& value) {
+    return {
+        .instance = toC(value.instance),
+        .motion = static_cast<bfr_instance_motion>(value.motion),
+        .first_keyframe = value.firstKeyframe,
+        .keyframe_count = value.keyframeCount,
     };
 }
 
@@ -6576,6 +6716,19 @@ inline Expected<AccelerationStructure> Device::createAccelerationStructure(const
         return std::unexpected(detail::failure(result));
     }
     return AccelerationStructure{device_, structure, keepAlive_};
+}
+
+inline Expected<void> Device::writeMotionInstances(std::span<const AccelerationStructureMotionInstance> instances, std::span<const MotionKeyframe> keyframes, void* data, std::size_t size) const {
+    if (!std::in_range<uint32_t>(instances.size())) {
+        return std::unexpected(detail::tooMany("instances holds more elements than a uint32_t counts"));
+    }
+    if (!std::in_range<uint32_t>(keyframes.size())) {
+        return std::unexpected(detail::tooMany("keyframes holds more elements than a uint32_t counts"));
+    }
+    if (const bfr_result result = bfr_write_motion_instances(device_, reinterpret_cast<const bfr_acceleration_structure_motion_instance*>(instances.data()), static_cast<uint32_t>(instances.size()), reinterpret_cast<const bfr_motion_keyframe*>(keyframes.data()), static_cast<uint32_t>(keyframes.size()), data, size); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
 }
 
 inline Expected<void> Device::writeInstances(std::span<const AccelerationStructureInstance> instances, void* data, std::size_t size) const {

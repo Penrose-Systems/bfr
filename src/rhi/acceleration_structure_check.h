@@ -154,6 +154,15 @@ namespace bfr::rhi {
 /// Fails with RhiInvalidCall when out holds fewer than instances' records of
 /// instanceSize bytes, or an instance has an index or offset
 /// kInstanceIndexLimit or above or an opacity BFR doesn't have.
+[[nodiscard]] inline core::Result<void> checkInstance(const AccelerationStructureInstance& instance) {
+    if (instance.customIndex >= kInstanceIndexLimit || instance.hitGroupOffset >= kInstanceIndexLimit) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "an instance's custom index {} and hit group offset {} are below {}", instance.customIndex,
+                             instance.hitGroupOffset, kInstanceIndexLimit);
+    }
+    return checkKnown(instance.opacity, "instance opacity");
+}
+
 [[nodiscard]] inline core::Result<void> checkInstances(std::span<const AccelerationStructureInstance> instances,
                                                        std::span<const std::byte> out, std::uint32_t instanceSize) {
     if (out.size() / instanceSize < instances.size()) {
@@ -161,13 +170,52 @@ namespace bfr::rhi {
                              out.size(), instances.size(), instanceSize);
     }
     for (const AccelerationStructureInstance& instance : instances) {
-        if (instance.customIndex >= kInstanceIndexLimit || instance.hitGroupOffset >= kInstanceIndexLimit) {
-            return core::failure(core::ErrorCode::RhiInvalidCall,
-                                 "an instance's custom index {} and hit group offset {} are below {}",
-                                 instance.customIndex, instance.hitGroupOffset, kInstanceIndexLimit);
-        }
-        if (auto checked = checkKnown(instance.opacity, "instance opacity"); !checked) {
+        if (auto checked = checkInstance(instance); !checked) {
             return checked;
+        }
+    }
+    return {};
+}
+
+/// Fails with RhiUnsupported where the device has no motion, as
+/// Features::rayTracingMotion says.
+[[nodiscard]] inline core::Result<void> checkRayTracingMotion(bool rayTracingMotion) {
+    if (!rayTracingMotion) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device has no structures with motion (Features::rayTracingMotion)");
+    }
+    return {};
+}
+
+/// Fails as checkRayTracingMotion does for motionKeyframes other than 0.
+[[nodiscard]] inline core::Result<void> checkMotion(bool rayTracingMotion, std::uint32_t motionKeyframes) {
+    return motionKeyframes == 0 ? core::Result<void>{} : checkRayTracingMotion(rayTracingMotion);
+}
+
+/// Fails as checkInstances does, with RhiUnsupported where
+/// Features::rayTracingMotion is false, and RhiInvalidCall for a motion
+/// BFR doesn't have or keyframes past keyframes, which BFR reads.
+[[nodiscard]] inline core::Result<void> checkMotionInstances(
+    bool rayTracingMotion, std::span<const AccelerationStructureMotionInstance> instances,
+    std::span<const MotionKeyframe> keyframes, std::span<const std::byte> out, std::uint32_t instanceSize) {
+    if (auto checked = checkRayTracingMotion(rayTracingMotion); !checked) {
+        return checked;
+    }
+    if (out.size() / instanceSize < instances.size()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "{} bytes hold fewer than {} motion instance records of {}", out.size(), instances.size(),
+                             instanceSize);
+    }
+    for (const AccelerationStructureMotionInstance& moving : instances) {
+        if (auto checked = checkInstance(moving.instance); !checked) {
+            return checked;
+        }
+        if (auto checked = checkKnown(moving.motion, "instance motion"); !checked) {
+            return checked;
+        }
+        if (moving.firstKeyframe > keyframes.size() || moving.keyframeCount > keyframes.size() - moving.firstKeyframe) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "{} keyframes from {} run past the {} given",
+                                 moving.keyframeCount, moving.firstKeyframe, keyframes.size());
         }
     }
     return {};

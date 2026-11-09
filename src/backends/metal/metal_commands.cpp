@@ -518,6 +518,12 @@ core::Result<void> MetalDevice::captureReplayIdentifiers(PipelineHandle /*pipeli
     return checkCaptureReplay(features_.rayTracingCaptureReplay);
 }
 
+core::Result<void> MetalDevice::writeMotionInstances(std::span<const AccelerationStructureMotionInstance> /*instances*/,
+                                                     std::span<const MotionKeyframe> /*keyframes*/,
+                                                     std::span<std::byte> /*out*/) {
+    return checkRayTracingMotion(features_.rayTracingMotion);
+}
+
 core::Result<void> MetalDevice::buildAccelerationStructureIndirect(CommandListHandle /*commandList*/,
                                                                    const AccelerationStructureBuild& /*build*/,
                                                                    BufferHandle /*ranges*/, std::uint64_t /*offset*/,

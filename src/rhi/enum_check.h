@@ -112,6 +112,9 @@ constexpr std::pair<AccelerationStructureType, AccelerationStructureType> rangeO
     AccelerationStructureType /*unused*/) {
     return {AccelerationStructureType::Bottom, AccelerationStructureType::OpacityMicromap};
 }
+constexpr std::pair<InstanceMotion, InstanceMotion> rangeOf(InstanceMotion /*unused*/) {
+    return {InstanceMotion::None, InstanceMotion::Srt};
+}
 constexpr std::pair<OpacityMicromapFormat, OpacityMicromapFormat> rangeOf(OpacityMicromapFormat /*unused*/) {
     return {OpacityMicromapFormat::TwoState, OpacityMicromapFormat::FourState};
 }

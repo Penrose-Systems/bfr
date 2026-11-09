@@ -1193,7 +1193,7 @@ TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call tim
 
     std::uint32_t count = 0;
     REQUIRE(bfr_get_call_timings(device.device, &count, nullptr) == BFR_RESULT_SUCCESS);
-    CHECK(count == BFR_CALL_CAPTURE_REPLAY_IDENTIFIERS + 1);
+    CHECK(count == BFR_CALL_WRITE_MOTION_INSTANCES + 1);
     std::vector<bfr_call_timing> timings(count);
     REQUIRE(bfr_get_call_timings(device.device, &count, timings.data()) == BFR_RESULT_SUCCESS);
     CHECK(timings.at(BFR_CALL_CREATE_TIMESTAMP_POOL).count == 2);
@@ -1798,7 +1798,10 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
                                              .transform_offset = 0,
                                              .opaque = BFR_TRUE,
                                              .no_duplicate_any_hit = BFR_FALSE,
-                                             .opacity_micromap = {}};
+                                             .opacity_micromap = {},
+                                             .motion_vertices = {},
+                                             .motion_vertex_offset = 0,
+                                             .motion_keyframe_stride = 0};
         const std::array<bfr_triangle_geometry, 2> two{triangle, triangle};
         bfr_acceleration_structure_inputs inputs{};
         inputs.type = BFR_ACCELERATION_STRUCTURE_TYPE_BOTTOM;
@@ -1811,7 +1814,9 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
         CHECK(sizes.size != 0);
         const bfr_acceleration_structure_desc structureDesc{.next = nullptr,
                                                             .type = BFR_ACCELERATION_STRUCTURE_TYPE_BOTTOM,
-                                                            .size = sizes.size};
+                                                            .size = sizes.size,
+                                                            .motion_keyframes = 0,
+                                                            .motion_instances = 0};
         bfr_acceleration_structure bottom{};
         REQUIRE(bfr_create_acceleration_structure(device, &structureDesc, &bottom) == BFR_RESULT_SUCCESS);
 
@@ -1965,7 +1970,8 @@ TEST_CASE("C API makes shaders and a ray tracing pipeline from them, and gives i
                                                  .capture_replay = BFR_FALSE,
                                                  .replay_identifiers = nullptr,
                                                  .replay_identifiers_size = 0,
-                                                 .allow_opacity_micromaps = BFR_FALSE};
+                                                 .allow_opacity_micromaps = BFR_FALSE,
+                                                 .allow_motion = BFR_FALSE};
         bfr_pipeline pipeline{};
         bfr_ray_tracing_pipeline_desc unnamed = desc;
         unnamed.library_count = 1;
@@ -2003,4 +2009,5 @@ TEST_CASE("C API refuses acceleration structure property and serialization calls
           BFR_RESULT_ERROR_INVALID_ARGUMENT);
     CHECK(bfr_get_capture_replay_identifiers(nullptr, bfr_pipeline{}, 0, 0, nullptr, 0) ==
           BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_write_motion_instances(nullptr, nullptr, 0, nullptr, 0, nullptr, 0) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
 }

@@ -300,6 +300,9 @@ public:
     [[nodiscard]] core::Result<void> destroyAccelerationStructure(AccelerationStructureHandle structure) override;
     [[nodiscard]] core::Result<void> writeInstances(std::span<const AccelerationStructureInstance> instances,
                                                     std::span<std::byte> out) override;
+    [[nodiscard]] core::Result<void> writeMotionInstances(
+        std::span<const AccelerationStructureMotionInstance> instances, std::span<const MotionKeyframe> keyframes,
+        std::span<std::byte> out) override;
     [[nodiscard]] core::Result<void> buildAccelerationStructure(CommandListHandle commandList,
                                                                 const AccelerationStructureBuild& build) override;
     [[nodiscard]] core::Result<void> buildAccelerationStructureIndirect(CommandListHandle commandList,

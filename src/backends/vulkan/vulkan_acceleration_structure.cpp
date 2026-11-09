@@ -122,6 +122,20 @@ VkBuildMicromapFlagsEXT micromapFlagsFor(const AccelerationStructureFlags& flags
     return vulkan;
 }
 
+// Fails as checkMotion does, and with RhiInvalidCall for motion keyframes
+// other than the two Vulkan's motion structures hold.
+core::Result<void> checkVulkanMotion(bool rayTracingMotion, std::uint32_t motionKeyframes) {
+    if (auto checked = checkMotion(rayTracingMotion, motionKeyframes); !checked) {
+        return checked;
+    }
+    if (motionKeyframes != 0 && motionKeyframes != kVulkanMotionKeyframes) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "Vulkan's structures with motion have {} keyframes, not {}", kVulkanMotionKeyframes,
+                             motionKeyframes);
+    }
+    return {};
+}
+
 // usages as Vulkan reads them, in place: the layouts and format values are
 // the same.
 const VkMicromapUsageEXT* usagesOf(std::span<const OpacityMicromapUsage> usages) {
@@ -264,6 +278,20 @@ core::Result<VkAccelerationStructureBuildGeometryInfoKHR> addGeometries(const Ac
                 std::ignore = arrays.micromaps.push(linked);
                 data.pNext = &arrays.micromaps[arrays.micromaps.size() - 1];
             }
+            // Vulkan's second keyframe, at time 1, is the only one after the
+            // first.
+            if (inputs.motionKeyframes != 0 && !triangles.motionVertices.isNull()) {
+                const auto moved = addressOf(triangles.motionVertices, triangles.motionVertexOffset);
+                if (!moved) {
+                    return std::unexpected(moved.error());
+                }
+                VkAccelerationStructureGeometryMotionTrianglesDataNV motion{};
+                motion.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_MOTION_TRIANGLES_DATA_NV;
+                motion.pNext = data.pNext;
+                motion.vertexData.deviceAddress = *moved;
+                std::ignore = arrays.motions.push(motion);
+                data.pNext = &arrays.motions[arrays.motions.size() - 1];
+            }
             add(geometry, triangles.triangleCount);
         }
         for (const BoxGeometry& boxes : inputs.boxes) {
@@ -283,7 +311,10 @@ core::Result<VkAccelerationStructureBuildGeometryInfoKHR> addGeometries(const Ac
     VkAccelerationStructureBuildGeometryInfoKHR info{};
     info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
     info.type = typeFor(inputs.type);
-    info.flags = flagsFor(inputs.flags);
+    info.flags = flagsFor(inputs.flags) |
+                 (inputs.motionKeyframes != 0
+                      ? VkBuildAccelerationStructureFlagsKHR{VK_BUILD_ACCELERATION_STRUCTURE_MOTION_BIT_NV}
+                      : 0U);
     info.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     info.geometryCount = static_cast<std::uint32_t>(arrays.geometries.size() - first);
     info.pGeometries = arrays.geometries.data() + first;
@@ -349,6 +380,9 @@ core::Result<AccelerationStructureSizes> VulkanDevice::accelerationStructureSize
     if (auto checked = checkInputs(inputs, features_.opacityMicromap); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkVulkanMotion(features_.rayTracingMotion, inputs.motionKeyframes); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     if (auto counted = countGeometries(inputs, desc_.maxBuildGeometries); !counted) {
         return std::unexpected(std::move(counted.error()));
     }
@@ -393,6 +427,9 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     if (auto checked = checkOpacityMicromaps(features_.opacityMicromap,
                                              desc.type == AccelerationStructureType::OpacityMicromap);
         !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkVulkanMotion(features_.rayTracingMotion, desc.motionKeyframes); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (desc.size == 0) {
@@ -446,6 +483,13 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     info.offset = 0;
     info.size = desc.size;
     info.type = typeFor(desc.type);
+    VkAccelerationStructureMotionInfoNV motion{};
+    motion.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_MOTION_INFO_NV;
+    motion.maxInstances = desc.motionInstances;
+    if (desc.motionKeyframes != 0) {
+        info.createFlags |= VK_ACCELERATION_STRUCTURE_CREATE_MOTION_BIT_NV;
+        info.pNext = &motion;
+    }
     VkAccelerationStructureKHR structure = VK_NULL_HANDLE;
     if (const VkResult result = table_.vkCreateAccelerationStructureKHR(device_, &info, nullptr, &structure);
         result != VK_SUCCESS) {
@@ -517,32 +561,128 @@ core::Result<void> VulkanDevice::writeInstances(std::span<const AccelerationStru
         return checked;
     }
     for (std::size_t i = 0; i < instances.size(); ++i) {
-        const AccelerationStructureInstance& instance = instances[i];
-        VkDeviceAddress reference = 0;
-        if (!instance.bottomStructure.isNull()) {
-            auto found = accelerationStructureFor(instance.bottomStructure);
-            if (!found) {
-                return std::unexpected(std::move(found.error()));
-            }
-            if ((*found)->type() != AccelerationStructureType::Bottom) {
-                return core::failure(core::ErrorCode::RhiInvalidCall,
-                                     "instance {} names a structure that is not a bottom one; instances are of bottom "
-                                     "ones",
-                                     i);
-            }
-            reference = (*found)->reference();
+        const auto record = instanceRecord(instances[i], i);
+        if (!record) {
+            return std::unexpected(record.error());
         }
-        VkAccelerationStructureInstanceKHR record{};
-        static_assert(sizeof(record.transform) == sizeof(instance.transform));
-        std::memcpy(&record.transform, instance.transform.data(), sizeof(record.transform));
-        // checkInstances has seen the indices fit their 24 bits, and the
-        // flags are 8 bits' worth.
-        record.instanceCustomIndex = instance.customIndex & kIndexBits;
-        record.mask = instance.mask;
-        record.instanceShaderBindingTableRecordOffset = instance.hitGroupOffset & kIndexBits;
-        record.flags = static_cast<std::uint8_t>(instanceFlagsFor(instance));
-        record.accelerationStructureReference = reference;
-        std::memcpy(out.subspan(i * sizeof(record)).data(), &record, sizeof(record));
+        std::memcpy(out.subspan(i * sizeof(*record)).data(), &*record, sizeof(*record));
+    }
+    return {};
+}
+
+core::Result<VkAccelerationStructureInstanceKHR> VulkanDevice::instanceRecord(
+    const AccelerationStructureInstance& instance, std::size_t index) {
+    VkDeviceAddress reference = 0;
+    if (!instance.bottomStructure.isNull()) {
+        auto found = accelerationStructureFor(instance.bottomStructure);
+        if (!found) {
+            return std::unexpected(std::move(found.error()));
+        }
+        if ((*found)->type() != AccelerationStructureType::Bottom) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 "instance {} names a structure that is not a bottom one; instances are of bottom ones",
+                                 index);
+        }
+        reference = (*found)->reference();
+    }
+    VkAccelerationStructureInstanceKHR record{};
+    static_assert(sizeof(record.transform) == sizeof(instance.transform));
+    std::memcpy(&record.transform, instance.transform.data(), sizeof(record.transform));
+    // checkInstance has seen the indices fit their 24 bits, and the flags are
+    // 8 bits' worth.
+    record.instanceCustomIndex = instance.customIndex & kIndexBits;
+    record.mask = instance.mask;
+    record.instanceShaderBindingTableRecordOffset = instance.hitGroupOffset & kIndexBits;
+    record.flags = static_cast<std::uint8_t>(instanceFlagsFor(instance));
+    record.accelerationStructureReference = reference;
+    return record;
+}
+
+namespace {
+
+VkSRTDataNV srtFor(const SrtTransform& srt) {
+    return {.sx = srt.scale[0],
+            .a = srt.shear[0],
+            .b = srt.shear[1],
+            .pvx = srt.pivot[0],
+            .sy = srt.scale[1],
+            .c = srt.shear[2],
+            .pvy = srt.pivot[1],
+            .sz = srt.scale[2],
+            .pvz = srt.pivot[2],
+            .qx = srt.rotation[0],
+            .qy = srt.rotation[1],
+            .qz = srt.rotation[2],
+            .qw = srt.rotation[3],
+            .tx = srt.translation[0],
+            .ty = srt.translation[1],
+            .tz = srt.translation[2]};
+}
+
+// The fields a motion record shares with a static one, from record.
+template <class Motion>
+void copyFields(const VkAccelerationStructureInstanceKHR& record, Motion& motion) {
+    motion.instanceCustomIndex = record.instanceCustomIndex;
+    motion.mask = record.mask;
+    motion.instanceShaderBindingTableRecordOffset = record.instanceShaderBindingTableRecordOffset;
+    motion.flags = record.flags;
+    motion.accelerationStructureReference = record.accelerationStructureReference;
+}
+
+} // namespace
+
+core::Result<void> VulkanDevice::writeMotionInstances(std::span<const AccelerationStructureMotionInstance> instances,
+                                                      std::span<const MotionKeyframe> keyframes,
+                                                      std::span<std::byte> out) {
+    if (auto checked = checkAccelerationStructures(features_.accelerationStructure); !checked) {
+        return checked;
+    }
+    if (auto checked = checkMotionInstances(features_.rayTracingMotion, instances, keyframes, out,
+                                            rayTracing_.motionInstanceSize);
+        !checked) {
+        return checked;
+    }
+    static_assert(sizeof(VkAccelerationStructureMotionInstanceNV) <= kVulkanMotionInstanceStride);
+    for (std::size_t i = 0; i < instances.size(); ++i) {
+        const AccelerationStructureMotionInstance& moving = instances[i];
+        if (moving.motion != InstanceMotion::None && moving.keyframeCount != kVulkanMotionKeyframes) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 "motion instance {} has {} keyframes; Vulkan's record holds {}", i,
+                                 moving.keyframeCount, kVulkanMotionKeyframes);
+        }
+        const auto record = instanceRecord(moving.instance, i);
+        if (!record) {
+            return std::unexpected(record.error());
+        }
+        VkAccelerationStructureMotionInstanceNV motion{};
+        switch (moving.motion) {
+            case InstanceMotion::Matrix: {
+                motion.type = VK_ACCELERATION_STRUCTURE_MOTION_INSTANCE_TYPE_MATRIX_MOTION_NV;
+                VkAccelerationStructureMatrixMotionInstanceNV& matrix = motion.data.matrixMotionInstance;
+                const MotionKeyframe& first = keyframes[moving.firstKeyframe];
+                const MotionKeyframe& last = keyframes[moving.firstKeyframe + 1];
+                static_assert(sizeof(matrix.transformT0) == sizeof(first.matrix));
+                std::memcpy(&matrix.transformT0, first.matrix.data(), sizeof(matrix.transformT0));
+                std::memcpy(&matrix.transformT1, last.matrix.data(), sizeof(matrix.transformT1));
+                copyFields(*record, matrix);
+                break;
+            }
+            case InstanceMotion::Srt: {
+                motion.type = VK_ACCELERATION_STRUCTURE_MOTION_INSTANCE_TYPE_SRT_MOTION_NV;
+                VkAccelerationStructureSRTMotionInstanceNV& srt = motion.data.srtMotionInstance;
+                srt.transformT0 = srtFor(keyframes[moving.firstKeyframe].srt);
+                srt.transformT1 = srtFor(keyframes[moving.firstKeyframe + 1].srt);
+                copyFields(*record, srt);
+                break;
+            }
+            case InstanceMotion::None:
+            default:
+                motion.type = VK_ACCELERATION_STRUCTURE_MOTION_INSTANCE_TYPE_STATIC_NV;
+                motion.data.staticInstance = *record;
+                break;
+        }
+        // The stride's padding past the record is left as out holds it.
+        std::memcpy(out.subspan(i * kVulkanMotionInstanceStride).data(), &motion, sizeof(motion));
     }
     return {};
 }
@@ -581,6 +721,9 @@ core::Result<void> VulkanDevice::recordBuild(CommandListHandle commandList, cons
                   offsetof(AccelerationStructureBuildRange, transformOffset) ==
                       offsetof(VkAccelerationStructureBuildRangeInfoKHR, transformOffset));
     if (auto checked = checkInputs(build.inputs, features_.opacityMicromap); !checked) {
+        return checked;
+    }
+    if (auto checked = checkVulkanMotion(features_.rayTracingMotion, build.inputs.motionKeyframes); !checked) {
         return checked;
     }
     if (auto counted = countGeometries(build.inputs, desc_.maxBuildGeometries); !counted) {

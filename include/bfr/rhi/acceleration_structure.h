@@ -131,6 +131,14 @@ struct TriangleGeometry {
     bool noDuplicateAnyHit = false;
     /// Where Features::opacityMicromap.
     TriangleOpacityMicromap opacityMicromap{};
+    /// In a structure with motion, the vertices at each keyframe after the
+    /// first, which vertices holds: keyframe k's from
+    /// motionVertexOffset + (k - 1) * motionKeyframeStride in motionVertices,
+    /// laid out as vertices are. The buffer has accelerationStructureInput
+    /// usage.
+    BufferHandle motionVertices{};
+    std::uint64_t motionVertexOffset = 0;
+    std::uint64_t motionKeyframeStride = 0;
 };
 
 /// Boxes in a bottom structure: six floats each, min xyz then max xyz, min
@@ -172,6 +180,10 @@ struct AccelerationStructureInputs {
     BufferHandle micromapRecords{};
     std::uint64_t micromapRecordOffset = 0;
     std::uint32_t micromapRecordStride = 0;
+    /// The structure's AccelerationStructureDesc::motionKeyframes: its
+    /// triangles' motion vertices are read, or its instance records are
+    /// writeMotionInstances'.
+    std::uint32_t motionKeyframes = 0;
 };
 
 /// The bytes a structure takes, and the scratch bytes its build and its
@@ -184,10 +196,16 @@ struct AccelerationStructureSizes {
     bool discardable = false;
 };
 
-/// A structure of size bytes, in memory the device allocates.
+/// A structure of size bytes, in memory the device allocates. With
+/// motionKeyframes, at least 2 and at most RayTracingLimits::maxMotionKeyframes,
+/// where Features::rayTracingMotion, its builds have motion: a bottom one's
+/// triangles move between keyframes, a top one holds motion instances, at
+/// most motionInstances of them, passed to backends that take it. 0 is none.
 struct AccelerationStructureDesc {
     AccelerationStructureType type = AccelerationStructureType::Bottom;
     std::uint64_t size = 0;
+    std::uint32_t motionKeyframes = 0;
+    std::uint32_t motionInstances = 0;
 };
 
 /// A build of dst, of inputs.type, from inputs; or, with update, an update
@@ -294,6 +312,43 @@ struct AccelerationStructureInstance {
     bool forceOpacityMicromap2State = false;
     bool disableOpacityMicromaps = false;
     AccelerationStructureHandle bottomStructure{};
+};
+
+/// How a motion instance moves: not at all, by its keyframes' matrices, or
+/// by their SrtTransforms. The values are the C API's.
+enum class InstanceMotion : std::uint8_t {
+    None = 0,
+    Matrix = 1,
+    Srt = 2,
+};
+
+/// A transform as its parts: scale, the shears a (xy), b (xz) and c (yz), a
+/// pivot it scales and shears about, then a rotation quaternion (x, y, z,
+/// w) and a translation. Keyframes between are blended part by part.
+struct SrtTransform {
+    std::array<float, 3> scale{};
+    std::array<float, 3> shear{};
+    std::array<float, 3> pivot{};
+    std::array<float, 4> rotation{};
+    std::array<float, 3> translation{};
+};
+
+/// One keyframe of a motion instance's transform: matrix, a 3x4 row-major
+/// transform, for Matrix motion; srt for Srt motion.
+struct MotionKeyframe {
+    std::array<float, kTransformFloats> matrix{};
+    SrtTransform srt{};
+};
+
+/// An instance in a top structure with motion: instance, whose transform is
+/// the instance's where motion is None, and keyframeCount keyframes from
+/// firstKeyframe in the keyframes writeMotionInstances is given, the first
+/// at time 0 and the last at 1, where it moves.
+struct AccelerationStructureMotionInstance {
+    AccelerationStructureInstance instance{};
+    InstanceMotion motion = InstanceMotion::None;
+    std::uint32_t firstKeyframe = 0;
+    std::uint32_t keyframeCount = 0;
 };
 
 } // namespace bfr::rhi

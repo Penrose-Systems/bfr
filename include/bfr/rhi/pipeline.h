@@ -367,6 +367,9 @@ struct RayTracingPipelineDesc {
     /// Its traces take the opacity micromaps structures hold, where
     /// Features::opacityMicromap.
     bool allowOpacityMicromaps = false;
+    /// Its traces are at a time, of structures with motion, where
+    /// Features::rayTracingMotion.
+    bool allowMotion = false;
 };
 
 } // namespace bfr::rhi

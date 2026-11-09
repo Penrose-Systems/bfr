@@ -570,9 +570,12 @@ public:
     /// An empty structure of desc.size bytes, which a build fills. Cold: it
     /// frees structures the GPU is done with. Fails with RhiUnsupported where
     /// Features::accelerationStructure is false, RhiInvalidCall for a size of
-    /// 0 or an enum value BFR doesn't have, RhiLimitReached at the device's
-    /// maximum or, for a top structure on a device with table slots, when
-    /// they are all held,
+    /// 0 or an enum value BFR doesn't have, RhiUnsupported for
+    /// motionKeyframes where Features::rayTracingMotion is false or for an
+    /// opacity micromap where Features::opacityMicromap is, RhiInvalidCall for
+    /// motionKeyframes other than the backend takes (Vulkan, two),
+    /// RhiLimitReached at the device's maximum or, for a top structure on a
+    /// device with table slots, when they are all held,
     /// RhiOutOfMemory when the API says memory ran out, and RhiDeviceFailed
     /// when it refuses.
     [[nodiscard]] virtual core::Result<AccelerationStructureHandle> createAccelerationStructure(
@@ -609,6 +612,16 @@ public:
     /// that is gone.
     [[nodiscard]] virtual core::Result<void> writeInstances(std::span<const AccelerationStructureInstance> instances,
                                                             std::span<std::byte> out) = 0;
+
+    /// Writes instances to out as the records a top structure with motion is
+    /// built from, RayTracingLimits::motionInstanceSize bytes each, their
+    /// keyframes read from keyframes, on the CPU. Fails as writeInstances
+    /// does, with RhiUnsupported where Features::rayTracingMotion is false,
+    /// and RhiInvalidCall for an instance whose keyframes run past keyframes,
+    /// or number other than the backend's record holds (Vulkan's, two).
+    [[nodiscard]] virtual core::Result<void> writeMotionInstances(
+        std::span<const AccelerationStructureMotionInstance> instances, std::span<const MotionKeyframe> keyframes,
+        std::span<std::byte> out) = 0;
 
     /// Records build, outside rendering, on a queue whose kind runs compute.
     /// A barrier orders the work that wrote its inputs before it, and its
@@ -747,7 +760,8 @@ public:
     /// RhiUnsupported where Features::rayTracingPipeline is false, or for
     /// library or libraries where Features::rayTracingPipelineLibrary is
     /// false, captureReplay where Features::rayTracingCaptureReplay is false,
-    /// or allowOpacityMicromaps where Features::opacityMicromap is false,
+    /// allowOpacityMicromaps where Features::opacityMicromap is false, or
+    /// allowMotion where Features::rayTracingMotion is false,
     /// RhiInvalidCall for an enum value BFR doesn't have, a stackSize past 32
     /// bits on Vulkan, which takes no more, or replayIdentifiers neither empty
     /// nor holding every group's, RhiInvalidHandle for a shader, library or

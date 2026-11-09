@@ -437,6 +437,13 @@ core::Result<void> TimedDevice::buildAccelerationStructure(CommandListHandle com
                           [&] { return device_->buildAccelerationStructure(commandList, build); });
 }
 
+core::Result<void> TimedDevice::writeMotionInstances(std::span<const AccelerationStructureMotionInstance> instances,
+                                                     std::span<const MotionKeyframe> keyframes,
+                                                     std::span<std::byte> out) {
+    return counters_.time(Call::WriteMotionInstances,
+                          [&] { return device_->writeMotionInstances(instances, keyframes, out); });
+}
+
 core::Result<void> TimedDevice::buildAccelerationStructureIndirect(CommandListHandle commandList,
                                                                    const AccelerationStructureBuild& build,
                                                                    BufferHandle ranges, std::uint64_t offset,

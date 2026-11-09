@@ -310,6 +310,12 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
         .accelerationStructureIndirectBuild = hasAccelerationStructures(features) &&
                                               on(features.accelerationStructure.accelerationStructureIndirectBuild),
         .opacityMicromap = hasAccelerationStructures(features) && on(features.opacityMicromap.micromap),
+        .rayTracingMotion = hasAccelerationStructures(features) && on(features.rayTracingPipeline.rayTracingPipeline) &&
+                            on(features.motionBlur.rayTracingMotionBlur),
+        .rayTracingMotionIndirect = hasAccelerationStructures(features) &&
+                                    on(features.rayTracingPipeline.rayTracingPipeline) &&
+                                    on(features.motionBlur.rayTracingMotionBlur) &&
+                                    on(features.motionBlur.rayTracingMotionBlurPipelineTraceRaysIndirect),
         .meshShader = on(features.mesh.meshShader),
         .taskShader = on(features.mesh.taskShader),
         // BFR has no call for shading rates or conservative raster yet (roadmap step
@@ -818,6 +824,7 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     invocationReorder.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_EXT;
     libraryGroupHandles.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_LIBRARY_GROUP_HANDLES_FEATURES_EXT;
     opacityMicromap.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_FEATURES_EXT;
+    motionBlur.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_MOTION_BLUR_FEATURES_NV;
 
     void** tail = &core.pNext;
     link(tail, vulkan11);
@@ -895,6 +902,11 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
         // VK_EXT_opacity_micromap needs acceleration structures and
         // synchronization2 (vkdocs xml/vk.xml:28172), which BFR's minimum has.
         linkIfListed(VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME, opacityMicromap);
+        // VK_NV_ray_tracing_motion_blur needs ray tracing pipelines
+        // (vkdocs xml/vk.xml:27270).
+        if (lists(extensions, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
+            linkIfListed(VK_NV_RAY_TRACING_MOTION_BLUR_EXTENSION_NAME, motionBlur);
+        }
         // VK_EXT_pipeline_library_group_handles needs VK_KHR_pipeline_library
         // and VK_KHR_ray_tracing_pipeline (vkdocs xml/vk.xml:29884).
         if (lists(extensions, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME)) {
@@ -1004,6 +1016,10 @@ RayTracingLimits rayTracingFrom(const PropertyQuery& properties, const Features&
     }
     if (reported.rayTracingCaptureReplay) {
         limits.captureReplayIdentifierSize = properties.rayTracingPipeline.shaderGroupHandleCaptureReplaySize;
+    }
+    if (reported.rayTracingMotion) {
+        limits.maxMotionKeyframes = kVulkanMotionKeyframes;
+        limits.motionInstanceSize = kVulkanMotionInstanceStride;
     }
     if (reported.opacityMicromap) {
         limits.maxOpacity2StateSubdivisionLevel = properties.opacityMicromap.maxOpacity2StateSubdivisionLevel;

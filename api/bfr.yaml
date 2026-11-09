@@ -423,6 +423,7 @@ enums:
       ray_tracing_stack_size: {value: 101}
       build_acceleration_structure_indirect: {value: 102}
       capture_replay_identifiers: {value: 103}
+      write_motion_instances: {value: 104}
 
   timestamp_stage:
     doc: >-
@@ -687,6 +688,13 @@ enums:
       fully_opaque: {value: -2}
       fully_unknown_transparent: {value: -3}
       fully_unknown_opaque: {value: -4}
+
+  instance_motion:
+    doc: "How a motion instance moves: not at all, by its keyframes' matrices, or by their SRT transforms."
+    values:
+      none: {value: 0}
+      matrix: {value: 1}
+      srt: {value: 2}
 
   build_preference:
     doc: What an acceleration structure build favours; passed to the backend as given.
@@ -1570,6 +1578,7 @@ structs:
           only.
       - {name: replay_identifiers_size, type: size, doc: Bytes.}
       - {name: allow_opacity_micromaps, type: bool, doc: "Its traces take the opacity micromaps structures hold, where bfr_caps_features.opacity_micromap."}
+      - {name: allow_motion, type: bool, doc: "Its traces are at a time, of structures with motion, where bfr_caps_features.ray_tracing_motion."}
 
   shader_table_region:
     doc: >-
@@ -1879,6 +1888,15 @@ structs:
       - {name: opaque, type: bool}
       - {name: no_duplicate_any_hit, type: bool}
       - {name: opacity_micromap, type: triangle_opacity_micromap, doc: "Where bfr_caps_features.opacity_micromap."}
+      - name: motion_vertices
+        type: buffer
+        doc: >-
+          In a structure with motion, the vertices at each keyframe after the
+          first, which vertices holds: keyframe k's from motion_vertex_offset +
+          (k - 1) * motion_keyframe_stride, laid out as vertices are. It has
+          acceleration_structure_input usage.
+      - {name: motion_vertex_offset, type: u64, doc: Bytes into motion_vertices.}
+      - {name: motion_keyframe_stride, type: u64, doc: Bytes from one keyframe's vertices to the next.}
 
   box_geometry:
     doc: >-
@@ -1926,6 +1944,12 @@ structs:
       - {name: micromap_records, type: buffer}
       - {name: micromap_record_offset, type: u64, doc: Bytes into micromap_records.}
       - {name: micromap_record_stride, type: u32}
+      - name: motion_keyframes
+        type: u32
+        doc: >-
+          The structure's bfr_acceleration_structure_desc.motion_keyframes: its
+          triangles' motion vertices are read, or its instance records are
+          bfr_write_motion_instances'.
 
   acceleration_structure_sizes:
     doc: >-
@@ -1939,11 +1963,20 @@ structs:
       - {name: discardable, type: bool}
 
   acceleration_structure_desc:
-    doc: How to create an acceleration structure of size bytes, in memory the device allocates.
+    doc: >-
+      How to create an acceleration structure of size bytes, in memory the
+      device allocates. With motion_keyframes, at least 2 and at most
+      bfr_caps_ray_tracing.max_motion_keyframes, where
+      bfr_caps_features.ray_tracing_motion, its builds have motion: a bottom
+      one's triangles move between keyframes, a top one holds motion
+      instances, at most motion_instances of them, passed to backends that
+      take it. 0 is none.
     extensible: true
     members:
       - {name: type, type: acceleration_structure_type, doc: 0 is bottom.}
       - {name: size, type: u64, doc: "Bytes, as bfr_get_acceleration_structure_sizes gives them."}
+      - {name: motion_keyframes, type: u32}
+      - {name: motion_instances, type: u32}
 
   acceleration_structure_build_range:
     doc: >-
@@ -1990,6 +2023,36 @@ structs:
       - {name: force_opacity_micromap_2_state, type: bool, doc: "Its opacity micromaps' unknown states are taken as known."}
       - {name: disable_opacity_micromaps, type: bool, doc: "Its opacity micromaps are ignored, of a bottom structure built with allow_disable_opacity_micromaps."}
       - {name: bottom_structure, type: acceleration_structure, doc: Null is an instance no ray hits.}
+
+  srt_transform:
+    doc: >-
+      A transform as its parts: scale, the shears a (xy), b (xz) and c (yz), a
+      pivot it scales and shears about, then a rotation quaternion (x, y, z,
+      w) and a translation. Keyframes between are blended part by part.
+    members:
+      - {name: scale, type: f32, fixed: 3}
+      - {name: shear, type: f32, fixed: 3}
+      - {name: pivot, type: f32, fixed: 3}
+      - {name: rotation, type: f32, fixed: 4}
+      - {name: translation, type: f32, fixed: 3}
+
+  motion_keyframe:
+    doc: "One keyframe of a motion instance's transform: matrix for matrix motion, srt for srt motion."
+    members:
+      - {name: matrix, type: f32, fixed: transform_floats, doc: 3x4 row-major transform.}
+      - {name: srt, type: srt_transform}
+
+  acceleration_structure_motion_instance:
+    doc: >-
+      An instance in a top structure with motion: instance, whose transform is
+      the instance's where motion is none, and keyframe_count keyframes from
+      first_keyframe in the keyframes bfr_write_motion_instances is given, the
+      first at time 0 and the last at 1, where it moves.
+    members:
+      - {name: instance, type: acceleration_structure_instance}
+      - {name: motion, type: instance_motion, doc: 0 is none.}
+      - {name: first_keyframe, type: u32}
+      - {name: keyframe_count, type: u32}
 
   acceleration_structure_property_pool_desc:
     doc: >-
@@ -2153,6 +2216,8 @@ structs:
       - {name: capture_replay_identifier_size, type: u32, doc: The bytes of one group's identifier bfr_get_capture_replay_identifiers writes.}
       - {name: max_opacity_2_state_subdivision_level, type: u32, doc: The highest subdivision level of a two-state opacity micromap.}
       - {name: max_opacity_4_state_subdivision_level, type: u32, doc: The highest subdivision level of a four-state opacity micromap.}
+      - {name: max_motion_keyframes, type: u32, doc: "The most keyframes a structure with motion, or a motion instance, has."}
+      - {name: motion_instance_size, type: u32, doc: The bytes of one record bfr_write_motion_instances writes.}
 
   caps_features:
     doc: Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and not listed.
@@ -2175,6 +2240,8 @@ structs:
       - {name: ray_tracing_capture_replay_mixed, type: bool, doc: "A device makes pipelines with replayed identifiers and pipelines without them in any order, at once."}
       - {name: acceleration_structure_indirect_build, type: bool, doc: bfr_build_acceleration_structure_indirect.}
       - {name: opacity_micromap, type: bool, doc: "Opacity micromap structures, which bottom structures' triangles take their opacity from."}
+      - {name: ray_tracing_motion, type: bool, doc: "Structures with motion, traced at a time by pipelines made with allow_motion."}
+      - {name: ray_tracing_motion_indirect, type: bool, doc: bfr_trace_rays_indirect with a pipeline made with allow_motion.}
       - {name: mesh_shader, type: bool}
       - {name: task_shader, type: bool}
       - {name: shading_rate, type: bool, doc: A shading rate per draw.}
@@ -3517,8 +3584,13 @@ functions:
       with. Fails with error_unsupported where
       bfr_caps_features.acceleration_structure is false,
       error_invalid_argument for a size of 0 or an enum value BFR doesn't
-      have, error_limit_reached at the device's maximum or, for a top
-      structure on a device with table slots, when they are all held,
+      have, error_unsupported for motion_keyframes where
+      bfr_caps_features.ray_tracing_motion is false or for an opacity
+      micromap where bfr_caps_features.opacity_micromap is,
+      error_invalid_argument for motion_keyframes other than the backend
+      takes (Vulkan, two), error_limit_reached at the device's maximum or,
+      for a top structure on a device with table slots, when they are all
+      held,
       error_out_of_memory when the backend
       says memory ran out, and error_device_failed when it refuses.
     returns: result
@@ -3538,6 +3610,27 @@ functions:
       - {name: device, type: device}
       - {name: structure, type: acceleration_structure}
       - {name: slot, type: u32, pointer: out}
+
+  write_motion_instances:
+    doc: >-
+      Writes instances to data as the records a top acceleration structure
+      with motion is built from, bfr_caps_ray_tracing.motion_instance_size
+      bytes each, their keyframes read from keyframes, on the CPU. On Vulkan a
+      record is VkAccelerationStructureMotionInstanceNV's, 160 bytes apart.
+      Fails as bfr_write_instances does, with error_unsupported where
+      bfr_caps_features.ray_tracing_motion is false, and
+      error_invalid_argument for an instance whose keyframes run past
+      keyframes, or number other than the backend's record holds (Vulkan's,
+      two).
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: instances, type: acceleration_structure_motion_instance, array: instance_count, pointer: in, optional: true}
+      - {name: instance_count, type: u32}
+      - {name: keyframes, type: motion_keyframe, array: keyframe_count, pointer: in, optional: true}
+      - {name: keyframe_count, type: u32}
+      - {name: data, type: opaque, doc: Where the records go.}
+      - {name: size, type: size, doc: Bytes of data.}
 
   get_acceleration_structure_reference:
     doc: >-
@@ -3570,7 +3663,8 @@ functions:
       transform's 12 floats, then the custom index in the low 24 bits of a
       32-bit value and the mask in its high 8, then the hit group offset in
       the low 24 bits of another and the flags in its high 8 (1 cull disable,
-      2 front counter-clockwise, 4 force opaque, 8 force non-opaque), then
+      2 front counter-clockwise, 4 force opaque, 8 force non-opaque, 16 force
+      opacity micromap 2-state, 32 disable opacity micromaps), then
       the 64-bit reference bfr_get_acceleration_structure_reference gives, 0
       for an instance no ray hits. Fails with error_unsupported where
       bfr_caps_features.acceleration_structure is false,
@@ -3667,8 +3761,9 @@ functions:
       bfr_caps_features.ray_tracing_pipeline is false, or for library or
       libraries where bfr_caps_features.ray_tracing_pipeline_library is false,
       capture_replay where bfr_caps_features.ray_tracing_capture_replay is
-      false, or allow_opacity_micromaps where
-      bfr_caps_features.opacity_micromap is false,
+      false, allow_opacity_micromaps where bfr_caps_features.opacity_micromap
+      is false, or allow_motion where bfr_caps_features.ray_tracing_motion is
+      false,
       error_invalid_argument for an enum value BFR doesn't have, a stack_size
       past 32 bits on Vulkan, which takes no more, or replay_identifiers
       neither none nor holding every group's, error_invalid_handle for a shader,

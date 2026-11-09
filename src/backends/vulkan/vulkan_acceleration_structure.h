@@ -81,8 +81,8 @@ private:
 
 /// What one buildAccelerationStructure or accelerationStructureSizes call
 /// fills: a geometry, a range and a primitive count for each of its
-/// geometries, and the opacity micromap its triangles chain where they name
-/// one. Made with the device at DeviceDesc::maxBuildGeometries, so no call
+/// geometries, and the opacity micromap and motion vertices its triangles
+/// chain where they have them. Made with the device at DeviceDesc::maxBuildGeometries, so no call
 /// allocates, nor moves what a geometry points at; used by one call at a
 /// time, under the device's lock.
 struct VulkanBuildArrays {
@@ -90,19 +90,22 @@ struct VulkanBuildArrays {
         : geometries(maxBuildGeometries),
           ranges(maxBuildGeometries),
           primitiveCounts(maxBuildGeometries),
-          micromaps(maxBuildGeometries) {}
+          micromaps(maxBuildGeometries),
+          motions(maxBuildGeometries) {}
 
     void clear() {
         geometries.clear();
         ranges.clear();
         primitiveCounts.clear();
         micromaps.clear();
+        motions.clear();
     }
 
     core::FixedVector<VkAccelerationStructureGeometryKHR> geometries;
     core::FixedVector<VkAccelerationStructureBuildRangeInfoKHR> ranges;
     core::FixedVector<std::uint32_t> primitiveCounts;
     core::FixedVector<VkAccelerationStructureTrianglesOpacityMicromapEXT> micromaps;
+    core::FixedVector<VkAccelerationStructureGeometryMotionTrianglesDataNV> motions;
 };
 
 } // namespace bfr::rhi::vulkan

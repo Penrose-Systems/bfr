@@ -526,6 +526,7 @@ typedef enum bfr_call {
     BFR_CALL_RAY_TRACING_STACK_SIZE = 101,
     BFR_CALL_BUILD_ACCELERATION_STRUCTURE_INDIRECT = 102,
     BFR_CALL_CAPTURE_REPLAY_IDENTIFIERS = 103,
+    BFR_CALL_WRITE_MOTION_INSTANCES = 104,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -894,6 +895,14 @@ typedef enum bfr_opacity_micromap_special_index {
     BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_UNKNOWN_OPAQUE = -4,
     BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FORCE32 = 0x7FFFFFFF
 } bfr_opacity_micromap_special_index;
+
+// How a motion instance moves: not at all, by its keyframes' matrices, or by their SRT transforms.
+typedef enum bfr_instance_motion {
+    BFR_INSTANCE_MOTION_NONE = 0,
+    BFR_INSTANCE_MOTION_MATRIX = 1,
+    BFR_INSTANCE_MOTION_SRT = 2,
+    BFR_INSTANCE_MOTION_FORCE32 = 0x7FFFFFFF
+} bfr_instance_motion;
 
 // What an acceleration structure build favours; passed to the backend as given.
 typedef enum bfr_build_preference {
@@ -1786,6 +1795,9 @@ typedef struct bfr_ray_tracing_pipeline_desc {
     // Its traces take the opacity micromaps structures hold, where
     // bfr_caps_features.opacity_micromap.
     bfr_bool allow_opacity_micromaps;
+    // Its traces are at a time, of structures with motion, where
+    // bfr_caps_features.ray_tracing_motion.
+    bfr_bool allow_motion;
 } bfr_ray_tracing_pipeline_desc;
 
 // Records in a shader binding table: size bytes from offset in buffer, which has
@@ -2114,6 +2126,14 @@ typedef struct bfr_triangle_geometry {
     bfr_bool no_duplicate_any_hit;
     // Where bfr_caps_features.opacity_micromap.
     bfr_triangle_opacity_micromap opacity_micromap;
+    // In a structure with motion, the vertices at each keyframe after the first, which vertices
+    // holds: keyframe k's from motion_vertex_offset + (k - 1) * motion_keyframe_stride, laid out as
+    // vertices are. It has acceleration_structure_input usage.
+    bfr_buffer motion_vertices;
+    // Bytes into motion_vertices.
+    uint64_t motion_vertex_offset;
+    // Bytes from one keyframe's vertices to the next.
+    uint64_t motion_keyframe_stride;
 } bfr_triangle_geometry;
 
 // Boxes in a bottom acceleration structure: six floats each, min xyz then max xyz, min at most max,
@@ -2163,6 +2183,9 @@ typedef struct bfr_acceleration_structure_inputs {
     // Bytes into micromap_records.
     uint64_t micromap_record_offset;
     uint32_t micromap_record_stride;
+    // The structure's bfr_acceleration_structure_desc.motion_keyframes: its triangles' motion
+    // vertices are read, or its instance records are bfr_write_motion_instances'.
+    uint32_t motion_keyframes;
 } bfr_acceleration_structure_inputs;
 
 // The bytes an acceleration structure takes, and the scratch bytes its build and its update take.
@@ -2175,13 +2198,19 @@ typedef struct bfr_acceleration_structure_sizes {
     bfr_bool discardable;
 } bfr_acceleration_structure_sizes;
 
-// How to create an acceleration structure of size bytes, in memory the device allocates.
+// How to create an acceleration structure of size bytes, in memory the device allocates. With
+// motion_keyframes, at least 2 and at most bfr_caps_ray_tracing.max_motion_keyframes, where
+// bfr_caps_features.ray_tracing_motion, its builds have motion: a bottom one's triangles move
+// between keyframes, a top one holds motion instances, at most motion_instances of them, passed to
+// backends that take it. 0 is none.
 typedef struct bfr_acceleration_structure_desc {
     const bfr_chain* next;
     // 0 is bottom.
     bfr_acceleration_structure_type type;
     // Bytes, as bfr_get_acceleration_structure_sizes gives them.
     uint64_t size;
+    uint32_t motion_keyframes;
+    uint32_t motion_instances;
 } bfr_acceleration_structure_desc;
 
 // One geometry's counts, as a buffer holds them for bfr_build_acceleration_structure_indirect:
@@ -2233,6 +2262,35 @@ typedef struct bfr_acceleration_structure_instance {
     // Null is an instance no ray hits.
     bfr_acceleration_structure bottom_structure;
 } bfr_acceleration_structure_instance;
+
+// A transform as its parts: scale, the shears a (xy), b (xz) and c (yz), a pivot it scales and
+// shears about, then a rotation quaternion (x, y, z, w) and a translation. Keyframes between are
+// blended part by part.
+typedef struct bfr_srt_transform {
+    float scale[3];
+    float shear[3];
+    float pivot[3];
+    float rotation[4];
+    float translation[3];
+} bfr_srt_transform;
+
+// One keyframe of a motion instance's transform: matrix for matrix motion, srt for srt motion.
+typedef struct bfr_motion_keyframe {
+    // 3x4 row-major transform.
+    float matrix[BFR_TRANSFORM_FLOATS];
+    bfr_srt_transform srt;
+} bfr_motion_keyframe;
+
+// An instance in a top structure with motion: instance, whose transform is the instance's where
+// motion is none, and keyframe_count keyframes from first_keyframe in the keyframes
+// bfr_write_motion_instances is given, the first at time 0 and the last at 1, where it moves.
+typedef struct bfr_acceleration_structure_motion_instance {
+    bfr_acceleration_structure_instance instance;
+    // 0 is none.
+    bfr_instance_motion motion;
+    uint32_t first_keyframe;
+    uint32_t keyframe_count;
+} bfr_acceleration_structure_motion_instance;
 
 // How to create a property pool of count entries of property, at least 1, of opacity micromaps
 // where opacity_micromaps, and of other structures where not.
@@ -2463,6 +2521,10 @@ typedef struct bfr_caps_ray_tracing {
     uint32_t max_opacity_2_state_subdivision_level;
     // The highest subdivision level of a four-state opacity micromap.
     uint32_t max_opacity_4_state_subdivision_level;
+    // The most keyframes a structure with motion, or a motion instance, has.
+    uint32_t max_motion_keyframes;
+    // The bytes of one record bfr_write_motion_instances writes.
+    uint32_t motion_instance_size;
 } bfr_caps_ray_tracing;
 
 // Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and
@@ -2505,6 +2567,10 @@ typedef struct bfr_caps_features {
     bfr_bool acceleration_structure_indirect_build;
     // Opacity micromap structures, which bottom structures' triangles take their opacity from.
     bfr_bool opacity_micromap;
+    // Structures with motion, traced at a time by pipelines made with allow_motion.
+    bfr_bool ray_tracing_motion;
+    // bfr_trace_rays_indirect with a pipeline made with allow_motion.
+    bfr_bool ray_tracing_motion_indirect;
     bfr_bool mesh_shader;
     bfr_bool task_shader;
     // A shading rate per draw.
@@ -3605,7 +3671,10 @@ BFR_API bfr_result bfr_get_acceleration_structure_sizes(
 // Creates an empty acceleration structure of desc's size bytes, which a build fills. Not for the
 // frame path: it frees structures the GPU is done with. Fails with error_unsupported where
 // bfr_caps_features.acceleration_structure is false, error_invalid_argument for a size of 0 or an
-// enum value BFR doesn't have, error_limit_reached at the device's maximum or, for a top structure
+// enum value BFR doesn't have, error_unsupported for motion_keyframes where
+// bfr_caps_features.ray_tracing_motion is false or for an opacity micromap where
+// bfr_caps_features.opacity_micromap is, error_invalid_argument for motion_keyframes other than the
+// backend takes (Vulkan, two), error_limit_reached at the device's maximum or, for a top structure
 // on a device with table slots, when they are all held, error_out_of_memory when the backend says
 // memory ran out, and error_device_failed when it refuses.
 BFR_API bfr_result bfr_create_acceleration_structure(
@@ -3620,6 +3689,25 @@ BFR_API bfr_result bfr_get_acceleration_structure_slot(
     bfr_device* device,
     bfr_acceleration_structure structure,
     uint32_t* slot);
+
+// Writes instances to data as the records a top acceleration structure with motion is built from,
+// bfr_caps_ray_tracing.motion_instance_size bytes each, their keyframes read from keyframes, on the
+// CPU. On Vulkan a record is VkAccelerationStructureMotionInstanceNV's, 160 bytes apart. Fails as
+// bfr_write_instances does, with error_unsupported where bfr_caps_features.ray_tracing_motion is
+// false, and error_invalid_argument for an instance whose keyframes run past keyframes, or number
+// other than the backend's record holds (Vulkan's, two).
+// instances: An array of instance_count elements. May be null.
+// keyframes: An array of keyframe_count elements. May be null.
+// data: Where the records go.
+// size: Bytes of data.
+BFR_API bfr_result bfr_write_motion_instances(
+    bfr_device* device,
+    const bfr_acceleration_structure_motion_instance* instances,
+    uint32_t instance_count,
+    const bfr_motion_keyframe* keyframes,
+    uint32_t keyframe_count,
+    void* data,
+    size_t size);
 
 // Writes what an instance record names a bottom acceleration structure by, for records the GPU
 // writes, as bfr_write_instances lays them out. Fails with error_invalid_argument for an opacity
@@ -3641,12 +3729,12 @@ BFR_API void bfr_destroy_acceleration_structure(
 // VkAccelerationStructureInstanceKHR's 64 bytes: the transform's 12 floats, then the custom index
 // in the low 24 bits of a 32-bit value and the mask in its high 8, then the hit group offset in the
 // low 24 bits of another and the flags in its high 8 (1 cull disable, 2 front counter-clockwise, 4
-// force opaque, 8 force non-opaque), then the 64-bit reference
-// bfr_get_acceleration_structure_reference gives, 0 for an instance no ray hits. Fails with
-// error_unsupported where bfr_caps_features.acceleration_structure is false, error_invalid_argument
-// when size is too small, an index or offset is instance_index_limit or above, an enum value BFR
-// doesn't have, or an instance names a structure other than a bottom one, and error_invalid_handle
-// for a structure that is gone.
+// force opaque, 8 force non-opaque, 16 force opacity micromap 2-state, 32 disable opacity
+// micromaps), then the 64-bit reference bfr_get_acceleration_structure_reference gives, 0 for an
+// instance no ray hits. Fails with error_unsupported where bfr_caps_features.acceleration_structure
+// is false, error_invalid_argument when size is too small, an index or offset is
+// instance_index_limit or above, an enum value BFR doesn't have, or an instance names a structure
+// other than a bottom one, and error_invalid_handle for a structure that is gone.
 // instances: An array of instance_count elements. May be null.
 // data: Where the records go.
 // size: Bytes of data.
@@ -3712,12 +3800,13 @@ BFR_API void bfr_destroy_shader(bfr_device* device, bfr_shader shader);
 // desc.cache is looked in first, and the pipeline added on a miss. Fails with error_unsupported
 // where bfr_caps_features.ray_tracing_pipeline is false, or for library or libraries where
 // bfr_caps_features.ray_tracing_pipeline_library is false, capture_replay where
-// bfr_caps_features.ray_tracing_capture_replay is false, or allow_opacity_micromaps where
-// bfr_caps_features.opacity_micromap is false, error_invalid_argument for an enum value BFR doesn't
-// have, a stack_size past 32 bits on Vulkan, which takes no more, or replay_identifiers neither
-// none nor holding every group's, error_invalid_handle for a shader, library or desc.cache that is
-// gone, error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
-// backend refuses the desc; the message carries what it said.
+// bfr_caps_features.ray_tracing_capture_replay is false, allow_opacity_micromaps where
+// bfr_caps_features.opacity_micromap is false, or allow_motion where
+// bfr_caps_features.ray_tracing_motion is false, error_invalid_argument for an enum value BFR
+// doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or replay_identifiers
+// neither none nor holding every group's, error_invalid_handle for a shader, library or desc.cache
+// that is gone, error_limit_reached at the device's maximum of pipelines, and error_device_failed
+// when the backend refuses the desc; the message carries what it said.
 BFR_API bfr_result bfr_create_ray_tracing_pipeline(
     bfr_device* device,
     const bfr_ray_tracing_pipeline_desc* desc,

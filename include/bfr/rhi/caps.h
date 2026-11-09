@@ -161,6 +161,10 @@ struct RayTracingLimits {
     /// opacity micromap.
     std::uint32_t maxOpacity2StateSubdivisionLevel = 0;
     std::uint32_t maxOpacity4StateSubdivisionLevel = 0;
+    /// The most keyframes a structure with motion, or a motion instance, has.
+    std::uint32_t maxMotionKeyframes = 0;
+    /// The bytes of one record Device::writeMotionInstances writes.
+    std::uint32_t motionInstanceSize = 0;
 };
 
 struct Features {
@@ -201,6 +205,11 @@ struct Features {
     /// AccelerationStructureType::OpacityMicromap: structures of micromaps,
     /// which bottom structures' triangles take their opacity from.
     bool opacityMicromap = false;
+    /// Structures with motion, AccelerationStructureDesc::motionKeyframes,
+    /// traced at a time by pipelines made with allowMotion.
+    bool rayTracingMotion = false;
+    /// Device::traceRaysIndirect with a pipeline made with allowMotion.
+    bool rayTracingMotionIndirect = false;
     bool meshShader = false;
     bool taskShader = false;
     bool shadingRate = false;

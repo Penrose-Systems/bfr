@@ -23,6 +23,12 @@ namespace bfr::rhi::vulkan {
 /// The oldest Vulkan BFR runs on.
 inline constexpr std::uint32_t kMinimumVersion = VK_API_VERSION_1_2;
 
+/// The keyframes a motion structure or instance has on Vulkan, times 0 and 1
+/// (VkAccelerationStructureMatrixMotionInstanceNV::transformT0, transformT1),
+/// and the bytes between motion instance records (accelstructures.adoc:1796-1797).
+inline constexpr std::uint32_t kVulkanMotionKeyframes = 2;
+inline constexpr std::uint32_t kVulkanMotionInstanceStride = 160;
+
 /// Whether a device at version has what Vulkan 1.3 made core.
 [[nodiscard]] constexpr bool hasCore13(std::uint32_t version) {
     return version >= VK_API_VERSION_1_3;
@@ -106,6 +112,7 @@ struct DeviceFeatures {
     VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT invocationReorder{};
     VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT libraryGroupHandles{};
     VkPhysicalDeviceOpacityMicromapFeaturesEXT opacityMicromap{};
+    VkPhysicalDeviceRayTracingMotionBlurFeaturesNV motionBlur{};
     /// VK_KHR_pipeline_library, which has no features struct, is enabled.
     bool pipelineLibrary = false;
     /// The extensions whose structs are chained, which the device enables.

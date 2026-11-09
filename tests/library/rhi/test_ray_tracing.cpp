@@ -361,6 +361,9 @@ struct TracingOptions {
     bool captureReplay = false;
     std::span<const std::byte> replayIdentifiers{};
     bool allowOpacityMicromaps = false;
+    // Made with allowMotion, its ray generation trace_motion.rgen, which
+    // traces at the time a third push constant holds.
+    bool motion = false;
 };
 
 // trace.rgen, trace.rmiss, and hit groups of trace.rchit for triangles and
@@ -369,8 +372,10 @@ struct TracingOptions {
 // a table alignment.
 struct RayTracing {
     RayTracing(Device& device, const Caps& caps, const TracingOptions& options = {}) : device(&device) {
-        const std::array codes{spirv(bfr::test::spirv::kTraceRgen), spirv(bfr::test::spirv::kTraceRmiss),
-                               spirv(bfr::test::spirv::kTraceRchit), spirv(bfr::test::spirv::kBoxRint)};
+        const std::array codes{options.motion ? spirv(bfr::test::spirv::kTraceMotionRgen)
+                                              : spirv(bfr::test::spirv::kTraceRgen),
+                               spirv(bfr::test::spirv::kTraceRmiss), spirv(bfr::test::spirv::kTraceRchit),
+                               spirv(bfr::test::spirv::kBoxRint)};
         std::array<ShaderHandle, kShaders> shaders{};
         for (std::size_t i = 0; i < kShaders; ++i) {
             const auto shader = device.createShader(codes.at(i));
@@ -397,7 +402,8 @@ struct RayTracing {
                                            .stackSize = options.stackSize,
                                            .captureReplay = options.captureReplay,
                                            .replayIdentifiers = options.replayIdentifiers,
-                                           .allowOpacityMicromaps = options.allowOpacityMicromaps};
+                                           .allowOpacityMicromaps = options.allowOpacityMicromaps,
+                                           .allowMotion = options.motion};
         if (options.linked) {
             // The library's shader indices are its own, from the miss shader.
             const std::array<RayTracingGroup, kGroups - 1> libraryGroups{{
@@ -943,6 +949,9 @@ TEST_CASE("Device refuses ray tracing pipeline work it can't pass on", "[rhi][ag
         if (made.caps.features.rayTracingPipeline && !made.caps.features.rayTracingPipelineLibrary) {
             CHECK(code(device.createRayTracingPipeline({.library = true})) == ErrorCode::RhiUnsupported);
         }
+        if (made.caps.features.rayTracingPipeline && !made.caps.features.rayTracingMotion) {
+            CHECK(code(device.createRayTracingPipeline({.allowMotion = true})) == ErrorCode::RhiUnsupported);
+        }
         if (made.caps.features.rayTracingPipeline && !made.caps.features.opacityMicromap) {
             CHECK(code(device.createRayTracingPipeline({.allowOpacityMicromaps = true})) == ErrorCode::RhiUnsupported);
         }
@@ -1317,6 +1326,145 @@ TEST_CASE("Device builds opacity micromaps, and rays take triangles' opacity fro
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("Device builds structures with motion, and rays traced at a time hit them where they are then, where it "
+          "has them",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const RayDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        if (!made.caps.features.rayTracingMotion) {
+            SKIP("the adapter has no structures with motion");
+        }
+        if (!takesSpirv(backend)) {
+            SKIP("no " << backend.name << " bytecode is checked in");
+        }
+        const RayTracingLimits& limits = made.caps.rayTracing;
+        REQUIRE(limits.maxMotionKeyframes >= 2);
+        constexpr std::uint32_t kKeyframes = 2;
+        // A triangle about the origin at time 0 that has moved 10 along x by
+        // time 1, and a box about the origin that stays.
+        const BufferHandle vertices = input(device,
+                                            std::array<float, kVertexFloats * kTriangleVertices>{-1, -1, 0, 1, -1, 0, 0,
+                                                                                                 1, 0});
+        const BufferHandle moved = input(device, std::array<float, kVertexFloats * kTriangleVertices>{9, -1, 0, 11, -1,
+                                                                                                      0, 10, 1, 0});
+        const BufferHandle boxes = input(device, std::array<float, kBoxFloats>{-1, -1, -1, 1, 1, 1});
+        const TriangleGeometry triangle{.vertices = vertices,
+                                        .vertexFormat = Format::Rgb32Float,
+                                        .vertexStride = kVertexFloats * sizeof(float),
+                                        .vertexCount = kTriangleVertices,
+                                        .triangleCount = 1,
+                                        .opaque = true,
+                                        .motionVertices = moved};
+        const BoxGeometry box{.boxes = boxes, .stride = kBoxFloats * sizeof(float), .count = 1};
+        const AccelerationStructureInputs triangleInputs{.type = AccelerationStructureType::Bottom,
+                                                         .triangles = std::span{&triangle, 1},
+                                                         .motionKeyframes = kKeyframes};
+        const AccelerationStructureInputs boxInputs{.type = AccelerationStructureType::Bottom,
+                                                    .boxes = std::span{&box, 1}};
+        // Instances: the moving triangle, still; a box moved by matrices
+        // from x = 20 to 30; and one moved by SRT transforms from x = 35 to 25.
+        const BufferHandle records = created(device, {.size = std::uint64_t{limits.motionInstanceSize} * kInstances,
+                                                      .memory = BufferMemory::Upload,
+                                                      .usage = {.accelerationStructureInput = true}});
+        const AccelerationStructureInputs topInputs{.type = AccelerationStructureType::Top,
+                                                    .instances = records,
+                                                    .instanceCount = kInstances,
+                                                    .motionKeyframes = kKeyframes};
+        const auto make = [&](const AccelerationStructureInputs& inputs, std::uint32_t motion) {
+            const auto sizes = device.accelerationStructureSizes(inputs);
+            INFO(failureOf(sizes));
+            REQUIRE(sizes.has_value());
+            return Built{.structure = created(device, {.type = inputs.type,
+                                                       .size = sizes->size,
+                                                       .motionKeyframes = motion,
+                                                       .motionInstances = motion == 0 ? 0 : kInstances}),
+                         .scratch = created(device, {.size = sizes->buildScratch,
+                                                     .usage = {.accelerationStructureScratch = true}})};
+        };
+        const Built triangles = make(triangleInputs, kKeyframes);
+        const Built still = make(boxInputs, 0);
+        const Built top = make(topInputs, kKeyframes);
+
+        const auto srtAt = [](float x) {
+            return SrtTransform{.scale = {1, 1, 1}, .rotation = {0, 0, 0, 1}, .translation = {x, 0, 0}};
+        };
+        const std::array<MotionKeyframe, 4> keyframes{{
+            {.matrix = movedBy(4 * kSpacing)},
+            {.matrix = movedBy(6 * kSpacing)},
+            {.srt = srtAt(7 * kSpacing)},
+            {.srt = srtAt(5 * kSpacing)},
+        }};
+        const std::array<AccelerationStructureMotionInstance, kInstances> instances{{
+            {.instance = {.transform = movedBy(0),
+                          .customIndex = kFirst,
+                          .mask = kAllRays,
+                          .bottomStructure = triangles.structure}},
+            {.instance =
+                 {.customIndex = kBox, .mask = kAllRays, .hitGroupOffset = 1, .bottomStructure = still.structure},
+             .motion = InstanceMotion::Matrix,
+             .firstKeyframe = 0,
+             .keyframeCount = kKeyframes},
+            {.instance =
+                 {.customIndex = kSecond, .mask = kAllRays, .hitGroupOffset = 1, .bottomStructure = still.structure},
+             .motion = InstanceMotion::Srt,
+             .firstKeyframe = 2,
+             .keyframeCount = kKeyframes},
+        }};
+        const auto mapped = device.mapBuffer(records);
+        REQUIRE(mapped.has_value());
+        const auto written = device.writeMotionInstances(instances, keyframes, *mapped);
+        INFO(failureOf(written));
+        REQUIRE(written.has_value());
+
+        const RayTracing tracing{device, made.caps, {.motion = true}};
+        const auto built = [&](CommandListHandle list) {
+            for (const auto& [structure, inputs] :
+                 {std::pair{triangles, triangleInputs}, std::pair{still, boxInputs}}) {
+                const auto recorded = device.buildAccelerationStructure(list, {.dst = structure.structure,
+                                                                               .inputs = inputs,
+                                                                               .scratch = structure.scratch});
+                INFO(failureOf(recorded));
+                CHECK(recorded.has_value());
+            }
+            CHECK(device.barrier(list).has_value());
+            const auto recorded = device.buildAccelerationStructure(list, {.dst = top.structure,
+                                                                           .inputs = topInputs,
+                                                                           .scratch = top.scratch});
+            INFO(failureOf(recorded));
+            CHECK(recorded.has_value());
+            CHECK(device.barrier(list).has_value());
+        };
+        // The rays traced at time.
+        const auto at = [&](float time) {
+            const auto trace = [&](CommandListHandle list, std::span<const std::byte> push) {
+                std::array<std::byte, 3 * sizeof(std::uint32_t)> timed{};
+                std::memcpy(timed.data(), push.data(), push.size());
+                std::memcpy(timed.data() + push.size(), &time, sizeof(time));
+                CHECK(device.bindPipeline(list, tracing.pipeline).has_value());
+                CHECK(device.pushConstants(list, timed).has_value());
+                const auto traced = device.traceRays(list, tracing.desc());
+                INFO(failureOf(traced));
+                CHECK(traced.has_value());
+            };
+            return traced(device, top.structure, built, trace);
+        };
+        CHECK(at(0) == std::array<std::uint32_t, kRays>{kFirst, kMiss, kMiss, kMiss, kBox, kMiss, kMiss, kSecond});
+        CHECK(at(1) == std::array<std::uint32_t, kRays>{kMiss, kMiss, kFirst, kMiss, kMiss, kSecond, kBox, kMiss});
+
+        for (const Built& done : {triangles, still, top}) {
+            CHECK(device.destroyAccelerationStructure(done.structure).has_value());
+            CHECK(device.destroyBuffer(done.scratch).has_value());
+        }
+        for (const BufferHandle buffer : {vertices, moved, boxes, records}) {
+            CHECK(device.destroyBuffer(buffer).has_value());
+        }
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
@@ -1333,6 +1481,12 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
         CHECK(device.destroyAccelerationStructure(AccelerationStructureHandle{}).has_value());
         if (!made.caps.features.accelerationStructureIndirectBuild) {
             CHECK(code(device.buildAccelerationStructureIndirect(*list, {}, {}, 0, 0)) == ErrorCode::RhiUnsupported);
+        }
+        if (made.caps.features.accelerationStructure && !made.caps.features.rayTracingMotion) {
+            std::array<std::byte, 1> out{};
+            CHECK(code(device.createAccelerationStructure({.size = kSmall, .motionKeyframes = 2})) ==
+                  ErrorCode::RhiUnsupported);
+            CHECK(code(device.writeMotionInstances({}, {}, out)) == ErrorCode::RhiUnsupported);
         }
         if (made.caps.features.accelerationStructure && !made.caps.features.opacityMicromap) {
             CHECK(code(device.createAccelerationStructure({.type = AccelerationStructureType::OpacityMicromap,

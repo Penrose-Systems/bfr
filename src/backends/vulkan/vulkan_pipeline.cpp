@@ -769,6 +769,9 @@ core::Result<VulkanPipeline> createVulkanRayTracingPipeline(const VolkDeviceTabl
     if (desc.allowOpacityMicromaps) {
         info.flags |= VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT;
     }
+    if (desc.allowMotion) {
+        info.flags |= VK_PIPELINE_CREATE_RAY_TRACING_ALLOW_MOTION_BIT_NV;
+    }
     // Payload and attribute sizes reach Vulkan only through a library
     // interface, which a library and a pipeline linking libraries take
     // (VUID-VkRayTracingPipelineCreateInfoKHR-flags-03465, -pLibraryInfo-03590),

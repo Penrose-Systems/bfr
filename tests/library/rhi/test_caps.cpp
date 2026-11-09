@@ -93,6 +93,11 @@ std::vector<std::string> limitsWithoutFeatures(const Caps& caps) {
          "capture-replay identifiers"},
         {features.accelerationStructure || !features.accelerationStructureIndirectBuild, "indirect builds"},
         {features.accelerationStructure || !features.opacityMicromap, "opacity micromaps"},
+        {features.rayTracingPipeline || !features.rayTracingMotion, "motion"},
+        {features.rayTracingMotion || !features.rayTracingMotionIndirect, "indirect motion"},
+        {features.rayTracingMotion ||
+             (caps.rayTracing.maxMotionKeyframes == 0 && caps.rayTracing.motionInstanceSize == 0),
+         "motion limits"},
         {features.opacityMicromap || (caps.rayTracing.maxOpacity2StateSubdivisionLevel == 0 &&
                                       caps.rayTracing.maxOpacity4StateSubdivisionLevel == 0),
          "opacity micromap levels"},
