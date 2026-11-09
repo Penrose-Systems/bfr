@@ -621,10 +621,12 @@ public:
                                                             std::span<std::byte> out) = 0;
 
     /// Writes instances to out as the records a top structure with motion is
-    /// built from, RayTracingLimits::motionInstanceSize bytes apart, their
+    /// built from, RayTracingLimits::motionInstanceSize bytes apart, the last
+    /// taking only the bytes of the backend's record (Vulkan's, 152), their
     /// keyframes read from keyframes, on the CPU. Fails as writeInstances
     /// does, with RhiUnsupported where Features::rayTracingMotion is false,
-    /// and RhiInvalidCall for a moving instance whose keyframes run past keyframes,
+    /// and RhiInvalidCall for out too small for them, a moving instance whose
+    /// keyframes run past keyframes,
     /// or number other than the backend's record holds (Vulkan's, two).
     [[nodiscard]] virtual core::Result<void> writeMotionInstances(
         std::span<const AccelerationStructureMotionInstance> instances, std::span<const MotionKeyframe> keyframes,

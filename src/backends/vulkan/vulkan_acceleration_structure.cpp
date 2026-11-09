@@ -654,8 +654,11 @@ core::Result<void> VulkanDevice::writeMotionInstances(std::span<const Accelerati
     if (auto checked = checkAccelerationStructures(features_.accelerationStructure); !checked) {
         return checked;
     }
+    // The last record takes only its own bytes, short of the stride
+    // (accelstructures.adoc:1796-1797, 1981-1984).
     if (auto checked = checkMotionInstances(features_.rayTracingMotion, instances, keyframes, out,
-                                            rayTracing_.motionInstanceSize, features_.opacityMicromap);
+                                            rayTracing_.motionInstanceSize,
+                                            sizeof(VkAccelerationStructureMotionInstanceNV), features_.opacityMicromap);
         !checked) {
         return checked;
     }

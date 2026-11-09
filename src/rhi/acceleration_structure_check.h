@@ -208,20 +208,21 @@ namespace bfr::rhi {
 }
 
 /// Fails as checkInstances does, with RhiUnsupported where
-/// Features::rayTracingMotion is false, and RhiInvalidCall for a motion
-/// BFR doesn't have or, for a moving instance, keyframes past keyframes,
-/// which BFR reads.
+/// Features::rayTracingMotion is false, and RhiInvalidCall for out too small
+/// for the records stride bytes apart, the last only recordSize bytes, or for
+/// a motion BFR doesn't have or, for a moving instance, keyframes past
+/// keyframes, which BFR reads.
 [[nodiscard]] inline core::Result<void> checkMotionInstances(
     bool rayTracingMotion, std::span<const AccelerationStructureMotionInstance> instances,
-    std::span<const MotionKeyframe> keyframes, std::span<const std::byte> out, std::uint32_t instanceSize,
-    bool opacityMicromap) {
+    std::span<const MotionKeyframe> keyframes, std::span<const std::byte> out, std::uint32_t stride,
+    std::size_t recordSize, bool opacityMicromap) {
     if (auto checked = checkRayTracingMotion(rayTracingMotion); !checked) {
         return checked;
     }
-    if (out.size() / instanceSize < instances.size()) {
+    if (!instances.empty() && (out.size() < recordSize || (out.size() - recordSize) / stride < instances.size() - 1)) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "{} bytes hold fewer than {} motion instance records of {}", out.size(), instances.size(),
-                             instanceSize);
+                             "{} bytes hold fewer than {} motion instance records {} apart, the last of {}", out.size(),
+                             instances.size(), stride, recordSize);
     }
     for (const AccelerationStructureMotionInstance& moving : instances) {
         if (auto checked = checkInstance(moving.instance, opacityMicromap); !checked) {

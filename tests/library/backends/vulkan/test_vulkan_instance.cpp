@@ -662,6 +662,31 @@ TEST_CASE("Vulkan refuses motion of other than the two keyframes it takes", "[vu
     CHECK(written.error().code == bfr::core::ErrorCode::RhiInvalidCall);
 }
 
+TEST_CASE("Vulkan writes the last motion instance into its record's bytes, short of the stride", "[vulkan][gpu]") {
+    auto created = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(created));
+    REQUIRE(created.has_value());
+    const std::unique_ptr<Instance> instance = std::move(*created);
+    const Caps& caps = instance->adapters()[0].caps;
+    if (!caps.features.rayTracingMotion) {
+        SKIP("the adapter has no structures with motion");
+    }
+    auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+    INFO(failureOf(made));
+    REQUIRE(made.has_value());
+    Device& device = **made;
+    // Two records, the second 152 bytes (accelstructures.adoc:1981-1984).
+    constexpr std::size_t kRecord = 152;
+    const std::array<AccelerationStructureMotionInstance, 2> still{};
+    std::vector<std::byte> out(caps.rayTracing.motionInstanceSize + kRecord);
+    const auto written = device.writeMotionInstances(still, {}, out);
+    INFO(failureOf(written));
+    CHECK(written.has_value());
+    const auto shorter = device.writeMotionInstances(still, {}, std::span{out}.first(out.size() - 1));
+    REQUIRE_FALSE(shorter.has_value());
+    CHECK(shorter.error().code == bfr::core::ErrorCode::RhiInvalidCall);
+}
+
 TEST_CASE("Vulkan refuses motion its structures can't take: on a micromap, or unlike the structure built",
           "[vulkan][gpu]") {
     auto created = Instance::create(vulkanDesc(), {});

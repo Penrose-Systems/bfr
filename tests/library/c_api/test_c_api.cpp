@@ -1869,6 +1869,10 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
             std::vector<std::byte> records(stride * kInstances);
             REQUIRE(bfr_write_motion_instances(device, moving.data(), kInstances, keyframes.data(), kKeyframes,
                                                records.data(), records.size()) == BFR_RESULT_SUCCESS);
+            // Too small once the last record has no bytes.
+            CHECK(bfr_write_motion_instances(device, moving.data(), kInstances, keyframes.data(), kKeyframes,
+                                             records.data(),
+                                             stride * (kInstances - 1)) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
             std::vector<std::byte> record(stride);
             for (const std::uint32_t i : {0U, kChunk - 1, kChunk, kInstances - 1}) {
                 REQUIRE(bfr_write_motion_instances(device, &moving[i], 1, keyframes.data(), kKeyframes, record.data(),

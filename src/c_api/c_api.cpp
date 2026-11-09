@@ -3226,13 +3226,10 @@ bfr_result bfr_write_motion_instances(bfr_device* device, const bfr_acceleration
                                                      keyframe_count};
         const std::size_t recordSize = device->motionInstanceSize;
         // Converted a chunk at a time on the stack, as bfr_write_instances
-        // does.
+        // does. Each chunk's write checks the bytes it takes: the last
+        // record needs only the backend's own bytes, which caps don't give.
         constexpr std::size_t kChunk = 64;
         std::array<AccelerationStructureMotionInstance, kChunk> chunk{};
-        if (recordSize != 0 && size / recordSize < from.size()) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "{} bytes hold fewer than {} motion instance records of {}",
-                        size, from.size(), recordSize);
-        }
         std::size_t done = 0;
         do {
             const std::size_t count = std::min(kChunk, from.size() - done);

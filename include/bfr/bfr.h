@@ -3700,11 +3700,12 @@ BFR_API bfr_result bfr_get_acceleration_structure_slot(
     uint32_t* slot);
 
 // Writes instances to data as the records a top acceleration structure with motion is built from,
-// bfr_caps_ray_tracing.motion_instance_size bytes apart, their keyframes read from keyframes, on
-// the CPU. On Vulkan a record is VkAccelerationStructureMotionInstanceNV's, 160 bytes apart. Fails
-// as bfr_write_instances does, with error_unsupported where bfr_caps_features.ray_tracing_motion is
-// false, and error_invalid_argument for a moving instance whose keyframes run past keyframes, or
-// number other than the backend's record holds (Vulkan's, two).
+// bfr_caps_ray_tracing.motion_instance_size bytes apart, the last taking only the bytes of the
+// backend's record, their keyframes read from keyframes, on the CPU. On Vulkan a record is
+// VkAccelerationStructureMotionInstanceNV's 152 bytes, 160 bytes apart. Fails as
+// bfr_write_instances does, with error_unsupported where bfr_caps_features.ray_tracing_motion is
+// false, and error_invalid_argument for size too small for them, a moving instance whose keyframes
+// run past keyframes, or number other than the backend's record holds (Vulkan's, two).
 // instances: An array of instance_count elements. May be null.
 // keyframes: An array of keyframe_count elements. May be null.
 // data: Where the records go.
