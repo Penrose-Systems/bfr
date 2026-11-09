@@ -444,6 +444,74 @@ core::Result<void> TimedDevice::copyAccelerationStructure(CommandListHandle comm
                           [&] { return device_->copyAccelerationStructure(commandList, dst, src); });
 }
 
+core::Result<AccelerationStructurePropertyPoolHandle> TimedDevice::createAccelerationStructurePropertyPool(
+    const AccelerationStructurePropertyPoolDesc& desc) {
+    return counters_.time(Call::CreateAccelerationStructurePropertyPool,
+                          [&] { return device_->createAccelerationStructurePropertyPool(desc); });
+}
+
+core::Result<void> TimedDevice::destroyAccelerationStructurePropertyPool(AccelerationStructurePropertyPoolHandle pool) {
+    return counters_.time(Call::DestroyAccelerationStructurePropertyPool,
+                          [&] { return device_->destroyAccelerationStructurePropertyPool(pool); });
+}
+
+core::Result<void> TimedDevice::resetAccelerationStructureProperties(CommandListHandle commandList,
+                                                                     AccelerationStructurePropertyPoolHandle pool,
+                                                                     std::uint32_t first, std::uint32_t count) {
+    return counters_.time(Call::ResetAccelerationStructureProperties, [&] {
+        return device_->resetAccelerationStructureProperties(commandList, pool, first, count);
+    });
+}
+
+core::Result<void> TimedDevice::writeAccelerationStructureProperties(
+    CommandListHandle commandList, AccelerationStructurePropertyPoolHandle pool, std::uint32_t first,
+    std::span<const AccelerationStructureHandle> structures) {
+    return counters_.time(Call::WriteAccelerationStructureProperties, [&] {
+        return device_->writeAccelerationStructureProperties(commandList, pool, first, structures);
+    });
+}
+
+core::Result<void> TimedDevice::resolveAccelerationStructureProperties(CommandListHandle commandList,
+                                                                       AccelerationStructurePropertyPoolHandle pool,
+                                                                       std::uint32_t first, std::uint32_t count,
+                                                                       BufferHandle buffer, std::uint64_t offset) {
+    return counters_.time(Call::ResolveAccelerationStructureProperties, [&] {
+        return device_->resolveAccelerationStructureProperties(commandList, pool, first, count, buffer, offset);
+    });
+}
+
+core::Result<void> TimedDevice::compactAccelerationStructure(CommandListHandle commandList,
+                                                             AccelerationStructureHandle dst,
+                                                             AccelerationStructureHandle src) {
+    return counters_.time(Call::CompactAccelerationStructure,
+                          [&] { return device_->compactAccelerationStructure(commandList, dst, src); });
+}
+
+core::Result<void> TimedDevice::serializeAccelerationStructure(CommandListHandle commandList,
+                                                               AccelerationStructureHandle src, BufferHandle buffer,
+                                                               std::uint64_t offset) {
+    return counters_.time(Call::SerializeAccelerationStructure,
+                          [&] { return device_->serializeAccelerationStructure(commandList, src, buffer, offset); });
+}
+
+core::Result<void> TimedDevice::deserializeAccelerationStructure(CommandListHandle commandList, BufferHandle buffer,
+                                                                 std::uint64_t offset,
+                                                                 AccelerationStructureHandle dst) {
+    return counters_.time(Call::DeserializeAccelerationStructure,
+                          [&] { return device_->deserializeAccelerationStructure(commandList, buffer, offset, dst); });
+}
+
+core::Result<bool> TimedDevice::serializedCompatible(
+    std::span<const std::byte, kSerializedIdentifierSize> identifier) const {
+    return counters_.time(Call::SerializedCompatible, [&] { return device_->serializedCompatible(identifier); });
+}
+
+core::Result<std::uint64_t> TimedDevice::rayTracingStackSize(PipelineHandle pipeline, std::uint32_t group,
+                                                             RayTracingGroupShader shader) {
+    return counters_.time(Call::RayTracingStackSize,
+                          [&] { return device_->rayTracingStackSize(pipeline, group, shader); });
+}
+
 core::Result<ShaderHandle> TimedDevice::createShader(const ShaderCode& code) {
     return counters_.time(Call::CreateShader, [&] { return device_->createShader(code); });
 }

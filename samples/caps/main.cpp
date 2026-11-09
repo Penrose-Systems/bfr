@@ -522,12 +522,15 @@ void printAllShaders(const bfr::Caps& caps) {
                    field("maxMeshOutputComponents", m.maxMeshOutputComponents),
                    field("maxMeshOutputLayers", m.maxMeshOutputLayers)});
     const bfr::CapsRayTracing& r = caps.rayTracing;
-    group("rayTracing", {field("maxGeometries", r.maxGeometries), field("maxInstances", r.maxInstances),
-                         field("maxPrimitives", r.maxPrimitives), field("scratchAlignment", r.scratchAlignment),
-                         field("maxRecursionDepth", r.maxRecursionDepth), field("identifierSize", r.identifierSize),
-                         field("identifierAlignment", r.identifierAlignment), field("tableAlignment", r.tableAlignment),
-                         field("maxShaderGroupStride", r.maxShaderGroupStride), field("maxTraceRays", r.maxTraceRays),
-                         field("maxHitAttributeSize", r.maxHitAttributeSize), field("instanceSize", r.instanceSize)});
+    group("rayTracing",
+          {field("maxGeometries", r.maxGeometries), field("maxInstances", r.maxInstances),
+           field("maxPrimitives", r.maxPrimitives), field("scratchAlignment", r.scratchAlignment),
+           field("maxRecursionDepth", r.maxRecursionDepth), field("identifierSize", r.identifierSize),
+           field("identifierAlignment", r.identifierAlignment), field("tableAlignment", r.tableAlignment),
+           field("maxShaderGroupStride", r.maxShaderGroupStride), field("maxTraceRays", r.maxTraceRays),
+           field("maxHitAttributeSize", r.maxHitAttributeSize), field("propertyEntryBytes", r.propertyEntryBytes),
+           field("reordersInvocations", r.reordersInvocations),
+           field("maxBindingTableRecordIndex", r.maxBindingTableRecordIndex), field("instanceSize", r.instanceSize)});
 }
 
 void printAllFeatures(const bfr::CapsFeatures& f) {
@@ -537,6 +540,11 @@ void printAllFeatures(const bfr::CapsFeatures& f) {
                        field("traceRaysIndirect", f.traceRaysIndirect),
                        field("rayPrimitiveCulling", f.rayPrimitiveCulling),
                        field("bufferAddress", f.bufferAddress),
+                       field("rayPositionFetch", f.rayPositionFetch),
+                       field("accelerationStructureSerialization", f.accelerationStructureSerialization),
+                       field("accelerationStructureCurrentSize", f.accelerationStructureCurrentSize),
+                       field("serializedBottomCount", f.serializedBottomCount),
+                       field("rayInvocationReorder", f.rayInvocationReorder),
                        field("accelerationStructure", f.accelerationStructure),
                        field("meshShader", f.meshShader),
                        field("taskShader", f.taskShader),

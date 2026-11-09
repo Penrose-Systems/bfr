@@ -297,6 +297,33 @@ public:
     [[nodiscard]] core::Result<void> copyAccelerationStructure(CommandListHandle commandList,
                                                                AccelerationStructureHandle dst,
                                                                AccelerationStructureHandle src) override;
+    [[nodiscard]] core::Result<AccelerationStructurePropertyPoolHandle> createAccelerationStructurePropertyPool(
+        const AccelerationStructurePropertyPoolDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroyAccelerationStructurePropertyPool(
+        AccelerationStructurePropertyPoolHandle pool) override;
+    [[nodiscard]] core::Result<void> resetAccelerationStructureProperties(CommandListHandle commandList,
+                                                                          AccelerationStructurePropertyPoolHandle pool,
+                                                                          std::uint32_t first,
+                                                                          std::uint32_t count) override;
+    [[nodiscard]] core::Result<void> writeAccelerationStructureProperties(
+        CommandListHandle commandList, AccelerationStructurePropertyPoolHandle pool, std::uint32_t first,
+        std::span<const AccelerationStructureHandle> structures) override;
+    [[nodiscard]] core::Result<void> resolveAccelerationStructureProperties(
+        CommandListHandle commandList, AccelerationStructurePropertyPoolHandle pool, std::uint32_t first,
+        std::uint32_t count, BufferHandle buffer, std::uint64_t offset) override;
+    [[nodiscard]] core::Result<void> compactAccelerationStructure(CommandListHandle commandList,
+                                                                  AccelerationStructureHandle dst,
+                                                                  AccelerationStructureHandle src) override;
+    [[nodiscard]] core::Result<void> serializeAccelerationStructure(CommandListHandle commandList,
+                                                                    AccelerationStructureHandle src,
+                                                                    BufferHandle buffer, std::uint64_t offset) override;
+    [[nodiscard]] core::Result<void> deserializeAccelerationStructure(CommandListHandle commandList,
+                                                                      BufferHandle buffer, std::uint64_t offset,
+                                                                      AccelerationStructureHandle dst) override;
+    [[nodiscard]] core::Result<bool> serializedCompatible(
+        std::span<const std::byte, kSerializedIdentifierSize> identifier) const override;
+    [[nodiscard]] core::Result<std::uint64_t> rayTracingStackSize(PipelineHandle pipeline, std::uint32_t group,
+                                                                  RayTracingGroupShader shader) override;
     [[nodiscard]] core::Result<ShaderHandle> createShader(const ShaderCode& code) override;
     [[nodiscard]] core::Result<void> destroyShader(ShaderHandle shader) override;
     [[nodiscard]] core::Result<PipelineHandle> createRayTracingPipeline(const RayTracingPipelineDesc& desc) override;

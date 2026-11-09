@@ -542,6 +542,33 @@ TEST_CASE("Vulkan without VK_KHR_ray_tracing_pipeline reports none, and refuses 
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("Vulkan without VK_KHR_ray_tracing_position_fetch reports no position fetch", "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride;
+    const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_KHR_ray_tracing_position_fetch");
+    auto created = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(created));
+    REQUIRE(created.has_value());
+    const std::unique_ptr<Instance> instance = std::move(*created);
+    CHECK_FALSE(instance->adapters()[0].caps.features.rayPositionFetch);
+}
+
+TEST_CASE("Vulkan refuses a ray tracing stack size past the 32 bits it takes", "[vulkan][gpu]") {
+    auto created = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(created));
+    REQUIRE(created.has_value());
+    const std::unique_ptr<Instance> instance = std::move(*created);
+    if (!instance->adapters()[0].caps.features.rayTracingPipeline) {
+        SKIP("the adapter has no ray tracing pipelines");
+    }
+    auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+    INFO(failureOf(made));
+    REQUIRE(made.has_value());
+    constexpr std::uint64_t kPast32Bits = std::uint64_t{1} << 32U;
+    const auto pipeline = (**made).createRayTracingPipeline({.stackSize = kPast32Bits});
+    REQUIRE_FALSE(pipeline.has_value());
+    CHECK(pipeline.error().code == bfr::core::ErrorCode::RhiInvalidCall);
+}
+
 TEST_CASE("Vulkan with acceleration structures but no table updated after bind has no table, and makes top structures "
           "with no slot",
           "[vulkan][gpu]") {

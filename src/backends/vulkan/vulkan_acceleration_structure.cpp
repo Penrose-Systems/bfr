@@ -79,6 +79,12 @@ VkBuildAccelerationStructureFlagsKHR flagsFor(const AccelerationStructureFlags& 
     if (flags.allowUpdate) {
         vulkan |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
     }
+    if (flags.allowCompaction) {
+        vulkan |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
+    }
+    if (flags.allowDataAccess) {
+        vulkan |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_DATA_ACCESS_BIT_KHR;
+    }
     if (flags.minimizeMemory) {
         vulkan |= VK_BUILD_ACCELERATION_STRUCTURE_LOW_MEMORY_BIT_KHR;
     }
@@ -439,9 +445,9 @@ core::Result<void> VulkanDevice::buildAccelerationStructure(CommandListHandle co
     return {};
 }
 
-core::Result<void> VulkanDevice::copyAccelerationStructure(CommandListHandle commandList,
-                                                           AccelerationStructureHandle dst,
-                                                           AccelerationStructureHandle src) {
+core::Result<void> VulkanDevice::copyStructure(CommandListHandle commandList, AccelerationStructureHandle dst,
+                                               AccelerationStructureHandle src,
+                                               VkCopyAccelerationStructureModeKHR mode) {
     if (auto checked = checkAccelerationStructures(features_.accelerationStructure); !checked) {
         return checked;
     }
@@ -460,17 +466,255 @@ core::Result<void> VulkanDevice::copyAccelerationStructure(CommandListHandle com
     if (!from) {
         return std::unexpected(std::move(from.error()));
     }
-    if ((*to)->type() != (*from)->type() || (*to)->size() != (*from)->size()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "a copy is between acceleration structures of one type and size");
-    }
+    // The destination's size is the caller's to keep, as the API states it
+    // (copy_acceleration_structure_common.adoc, VUID-...-mode-12418, -12419).
     VkCopyAccelerationStructureInfoKHR info{};
     info.sType = VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR;
     info.src = (*from)->structure();
     info.dst = (*to)->structure();
-    info.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_CLONE_KHR;
+    info.mode = mode;
     table_.vkCmdCopyAccelerationStructureKHR((*list)->buffer, &info);
     return {};
+}
+
+core::Result<void> VulkanDevice::copyAccelerationStructure(CommandListHandle commandList,
+                                                           AccelerationStructureHandle dst,
+                                                           AccelerationStructureHandle src) {
+    return copyStructure(commandList, dst, src, VK_COPY_ACCELERATION_STRUCTURE_MODE_CLONE_KHR);
+}
+
+core::Result<void> VulkanDevice::compactAccelerationStructure(CommandListHandle commandList,
+                                                              AccelerationStructureHandle dst,
+                                                              AccelerationStructureHandle src) {
+    return copyStructure(commandList, dst, src, VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR);
+}
+
+VulkanPropertyPool::VulkanPropertyPool(const VolkDeviceTable& table, VkDevice device, VkQueryPool pool,
+                                       VkQueryType type, std::uint32_t count)
+    : table_(&table), device_(device), pool_(pool), type_(type), count_(count), structures_(count) {}
+
+VulkanPropertyPool::VulkanPropertyPool(VulkanPropertyPool&& other) noexcept
+    : table_(other.table_),
+      device_(other.device_),
+      pool_(std::exchange(other.pool_, VK_NULL_HANDLE)),
+      type_(other.type_),
+      count_(other.count_),
+      structures_(std::move(other.structures_)) {}
+
+VulkanPropertyPool::~VulkanPropertyPool() {
+    if (pool_ != VK_NULL_HANDLE) {
+        table_->vkDestroyQueryPool(device_, pool_, nullptr);
+    }
+}
+
+namespace {
+
+VkQueryType queryTypeFor(AccelerationStructureProperty property) {
+    switch (property) {
+        case AccelerationStructureProperty::SerializedSize:
+            return VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_SIZE_KHR;
+        case AccelerationStructureProperty::SerializedBottomCount:
+            return VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_BOTTOM_LEVEL_POINTERS_KHR;
+        case AccelerationStructureProperty::CurrentSize:
+            return VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SIZE_KHR;
+        case AccelerationStructureProperty::CompactedSize:
+        default:
+            return VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
+    }
+}
+
+} // namespace
+
+core::Result<AccelerationStructurePropertyPoolHandle> VulkanDevice::createAccelerationStructurePropertyPool(
+    const AccelerationStructurePropertyPoolDesc& desc) {
+    if (auto checked = checkAccelerationStructures(features_.accelerationStructure); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkProperty(desc.property, features_); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    collectBuffers();
+    VkQueryPoolCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    info.queryType = queryTypeFor(desc.property);
+    info.queryCount = desc.count;
+    VkQueryPool pool = VK_NULL_HANDLE;
+    if (const VkResult result = table_.vkCreateQueryPool(device_, &info, nullptr, &pool); result != VK_SUCCESS) {
+        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateQueryPool", .result = result});
+    }
+    const AccelerationStructurePropertyPoolHandle made = propertyPools_.emplace(
+        VulkanPropertyPool{table_, device_, pool, info.queryType, desc.count});
+    if (made.isNull()) {
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             "the device holds at most {} acceleration structure property pools",
+                             desc_.maxAccelerationStructurePropertyPools);
+    }
+    return made;
+}
+
+core::Result<void> VulkanDevice::destroyAccelerationStructurePropertyPool(
+    AccelerationStructurePropertyPoolHandle pool) {
+    if (pool.isNull()) {
+        return {};
+    }
+    // Retired against every submit made so far, as a buffer is.
+    const std::uint64_t id = submissions_.mark(
+        [this](std::uint32_t queue) { return queues_[queue]->submitted.load(std::memory_order_acquire); });
+    if (!propertyPools_.retire(pool, id)) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the property pool handle is stale");
+    }
+    collectBuffers();
+    return {};
+}
+
+core::Result<std::pair<VulkanCommandList*, VulkanPropertyPool*>> VulkanDevice::propertyCall(
+    CommandListHandle commandList, AccelerationStructurePropertyPoolHandle pool) {
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    // Reset, write and resolve take a graphics or compute queue (vkdocs
+    // xml/vk.xml:15872, 15886, 17426), which a compute-capable one is.
+    if (auto checked = checkRunsCompute(**list); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    VulkanPropertyPool* found = propertyPools_.find(pool);
+    if (found == nullptr) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the property pool handle is stale");
+    }
+    return std::pair{*list, found};
+}
+
+core::Result<void> VulkanDevice::resetAccelerationStructureProperties(CommandListHandle commandList,
+                                                                      AccelerationStructurePropertyPoolHandle pool,
+                                                                      std::uint32_t first, std::uint32_t count) {
+    const auto call = propertyCall(commandList, pool);
+    if (!call) {
+        return std::unexpected(call.error());
+    }
+    table_.vkCmdResetQueryPool(call->first->buffer, call->second->pool(), first, count);
+    return {};
+}
+
+core::Result<void> VulkanDevice::writeAccelerationStructureProperties(
+    CommandListHandle commandList, AccelerationStructurePropertyPoolHandle pool, std::uint32_t first,
+    std::span<const AccelerationStructureHandle> structures) {
+    const auto call = propertyCall(commandList, pool);
+    if (!call) {
+        return std::unexpected(call.error());
+    }
+    VulkanPropertyPool& found = *call->second;
+    if (auto checked = checkPropertyRange(first, structures.size(), found.count()); !checked) {
+        return checked;
+    }
+    // The pool's room holds count, which checkPropertyRange has seen is enough.
+    found.structures().clear();
+    for (const AccelerationStructureHandle structure : structures) {
+        auto named = accelerationStructureFor(structure);
+        if (!named) {
+            return std::unexpected(std::move(named.error()));
+        }
+        std::ignore = found.structures().push((*named)->structure());
+    }
+    table_.vkCmdWriteAccelerationStructuresPropertiesKHR(call->first->buffer,
+                                                         static_cast<std::uint32_t>(found.structures().size()),
+                                                         found.structures().data(), found.type(), found.pool(), first);
+    return {};
+}
+
+core::Result<void> VulkanDevice::resolveAccelerationStructureProperties(CommandListHandle commandList,
+                                                                        AccelerationStructurePropertyPoolHandle pool,
+                                                                        std::uint32_t first, std::uint32_t count,
+                                                                        BufferHandle buffer, std::uint64_t offset) {
+    const auto call = propertyCall(commandList, pool);
+    if (!call) {
+        return std::unexpected(call.error());
+    }
+    auto target = bufferFor(buffer);
+    if (!target) {
+        return std::unexpected(std::move(target.error()));
+    }
+    // As resolveTimestamps does: waiting for each entry, 64 bits each, the
+    // caps' propertyEntryBytes apart.
+    table_.vkCmdCopyQueryPoolResults(call->first->buffer, call->second->pool(), first, count, (*target)->buffer(),
+                                     offset, rayTracing_.propertyEntryBytes,
+                                     VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+    return {};
+}
+
+core::Result<void> VulkanDevice::serializeAccelerationStructure(CommandListHandle commandList,
+                                                                AccelerationStructureHandle src, BufferHandle buffer,
+                                                                std::uint64_t offset) {
+    if (auto checked = checkSerialization(features_.accelerationStructureSerialization); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    if (auto checked = checkRunsCompute(**list); !checked) {
+        return checked;
+    }
+    auto from = accelerationStructureFor(src);
+    if (!from) {
+        return std::unexpected(std::move(from.error()));
+    }
+    const auto address = addressOf(buffer, offset);
+    if (!address) {
+        return std::unexpected(address.error());
+    }
+    VkCopyAccelerationStructureToMemoryInfoKHR info{};
+    info.sType = VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_TO_MEMORY_INFO_KHR;
+    info.src = (*from)->structure();
+    info.dst.deviceAddress = *address;
+    info.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_SERIALIZE_KHR;
+    table_.vkCmdCopyAccelerationStructureToMemoryKHR((*list)->buffer, &info);
+    return {};
+}
+
+core::Result<void> VulkanDevice::deserializeAccelerationStructure(CommandListHandle commandList, BufferHandle buffer,
+                                                                  std::uint64_t offset,
+                                                                  AccelerationStructureHandle dst) {
+    if (auto checked = checkSerialization(features_.accelerationStructureSerialization); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    if (auto checked = checkRunsCompute(**list); !checked) {
+        return checked;
+    }
+    auto to = accelerationStructureFor(dst);
+    if (!to) {
+        return std::unexpected(std::move(to.error()));
+    }
+    const auto address = addressOf(buffer, offset);
+    if (!address) {
+        return std::unexpected(address.error());
+    }
+    VkCopyMemoryToAccelerationStructureInfoKHR info{};
+    info.sType = VK_STRUCTURE_TYPE_COPY_MEMORY_TO_ACCELERATION_STRUCTURE_INFO_KHR;
+    info.src.deviceAddress = *address;
+    info.dst = (*to)->structure();
+    info.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_DESERIALIZE_KHR;
+    table_.vkCmdCopyMemoryToAccelerationStructureKHR((*list)->buffer, &info);
+    return {};
+}
+
+core::Result<bool> VulkanDevice::serializedCompatible(
+    std::span<const std::byte, kSerializedIdentifierSize> identifier) const {
+    if (auto checked = checkSerialization(features_.accelerationStructureSerialization); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    // Two VK_UUID_SIZE identifiers (accelstructures.adoc:3393).
+    static_assert(kSerializedIdentifierSize == 2 * VK_UUID_SIZE);
+    VkAccelerationStructureVersionInfoKHR info{};
+    info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_VERSION_INFO_KHR;
+    info.pVersionData = reinterpret_cast<const std::uint8_t*>(identifier.data());
+    VkAccelerationStructureCompatibilityKHR compatibility = VK_ACCELERATION_STRUCTURE_COMPATIBILITY_INCOMPATIBLE_KHR;
+    table_.vkGetDeviceAccelerationStructureCompatibilityKHR(device_, &info, &compatibility);
+    return compatibility == VK_ACCELERATION_STRUCTURE_COMPATIBILITY_COMPATIBLE_KHR;
 }
 
 } // namespace bfr::rhi::vulkan

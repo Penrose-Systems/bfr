@@ -315,6 +315,15 @@ struct RayTracingGroup {
     std::uint32_t intersection = kNoShader;
 };
 
+/// The shader of a group whose stack size Device::rayTracingStackSize reads.
+/// The values are the C API's.
+enum class RayTracingGroupShader : std::uint8_t {
+    General = 0,
+    ClosestHit = 1,
+    AnyHit = 2,
+    Intersection = 3,
+};
+
 /// How to create a ray tracing pipeline: at least one ray generation shader.
 /// maxPayloadSize and maxAttributeSize are the largest payload and hit
 /// attributes its shaders declare, passed to backends that take them. Rays
@@ -328,6 +337,10 @@ struct RayTracingPipelineDesc {
     std::uint32_t maxAttributeSize = 0;
     /// Where the pipeline is looked for, and added on a miss; null is none.
     PipelineCacheHandle cache{};
+    /// The bytes of stack its traces take, large enough for every trace it
+    /// makes (Device::rayTracingStackSize gives each shader's); 0 leaves the
+    /// backend's own size.
+    std::uint64_t stackSize = 0;
 };
 
 } // namespace bfr::rhi

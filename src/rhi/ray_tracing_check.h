@@ -44,7 +44,8 @@ namespace bfr::rhi {
 
 /// Fails with RhiUnsupported where the device gives no buffer addresses, as
 /// Features::bufferAddress says, and RhiInvalidCall for a buffer of no usage
-/// that has one: indirect, shaderBindingTable or accelerationStructureInput.
+/// that has one: indirect, shaderBindingTable, accelerationStructureInput or
+/// accelerationStructureData.
 [[nodiscard]] inline core::Result<void> checkBufferAddress(bool bufferAddress, bool addressed) {
     if (!bufferAddress) {
         return core::failure(core::ErrorCode::RhiUnsupported,

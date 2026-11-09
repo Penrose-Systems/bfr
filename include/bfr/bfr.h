@@ -55,6 +55,10 @@ typedef uint8_t bfr_bool;
 // No shader in a bfr_ray_tracing_group's slot.
 #define BFR_NO_SHADER 4294967295u
 
+// The bytes of the identifier a serialized acceleration structure begins with, which
+// bfr_serialized_compatible reads: two 16-byte identifiers, on every backend that serializes.
+#define BFR_SERIALIZED_IDENTIFIER_SIZE 32u
+
 // The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".
 #define BFR_MAX_MESSAGE_LENGTH 1024u
 
@@ -510,6 +514,16 @@ typedef enum bfr_call {
     BFR_CALL_TRACE_RAYS = 89,
     BFR_CALL_TRACE_RAYS_INDIRECT = 90,
     BFR_CALL_BUFFER_ADDRESS = 91,
+    BFR_CALL_CREATE_ACCELERATION_STRUCTURE_PROPERTY_POOL = 92,
+    BFR_CALL_DESTROY_ACCELERATION_STRUCTURE_PROPERTY_POOL = 93,
+    BFR_CALL_RESET_ACCELERATION_STRUCTURE_PROPERTIES = 94,
+    BFR_CALL_WRITE_ACCELERATION_STRUCTURE_PROPERTIES = 95,
+    BFR_CALL_RESOLVE_ACCELERATION_STRUCTURE_PROPERTIES = 96,
+    BFR_CALL_COMPACT_ACCELERATION_STRUCTURE = 97,
+    BFR_CALL_SERIALIZE_ACCELERATION_STRUCTURE = 98,
+    BFR_CALL_DESERIALIZE_ACCELERATION_STRUCTURE = 99,
+    BFR_CALL_SERIALIZED_COMPATIBLE = 100,
+    BFR_CALL_RAY_TRACING_STACK_SIZE = 101,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -897,6 +911,32 @@ typedef enum bfr_ray_tracing_group_type {
     BFR_RAY_TRACING_GROUP_TYPE_FORCE32 = 0x7FFFFFFF
 } bfr_ray_tracing_group_type;
 
+// What a property pool's entries hold, one per structure a write names, of
+// bfr_caps_ray_tracing.property_entry_bytes each.
+typedef enum bfr_acceleration_structure_property {
+    // The bytes a compact copy takes, of a structure built with allow_compaction.
+    BFR_ACCELERATION_STRUCTURE_PROPERTY_COMPACTED_SIZE = 0,
+    // The bytes bfr_serialize_acceleration_structure writes, where
+    // bfr_caps_features.acceleration_structure_serialization.
+    BFR_ACCELERATION_STRUCTURE_PROPERTY_SERIALIZED_SIZE = 1,
+    // How many bottom structure references a serialized top structure holds, where
+    // bfr_caps_features.serialized_bottom_count.
+    BFR_ACCELERATION_STRUCTURE_PROPERTY_SERIALIZED_BOTTOM_COUNT = 2,
+    // The bytes the structure takes now, where
+    // bfr_caps_features.acceleration_structure_current_size.
+    BFR_ACCELERATION_STRUCTURE_PROPERTY_CURRENT_SIZE = 3,
+    BFR_ACCELERATION_STRUCTURE_PROPERTY_FORCE32 = 0x7FFFFFFF
+} bfr_acceleration_structure_property;
+
+// The shader of a group whose stack size bfr_get_ray_tracing_stack_size reads.
+typedef enum bfr_ray_tracing_group_shader {
+    BFR_RAY_TRACING_GROUP_SHADER_GENERAL = 0,
+    BFR_RAY_TRACING_GROUP_SHADER_CLOSEST_HIT = 1,
+    BFR_RAY_TRACING_GROUP_SHADER_ANY_HIT = 2,
+    BFR_RAY_TRACING_GROUP_SHADER_INTERSECTION = 3,
+    BFR_RAY_TRACING_GROUP_SHADER_FORCE32 = 0x7FFFFFFF
+} bfr_ray_tracing_group_shader;
+
 // Which window system a bfr_window comes from, for the platforms that have more than one.
 typedef enum bfr_window_system {
     // The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -1019,6 +1059,12 @@ typedef struct bfr_acceleration_structure {
 typedef struct bfr_shader {
     uint64_t bits;
 } bfr_shader;
+
+// Entries of one bfr_acceleration_structure_property, written by command lists and resolved into a
+// buffer. Calls on one pool must not overlap. A generational handle; 0 is never valid.
+typedef struct bfr_acceleration_structure_property_pool {
+    uint64_t bits;
+} bfr_acceleration_structure_property_pool;
 
 // Pipelines the backend has compiled, which it reads back as bytes for a later run to start from.
 // Pipelines made with one look in it first and add themselves on a miss. A generational handle; 0
@@ -1175,6 +1221,9 @@ typedef struct bfr_device_desc {
     // them is made with the device, so building never allocates. More fails with
     // error_limit_reached. 0 is none.
     uint32_t max_build_geometries;
+    // Property pools the device holds at once, 0 for none; past it,
+    // bfr_create_acceleration_structure_property_pool fails with error_limit_reached.
+    uint32_t max_acceleration_structure_property_pools;
     // The strides, in bytes, the device's indirect draws take, read during the call only. D3D12
     // fixes a stride in the command signature it makes for them, so it makes one for each here and
     // fails an indirect draw of any other with error_unsupported; Vulkan and Metal take any stride.
@@ -1346,6 +1395,9 @@ typedef struct bfr_buffer_usage {
     // It holds shader binding table records. It starts at an address that is a multiple of
     // bfr_caps_ray_tracing.table_alignment.
     bfr_bool shader_binding_table;
+    // bfr_serialize_acceleration_structure writes it and bfr_deserialize_acceleration_structure
+    // reads it. It starts at an address that is a multiple of 256.
+    bfr_bool acceleration_structure_data;
 } bfr_buffer_usage;
 
 // How to create a buffer.
@@ -1683,6 +1735,9 @@ typedef struct bfr_ray_tracing_pipeline_desc {
     uint32_t max_attribute_size;
     // Where the pipeline is looked for, and added on a miss; null is none.
     bfr_pipeline_cache cache;
+    // The bytes of stack its traces take, large enough for every trace it makes
+    // (bfr_get_ray_tracing_stack_size gives each shader's); 0 leaves the backend's own size.
+    uint64_t stack_size;
 } bfr_ray_tracing_pipeline_desc;
 
 // Records in a shader binding table: size bytes from offset in buffer, which has
@@ -1939,6 +1994,10 @@ typedef struct bfr_acceleration_structure_flags {
     // Later builds may update the structure.
     bfr_bool allow_update;
     bfr_bool minimize_memory;
+    // bfr_compact_acceleration_structure may copy it, and its compacted_size be written.
+    bfr_bool allow_compaction;
+    // Shaders read its triangles' positions, where bfr_caps_features.ray_position_fetch.
+    bfr_bool allow_data_access;
 } bfr_acceleration_structure_flags;
 
 // Triangles in a bottom acceleration structure. A null indices is none: triangle_count * 3 vertices
@@ -2050,6 +2109,14 @@ typedef struct bfr_acceleration_structure_instance {
     // Null is an instance no ray hits.
     bfr_acceleration_structure bottom_structure;
 } bfr_acceleration_structure_instance;
+
+// How to create a property pool of count entries of property, at least 1.
+typedef struct bfr_acceleration_structure_property_pool_desc {
+    const bfr_chain* next;
+    // 0 is compacted_size.
+    bfr_acceleration_structure_property property;
+    uint32_t count;
+} bfr_acceleration_structure_property_pool_desc;
 
 // Which window to ask about.
 typedef struct bfr_swapchain_query {
@@ -2256,6 +2323,12 @@ typedef struct bfr_caps_ray_tracing {
     // The most rays one trace makes.
     uint32_t max_trace_rays;
     uint32_t max_hit_attribute_size;
+    // The bytes of one entry bfr_resolve_acceleration_structure_properties writes.
+    uint32_t property_entry_bytes;
+    // Shaders that reorder invocations may see them reordered: the backend says it reorders.
+    bfr_bool reorders_invocations;
+    // The highest binding table record index a reordered hit names.
+    uint32_t max_binding_table_record_index;
     // The bytes of one record bfr_write_instances writes.
     uint32_t instance_size;
 } bfr_caps_ray_tracing;
@@ -2276,6 +2349,16 @@ typedef struct bfr_caps_features {
     bfr_bool acceleration_structure;
     // bfr_get_buffer_address.
     bfr_bool buffer_address;
+    // Shaders read a hit triangle's positions, of a structure built with allow_data_access.
+    bfr_bool ray_position_fetch;
+    // bfr_serialize_acceleration_structure and its kin.
+    bfr_bool acceleration_structure_serialization;
+    // The current_size property.
+    bfr_bool acceleration_structure_current_size;
+    // The serialized_bottom_count property.
+    bfr_bool serialized_bottom_count;
+    // Shaders reorder ray tracing invocations.
+    bfr_bool ray_invocation_reorder;
     bfr_bool mesh_shader;
     bfr_bool task_shader;
     // A shading rate per draw.
@@ -3438,10 +3521,10 @@ BFR_API bfr_result bfr_build_acceleration_structure(
     bfr_command_list command_list,
     const bfr_acceleration_structure_build* build);
 
-// Records a copy of src into dst, of the same type and size, not overlapping, as builds are
-// recorded. Fails with error_unsupported as bfr_build_acceleration_structure does,
-// error_invalid_argument for structures of different types or sizes, and error_invalid_handle for a
-// structure that is gone.
+// Records a copy of src into dst, at least src's size, or its current_size where
+// bfr_caps_features.acceleration_structure_current_size, not overlapping, as builds are recorded.
+// Fails with error_unsupported as bfr_build_acceleration_structure does, and error_invalid_handle
+// for a structure that is gone.
 BFR_API bfr_result bfr_copy_acceleration_structure(
     bfr_device* device,
     bfr_command_list command_list,
@@ -3465,9 +3548,10 @@ BFR_API void bfr_destroy_shader(bfr_device* device, bfr_shader shader);
 // Creates a ray tracing pipeline, as desc says, before returning. Not for the frame path. A
 // desc.cache is looked in first, and the pipeline added on a miss. Fails with error_unsupported
 // where bfr_caps_features.ray_tracing_pipeline is false, error_invalid_argument for an enum value
-// BFR doesn't have, error_invalid_handle for a shader or desc.cache that is gone,
-// error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
-// backend refuses the desc; the message carries what it said.
+// BFR doesn't have or a stack_size past 32 bits on Vulkan, which takes no more,
+// error_invalid_handle for a shader or desc.cache that is gone, error_limit_reached at the device's
+// maximum of pipelines, and error_device_failed when the backend refuses the desc; the message
+// carries what it said.
 BFR_API bfr_result bfr_create_ray_tracing_pipeline(
     bfr_device* device,
     const bfr_ray_tracing_pipeline_desc* desc,
@@ -3510,6 +3594,113 @@ BFR_API bfr_result bfr_trace_rays_indirect(
 // error_unsupported where bfr_caps_features.buffer_address is false, and error_invalid_argument for
 // a buffer of none of those usages.
 BFR_API bfr_result bfr_get_buffer_address(bfr_device* device, bfr_buffer buffer, uint64_t* address);
+
+// Creates a pool of desc's count entries of its property. Not for the frame path. Fails with
+// error_unsupported where bfr_caps_features.acceleration_structure, or the property's own feature,
+// is false, error_invalid_argument for an enum value BFR doesn't have, error_limit_reached at the
+// device's max_acceleration_structure_property_pools, and error_device_failed when the backend
+// refuses.
+BFR_API bfr_result bfr_create_acceleration_structure_property_pool(
+    bfr_device* device,
+    const bfr_acceleration_structure_property_pool_desc* desc,
+    bfr_acceleration_structure_property_pool* pool);
+
+// Destroys a property pool once the GPU has passed every submit made before the call; the handle is
+// invalid at once. Not for the frame path. A handle that is already destroyed does nothing.
+BFR_API void bfr_destroy_acceleration_structure_property_pool(
+    bfr_device* device,
+    bfr_acceleration_structure_property_pool pool);
+
+// Records a reset of count entries from first, which a backend that needs one before an entry is
+// written, the first time too, is given; the others record nothing. Outside rendering, on a queue
+// whose kind runs compute. Fails with error_unsupported on a copy queue.
+BFR_API bfr_result bfr_reset_acceleration_structure_properties(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_acceleration_structure_property_pool pool,
+    uint32_t first,
+    uint32_t count);
+
+// Records writes of structures' property into the pool's entries from first, in order, outside
+// rendering, on a queue whose kind runs compute. A barrier orders their builds before it. A
+// compacted_size is of structures built with allow_compaction, a serialized_bottom_count of top
+// ones. Fails with error_unsupported on a copy queue, error_invalid_argument for more structures
+// than the pool holds from first, and error_invalid_handle for a structure that is gone.
+// structures: An array of structure_count elements. May be null.
+BFR_API bfr_result bfr_write_acceleration_structure_properties(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_acceleration_structure_property_pool pool,
+    uint32_t first,
+    const bfr_acceleration_structure* structures,
+    uint32_t structure_count);
+
+// Records a copy of count entries from first into buffer at offset, a multiple of 8, as
+// bfr_caps_ray_tracing.property_entry_bytes each, once the GPU has written them. buffer has
+// copy_dst usage. Outside rendering, on a queue whose kind runs compute. Fails with
+// error_unsupported on a copy queue.
+// offset: Bytes into the buffer.
+BFR_API bfr_result bfr_resolve_acceleration_structure_properties(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_acceleration_structure_property_pool pool,
+    uint32_t first,
+    uint32_t count,
+    bfr_buffer buffer,
+    uint64_t offset);
+
+// Records a compact copy of src, built with allow_compaction, into dst, at least its
+// compacted_size, as builds are recorded. Fails as bfr_copy_acceleration_structure does.
+BFR_API bfr_result bfr_compact_acceleration_structure(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_acceleration_structure dst,
+    bfr_acceleration_structure src);
+
+// Records src serialized into buffer at offset, a multiple of 256, its serialized_size bytes:
+// serialized_identifier_size bytes of identifier, then the backend's header and data. A top
+// structure's data holds its bottom structures' references, which the caller rewrites with
+// bfr_get_acceleration_structure_reference values before deserializing it on another device. buffer
+// has acceleration_structure_data usage. As builds are recorded. Fails with error_unsupported where
+// bfr_caps_features.acceleration_structure_serialization is false or on a copy queue.
+// offset: Bytes into the buffer.
+BFR_API bfr_result bfr_serialize_acceleration_structure(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_acceleration_structure src,
+    bfr_buffer buffer,
+    uint64_t offset);
+
+// Records the structure buffer holds at offset, a multiple of 256, deserialized into dst, of its
+// type and at least the size the data names; its identifier is one bfr_serialized_compatible says
+// the device takes. Fails as bfr_serialize_acceleration_structure does.
+// offset: Bytes into the buffer.
+BFR_API bfr_result bfr_deserialize_acceleration_structure(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_buffer buffer,
+    uint64_t offset,
+    bfr_acceleration_structure dst);
+
+// Writes whether the device deserializes a structure that begins with identifier,
+// serialized_identifier_size bytes. Fails with error_unsupported where
+// bfr_caps_features.acceleration_structure_serialization is false.
+// identifier: The serialized structure's first serialized_identifier_size bytes.
+BFR_API bfr_result bfr_serialized_compatible(
+    bfr_device* device,
+    void* identifier,
+    bfr_bool* compatible);
+
+// Writes the bytes of stack one shader of group takes, for
+// bfr_ray_tracing_pipeline_desc.stack_size. The group has that shader. Fails with
+// error_invalid_argument for a pipeline that is not a ray tracing one or an enum value BFR doesn't
+// have.
+BFR_API bfr_result bfr_get_ray_tracing_stack_size(
+    bfr_device* device,
+    bfr_pipeline pipeline,
+    uint32_t group,
+    bfr_ray_tracing_group_shader shader,
+    uint64_t* stack_size);
 
 // Lists the CPU time spent in each of the device's calls since it was made, indexed by bfr_call.
 // With timings null, writes how many there are to count. Otherwise writes up to count of them, sets

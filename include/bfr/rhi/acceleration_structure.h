@@ -37,6 +37,11 @@ struct AccelerationStructureFlags {
     /// Later builds may update the structure.
     bool allowUpdate = false;
     bool minimizeMemory = false;
+    /// compactAccelerationStructure may copy it, and its CompactedSize be
+    /// written.
+    bool allowCompaction = false;
+    /// Shaders read its triangles' positions, where Features::rayPositionFetch.
+    bool allowDataAccess = false;
 };
 
 /// Triangles in a bottom structure. A null indices is none: triangleCount * 3
@@ -122,6 +127,41 @@ struct AccelerationStructureBuild {
 
 /// The floats of a 3x4 row-major transform.
 inline constexpr std::size_t kTransformFloats = 12;
+
+/// What a property pool's entries hold, one per structure a write names, of
+/// RayTracingLimits::propertyEntryBytes each.
+enum class AccelerationStructureProperty : std::uint8_t {
+    /// The bytes a compact copy takes, of a structure built with
+    /// allowCompaction.
+    CompactedSize = 0,
+    /// The bytes serializeAccelerationStructure writes, where
+    /// Features::accelerationStructureSerialization.
+    SerializedSize = 1,
+    /// How many bottom structure references a serialized top structure
+    /// holds, where Features::serializedBottomCount.
+    SerializedBottomCount = 2,
+    /// The bytes the structure takes now, where
+    /// Features::accelerationStructureCurrentSize.
+    CurrentSize = 3,
+};
+
+/// Entries of one AccelerationStructureProperty, written by lists and
+/// resolved into a buffer. Calls on one pool must not overlap. Only named, by
+/// an AccelerationStructurePropertyPoolHandle.
+struct AccelerationStructurePropertyPool;
+
+using AccelerationStructurePropertyPoolHandle = core::Handle<AccelerationStructurePropertyPool>;
+
+/// count entries of property, at least 1.
+struct AccelerationStructurePropertyPoolDesc {
+    AccelerationStructureProperty property = AccelerationStructureProperty::CompactedSize;
+    std::uint32_t count = 0;
+};
+
+/// The bytes of the identifier a serialized structure begins with, which
+/// Device::serializedCompatible reads: two 16-byte identifiers, on every
+/// backend that serializes.
+inline constexpr std::size_t kSerializedIdentifierSize = 32;
 
 /// Instance custom indices and hit group offsets are below this: every
 /// backend's record holds them in 24 bits.

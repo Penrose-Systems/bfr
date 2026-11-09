@@ -619,14 +619,99 @@ public:
     [[nodiscard]] virtual core::Result<void> buildAccelerationStructure(CommandListHandle commandList,
                                                                         const AccelerationStructureBuild& build) = 0;
 
-    /// Records a copy of src into dst, of the same type and size, not
-    /// overlapping, as builds are recorded. Fails with RhiUnsupported as
-    /// buildAccelerationStructure does, RhiInvalidCall for structures of
-    /// different types or sizes, and RhiInvalidHandle for a list or structure
-    /// that is gone.
+    /// Records a copy of src into dst, at least src's size, or its CurrentSize where
+    /// Features::accelerationStructureCurrentSize, not overlapping, as builds are recorded. Fails with RhiUnsupported
+    /// as buildAccelerationStructure does, and RhiInvalidHandle for a list or structure that is gone.
     [[nodiscard]] virtual core::Result<void> copyAccelerationStructure(CommandListHandle commandList,
                                                                        AccelerationStructureHandle dst,
                                                                        AccelerationStructureHandle src) = 0;
+
+    /// A pool of desc.count entries of desc.property. Cold. Fails with
+    /// RhiUnsupported where Features::accelerationStructure, or the
+    /// property's own feature, is false, RhiInvalidCall for an enum value BFR
+    /// doesn't have, RhiLimitReached at
+    /// DeviceDesc::maxAccelerationStructurePropertyPools, and RhiDeviceFailed
+    /// when the API refuses.
+    [[nodiscard]] virtual core::Result<AccelerationStructurePropertyPoolHandle> createAccelerationStructurePropertyPool(
+        const AccelerationStructurePropertyPoolDesc& desc) = 0;
+
+    /// Destroys the pool once the GPU has passed every submit made before the
+    /// call; the handle is invalid at once. Cold. A null handle does nothing.
+    /// Fails with RhiInvalidHandle when it is already destroyed.
+    [[nodiscard]] virtual core::Result<void> destroyAccelerationStructurePropertyPool(
+        AccelerationStructurePropertyPoolHandle pool) = 0;
+
+    /// Records a reset of count entries from first, which a backend that
+    /// needs one before an entry is written, the first time too, is given;
+    /// the others record nothing. Outside rendering, on a queue whose kind
+    /// runs compute. Fails with RhiUnsupported on a copy queue, and
+    /// RhiInvalidHandle for a list or pool that is gone.
+    [[nodiscard]] virtual core::Result<void> resetAccelerationStructureProperties(
+        CommandListHandle commandList, AccelerationStructurePropertyPoolHandle pool, std::uint32_t first,
+        std::uint32_t count) = 0;
+
+    /// Records writes of structures' property into the pool's entries from
+    /// first, in order, outside rendering, on a queue whose kind runs
+    /// compute. A barrier orders their builds before it. A CompactedSize is of
+    /// structures built with allowCompaction, a SerializedBottomCount of top
+    /// ones. Fails with RhiUnsupported on a copy queue, RhiInvalidCall for
+    /// more structures than the pool holds from first, and RhiInvalidHandle
+    /// for a list, pool or structure that is gone.
+    [[nodiscard]] virtual core::Result<void> writeAccelerationStructureProperties(
+        CommandListHandle commandList, AccelerationStructurePropertyPoolHandle pool, std::uint32_t first,
+        std::span<const AccelerationStructureHandle> structures) = 0;
+
+    /// Records a copy of count entries from first into buffer at offset, a
+    /// multiple of 8, as RayTracingLimits::propertyEntryBytes each, once the
+    /// GPU has written them. buffer has copyDst usage. Outside rendering, on a
+    /// queue whose kind runs compute. Fails with RhiUnsupported on a copy
+    /// queue, and RhiInvalidHandle for a list, pool or buffer that is gone.
+    [[nodiscard]] virtual core::Result<void> resolveAccelerationStructureProperties(
+        CommandListHandle commandList, AccelerationStructurePropertyPoolHandle pool, std::uint32_t first,
+        std::uint32_t count, BufferHandle buffer, std::uint64_t offset) = 0;
+
+    /// Records a compact copy of src, built with allowCompaction, into dst,
+    /// at least its CompactedSize, as builds are recorded.
+    /// Fails as copyAccelerationStructure does.
+    [[nodiscard]] virtual core::Result<void> compactAccelerationStructure(CommandListHandle commandList,
+                                                                          AccelerationStructureHandle dst,
+                                                                          AccelerationStructureHandle src) = 0;
+
+    /// Records src serialized into buffer at offset, a multiple of 256, its
+    /// SerializedSize bytes: kSerializedIdentifierSize bytes of identifier,
+    /// then the backend's header and data. A top structure's data holds its
+    /// bottom structures' references, which the caller rewrites with
+    /// accelerationStructureReference before deserializing it on another
+    /// device. buffer has accelerationStructureData usage. As builds are
+    /// recorded. Fails with RhiUnsupported where
+    /// Features::accelerationStructureSerialization is false or on a copy
+    /// queue, and RhiInvalidHandle for a list, structure or buffer that is
+    /// gone.
+    [[nodiscard]] virtual core::Result<void> serializeAccelerationStructure(CommandListHandle commandList,
+                                                                            AccelerationStructureHandle src,
+                                                                            BufferHandle buffer,
+                                                                            std::uint64_t offset) = 0;
+
+    /// Records the structure buffer holds at offset, a multiple of 256,
+    /// deserialized into dst, of its type and at least the size the data
+    /// names; its identifier is one serializedCompatible says the device
+    /// takes. Fails as serializeAccelerationStructure does.
+    [[nodiscard]] virtual core::Result<void> deserializeAccelerationStructure(CommandListHandle commandList,
+                                                                              BufferHandle buffer, std::uint64_t offset,
+                                                                              AccelerationStructureHandle dst) = 0;
+
+    /// Whether the device deserializes a structure that begins with
+    /// identifier. Fails with RhiUnsupported where
+    /// Features::accelerationStructureSerialization is false.
+    [[nodiscard]] virtual core::Result<bool> serializedCompatible(
+        std::span<const std::byte, kSerializedIdentifierSize> identifier) const = 0;
+
+    /// The bytes of stack one shader of group takes, for
+    /// RayTracingPipelineDesc::stackSize. The group has that shader. Fails
+    /// with RhiInvalidCall for a pipeline that is not a ray tracing one or an
+    /// enum value BFR doesn't have, and RhiInvalidHandle when it is gone.
+    [[nodiscard]] virtual core::Result<std::uint64_t> rayTracingStackSize(PipelineHandle pipeline, std::uint32_t group,
+                                                                          RayTracingGroupShader shader) = 0;
 
     /// Code compiled once, for the ray tracing pipelines made from it. Cold.
     /// Fails with RhiInvalidCall when the code is not what the backend takes
@@ -643,7 +728,8 @@ public:
     /// A ray tracing pipeline as desc says, made before returning, or loaded
     /// from desc.cache. Cold, as createComputePipeline is. Fails with
     /// RhiUnsupported where Features::rayTracingPipeline is false,
-    /// RhiInvalidCall for an enum value BFR doesn't have, RhiInvalidHandle
+    /// RhiInvalidCall for an enum value BFR doesn't have or a stackSize past
+    /// 32 bits on Vulkan, which takes no more, RhiInvalidHandle
     /// for a shader or desc.cache that is gone, RhiLimitReached at the
     /// device's maximum, and RhiDeviceFailed when the API refuses the desc,
     /// with what it said.

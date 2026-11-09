@@ -50,6 +50,7 @@ constexpr float kSpacing = 5;
 constexpr std::uint32_t kMiss = 0xFFFFFFFF;
 constexpr std::uint32_t kTableSlots = 4;
 constexpr std::uint32_t kGeometries = 4;
+constexpr std::uint32_t kPropertyPools = 4;
 // What the scene's instances answer a hit with.
 constexpr std::uint32_t kFirst = 7;
 constexpr std::uint32_t kSecond = 9;
@@ -77,6 +78,7 @@ struct RayDevice {
         auto made = instance->createDevice(0, kNoWindow, testDeviceWith([&](DeviceDesc& device) {
                                                device.maxBindlessAccelerationStructures = table ? tableSlots : 0;
                                                device.maxBuildGeometries = kGeometries;
+                                               device.maxAccelerationStructurePropertyPools = kPropertyPools;
                                            }));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
@@ -144,7 +146,9 @@ Built allocated(Device& device, const AccelerationStructureInputs& inputs) {
 // of three instances: the triangle at x = 0 and at x = 10, and the box at
 // x = 20, which rays 0, 2 and 4 hit; the others miss.
 struct Scene {
-    explicit Scene(Device& device, bool allowUpdate = false)
+    // topFlags build the top structure, bottomFlags the bottom ones.
+    explicit Scene(Device& device, const AccelerationStructureFlags& topFlags = {},
+                   const AccelerationStructureFlags& bottomFlags = {})
         : device(&device),
           vertices(input(device, std::array<float, kVertexFloats * kTriangleVertices>{-1, -1, 0, 1, -1, 0, 0, 1, 0})),
           boxes(input(device, std::array<float, kBoxFloats>{-1, -1, -1, 1, 1, 1})) {
@@ -155,9 +159,10 @@ struct Scene {
                             .triangleCount = 1,
                             .opaque = true};
         boxGeometry = {.boxes = boxes, .stride = kBoxFloats * sizeof(float), .count = 1};
+        flags = topFlags;
+        this->bottomFlags = bottomFlags;
         triangles = allocated(device, triangleInputs());
         box = allocated(device, boxInputs());
-        flags.allowUpdate = allowUpdate;
     }
 
     Scene(const Scene&) = delete;
@@ -174,10 +179,12 @@ struct Scene {
     }
 
     [[nodiscard]] AccelerationStructureInputs triangleInputs() const {
-        return {.type = AccelerationStructureType::Bottom, .triangles = std::span{&triangleGeometry, 1}};
+        return {.type = AccelerationStructureType::Bottom,
+                .flags = bottomFlags,
+                .triangles = std::span{&triangleGeometry, 1}};
     }
     [[nodiscard]] AccelerationStructureInputs boxInputs() const {
-        return {.type = AccelerationStructureType::Bottom, .boxes = std::span{&boxGeometry, 1}};
+        return {.type = AccelerationStructureType::Bottom, .flags = bottomFlags, .boxes = std::span{&boxGeometry, 1}};
     }
     [[nodiscard]] AccelerationStructureInputs topInputs() const {
         return {.type = AccelerationStructureType::Top,
@@ -188,8 +195,11 @@ struct Scene {
 
     // Writes the instances, the second triangle at secondX, into their
     // buffer, made the first time, and makes the top structure the first
-    // time.
-    void place(const Caps& caps, float secondX) {
+    // time. The triangles' instances are of trianglesFrom, or of the scene's
+    // own where it is null.
+    void place(const Caps& caps, float secondX, AccelerationStructureHandle trianglesFrom = {}) {
+        const AccelerationStructureHandle triangleStructure = trianglesFrom.isNull() ? triangles.structure
+                                                                                     : trianglesFrom;
         const std::uint32_t size = caps.rayTracing.instanceSize;
         REQUIRE(size != 0);
         if (instances.isNull()) {
@@ -198,11 +208,11 @@ struct Scene {
                                           .usage = {.accelerationStructureInput = true}});
         }
         const std::array<AccelerationStructureInstance, kInstances> placed{{
-            {.transform = movedBy(0), .customIndex = kFirst, .mask = kAllRays, .bottomStructure = triangles.structure},
+            {.transform = movedBy(0), .customIndex = kFirst, .mask = kAllRays, .bottomStructure = triangleStructure},
             {.transform = movedBy(secondX),
              .customIndex = kSecond,
              .mask = kAllRays,
-             .bottomStructure = triangles.structure},
+             .bottomStructure = triangleStructure},
             // A ray tracing pipeline's second hit group is the box's.
             {.transform = movedBy(4 * kSpacing),
              .customIndex = kBox,
@@ -252,6 +262,7 @@ struct Scene {
     TriangleGeometry triangleGeometry;
     BoxGeometry boxGeometry;
     AccelerationStructureFlags flags;
+    AccelerationStructureFlags bottomFlags;
     Built triangles;
     Built box;
     Built top;
@@ -298,11 +309,12 @@ std::array<std::uint32_t, kRays> traced(Device& device, AccelerationStructureHan
 }
 
 // ray_query.comp, which traces from a compute shader.
+// Or, given code, another shader that traces as it does.
 struct RayQuery {
-    explicit RayQuery(Device& device) : device(&device) {
+    explicit RayQuery(Device& device, std::span<const std::uint8_t> code = bfr::test::spirv::kRayQueryComp)
+        : device(&device) {
         const auto made = device.createComputePipeline(
-            {.compute = {.code = std::as_bytes(std::span{bfr::test::spirv::kRayQueryComp}), .entryPoint = "main"},
-             .workgroupSize = {kRays, 1, 1}});
+            {.compute = {.code = std::as_bytes(code), .entryPoint = "main"}, .workgroupSize = {kRays, 1, 1}});
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         pipeline = *made;
@@ -336,7 +348,7 @@ ShaderCode spirv(std::span<const std::uint8_t> bytes) {
 // records: ray generation, then miss, then the two hit groups, each region at
 // a table alignment.
 struct RayTracing {
-    RayTracing(Device& device, const Caps& caps) : device(&device) {
+    RayTracing(Device& device, const Caps& caps, std::uint64_t stackSize = 0) : device(&device) {
         const std::array codes{spirv(bfr::test::spirv::kTraceRgen), spirv(bfr::test::spirv::kTraceRmiss),
                                spirv(bfr::test::spirv::kTraceRchit), spirv(bfr::test::spirv::kBoxRint)};
         std::array<ShaderHandle, kShaders> shaders{};
@@ -358,8 +370,11 @@ struct RayTracing {
             {.type = RayTracingGroupType::TriangleHit, .closestHit = 2},
             {.type = RayTracingGroupType::BoxHit, .closestHit = 2, .intersection = 3},
         }};
-        const auto made = device.createRayTracingPipeline(
-            {.shaders = stages, .groups = groups, .maxRecursionDepth = 1, .maxPayloadSize = sizeof(std::uint32_t)});
+        const auto made = device.createRayTracingPipeline({.shaders = stages,
+                                                           .groups = groups,
+                                                           .maxRecursionDepth = 1,
+                                                           .maxPayloadSize = sizeof(std::uint32_t),
+                                                           .stackSize = stackSize});
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         pipeline = *made;
@@ -414,6 +429,53 @@ struct RayTracing {
     std::uint64_t spacing = 0;
 };
 
+// Records record in a list on queue 0, submits it and waits for it.
+template <class Record>
+void run(Device& device, const Record& record) {
+    const auto pool = device.createCommandPool({.queue = 0, .listCount = 1});
+    REQUIRE(pool.has_value());
+    const auto list = device.beginCommands(*pool);
+    REQUIRE(list.has_value());
+    record(*list);
+    const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+    INFO(failureOf(sent));
+    REQUIRE(sent.has_value());
+    REQUIRE(device.wait(*sent, kTestWait).has_value());
+    CHECK(device.destroyCommandPool(*pool).has_value());
+}
+
+// Each structure's property, written after before, which builds them, and
+// read back.
+template <class Before>
+std::vector<std::uint64_t> propertyOf(Device& device, const Caps& caps, AccelerationStructureProperty property,
+                                      std::span<const AccelerationStructureHandle> structures, const Before& before) {
+    const auto count = static_cast<std::uint32_t>(structures.size());
+    const auto pool = device.createAccelerationStructurePropertyPool({.property = property, .count = count});
+    INFO(failureOf(pool));
+    REQUIRE(pool.has_value());
+    const std::uint32_t entry = caps.rayTracing.propertyEntryBytes;
+    REQUIRE(entry == sizeof(std::uint64_t));
+    const BufferHandle readback = created(device, {.size = std::uint64_t{entry} * count,
+                                                   .memory = BufferMemory::Readback,
+                                                   .usage = {.copyDst = true}});
+    run(device, [&](CommandListHandle list) {
+        CHECK(device.resetAccelerationStructureProperties(list, *pool, 0, count).has_value());
+        before(list);
+        const auto written = device.writeAccelerationStructureProperties(list, *pool, 0, structures);
+        INFO(failureOf(written));
+        CHECK(written.has_value());
+        CHECK(device.barrier(list).has_value());
+        CHECK(device.resolveAccelerationStructureProperties(list, *pool, 0, count, readback, 0).has_value());
+    });
+    std::vector<std::uint64_t> values(count);
+    const auto read = device.mapBuffer(readback);
+    REQUIRE(read.has_value());
+    std::memcpy(values.data(), read->data(), values.size() * sizeof(std::uint64_t));
+    CHECK(device.destroyBuffer(readback).has_value());
+    CHECK(device.destroyAccelerationStructurePropertyPool(*pool).has_value());
+    return values;
+}
+
 constexpr std::array<std::uint32_t, kRays> kPlaced{kFirst, kMiss, kSecond, kMiss, kBox, kMiss, kMiss, kMiss};
 
 } // namespace
@@ -460,7 +522,7 @@ TEST_CASE("Device builds triangles, boxes and instances, and rays traced inline 
             CHECK(device.destroyAccelerationStructure(copy).has_value());
         }
         SECTION("an update moves an instance") {
-            Scene scene{device, true};
+            Scene scene{device, {.allowUpdate = true}};
             scene.place(made.caps, 2 * kSpacing);
             CHECK(traced(device, scene.top.structure, built(scene), query) == kPlaced);
             // The second triangle moves from ray 2 to ray 1.
@@ -506,6 +568,26 @@ TEST_CASE("Device traces rays through a ray tracing pipeline's binding table, di
                 const auto traced = device.traceRays(list, tracing.desc());
                 INFO(failureOf(traced));
                 CHECK(traced.has_value());
+            };
+            CHECK(traced(device, scene.top.structure, built, trace) == kPlaced);
+        }
+        SECTION("a trace with the stack size the caller gives") {
+            // Every shader's stack, which is more than any trace takes.
+            std::uint64_t stack = 0;
+            for (const auto& [group, shader] :
+                 {std::pair{0U, RayTracingGroupShader::General}, std::pair{1U, RayTracingGroupShader::General},
+                  std::pair{2U, RayTracingGroupShader::ClosestHit}, std::pair{3U, RayTracingGroupShader::ClosestHit},
+                  std::pair{3U, RayTracingGroupShader::Intersection}}) {
+                const auto size = device.rayTracingStackSize(tracing.pipeline, group, shader);
+                INFO(failureOf(size));
+                REQUIRE(size.has_value());
+                stack += *size;
+            }
+            const RayTracing sized{device, made.caps, std::max<std::uint64_t>(stack, 1)};
+            const auto trace = [&](CommandListHandle list, std::span<const std::byte> push) {
+                CHECK(device.bindPipeline(list, sized.pipeline).has_value());
+                CHECK(device.pushConstants(list, push).has_value());
+                CHECK(device.traceRays(list, sized.desc()).has_value());
             };
             CHECK(traced(device, scene.top.structure, built, trace) == kPlaced);
         }
@@ -568,8 +650,21 @@ TEST_CASE("Device allocates nothing tracing rays frame after frame", "[rhi][agno
             SKIP("no " << backend.name << " bytecode is checked in");
         }
         const RayTracing tracing{device, made.caps};
-        Scene scene{device};
+        // A top structure compacted each frame, its compacted size written.
+        Scene scene{device, {.allowCompaction = true}};
         scene.place(made.caps, 2 * kSpacing);
+        run(device, [&](CommandListHandle list) { scene.build(list); });
+        const auto topSizes = device.accelerationStructureSizes(scene.topInputs());
+        REQUIRE(topSizes.has_value());
+        const AccelerationStructureHandle compact = created(device, {.type = AccelerationStructureType::Top,
+                                                                     .size = topSizes->size});
+        const auto properties = device.createAccelerationStructurePropertyPool(
+            {.property = AccelerationStructureProperty::CompactedSize, .count = 1});
+        REQUIRE(properties.has_value());
+        const BufferHandle sizes = created(device, {.size = made.caps.rayTracing.propertyEntryBytes,
+                                                    .memory = BufferMemory::Readback,
+                                                    .usage = {.copyDst = true}});
+        const std::array compacted{scene.top.structure};
         const BufferHandle results = created(device,
                                              {.size = sizeof(std::uint32_t) * kRays, .usage = {.storage = true}});
         const auto slot = device.accelerationStructureSlot(scene.top.structure);
@@ -606,10 +701,19 @@ TEST_CASE("Device allocates nothing tracing rays frame after frame", "[rhi][agno
                 if (!check("beginCommands", list)) {
                     break;
                 }
+                check("resetAccelerationStructureProperties",
+                      device.resetAccelerationStructureProperties(*list, *properties, 0, 1));
                 check("buildAccelerationStructure",
                       device.buildAccelerationStructure(
                           *list, {.dst = scene.top.structure, .inputs = topInputs, .scratch = scene.top.scratch}));
                 check("barrier", device.barrier(*list));
+                check("writeAccelerationStructureProperties",
+                      device.writeAccelerationStructureProperties(*list, *properties, 0, compacted));
+                check("compactAccelerationStructure",
+                      device.compactAccelerationStructure(*list, compact, scene.top.structure));
+                check("barrier", device.barrier(*list));
+                check("resolveAccelerationStructureProperties",
+                      device.resolveAccelerationStructureProperties(*list, *properties, 0, 1, sizes, 0));
                 check("bindPipeline", device.bindPipeline(*list, tracing.pipeline));
                 check("pushConstants", device.pushConstants(*list, std::as_bytes(std::span{push})));
                 check("traceRays", device.traceRays(*list, tracing.desc()));
@@ -628,6 +732,9 @@ TEST_CASE("Device allocates nothing tracing rays frame after frame", "[rhi][agno
         CHECK(frees == 0);
         CHECK(device.destroyCommandPool(*pool).has_value());
         CHECK(device.destroyBuffer(results).has_value());
+        CHECK(device.destroyBuffer(sizes).has_value());
+        CHECK(device.destroyAccelerationStructurePropertyPool(*properties).has_value());
+        CHECK(device.destroyAccelerationStructure(compact).has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -667,6 +774,8 @@ TEST_CASE("Device refuses ray tracing pipeline work it can't pass on", "[rhi][ag
             CHECK(code(device.shaderIdentifiers(tracing.pipeline, 0, 2, out)) == ErrorCode::RhiInvalidCall);
             const RayQuery query{device};
             CHECK(code(device.shaderIdentifiers(query.pipeline, 0, 1, out)) == ErrorCode::RhiInvalidCall);
+            CHECK(code(device.rayTracingStackSize(query.pipeline, 0, RayTracingGroupShader::General)) ==
+                  ErrorCode::RhiInvalidCall);
             // An enum value BFR doesn't have.
             const RayTracingShader unknown{.stage = static_cast<RayTracingStage>(0xFF)};
             CHECK(code(device.createRayTracingPipeline({.shaders = std::span{&unknown, 1}})) ==
@@ -675,6 +784,138 @@ TEST_CASE("Device refuses ray tracing pipeline work it can't pass on", "[rhi][ag
         CHECK(device.destroyBuffer(readback).has_value());
         CHECK(device.destroyCommandList(*list).has_value());
         CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device compacts, serializes and deserializes structures, and writes their properties, where it has them",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const RayDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const Caps& caps = made.caps;
+        if (!caps.features.accelerationStructure || !caps.features.rayQuery) {
+            SKIP("the adapter has no acceleration structures or ray queries");
+        }
+        if (!takesSpirv(backend)) {
+            SKIP("no " << backend.name << " bytecode is checked in");
+        }
+        const RayQuery query{device};
+        const auto rebuilt = [](Scene& scene) {
+            return [&scene](CommandListHandle list) {
+                scene.buildTop(list, false);
+            };
+        };
+
+        SECTION("a compact copy traces as its structure does") {
+            Scene scene{device, {}, {.allowCompaction = true}};
+            scene.place(caps, 2 * kSpacing);
+            const std::array structures{scene.triangles.structure};
+            const auto compacted = propertyOf(device, caps, AccelerationStructureProperty::CompactedSize, structures,
+                                              [&](CommandListHandle list) { scene.build(list); });
+            REQUIRE(compacted.front() != 0);
+            const AccelerationStructureHandle compact = created(device,
+                                                                AccelerationStructureDesc{.size = compacted.front()});
+            run(device, [&](CommandListHandle list) {
+                const auto copied = device.compactAccelerationStructure(list, compact, scene.triangles.structure);
+                INFO(failureOf(copied));
+                CHECK(copied.has_value());
+            });
+            scene.place(caps, 2 * kSpacing, compact);
+            CHECK(traced(device, scene.top.structure, rebuilt(scene), query) == kPlaced);
+            CHECK(device.destroyAccelerationStructure(compact).has_value());
+        }
+        SECTION("a deserialized structure traces as its structure does, where the device serializes them") {
+            if (!caps.features.accelerationStructureSerialization) {
+                SKIP("the adapter serializes no acceleration structures");
+            }
+            Scene scene{device};
+            scene.place(caps, 2 * kSpacing);
+            const std::array structures{scene.triangles.structure};
+            const auto serialized = propertyOf(device, caps, AccelerationStructureProperty::SerializedSize, structures,
+                                               [&](CommandListHandle list) { scene.build(list); });
+            REQUIRE(serialized.front() >= kSerializedIdentifierSize);
+            const BufferHandle data = created(device, {.size = serialized.front(),
+                                                       .memory = BufferMemory::Readback,
+                                                       .usage = {.accelerationStructureData = true}});
+            run(device, [&](CommandListHandle list) {
+                const auto written = device.serializeAccelerationStructure(list, scene.triangles.structure, data, 0);
+                INFO(failureOf(written));
+                CHECK(written.has_value());
+            });
+            const auto bytes = device.mapBuffer(data);
+            REQUIRE(bytes.has_value());
+            const auto compatible = device.serializedCompatible(std::span{*bytes}.first<kSerializedIdentifierSize>());
+            INFO(failureOf(compatible));
+            REQUIRE(compatible.has_value());
+            CHECK(*compatible);
+            // As large as the structure it came from, which is at least the
+            // size its data names.
+            const auto sizes = device.accelerationStructureSizes(scene.triangleInputs());
+            REQUIRE(sizes.has_value());
+            const AccelerationStructureHandle copy = created(device, AccelerationStructureDesc{.size = sizes->size});
+            run(device, [&](CommandListHandle list) {
+                const auto read = device.deserializeAccelerationStructure(list, data, 0, copy);
+                INFO(failureOf(read));
+                CHECK(read.has_value());
+            });
+            scene.place(caps, 2 * kSpacing, copy);
+            CHECK(traced(device, scene.top.structure, rebuilt(scene), query) == kPlaced);
+            CHECK(device.destroyAccelerationStructure(copy).has_value());
+            CHECK(device.destroyBuffer(data).has_value());
+        }
+        SECTION("a structure's current size and a top structure's bottom count, where the device writes them") {
+            Scene scene{device};
+            scene.place(caps, 2 * kSpacing);
+            const auto build = [&](CommandListHandle list) {
+                scene.build(list);
+            };
+            if (caps.features.accelerationStructureCurrentSize) {
+                const std::array structures{scene.triangles.structure};
+                const auto current = propertyOf(device, caps, AccelerationStructureProperty::CurrentSize, structures,
+                                                build);
+                const auto sizes = device.accelerationStructureSizes(scene.triangleInputs());
+                REQUIRE(sizes.has_value());
+                CHECK(current.front() != 0);
+                CHECK(current.front() <= sizes->size);
+            }
+            if (caps.features.serializedBottomCount) {
+                const std::array structures{scene.top.structure};
+                const auto bottoms = propertyOf(device, caps, AccelerationStructureProperty::SerializedBottomCount,
+                                                structures, build);
+                CHECK(bottoms.front() != 0);
+            }
+        }
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device lets shaders read a hit triangle's positions, of a structure built to allow it, where it has them",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const RayDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        if (!made.caps.features.rayPositionFetch || !made.caps.features.rayQuery) {
+            SKIP("the adapter fetches no hit positions or has no ray queries");
+        }
+        if (!takesSpirv(backend)) {
+            SKIP("no " << backend.name << " bytecode is checked in");
+        }
+        const RayQuery positions{device, bfr::test::spirv::kRayPositionsComp};
+        Scene scene{device, {}, {.allowDataAccess = true}};
+        scene.place(made.caps, 2 * kSpacing);
+        // The triangles' first vertex is at x = -1 in object space, wherever
+        // their instances are.
+        const auto left = std::bit_cast<std::uint32_t>(-1.0F);
+        constexpr std::uint32_t kAll = kRays;
+        const std::array<std::uint32_t, kAll> expected{left, kMiss, left, kMiss, kMiss, kMiss, kMiss, kMiss};
+        CHECK(traced(
+                  device, scene.top.structure, [&](CommandListHandle list) { scene.build(list); }, positions) ==
+              expected);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -713,8 +954,6 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
             tooMany.fill(triangle);
             const AccelerationStructureHandle bottom = created(device, {.type = AccelerationStructureType::Bottom,
                                                                         .size = kSmall});
-            const AccelerationStructureHandle bigger = created(device, {.type = AccelerationStructureType::Bottom,
-                                                                        .size = 2 * kSmall});
             const AccelerationStructureHandle top = created(device,
                                                             {.type = AccelerationStructureType::Top, .size = kSmall});
 
@@ -728,13 +967,10 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
             CHECK(code(device.accelerationStructureSlot(bottom)) == ErrorCode::RhiInvalidCall);
             CHECK(device.accelerationStructureSlot(top).has_value() ==
                   (made.caps.bindless.maxAccelerationStructures != 0));
-            // A build's inputs are of its structure's type, and a copy is of
-            // one type and size.
+            // A build's inputs are of its structure's type.
             CHECK(code(device.buildAccelerationStructure(*list, {.dst = top,
                                                                  .inputs = {.triangles = std::span{&triangle, 1}}})) ==
                   ErrorCode::RhiInvalidCall);
-            CHECK(code(device.copyAccelerationStructure(*list, bigger, bottom)) == ErrorCode::RhiInvalidCall);
-            CHECK(code(device.copyAccelerationStructure(*list, top, bottom)) == ErrorCode::RhiInvalidCall);
 
             // An index or offset of 24 bits at most, room for every record,
             // and instances of bottom structures only.
@@ -755,10 +991,26 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
             ofTop.bottomStructure = top;
             CHECK(code(device.writeInstances(std::span{&ofTop, 1}, out)) == ErrorCode::RhiInvalidCall);
 
-            for (const AccelerationStructureHandle structure : {bottom, bigger, top}) {
+            for (const AccelerationStructureHandle structure : {bottom, top}) {
                 CHECK(device.destroyAccelerationStructure(structure).has_value());
             }
             CHECK(code(device.accelerationStructureReference(top)) == ErrorCode::RhiInvalidHandle);
+            // A property the device writes, and no more structures than its
+            // pool holds.
+            const auto pool = device.createAccelerationStructurePropertyPool(
+                {.property = AccelerationStructureProperty::CompactedSize, .count = 1});
+            REQUIRE(pool.has_value());
+            const std::array<AccelerationStructureHandle, 2> twoStructures{bottom, bottom};
+            CHECK(code(device.writeAccelerationStructureProperties(*list, *pool, 0, twoStructures)) ==
+                  ErrorCode::RhiInvalidCall);
+            CHECK(code(device.writeAccelerationStructureProperties(*list, *pool, 1, std::span{&bottom, 1})) ==
+                  ErrorCode::RhiInvalidCall);
+            CHECK(device.destroyAccelerationStructurePropertyPool(*pool).has_value());
+            if (!made.caps.features.accelerationStructureCurrentSize) {
+                CHECK(code(device.createAccelerationStructurePropertyPool(
+                          {.property = AccelerationStructureProperty::CurrentSize, .count = 1})) ==
+                      ErrorCode::RhiUnsupported);
+            }
             CHECK(device.destroyBuffer(vertices).has_value());
         }
         CHECK(device.destroyCommandList(*list).has_value());

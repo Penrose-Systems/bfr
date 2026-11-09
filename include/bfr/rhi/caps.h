@@ -145,6 +145,13 @@ struct RayTracingLimits {
     /// The most rays one trace makes.
     std::uint32_t maxTraceRays = 0;
     std::uint32_t maxHitAttributeSize = 0;
+    /// The bytes of one entry resolveAccelerationStructureProperties writes.
+    std::uint32_t propertyEntryBytes = 0;
+    /// Shaders that reorder invocations may see them reordered: the backend
+    /// says it reorders (Features::rayInvocationReorder).
+    bool reordersInvocations = false;
+    /// The highest binding table record index a reordered hit names.
+    std::uint32_t maxBindingTableRecordIndex = 0;
     /// The bytes of one record Device::writeInstances writes.
     std::uint32_t instanceSize = 0;
 };
@@ -162,6 +169,16 @@ struct Features {
     bool accelerationStructure = false;
     /// Device::bufferAddress.
     bool bufferAddress = false;
+    /// Shaders read a hit triangle's positions, of a structure built with
+    /// allowDataAccess.
+    bool rayPositionFetch = false;
+    /// Device::serializeAccelerationStructure and its kin.
+    bool accelerationStructureSerialization = false;
+    /// The CurrentSize and SerializedBottomCount properties.
+    bool accelerationStructureCurrentSize = false;
+    bool serializedBottomCount = false;
+    /// Shaders reorder ray tracing invocations.
+    bool rayInvocationReorder = false;
     bool meshShader = false;
     bool taskShader = false;
     bool shadingRate = false;

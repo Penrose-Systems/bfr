@@ -747,6 +747,16 @@ enum class Call : std::int32_t {
     TraceRays = BFR_CALL_TRACE_RAYS,
     TraceRaysIndirect = BFR_CALL_TRACE_RAYS_INDIRECT,
     BufferAddress = BFR_CALL_BUFFER_ADDRESS,
+    CreateAccelerationStructurePropertyPool = BFR_CALL_CREATE_ACCELERATION_STRUCTURE_PROPERTY_POOL,
+    DestroyAccelerationStructurePropertyPool = BFR_CALL_DESTROY_ACCELERATION_STRUCTURE_PROPERTY_POOL,
+    ResetAccelerationStructureProperties = BFR_CALL_RESET_ACCELERATION_STRUCTURE_PROPERTIES,
+    WriteAccelerationStructureProperties = BFR_CALL_WRITE_ACCELERATION_STRUCTURE_PROPERTIES,
+    ResolveAccelerationStructureProperties = BFR_CALL_RESOLVE_ACCELERATION_STRUCTURE_PROPERTIES,
+    CompactAccelerationStructure = BFR_CALL_COMPACT_ACCELERATION_STRUCTURE,
+    SerializeAccelerationStructure = BFR_CALL_SERIALIZE_ACCELERATION_STRUCTURE,
+    DeserializeAccelerationStructure = BFR_CALL_DESERIALIZE_ACCELERATION_STRUCTURE,
+    SerializedCompatible = BFR_CALL_SERIALIZED_COMPATIBLE,
+    RayTracingStackSize = BFR_CALL_RAY_TRACING_STACK_SIZE,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -844,6 +854,16 @@ enum class Call : std::int32_t {
     case Call::TraceRays: return "trace_rays";
     case Call::TraceRaysIndirect: return "trace_rays_indirect";
     case Call::BufferAddress: return "buffer_address";
+    case Call::CreateAccelerationStructurePropertyPool: return "create_acceleration_structure_property_pool";
+    case Call::DestroyAccelerationStructurePropertyPool: return "destroy_acceleration_structure_property_pool";
+    case Call::ResetAccelerationStructureProperties: return "reset_acceleration_structure_properties";
+    case Call::WriteAccelerationStructureProperties: return "write_acceleration_structure_properties";
+    case Call::ResolveAccelerationStructureProperties: return "resolve_acceleration_structure_properties";
+    case Call::CompactAccelerationStructure: return "compact_acceleration_structure";
+    case Call::SerializeAccelerationStructure: return "serialize_acceleration_structure";
+    case Call::DeserializeAccelerationStructure: return "deserialize_acceleration_structure";
+    case Call::SerializedCompatible: return "serialized_compatible";
+    case Call::RayTracingStackSize: return "ray_tracing_stack_size";
     }
     return {};
 }
@@ -1537,6 +1557,52 @@ enum class RayTracingGroupType : std::int32_t {
     return {};
 }
 
+/// What a property pool's entries hold, one per structure a write names, of
+/// bfr_caps_ray_tracing.property_entry_bytes each.
+enum class AccelerationStructureProperty : std::int32_t {
+    /// The bytes a compact copy takes, of a structure built with allow_compaction.
+    CompactedSize = BFR_ACCELERATION_STRUCTURE_PROPERTY_COMPACTED_SIZE,
+    /// The bytes bfr_serialize_acceleration_structure writes, where
+    /// bfr_caps_features.acceleration_structure_serialization.
+    SerializedSize = BFR_ACCELERATION_STRUCTURE_PROPERTY_SERIALIZED_SIZE,
+    /// How many bottom structure references a serialized top structure holds, where
+    /// bfr_caps_features.serialized_bottom_count.
+    SerializedBottomCount = BFR_ACCELERATION_STRUCTURE_PROPERTY_SERIALIZED_BOTTOM_COUNT,
+    /// The bytes the structure takes now, where
+    /// bfr_caps_features.acceleration_structure_current_size.
+    CurrentSize = BFR_ACCELERATION_STRUCTURE_PROPERTY_CURRENT_SIZE,
+};
+
+/// value's name in bfr.yaml; empty for a value AccelerationStructureProperty doesn't have.
+[[nodiscard]] constexpr std::string_view name(AccelerationStructureProperty value) {
+    switch (value) {
+    case AccelerationStructureProperty::CompactedSize: return "compacted_size";
+    case AccelerationStructureProperty::SerializedSize: return "serialized_size";
+    case AccelerationStructureProperty::SerializedBottomCount: return "serialized_bottom_count";
+    case AccelerationStructureProperty::CurrentSize: return "current_size";
+    }
+    return {};
+}
+
+/// The shader of a group whose stack size bfr_get_ray_tracing_stack_size reads.
+enum class RayTracingGroupShader : std::int32_t {
+    General = BFR_RAY_TRACING_GROUP_SHADER_GENERAL,
+    ClosestHit = BFR_RAY_TRACING_GROUP_SHADER_CLOSEST_HIT,
+    AnyHit = BFR_RAY_TRACING_GROUP_SHADER_ANY_HIT,
+    Intersection = BFR_RAY_TRACING_GROUP_SHADER_INTERSECTION,
+};
+
+/// value's name in bfr.yaml; empty for a value RayTracingGroupShader doesn't have.
+[[nodiscard]] constexpr std::string_view name(RayTracingGroupShader value) {
+    switch (value) {
+    case RayTracingGroupShader::General: return "general";
+    case RayTracingGroupShader::ClosestHit: return "closest_hit";
+    case RayTracingGroupShader::AnyHit: return "any_hit";
+    case RayTracingGroupShader::Intersection: return "intersection";
+    }
+    return {};
+}
+
 /// Which window system a bfr_window comes from, for the platforms that have more than one.
 enum class WindowSystem : std::int32_t {
     /// The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -1599,6 +1665,8 @@ class SparseMemory;
 class AccelerationStructure;
 
 class Shader;
+
+class AccelerationStructurePropertyPool;
 
 class PipelineCache;
 
@@ -1762,6 +1830,22 @@ private:
 static_assert(sizeof(ShaderRef) == sizeof(bfr_shader) && alignof(ShaderRef) == alignof(bfr_shader) &&
               std::is_standard_layout_v<ShaderRef> && std::is_trivially_copyable_v<ShaderRef>);
 
+/// A borrowed AccelerationStructurePropertyPool, laid out as bfr_acceleration_structure_property_pool: what a struct names one by. It owns nothing;
+/// the AccelerationStructurePropertyPool outlives the call it is passed to. Null by default.
+class AccelerationStructurePropertyPoolRef {
+public:
+    AccelerationStructurePropertyPoolRef() = default;
+    AccelerationStructurePropertyPoolRef(const AccelerationStructurePropertyPool& accelerationStructurePropertyPool); // NOLINT(google-explicit-constructor): a AccelerationStructurePropertyPool is passed as one
+
+    [[nodiscard]] bfr_acceleration_structure_property_pool get() const { return accelerationStructurePropertyPool_; }
+    [[nodiscard]] explicit operator bool() const { return accelerationStructurePropertyPool_.bits != 0; }
+
+private:
+    bfr_acceleration_structure_property_pool accelerationStructurePropertyPool_{};
+};
+static_assert(sizeof(AccelerationStructurePropertyPoolRef) == sizeof(bfr_acceleration_structure_property_pool) && alignof(AccelerationStructurePropertyPoolRef) == alignof(bfr_acceleration_structure_property_pool) &&
+              std::is_standard_layout_v<AccelerationStructurePropertyPoolRef> && std::is_trivially_copyable_v<AccelerationStructurePropertyPoolRef>);
+
 /// A borrowed PipelineCache, laid out as bfr_pipeline_cache: what a struct names one by. It owns nothing;
 /// the PipelineCache outlives the call it is passed to. Null by default.
 class PipelineCacheRef {
@@ -1908,6 +1992,9 @@ struct DeviceDesc {
     /// them is made with the device, so building never allocates. More fails with
     /// error_limit_reached. 0 is none.
     std::uint32_t maxBuildGeometries{};
+    /// Property pools the device holds at once, 0 for none; past it,
+    /// bfr_create_acceleration_structure_property_pool fails with error_limit_reached.
+    std::uint32_t maxAccelerationStructurePropertyPools{};
     /// The strides, in bytes, the device's indirect draws take, read during the call only. D3D12
     /// fixes a stride in the command signature it makes for them, so it makes one for each here and
     /// fails an indirect draw of any other with error_unsupported; Vulkan and Metal take any
@@ -2075,6 +2162,9 @@ struct BufferUsage {
     /// It holds shader binding table records. It starts at an address that is a multiple of
     /// bfr_caps_ray_tracing.table_alignment.
     bool shaderBindingTable{};
+    /// bfr_serialize_acceleration_structure writes it and bfr_deserialize_acceleration_structure
+    /// reads it. It starts at an address that is a multiple of 256.
+    bool accelerationStructureData{};
 };
 
 /// How to create a buffer.
@@ -2424,6 +2514,9 @@ struct RayTracingPipelineDesc {
     std::uint32_t maxAttributeSize{};
     /// Where the pipeline is looked for, and added on a miss; null is none.
     PipelineCacheRef cache{};
+    /// The bytes of stack its traces take, large enough for every trace it makes
+    /// (bfr_get_ray_tracing_stack_size gives each shader's); 0 leaves the backend's own size.
+    std::uint64_t stackSize{};
 };
 
 /// Records in a shader binding table: size bytes from offset in buffer, which has
@@ -2669,6 +2762,10 @@ struct AccelerationStructureFlags {
     /// Later builds may update the structure.
     bool allowUpdate{};
     bool minimizeMemory{};
+    /// bfr_compact_acceleration_structure may copy it, and its compacted_size be written.
+    bool allowCompaction{};
+    /// Shaders read its triangles' positions, where bfr_caps_features.ray_position_fetch.
+    bool allowDataAccess{};
 };
 
 /// Triangles in a bottom acceleration structure. A null indices is none: triangle_count * 3
@@ -2810,6 +2907,13 @@ static_assert(offsetof(AccelerationStructureInstance, cullDisable) == offsetof(b
 static_assert(offsetof(AccelerationStructureInstance, frontCounterClockwise) == offsetof(bfr_acceleration_structure_instance, front_counter_clockwise));
 static_assert(offsetof(AccelerationStructureInstance, opacity) == offsetof(bfr_acceleration_structure_instance, opacity));
 static_assert(offsetof(AccelerationStructureInstance, bottomStructure) == offsetof(bfr_acceleration_structure_instance, bottom_structure));
+
+/// How to create a property pool of count entries of property, at least 1.
+struct AccelerationStructurePropertyPoolDesc {
+    /// 0 is compacted_size.
+    AccelerationStructureProperty property{};
+    std::uint32_t count{};
+};
 
 /// Which window to ask about.
 struct SwapchainQuery {
@@ -3013,6 +3117,12 @@ struct CapsRayTracing {
     /// The most rays one trace makes.
     std::uint32_t maxTraceRays{};
     std::uint32_t maxHitAttributeSize{};
+    /// The bytes of one entry bfr_resolve_acceleration_structure_properties writes.
+    std::uint32_t propertyEntryBytes{};
+    /// Shaders that reorder invocations may see them reordered: the backend says it reorders.
+    bool reordersInvocations{};
+    /// The highest binding table record index a reordered hit names.
+    std::uint32_t maxBindingTableRecordIndex{};
     /// The bytes of one record bfr_write_instances writes.
     std::uint32_t instanceSize{};
 };
@@ -3033,6 +3143,16 @@ struct CapsFeatures {
     bool accelerationStructure{};
     /// bfr_get_buffer_address.
     bool bufferAddress{};
+    /// Shaders read a hit triangle's positions, of a structure built with allow_data_access.
+    bool rayPositionFetch{};
+    /// bfr_serialize_acceleration_structure and its kin.
+    bool accelerationStructureSerialization{};
+    /// The current_size property.
+    bool accelerationStructureCurrentSize{};
+    /// The serialized_bottom_count property.
+    bool serializedBottomCount{};
+    /// Shaders reorder ray tracing invocations.
+    bool rayInvocationReorder{};
     bool meshShader{};
     bool taskShader{};
     /// A shading rate per draw.
@@ -3481,6 +3601,7 @@ inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
         .max_tile_mappings = value.maxTileMappings,
         .max_bindless_acceleration_structures = value.maxBindlessAccelerationStructures,
         .max_build_geometries = value.maxBuildGeometries,
+        .max_acceleration_structure_property_pools = value.maxAccelerationStructurePropertyPools,
         .indirect_strides = reinterpret_cast<const uint32_t*>(value.indirectStrides.data()),
         .indirect_stride_count = static_cast<uint32_t>(value.indirectStrides.size()),
     };
@@ -3534,6 +3655,7 @@ inline bfr_buffer_usage toC(const BufferUsage& value) {
         .acceleration_structure_input = static_cast<bfr_bool>(value.accelerationStructureInput),
         .acceleration_structure_scratch = static_cast<bfr_bool>(value.accelerationStructureScratch),
         .shader_binding_table = static_cast<bfr_bool>(value.shaderBindingTable),
+        .acceleration_structure_data = static_cast<bfr_bool>(value.accelerationStructureData),
     };
 }
 
@@ -3767,6 +3889,8 @@ inline bfr_acceleration_structure_flags toC(const AccelerationStructureFlags& va
         .preference = static_cast<bfr_build_preference>(value.preference),
         .allow_update = static_cast<bfr_bool>(value.allowUpdate),
         .minimize_memory = static_cast<bfr_bool>(value.minimizeMemory),
+        .allow_compaction = static_cast<bfr_bool>(value.allowCompaction),
+        .allow_data_access = static_cast<bfr_bool>(value.allowDataAccess),
     };
 }
 
@@ -3775,6 +3899,14 @@ inline bfr_acceleration_structure_desc toC(const AccelerationStructureDesc& valu
         .next = next,
         .type = static_cast<bfr_acceleration_structure_type>(value.type),
         .size = value.size,
+    };
+}
+
+inline bfr_acceleration_structure_property_pool_desc toC(const AccelerationStructurePropertyPoolDesc& value, const bfr_chain* next) {
+    return {
+        .next = next,
+        .property = static_cast<bfr_acceleration_structure_property>(value.property),
+        .count = value.count,
     };
 }
 
@@ -3993,6 +4125,9 @@ inline CapsRayTracing fromC(const bfr_caps_ray_tracing& value) {
         .maxShaderGroupStride = value.max_shader_group_stride,
         .maxTraceRays = value.max_trace_rays,
         .maxHitAttributeSize = value.max_hit_attribute_size,
+        .propertyEntryBytes = value.property_entry_bytes,
+        .reordersInvocations = value.reorders_invocations != BFR_FALSE,
+        .maxBindingTableRecordIndex = value.max_binding_table_record_index,
         .instanceSize = value.instance_size,
     };
 }
@@ -4006,6 +4141,11 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .rayPrimitiveCulling = value.ray_primitive_culling != BFR_FALSE,
         .accelerationStructure = value.acceleration_structure != BFR_FALSE,
         .bufferAddress = value.buffer_address != BFR_FALSE,
+        .rayPositionFetch = value.ray_position_fetch != BFR_FALSE,
+        .accelerationStructureSerialization = value.acceleration_structure_serialization != BFR_FALSE,
+        .accelerationStructureCurrentSize = value.acceleration_structure_current_size != BFR_FALSE,
+        .serializedBottomCount = value.serialized_bottom_count != BFR_FALSE,
+        .rayInvocationReorder = value.ray_invocation_reorder != BFR_FALSE,
         .meshShader = value.mesh_shader != BFR_FALSE,
         .taskShader = value.task_shader != BFR_FALSE,
         .shadingRate = value.shading_rate != BFR_FALSE,
@@ -4364,10 +4504,10 @@ public:
     /// Owns nothing, as a moved-from Device does.
     Device() = default;
     /// Destroys a device once the GPU has finished with it, with every handle it still owns. Null
-    /// does nothing. A Device with AccelerationStructure or Buffer or CommandList or CommandPool or
-    /// Pipeline or PipelineCache or Sampler or Shader or SparseMemory or Swapchain or Texture or
-    /// TimestampPool objects left lives on until the last of them is destroyed, so they may be
-    /// destroyed in any order.
+    /// does nothing. A Device with AccelerationStructure or AccelerationStructurePropertyPool or
+    /// Buffer or CommandList or CommandPool or Pipeline or PipelineCache or Sampler or Shader or
+    /// SparseMemory or Swapchain or Texture or TimestampPool objects left lives on until the last
+    /// of them is destroyed, so they may be destroyed in any order.
     ~Device() = default;
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
@@ -4702,10 +4842,10 @@ public:
     /// max_build_geometries, and error_invalid_handle for a structure or buffer that is gone.
     [[nodiscard]] Expected<void> buildAccelerationStructure(CommandList commandList, const AccelerationStructureBuild& build) const;
 
-    /// Records a copy of src into dst, of the same type and size, not overlapping, as builds are
-    /// recorded. Fails with error_unsupported as bfr_build_acceleration_structure does,
-    /// error_invalid_argument for structures of different types or sizes, and error_invalid_handle
-    /// for a structure that is gone.
+    /// Records a copy of src into dst, at least src's size, or its current_size where
+    /// bfr_caps_features.acceleration_structure_current_size, not overlapping, as builds are
+    /// recorded. Fails with error_unsupported as bfr_build_acceleration_structure does, and
+    /// error_invalid_handle for a structure that is gone.
     [[nodiscard]] Expected<void> copyAccelerationStructure(CommandList commandList, const AccelerationStructure& dst, const AccelerationStructure& src) const;
 
     /// Creates a shader from code, compiled once, for the ray tracing pipelines made from it. Not
@@ -4718,9 +4858,10 @@ public:
     /// Creates a ray tracing pipeline, as desc says, before returning. Not for the frame path. A
     /// desc.cache is looked in first, and the pipeline added on a miss. Fails with
     /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false,
-    /// error_invalid_argument for an enum value BFR doesn't have, error_invalid_handle for a shader
-    /// or desc.cache that is gone, error_limit_reached at the device's maximum of pipelines, and
-    /// error_device_failed when the backend refuses the desc; the message carries what it said.
+    /// error_invalid_argument for an enum value BFR doesn't have or a stack_size past 32 bits on
+    /// Vulkan, which takes no more, error_invalid_handle for a shader or desc.cache that is gone,
+    /// error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
+    /// backend refuses the desc; the message carries what it said.
     [[nodiscard]] Expected<Pipeline> createRayTracingPipeline(const RayTracingPipelineDesc& desc) const;
 
     /// Records a trace of desc's rays with the bound ray tracing pipeline, outside rendering, on a
@@ -4733,6 +4874,56 @@ public:
     /// offset, a multiple of 4; buffer has indirect usage. Fails with error_unsupported where
     /// bfr_caps_features.trace_rays_indirect is false, and as bfr_trace_rays does.
     [[nodiscard]] Expected<void> traceRaysIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset) const;
+
+    /// Creates a pool of desc's count entries of its property. Not for the frame path. Fails with
+    /// error_unsupported where bfr_caps_features.acceleration_structure, or the property's own
+    /// feature, is false, error_invalid_argument for an enum value BFR doesn't have,
+    /// error_limit_reached at the device's max_acceleration_structure_property_pools, and
+    /// error_device_failed when the backend refuses.
+    [[nodiscard]] Expected<AccelerationStructurePropertyPool> createAccelerationStructurePropertyPool(const AccelerationStructurePropertyPoolDesc& desc) const;
+
+    /// Records a reset of count entries from first, which a backend that needs one before an entry
+    /// is written, the first time too, is given; the others record nothing. Outside rendering, on a
+    /// queue whose kind runs compute. Fails with error_unsupported on a copy queue.
+    [[nodiscard]] Expected<void> resetAccelerationStructureProperties(CommandList commandList, const AccelerationStructurePropertyPool& pool, std::uint32_t first, std::uint32_t count) const;
+
+    /// Records writes of structures' property into the pool's entries from first, in order, outside
+    /// rendering, on a queue whose kind runs compute. A barrier orders their builds before it. A
+    /// compacted_size is of structures built with allow_compaction, a serialized_bottom_count of
+    /// top ones. Fails with error_unsupported on a copy queue, error_invalid_argument for more
+    /// structures than the pool holds from first, and error_invalid_handle for a structure that is
+    /// gone.
+    [[nodiscard]] Expected<void> writeAccelerationStructureProperties(CommandList commandList, const AccelerationStructurePropertyPool& pool, std::uint32_t first, std::span<const AccelerationStructureRef> structures) const;
+
+    /// Records a copy of count entries from first into buffer at offset, a multiple of 8, as
+    /// bfr_caps_ray_tracing.property_entry_bytes each, once the GPU has written them. buffer has
+    /// copy_dst usage. Outside rendering, on a queue whose kind runs compute. Fails with
+    /// error_unsupported on a copy queue.
+    [[nodiscard]] Expected<void> resolveAccelerationStructureProperties(CommandList commandList, const AccelerationStructurePropertyPool& pool, std::uint32_t first, std::uint32_t count, const Buffer& buffer, std::uint64_t offset) const;
+
+    /// Records a compact copy of src, built with allow_compaction, into dst, at least its
+    /// compacted_size, as builds are recorded. Fails as bfr_copy_acceleration_structure does.
+    [[nodiscard]] Expected<void> compactAccelerationStructure(CommandList commandList, const AccelerationStructure& dst, const AccelerationStructure& src) const;
+
+    /// Records src serialized into buffer at offset, a multiple of 256, its serialized_size bytes:
+    /// serialized_identifier_size bytes of identifier, then the backend's header and data. A top
+    /// structure's data holds its bottom structures' references, which the caller rewrites with
+    /// bfr_get_acceleration_structure_reference values before deserializing it on another device.
+    /// buffer has acceleration_structure_data usage. As builds are recorded. Fails with
+    /// error_unsupported where bfr_caps_features.acceleration_structure_serialization is false or
+    /// on a copy queue.
+    [[nodiscard]] Expected<void> serializeAccelerationStructure(CommandList commandList, const AccelerationStructure& src, const Buffer& buffer, std::uint64_t offset) const;
+
+    /// Records the structure buffer holds at offset, a multiple of 256, deserialized into dst, of
+    /// its type and at least the size the data names; its identifier is one
+    /// bfr_serialized_compatible says the device takes. Fails as
+    /// bfr_serialize_acceleration_structure does.
+    [[nodiscard]] Expected<void> deserializeAccelerationStructure(CommandList commandList, const Buffer& buffer, std::uint64_t offset, const AccelerationStructure& dst) const;
+
+    /// Writes whether the device deserializes a structure that begins with identifier,
+    /// serialized_identifier_size bytes. Fails with error_unsupported where
+    /// bfr_caps_features.acceleration_structure_serialization is false.
+    [[nodiscard]] Expected<bool> serializedCompatible(void* identifier) const;
 
     /// Lists the CPU time spent in each of the device's calls since it was made, indexed by
     /// bfr_call.
@@ -5024,6 +5215,12 @@ public:
     /// too small or the pipeline is not a ray tracing one.
     [[nodiscard]] Expected<void> shaderIdentifiers(std::uint32_t first, std::uint32_t count, void* data, std::size_t size);
 
+    /// Writes the bytes of stack one shader of group takes, for
+    /// bfr_ray_tracing_pipeline_desc.stack_size. The group has that shader. Fails with
+    /// error_invalid_argument for a pipeline that is not a ray tracing one or an enum value BFR
+    /// doesn't have.
+    [[nodiscard]] Expected<std::uint64_t> rayTracingStackSize(std::uint32_t group, RayTracingGroupShader shader);
+
 private:
     Pipeline(bfr_device* device, bfr_pipeline pipeline, detail::KeepAlive keepAlive) : device_(device), pipeline_(pipeline), keepAlive_(std::move(keepAlive)) {}
     friend class Device;
@@ -5231,6 +5428,43 @@ private:
     detail::KeepAlive keepAlive_;
 };
 
+/// Entries of one bfr_acceleration_structure_property, written by command lists and resolved into a
+/// buffer. Calls on one pool must not overlap.
+class AccelerationStructurePropertyPool {
+public:
+    /// Owns nothing, as a moved-from AccelerationStructurePropertyPool does.
+    AccelerationStructurePropertyPool() = default;
+    /// Destroys a property pool once the GPU has passed every submit made before the call; the
+    /// handle is invalid at once. Not for the frame path. A handle that is already destroyed does
+    /// nothing.
+    ~AccelerationStructurePropertyPool() { bfr_destroy_acceleration_structure_property_pool(device_, accelerationStructurePropertyPool_); }
+    AccelerationStructurePropertyPool(const AccelerationStructurePropertyPool&) = delete;
+    AccelerationStructurePropertyPool& operator=(const AccelerationStructurePropertyPool&) = delete;
+    AccelerationStructurePropertyPool(AccelerationStructurePropertyPool&& other) noexcept : device_(std::exchange(other.device_, nullptr)), accelerationStructurePropertyPool_(std::exchange(other.accelerationStructurePropertyPool_, {})), keepAlive_(std::move(other.keepAlive_)) {}
+    AccelerationStructurePropertyPool& operator=(AccelerationStructurePropertyPool&& other) noexcept {
+        if (this != &other) {
+            bfr_destroy_acceleration_structure_property_pool(device_, accelerationStructurePropertyPool_);
+            device_ = std::exchange(other.device_, nullptr);
+            accelerationStructurePropertyPool_ = std::exchange(other.accelerationStructurePropertyPool_, {});
+            keepAlive_ = std::move(other.keepAlive_);
+        }
+        return *this;
+    }
+
+    /// The C value, for calls bfr.hpp does not wrap; this still owns it.
+    [[nodiscard]] bfr_acceleration_structure_property_pool get() const { return accelerationStructurePropertyPool_; }
+    [[nodiscard]] explicit operator bool() const { return accelerationStructurePropertyPool_.bits != 0; }
+
+private:
+    AccelerationStructurePropertyPool(bfr_device* device, bfr_acceleration_structure_property_pool accelerationStructurePropertyPool, detail::KeepAlive keepAlive) : device_(device), accelerationStructurePropertyPool_(accelerationStructurePropertyPool), keepAlive_(std::move(keepAlive)) {}
+    friend class Device;
+
+    bfr_device* device_ = nullptr;
+    bfr_acceleration_structure_property_pool accelerationStructurePropertyPool_{};
+    // Keeps the Device that made this alive until this is destroyed.
+    detail::KeepAlive keepAlive_;
+};
+
 /// Pipelines the backend has compiled, which it reads back as bytes for a later run to start from.
 /// Pipelines made with one look in it first and add themselves on a miss.
 class PipelineCache {
@@ -5291,6 +5525,8 @@ inline AccelerationStructureRef::AccelerationStructureRef(const AccelerationStru
 
 inline ShaderRef::ShaderRef(const Shader& shader) : shader_(shader.get()) {}
 
+inline AccelerationStructurePropertyPoolRef::AccelerationStructurePropertyPoolRef(const AccelerationStructurePropertyPool& accelerationStructurePropertyPool) : accelerationStructurePropertyPool_(accelerationStructurePropertyPool.get()) {}
+
 inline PipelineCacheRef::PipelineCacheRef(const PipelineCache& pipelineCache) : pipelineCache_(pipelineCache.get()) {}
 
 namespace detail {
@@ -5347,6 +5583,7 @@ inline bfr_ray_tracing_pipeline_desc toC(const RayTracingPipelineDesc& value, co
         .max_payload_size = value.maxPayloadSize,
         .max_attribute_size = value.maxAttributeSize,
         .cache = value.cache.get(),
+        .stack_size = value.stackSize,
     };
 }
 
@@ -6179,6 +6416,68 @@ inline Expected<void> Device::traceRaysIndirect(CommandList commandList, const B
     return {};
 }
 
+inline Expected<AccelerationStructurePropertyPool> Device::createAccelerationStructurePropertyPool(const AccelerationStructurePropertyPoolDesc& desc) const {
+    const bfr_acceleration_structure_property_pool_desc cDesc = detail::toC(desc, nullptr);
+    bfr_acceleration_structure_property_pool pool{};
+    if (const bfr_result result = bfr_create_acceleration_structure_property_pool(device_, &cDesc, &pool); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return AccelerationStructurePropertyPool{device_, pool, keepAlive_};
+}
+
+inline Expected<void> Device::resetAccelerationStructureProperties(CommandList commandList, const AccelerationStructurePropertyPool& pool, std::uint32_t first, std::uint32_t count) const {
+    if (const bfr_result result = bfr_reset_acceleration_structure_properties(device_, commandList.get(), pool.get(), first, count); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::writeAccelerationStructureProperties(CommandList commandList, const AccelerationStructurePropertyPool& pool, std::uint32_t first, std::span<const AccelerationStructureRef> structures) const {
+    if (!std::in_range<uint32_t>(structures.size())) {
+        return std::unexpected(detail::tooMany("structures holds more elements than a uint32_t counts"));
+    }
+    if (const bfr_result result = bfr_write_acceleration_structure_properties(device_, commandList.get(), pool.get(), first, reinterpret_cast<const bfr_acceleration_structure*>(structures.data()), static_cast<uint32_t>(structures.size())); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::resolveAccelerationStructureProperties(CommandList commandList, const AccelerationStructurePropertyPool& pool, std::uint32_t first, std::uint32_t count, const Buffer& buffer, std::uint64_t offset) const {
+    if (const bfr_result result = bfr_resolve_acceleration_structure_properties(device_, commandList.get(), pool.get(), first, count, buffer.get(), offset); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::compactAccelerationStructure(CommandList commandList, const AccelerationStructure& dst, const AccelerationStructure& src) const {
+    if (const bfr_result result = bfr_compact_acceleration_structure(device_, commandList.get(), dst.get(), src.get()); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::serializeAccelerationStructure(CommandList commandList, const AccelerationStructure& src, const Buffer& buffer, std::uint64_t offset) const {
+    if (const bfr_result result = bfr_serialize_acceleration_structure(device_, commandList.get(), src.get(), buffer.get(), offset); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::deserializeAccelerationStructure(CommandList commandList, const Buffer& buffer, std::uint64_t offset, const AccelerationStructure& dst) const {
+    if (const bfr_result result = bfr_deserialize_acceleration_structure(device_, commandList.get(), buffer.get(), offset, dst.get()); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<bool> Device::serializedCompatible(void* identifier) const {
+    bfr_bool compatible{};
+    if (const bfr_result result = bfr_serialized_compatible(device_, identifier, &compatible); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return compatible != BFR_FALSE;
+}
+
 inline Expected<std::vector<CallTiming>> Device::callTimings() const {
     std::vector<bfr_call_timing> timingsC;
     std::uint32_t count = 0;
@@ -6301,6 +6600,14 @@ inline Expected<void> Pipeline::shaderIdentifiers(std::uint32_t first, std::uint
         return std::unexpected(detail::failure(result));
     }
     return {};
+}
+
+inline Expected<std::uint64_t> Pipeline::rayTracingStackSize(std::uint32_t group, RayTracingGroupShader shader) {
+    uint64_t stackSize{};
+    if (const bfr_result result = bfr_get_ray_tracing_stack_size(device_, pipeline_, group, static_cast<bfr_ray_tracing_group_shader>(shader), &stackSize); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return stackSize;
 }
 
 inline Expected<std::uint32_t> Sampler::samplerSlot() {

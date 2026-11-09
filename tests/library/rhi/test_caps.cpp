@@ -76,6 +76,14 @@ std::vector<std::string> limitsWithoutFeatures(const Caps& caps) {
         {features.taskShader || caps.mesh.maxTaskPayloadSize == 0, "task"},
         {features.accelerationStructure || caps.rayTracing.maxInstances == 0, "acceleration structure"},
         {features.accelerationStructure || caps.rayTracing.instanceSize == 0, "instance records"},
+        {features.accelerationStructure || caps.rayTracing.propertyEntryBytes == 0, "property entries"},
+        {features.accelerationStructure ||
+             !(features.accelerationStructureSerialization || features.accelerationStructureCurrentSize ||
+               features.serializedBottomCount || features.rayPositionFetch),
+         "acceleration structure features"},
+        {features.rayInvocationReorder ||
+             (!caps.rayTracing.reordersInvocations && caps.rayTracing.maxBindingTableRecordIndex == 0),
+         "invocation reorder"},
         {features.accelerationStructure || caps.bindless.maxAccelerationStructures == 0,
          "acceleration structure table"},
         {features.accelerationStructure || !(features.rayQuery || features.rayQueryGraphics), "ray queries"},

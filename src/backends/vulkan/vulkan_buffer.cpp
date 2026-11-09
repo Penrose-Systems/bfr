@@ -48,15 +48,18 @@ VkBufferUsageFlags usageFor(const BufferUsage& usage, const BufferAddressing& ad
            // Traces read binding tables, and indirect traces their
            // arguments, by address (VUID-vkCmdTraceRaysIndirect2KHR-indirectDeviceAddress-03633).
            flag(usage.shaderBindingTable, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR) |
+           // Serialized structures are copied to and from by address
+           // (VUID-vkCmdCopyAccelerationStructureToMemoryKHR-pInfo-03739).
            flag(usage.accelerationStructureInput || usage.accelerationStructureScratch || usage.shaderBindingTable ||
-                    (usage.indirect && addressing.indirectAddresses),
+                    usage.accelerationStructureData || (usage.indirect && addressing.indirectAddresses),
                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
 }
 
 VkDeviceSize alignmentFor(const BufferUsage& usage, const BufferAddressing& addressing) {
     return std::max({usage.accelerationStructureScratch ? addressing.scratch : 0,
                      usage.accelerationStructureInput ? addressing.input : 0,
-                     usage.shaderBindingTable ? addressing.table : 0});
+                     usage.shaderBindingTable ? addressing.table : 0,
+                     usage.accelerationStructureData ? addressing.data : 0});
 }
 
 // The memory properties each BufferMemory requires, and the ones it would
@@ -249,6 +252,7 @@ void VulkanDevice::collectBuffers() {
     samplers_.collect(completed, [this](const VulkanSampler& sampler) { bindless_.giveSampler(sampler.slot()); });
     timestampPools_.collect(completed);
     sparseMemories_.collect(completed);
+    propertyPools_.collect(completed);
     pipelines_.collect(completed);
     accelerationStructures_.collect(completed, [this](const VulkanAccelerationStructure& structure) {
         bindless_.giveAccelerationStructure(structure.slot());

@@ -53,6 +53,10 @@ constexpr std::uint32_t kNewestForVma = VK_API_VERSION_1_4;
 // 118-136).
 constexpr VkDeviceSize kInputAlignment = 16;
 
+// A serialized structure's address alignment (accelstructures.adoc:3137,
+// VUID-vkCmdCopyMemoryToAccelerationStructureKHR-pInfo-03743).
+constexpr VkDeviceSize kSerializedAlignment = 256;
+
 VkAttachmentLoadOp loadOpFor(LoadOp op) {
     switch (op) {
         case LoadOp::Load:
@@ -186,7 +190,8 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       addressing_{.indirectAddresses = setup.deviceAddresses,
                   .scratch = setup.rayTracing.scratchAlignment,
                   .input = setup.features.accelerationStructure ? kInputAlignment : 0,
-                  .table = setup.rayTracing.tableAlignment},
+                  .table = setup.rayTracing.tableAlignment,
+                  .data = setup.features.accelerationStructure ? kSerializedAlignment : 0},
       formats13_(setup.formats13),
       desc_(heldPart(desc)),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
@@ -204,6 +209,8 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       sparseMemories_("sparse memories", desc.maxSparseMemories, desc.maxSparseMemories, rhi.logger()),
       pipelineCaches_("pipeline caches", kBufferCapacity, kBufferLimit, rhi.logger()),
       accelerationStructures_("acceleration structures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      propertyPools_("acceleration structure property pools", desc.maxAccelerationStructurePropertyPools,
+                     desc.maxAccelerationStructurePropertyPools, rhi.logger()),
       builds_(desc.maxBuildGeometries),
       bindless_(desc),
       shaders_("shaders", kBufferCapacity, kBufferLimit, rhi.logger()),
@@ -1073,6 +1080,10 @@ void VulkanDevice::warnLeftovers() const {
         BFR_LOG_WARN(instance_->logger(), "{} acceleration structures were left when the device went",
                      accelerationStructures_.size());
     }
+    if (propertyPools_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} acceleration structure property pools were left when the device went",
+                     propertyPools_.size());
+    }
     if (shaders_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} shaders were left when the device went", shaders_.size());
     }
@@ -1098,6 +1109,7 @@ VulkanDevice::~VulkanDevice() {
     // Every buffer and texture gives its memory back before the allocator goes,
     // and every pipeline goes before the layout it was made on.
     accelerationStructures_.clear();
+    propertyPools_.clear();
     buffers_.clear();
     textures_.clear();
     sparseMemories_.clear();

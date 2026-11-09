@@ -294,7 +294,8 @@ std::optional<bfr::rhi::BufferDesc> bufferIn(const bfr_buffer_desc& desc, bfr::c
                                 .indirect = desc.usage.indirect != BFR_FALSE,
                                 .accelerationStructureInput = desc.usage.acceleration_structure_input != BFR_FALSE,
                                 .accelerationStructureScratch = desc.usage.acceleration_structure_scratch != BFR_FALSE,
-                                .shaderBindingTable = desc.usage.shader_binding_table != BFR_FALSE},
+                                .shaderBindingTable = desc.usage.shader_binding_table != BFR_FALSE,
+                                .accelerationStructureData = desc.usage.acceleration_structure_data != BFR_FALSE},
                       .sparse = desc.sparse != BFR_FALSE,
                       .sparseAliased = desc.sparse_aliased != BFR_FALSE,
                       .tileBytes = desc.tile_bytes};
@@ -375,6 +376,26 @@ bfr::rhi::PipelineHandle fromC(bfr_pipeline handle) {
 bfr_pipeline_cache toC(bfr::rhi::PipelineCacheHandle handle) {
     return {.bits = handle.bits};
 }
+
+bfr::rhi::AccelerationStructurePropertyPoolHandle fromC(bfr_acceleration_structure_property_pool handle) {
+    return bfr::rhi::AccelerationStructurePropertyPoolHandle::fromBits(handle.bits);
+}
+
+bfr_acceleration_structure_property_pool toC(bfr::rhi::AccelerationStructurePropertyPoolHandle handle) {
+    return {.bits = handle.bits};
+}
+
+static_assert(static_cast<int>(bfr::rhi::AccelerationStructureProperty::CurrentSize) ==
+              BFR_ACCELERATION_STRUCTURE_PROPERTY_CURRENT_SIZE);
+static_assert(static_cast<int>(bfr::rhi::RayTracingGroupShader::Intersection) ==
+              BFR_RAY_TRACING_GROUP_SHADER_INTERSECTION);
+static_assert(bfr::rhi::kSerializedIdentifierSize == BFR_SERIALIZED_IDENTIFIER_SIZE);
+// bfr_write_acceleration_structure_properties reads the caller's handles in
+// place as the rhi's.
+static_assert(sizeof(bfr_acceleration_structure) == sizeof(bfr::rhi::AccelerationStructureHandle) &&
+              alignof(bfr_acceleration_structure) == alignof(bfr::rhi::AccelerationStructureHandle) &&
+              std::is_standard_layout_v<bfr::rhi::AccelerationStructureHandle> &&
+              std::is_trivially_copyable_v<bfr::rhi::AccelerationStructureHandle>);
 
 bfr::rhi::ShaderHandle fromC(bfr_shader handle) {
     return bfr::rhi::ShaderHandle::fromBits(handle.bits);
@@ -510,8 +531,8 @@ static_assert(static_cast<int>(bfr::rhi::Call::ResolveTexture) == BFR_CALL_RESOL
 static_assert(static_cast<int>(bfr::rhi::Call::DrawMeshIndirectCount) == BFR_CALL_DRAW_MESH_INDIRECT_COUNT);
 static_assert(static_cast<int>(bfr::rhi::Call::BuildAccelerationStructure) == BFR_CALL_BUILD_ACCELERATION_STRUCTURE);
 static_assert(static_cast<int>(bfr::rhi::Call::CopyAccelerationStructure) == BFR_CALL_COPY_ACCELERATION_STRUCTURE);
-static_assert(static_cast<int>(bfr::rhi::Call::BufferAddress) == BFR_CALL_BUFFER_ADDRESS);
-static_assert(bfr::rhi::kCallCount == BFR_CALL_BUFFER_ADDRESS + 1);
+static_assert(static_cast<int>(bfr::rhi::Call::RayTracingStackSize) == BFR_CALL_RAY_TRACING_STACK_SIZE);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_RAY_TRACING_STACK_SIZE + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
@@ -554,7 +575,9 @@ std::optional<bfr::rhi::AccelerationStructureInputs> inputsIn(const bfr_accelera
     AccelerationStructureInputs made{.type = *type,
                                      .flags = {.preference = *preference,
                                                .allowUpdate = inputs.flags.allow_update != BFR_FALSE,
-                                               .minimizeMemory = inputs.flags.minimize_memory != BFR_FALSE},
+                                               .minimizeMemory = inputs.flags.minimize_memory != BFR_FALSE,
+                                               .allowCompaction = inputs.flags.allow_compaction != BFR_FALSE,
+                                               .allowDataAccess = inputs.flags.allow_data_access != BFR_FALSE},
                                      .triangles = {},
                                      .boxes = {},
                                      .instances = fromC(inputs.instances),
@@ -1176,6 +1199,9 @@ bfr_caps_ray_tracing toC(const bfr::rhi::RayTracingLimits& rayTracing) {
         .max_shader_group_stride = rayTracing.maxShaderGroupStride,
         .max_trace_rays = rayTracing.maxTraceRays,
         .max_hit_attribute_size = rayTracing.maxHitAttributeSize,
+        .property_entry_bytes = rayTracing.propertyEntryBytes,
+        .reorders_invocations = toC(rayTracing.reordersInvocations),
+        .max_binding_table_record_index = rayTracing.maxBindingTableRecordIndex,
         .instance_size = rayTracing.instanceSize,
     };
 }
@@ -1189,6 +1215,11 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .ray_primitive_culling = toC(features.rayPrimitiveCulling),
         .acceleration_structure = toC(features.accelerationStructure),
         .buffer_address = toC(features.bufferAddress),
+        .ray_position_fetch = toC(features.rayPositionFetch),
+        .acceleration_structure_serialization = toC(features.accelerationStructureSerialization),
+        .acceleration_structure_current_size = toC(features.accelerationStructureCurrentSize),
+        .serialized_bottom_count = toC(features.serializedBottomCount),
+        .ray_invocation_reorder = toC(features.rayInvocationReorder),
         .mesh_shader = toC(features.meshShader),
         .task_shader = toC(features.taskShader),
         .shading_rate = toC(features.shadingRate),
@@ -1631,6 +1662,7 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
              .maxTileMappings = desc->max_tile_mappings,
              .maxBindlessAccelerationStructures = desc->max_bindless_acceleration_structures,
              .maxBuildGeometries = desc->max_build_geometries,
+             .maxAccelerationStructurePropertyPools = desc->max_acceleration_structure_property_pools,
              .indirectStrides = {desc->indirect_strides, desc->indirect_stride_count}});
         if (!created) {
             return fail(created.error());
@@ -3179,7 +3211,8 @@ bfr_result bfr_create_ray_tracing_pipeline(bfr_device* device, const bfr_ray_tra
                                                                        .maxRecursionDepth = desc->max_recursion_depth,
                                                                        .maxPayloadSize = desc->max_payload_size,
                                                                        .maxAttributeSize = desc->max_attribute_size,
-                                                                       .cache = fromC(desc->cache)});
+                                                                       .cache = fromC(desc->cache),
+                                                                       .stackSize = desc->stack_size});
         if (!created) {
             return fail(created.error());
         }
@@ -3247,6 +3280,162 @@ bfr_result bfr_get_buffer_address(bfr_device* device, bfr_buffer buffer, uint64_
             return fail(found.error());
         }
         *address = *found;
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_create_acceleration_structure_property_pool(bfr_device* device,
+                                                           const bfr_acceleration_structure_property_pool_desc* desc,
+                                                           bfr_acceleration_structure_property_pool* pool) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr || pool == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and pool must not be null");
+        }
+        *pool = {};
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT,
+                        "bfr_acceleration_structure_property_pool_desc takes no chained structs");
+        }
+        bfr::core::Message error;
+        const auto property = enumIn(desc->property, bfr::rhi::AccelerationStructureProperty::CurrentSize, "property",
+                                     error);
+        if (!property) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto made = device->device->createAccelerationStructurePropertyPool(
+            {.property = *property, .count = desc->count});
+        if (!made) {
+            return fail(made.error());
+        }
+        *pool = toC(*made);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+void bfr_destroy_acceleration_structure_property_pool(bfr_device* device,
+                                                      bfr_acceleration_structure_property_pool pool) {
+    quietly([&] {
+        if (device == nullptr) {
+            return;
+        }
+        if (const auto destroyed = device->device->destroyAccelerationStructurePropertyPool(fromC(pool)); !destroyed) {
+            lastError() = destroyed.error().message;
+        }
+    });
+}
+
+bfr_result bfr_reset_acceleration_structure_properties(bfr_device* device, bfr_command_list command_list,
+                                                       bfr_acceleration_structure_property_pool pool, uint32_t first,
+                                                       uint32_t count) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto reset = device->device->resetAccelerationStructureProperties(fromC(command_list), fromC(pool), first,
+                                                                                count);
+        return reset ? BFR_RESULT_SUCCESS : fail(reset.error());
+    });
+}
+
+bfr_result bfr_write_acceleration_structure_properties(bfr_device* device, bfr_command_list command_list,
+                                                       bfr_acceleration_structure_property_pool pool, uint32_t first,
+                                                       const bfr_acceleration_structure* structures,
+                                                       uint32_t structure_count) {
+    return guarded([&] {
+        if (device == nullptr || (structures == nullptr && structure_count != 0)) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null, nor structures with a count");
+        }
+        // The caller's handles, read in place; see the layout assert above.
+        const auto written = device->device->writeAccelerationStructureProperties(
+            fromC(command_list), fromC(pool), first,
+            {reinterpret_cast<const bfr::rhi::AccelerationStructureHandle*>(structures), structure_count});
+        return written ? BFR_RESULT_SUCCESS : fail(written.error());
+    });
+}
+
+bfr_result bfr_resolve_acceleration_structure_properties(bfr_device* device, bfr_command_list command_list,
+                                                         bfr_acceleration_structure_property_pool pool, uint32_t first,
+                                                         uint32_t count, bfr_buffer buffer, uint64_t offset) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto resolved = device->device->resolveAccelerationStructureProperties(fromC(command_list), fromC(pool),
+                                                                                     first, count, fromC(buffer),
+                                                                                     offset);
+        return resolved ? BFR_RESULT_SUCCESS : fail(resolved.error());
+    });
+}
+
+bfr_result bfr_compact_acceleration_structure(bfr_device* device, bfr_command_list command_list,
+                                              bfr_acceleration_structure dst, bfr_acceleration_structure src) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto copied = device->device->compactAccelerationStructure(fromC(command_list), fromC(dst), fromC(src));
+        return copied ? BFR_RESULT_SUCCESS : fail(copied.error());
+    });
+}
+
+bfr_result bfr_serialize_acceleration_structure(bfr_device* device, bfr_command_list command_list,
+                                                bfr_acceleration_structure src, bfr_buffer buffer, uint64_t offset) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto serialized = device->device->serializeAccelerationStructure(fromC(command_list), fromC(src),
+                                                                               fromC(buffer), offset);
+        return serialized ? BFR_RESULT_SUCCESS : fail(serialized.error());
+    });
+}
+
+bfr_result bfr_deserialize_acceleration_structure(bfr_device* device, bfr_command_list command_list, bfr_buffer buffer,
+                                                  uint64_t offset, bfr_acceleration_structure dst) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto deserialized = device->device->deserializeAccelerationStructure(fromC(command_list), fromC(buffer),
+                                                                                   offset, fromC(dst));
+        return deserialized ? BFR_RESULT_SUCCESS : fail(deserialized.error());
+    });
+}
+
+bfr_result bfr_serialized_compatible(bfr_device* device, void* identifier, bfr_bool* compatible) {
+    return guarded([&] {
+        if (device == nullptr || identifier == nullptr || compatible == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, identifier and compatible must not be null");
+        }
+        *compatible = BFR_FALSE;
+        const auto found = device->device->serializedCompatible(
+            std::span<const std::byte, bfr::rhi::kSerializedIdentifierSize>{static_cast<const std::byte*>(identifier),
+                                                                            bfr::rhi::kSerializedIdentifierSize});
+        if (!found) {
+            return fail(found.error());
+        }
+        *compatible = toC(*found);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_get_ray_tracing_stack_size(bfr_device* device, bfr_pipeline pipeline, uint32_t group,
+                                          bfr_ray_tracing_group_shader shader, uint64_t* stack_size) {
+    return guarded([&] {
+        if (device == nullptr || stack_size == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and stack_size must not be null");
+        }
+        *stack_size = 0;
+        bfr::core::Message error;
+        const auto which = enumIn(shader, bfr::rhi::RayTracingGroupShader::Intersection, "group shader", error);
+        if (!which) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto found = device->device->rayTracingStackSize(fromC(pipeline), group, *which);
+        if (!found) {
+            return fail(found.error());
+        }
+        *stack_size = *found;
         return BFR_RESULT_SUCCESS;
     });
 }

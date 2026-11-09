@@ -2,6 +2,7 @@
 
 #include "bfr/core/error.h"
 #include "bfr/rhi/acceleration_structure.h"
+#include "bfr/rhi/caps.h"
 #include "rhi/enum_check.h"
 
 #include <cstddef>
@@ -16,6 +17,47 @@ namespace bfr::rhi {
     if (!accelerationStructure) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "the device has no acceleration structures (Features::accelerationStructure)");
+    }
+    return {};
+}
+
+/// Fails with RhiInvalidCall for a property BFR doesn't have, and
+/// RhiUnsupported for one whose feature the device lacks.
+[[nodiscard]] inline core::Result<void> checkProperty(AccelerationStructureProperty property,
+                                                      const Features& features) {
+    if (auto checked = checkKnown(property, "acceleration structure property"); !checked) {
+        return checked;
+    }
+    const bool has =
+        property == AccelerationStructureProperty::CompactedSize ||
+        (property == AccelerationStructureProperty::SerializedSize && features.accelerationStructureSerialization) ||
+        (property == AccelerationStructureProperty::SerializedBottomCount && features.serializedBottomCount) ||
+        (property == AccelerationStructureProperty::CurrentSize && features.accelerationStructureCurrentSize);
+    if (!has) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device writes no acceleration structure property {}, as its Features say",
+                             static_cast<std::uint32_t>(property));
+    }
+    return {};
+}
+
+/// Fails with RhiUnsupported where the device serializes no acceleration
+/// structures, as Features::accelerationStructureSerialization says.
+[[nodiscard]] inline core::Result<void> checkSerialization(bool serialization) {
+    if (!serialization) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "the device serializes no acceleration structures "
+                                                              "(Features::accelerationStructureSerialization)");
+    }
+    return {};
+}
+
+/// Fails with RhiInvalidCall when structures from first are more than the
+/// pool's count entries hold.
+[[nodiscard]] inline core::Result<void> checkPropertyRange(std::uint32_t first, std::size_t structures,
+                                                           std::uint32_t count) {
+    if (first > count || structures > count - first) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "{} structures from entry {} are more than a pool of {} holds", structures, first, count);
     }
     return {};
 }

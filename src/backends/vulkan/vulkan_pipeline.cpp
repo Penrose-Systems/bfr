@@ -506,15 +506,21 @@ void VulkanBindlessLayout::destroy() {
 }
 
 VulkanPipeline::VulkanPipeline(const VolkDeviceTable& table, VkDevice device, VkPipeline pipeline,
-                               VkPipelineBindPoint bindPoint, VkPrimitiveTopology topology)
-    : table_(&table), device_(device), pipeline_(pipeline), bindPoint_(bindPoint), topology_(topology) {}
+                               VkPipelineBindPoint bindPoint, VkPrimitiveTopology topology, std::uint64_t stackSize)
+    : table_(&table),
+      device_(device),
+      pipeline_(pipeline),
+      bindPoint_(bindPoint),
+      topology_(topology),
+      stackSize_(stackSize) {}
 
 VulkanPipeline::VulkanPipeline(VulkanPipeline&& other) noexcept
     : table_(other.table_),
       device_(other.device_),
       pipeline_(std::exchange(other.pipeline_, VK_NULL_HANDLE)),
       bindPoint_(other.bindPoint_),
-      topology_(other.topology_) {}
+      topology_(other.topology_),
+      stackSize_(other.stackSize_) {}
 
 VulkanPipeline::~VulkanPipeline() {
     if (pipeline_ != VK_NULL_HANDLE) {
@@ -759,14 +765,25 @@ core::Result<VulkanPipeline> createVulkanRayTracingPipeline(const VolkDeviceTabl
     info.pGroups = groups.data();
     info.maxPipelineRayRecursionDepth = desc.maxRecursionDepth;
     info.layout = layout;
+    // A stack size the caller gives is set as the pipeline is bound, which
+    // takes it as dynamic state (pipelines.adoc:7954-7959).
+    constexpr VkDynamicState kStackSize = VK_DYNAMIC_STATE_RAY_TRACING_PIPELINE_STACK_SIZE_KHR;
+    VkPipelineDynamicStateCreateInfo dynamic{};
+    dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic.dynamicStateCount = 1;
+    dynamic.pDynamicStates = &kStackSize;
+    if (desc.stackSize != 0) {
+        info.pDynamicState = &dynamic;
+    }
     VkPipeline pipeline = VK_NULL_HANDLE;
     const VkResult result = table.vkCreateRayTracingPipelinesKHR(device, VK_NULL_HANDLE, cache, 1, &info, nullptr,
                                                                  &pipeline);
     if (result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateRayTracingPipelinesKHR", .result = result});
     }
-    return VulkanPipeline{table, device, pipeline, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-                          VK_PRIMITIVE_TOPOLOGY_MAX_ENUM};
+    return VulkanPipeline{
+        table,         device, pipeline, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, VK_PRIMITIVE_TOPOLOGY_MAX_ENUM,
+        desc.stackSize};
 }
 
 // The device's pipeline calls, beside the pipelines they make.
@@ -873,6 +890,11 @@ core::Result<PipelineHandle> VulkanDevice::createRayTracingPipeline(const RayTra
     if (auto checked = checkEnums(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    // vkCmdSetRayTracingPipelineStackSizeKHR takes 32 bits.
+    if (!std::in_range<std::uint32_t>(desc.stackSize)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "a stack size of {} bytes is past what Vulkan takes",
+                             desc.stackSize);
+    }
     collectBuffers();
     const auto cache = pipelineCacheFor(desc.cache);
     if (!cache) {
@@ -918,6 +940,39 @@ core::Result<void> VulkanDevice::shaderIdentifiers(PipelineHandle pipeline, std:
                        {.call = "vkGetRayTracingShaderGroupHandlesKHR", .result = result});
     }
     return {};
+}
+
+namespace {
+
+VkShaderGroupShaderKHR groupShaderFor(RayTracingGroupShader shader) {
+    switch (shader) {
+        case RayTracingGroupShader::ClosestHit:
+            return VK_SHADER_GROUP_SHADER_CLOSEST_HIT_KHR;
+        case RayTracingGroupShader::AnyHit:
+            return VK_SHADER_GROUP_SHADER_ANY_HIT_KHR;
+        case RayTracingGroupShader::Intersection:
+            return VK_SHADER_GROUP_SHADER_INTERSECTION_KHR;
+        case RayTracingGroupShader::General:
+        default:
+            return VK_SHADER_GROUP_SHADER_GENERAL_KHR;
+    }
+}
+
+} // namespace
+
+core::Result<std::uint64_t> VulkanDevice::rayTracingStackSize(PipelineHandle pipeline, std::uint32_t group,
+                                                              RayTracingGroupShader shader) {
+    if (auto checked = checkKnown(shader, "ray tracing group shader"); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    auto found = pipelineFor(pipeline);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    if ((*found)->bindPoint() != VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the pipeline is not a ray tracing one");
+    }
+    return table_.vkGetRayTracingShaderGroupStackSizeKHR(device_, (*found)->pipeline(), group, groupShaderFor(shader));
 }
 
 } // namespace bfr::rhi::vulkan

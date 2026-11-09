@@ -28,7 +28,9 @@ mesh limits, task and mesh timestamps); acceleration structures and inline
 ray queries (builds of triangles, boxes and instances, updates, copies,
 instance records, the acceleration structure table); ray tracing pipelines
 (shader objects, shader groups and their identifiers, binding tables, direct
-and indirect traces, buffer addresses).
+and indirect traces, buffer addresses); compaction, serialization and
+acceleration structure properties, stack sizes, position fetch, invocation
+reorder caps.
 
 D3D12 and Metal are paused while Vulkan takes shape (owner, 2026-11-08); they
 still type-check.

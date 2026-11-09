@@ -44,6 +44,10 @@ struct BufferUsage {
     /// It holds shader binding table records. It starts at an address that is
     /// a multiple of RayTracingLimits::tableAlignment.
     bool shaderBindingTable = false;
+    /// serializeAccelerationStructure writes it and
+    /// deserializeAccelerationStructure reads it. It starts at an address
+    /// that is a multiple of 256.
+    bool accelerationStructureData = false;
 };
 
 /// How to create a buffer.

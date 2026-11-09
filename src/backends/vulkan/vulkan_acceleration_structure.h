@@ -43,6 +43,34 @@ private:
     VkDeviceAddress reference_;
 };
 
+/// A VkQueryPool of one acceleration structure property, destroyed when this
+/// goes, with room made with it for the structures a write names, so no write
+/// allocates.
+class VulkanPropertyPool {
+public:
+    VulkanPropertyPool(const VolkDeviceTable& table, VkDevice device, VkQueryPool pool, VkQueryType type,
+                       std::uint32_t count);
+    ~VulkanPropertyPool();
+    VulkanPropertyPool(const VulkanPropertyPool&) = delete;
+    VulkanPropertyPool& operator=(const VulkanPropertyPool&) = delete;
+    VulkanPropertyPool(VulkanPropertyPool&& other) noexcept;
+    VulkanPropertyPool& operator=(VulkanPropertyPool&&) = delete;
+
+    [[nodiscard]] VkQueryPool pool() const { return pool_; }
+    [[nodiscard]] VkQueryType type() const { return type_; }
+    [[nodiscard]] std::uint32_t count() const { return count_; }
+    /// Where a write's structures go, count of them.
+    [[nodiscard]] core::FixedVector<VkAccelerationStructureKHR>& structures() { return structures_; }
+
+private:
+    const VolkDeviceTable* table_;
+    VkDevice device_;
+    VkQueryPool pool_;
+    VkQueryType type_;
+    std::uint32_t count_;
+    core::FixedVector<VkAccelerationStructureKHR> structures_;
+};
+
 /// What one buildAccelerationStructure or accelerationStructureSizes call
 /// fills: a geometry, a range and a primitive count for each of its
 /// geometries. Made with the device at DeviceDesc::maxBuildGeometries, so no

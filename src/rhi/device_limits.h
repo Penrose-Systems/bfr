@@ -34,7 +34,8 @@ namespace bfr::rhi {
           std::pair{"maxTimestampPools", desc.maxTimestampPools},
           std::pair{"maxSparseMemories", desc.maxSparseMemories}, std::pair{"maxTileMappings", desc.maxTileMappings},
           std::pair{"maxBindlessAccelerationStructures", desc.maxBindlessAccelerationStructures},
-          std::pair{"maxBuildGeometries", desc.maxBuildGeometries}}) {
+          std::pair{"maxBuildGeometries", desc.maxBuildGeometries},
+          std::pair{"maxAccelerationStructurePropertyPools", desc.maxAccelerationStructurePropertyPools}}) {
         if (value > kMost) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "{} is {}; it is at most {}", name, value, kMost);
         }

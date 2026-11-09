@@ -83,11 +83,12 @@ private:
 };
 
 /// A VkPipeline, destroyed when this goes, with where it binds and its
-/// topology, which binding it sets.
+/// topology, or a ray tracing pipeline's stack size, 0 for its own, which
+/// binding it sets.
 class VulkanPipeline {
 public:
     VulkanPipeline(const VolkDeviceTable& table, VkDevice device, VkPipeline pipeline, VkPipelineBindPoint bindPoint,
-                   VkPrimitiveTopology topology);
+                   VkPrimitiveTopology topology, std::uint64_t stackSize = 0);
     ~VulkanPipeline();
     VulkanPipeline(const VulkanPipeline&) = delete;
     VulkanPipeline& operator=(const VulkanPipeline&) = delete;
@@ -97,6 +98,7 @@ public:
     [[nodiscard]] VkPipeline pipeline() const { return pipeline_; }
     [[nodiscard]] VkPipelineBindPoint bindPoint() const { return bindPoint_; }
     [[nodiscard]] VkPrimitiveTopology topology() const { return topology_; }
+    [[nodiscard]] std::uint64_t stackSize() const { return stackSize_; }
 
 private:
     const VolkDeviceTable* table_;
@@ -104,6 +106,7 @@ private:
     VkPipeline pipeline_;
     VkPipelineBindPoint bindPoint_;
     VkPrimitiveTopology topology_;
+    std::uint64_t stackSize_;
 };
 
 /// A VkShaderModule and the entry point its pipelines run, destroyed when

@@ -101,6 +101,7 @@ struct DeviceDesc {
     /// The most geometries one build takes, in buildAccelerationStructure
     /// and the size query; a top structure's instances are one geometry.
     std::uint32_t maxBuildGeometries = 0;
+    std::uint32_t maxAccelerationStructurePropertyPools = 0;
     /// The strides, in bytes, the device's indirect draws take, read during
     /// createDevice only: D3D12 fixes a stride in the command signature it
     /// makes for them, so it makes one for each here and fails an indirect

@@ -100,6 +100,10 @@ struct DeviceFeatures {
     VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipeline{};
     /// Its rayTracingPipelineTraceRaysIndirect2 is traceRaysIndirect's.
     VkPhysicalDeviceRayTracingMaintenance1FeaturesKHR rayTracingMaintenance1{};
+    VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR rayTracingPositionFetch{};
+    /// The cross-vendor reorder; VK_NV_ray_tracing_invocation_reorder's is not
+    /// enabled, so NV-only adapters report none.
+    VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT invocationReorder{};
     /// The extensions whose structs are chained, which the device enables.
     std::vector<const char*> enabledExtensions;
     std::uint32_t version = 0;

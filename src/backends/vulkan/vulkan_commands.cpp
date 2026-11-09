@@ -93,6 +93,12 @@ core::Result<void> VulkanDevice::bindPipeline(CommandListHandle commandList, Pip
         // mesh pipeline has none.
         table_.vkCmdSetPrimitiveTopology((*list)->buffer, (*found)->topology());
     }
+    // A ray tracing pipeline made with a stack size takes it as each list's
+    // state, before each trace (VUID-vkCmdTraceRaysKHR-None-09458).
+    if ((*found)->stackSize() != 0) {
+        table_.vkCmdSetRayTracingPipelineStackSizeKHR((*list)->buffer,
+                                                      static_cast<std::uint32_t>((*found)->stackSize()));
+    }
     return {};
 }
 

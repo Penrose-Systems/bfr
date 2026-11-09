@@ -32,6 +32,8 @@ struct BufferAddressing {
     VkDeviceSize input = 0;
     /// RayTracingLimits::tableAlignment.
     VkDeviceSize table = 0;
+    /// A serialized structure's.
+    VkDeviceSize data = 0;
 };
 
 /// A VkBuffer and the memory VMA placed it in, which it frees when it goes:

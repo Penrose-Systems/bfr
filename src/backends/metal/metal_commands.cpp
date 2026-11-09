@@ -526,4 +526,64 @@ core::Result<std::uint64_t> MetalDevice::bufferAddress(BufferHandle /*buffer*/) 
     return std::unexpected(checkBufferAddress(features_.bufferAddress, false).error());
 }
 
+core::Result<AccelerationStructurePropertyPoolHandle> MetalDevice::createAccelerationStructurePropertyPool(
+    const AccelerationStructurePropertyPoolDesc& /*desc*/) {
+    return std::unexpected(checkAccelerationStructures(features_.accelerationStructure).error());
+}
+
+core::Result<void> MetalDevice::destroyAccelerationStructurePropertyPool(AccelerationStructurePropertyPoolHandle pool) {
+    if (pool.isNull()) {
+        return {};
+    }
+    return checkAccelerationStructures(features_.accelerationStructure);
+}
+
+core::Result<void> MetalDevice::resetAccelerationStructureProperties(CommandListHandle /*commandList*/,
+                                                                     AccelerationStructurePropertyPoolHandle /*pool*/,
+                                                                     std::uint32_t /*first*/, std::uint32_t /*count*/) {
+    return checkAccelerationStructures(features_.accelerationStructure);
+}
+
+core::Result<void> MetalDevice::writeAccelerationStructureProperties(
+    CommandListHandle /*commandList*/, AccelerationStructurePropertyPoolHandle /*pool*/, std::uint32_t /*first*/,
+    std::span<const AccelerationStructureHandle> /*structures*/) {
+    return checkAccelerationStructures(features_.accelerationStructure);
+}
+
+core::Result<void> MetalDevice::resolveAccelerationStructureProperties(CommandListHandle /*commandList*/,
+                                                                       AccelerationStructurePropertyPoolHandle /*pool*/,
+                                                                       std::uint32_t /*first*/, std::uint32_t /*count*/,
+                                                                       BufferHandle /*buffer*/,
+                                                                       std::uint64_t /*offset*/) {
+    return checkAccelerationStructures(features_.accelerationStructure);
+}
+
+core::Result<void> MetalDevice::compactAccelerationStructure(CommandListHandle /*commandList*/,
+                                                             AccelerationStructureHandle /*dst*/,
+                                                             AccelerationStructureHandle /*src*/) {
+    return checkAccelerationStructures(features_.accelerationStructure);
+}
+
+core::Result<void> MetalDevice::serializeAccelerationStructure(CommandListHandle /*commandList*/,
+                                                               AccelerationStructureHandle /*src*/,
+                                                               BufferHandle /*buffer*/, std::uint64_t /*offset*/) {
+    return checkSerialization(features_.accelerationStructureSerialization);
+}
+
+core::Result<void> MetalDevice::deserializeAccelerationStructure(CommandListHandle /*commandList*/,
+                                                                 BufferHandle /*buffer*/, std::uint64_t /*offset*/,
+                                                                 AccelerationStructureHandle /*dst*/) {
+    return checkSerialization(features_.accelerationStructureSerialization);
+}
+
+core::Result<bool> MetalDevice::serializedCompatible(
+    std::span<const std::byte, kSerializedIdentifierSize> /*identifier*/) const {
+    return std::unexpected(checkSerialization(features_.accelerationStructureSerialization).error());
+}
+
+core::Result<std::uint64_t> MetalDevice::rayTracingStackSize(PipelineHandle /*pipeline*/, std::uint32_t /*group*/,
+                                                             RayTracingGroupShader /*shader*/) {
+    return std::unexpected(checkRayTracingPipelines(features_.rayTracingPipeline).error());
+}
+
 } // namespace bfr::rhi::metal

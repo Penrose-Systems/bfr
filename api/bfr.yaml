@@ -38,6 +38,7 @@ constants:
   instance_index_limit: {value: 16777216, doc: "Instance custom indices and hit group offsets are below this: every backend's record holds them in 24 bits."}
   transform_floats: {value: 12, doc: The floats of a 3x4 row-major transform.}
   no_shader: {value: 4294967295, doc: No shader in a bfr_ray_tracing_group's slot.}
+  serialized_identifier_size: {value: 32, doc: "The bytes of the identifier a serialized acceleration structure begins with, which bfr_serialized_compatible reads: two 16-byte identifiers, on every backend that serializes."}
   max_message_length: {value: 1024, doc: The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".}
 
 enums:
@@ -410,6 +411,16 @@ enums:
       trace_rays: {value: 89}
       trace_rays_indirect: {value: 90}
       buffer_address: {value: 91}
+      create_acceleration_structure_property_pool: {value: 92}
+      destroy_acceleration_structure_property_pool: {value: 93}
+      reset_acceleration_structure_properties: {value: 94}
+      write_acceleration_structure_properties: {value: 95}
+      resolve_acceleration_structure_properties: {value: 96}
+      compact_acceleration_structure: {value: 97}
+      serialize_acceleration_structure: {value: 98}
+      deserialize_acceleration_structure: {value: 99}
+      serialized_compatible: {value: 100}
+      ray_tracing_stack_size: {value: 101}
 
   timestamp_stage:
     doc: >-
@@ -686,6 +697,22 @@ enums:
       triangle_hit: {value: 1, doc: "closest_hit and any_hit, either no_shader, for triangles."}
       box_hit: {value: 2, doc: "intersection, and closest_hit and any_hit, either no_shader, for boxes."}
 
+  acceleration_structure_property:
+    doc: "What a property pool's entries hold, one per structure a write names, of bfr_caps_ray_tracing.property_entry_bytes each."
+    values:
+      compacted_size: {value: 0, doc: "The bytes a compact copy takes, of a structure built with allow_compaction."}
+      serialized_size: {value: 1, doc: "The bytes bfr_serialize_acceleration_structure writes, where bfr_caps_features.acceleration_structure_serialization."}
+      serialized_bottom_count: {value: 2, doc: "How many bottom structure references a serialized top structure holds, where bfr_caps_features.serialized_bottom_count."}
+      current_size: {value: 3, doc: "The bytes the structure takes now, where bfr_caps_features.acceleration_structure_current_size."}
+
+  ray_tracing_group_shader:
+    doc: The shader of a group whose stack size bfr_get_ray_tracing_stack_size reads.
+    values:
+      general: {value: 0}
+      closest_hit: {value: 1}
+      any_hit: {value: 2}
+      intersection: {value: 3}
+
   window_system:
     doc: >-
       Which window system a bfr_window comes from, for the platforms that have
@@ -809,6 +836,13 @@ handles:
     doc: >-
       Code compiled once and named by the ray tracing pipelines made from it,
       which keep what they need of it: it may be destroyed once they are made.
+
+  acceleration_structure_property_pool:
+    parent: device
+    destroy: destroy_acceleration_structure_property_pool
+    doc: >-
+      Entries of one bfr_acceleration_structure_property, written by command
+      lists and resolved into a buffer. Calls on one pool must not overlap.
 
   pipeline_cache:
     parent: device
@@ -1004,6 +1038,9 @@ structs:
           bfr_get_acceleration_structure_sizes; a top structure's instances are one geometry. Room
           for them is made with the device, so building never allocates. More fails with
           error_limit_reached. 0 is none.
+      - name: max_acceleration_structure_property_pools
+        type: u32
+        doc: "Property pools the device holds at once, 0 for none; past it, bfr_create_acceleration_structure_property_pool fails with error_limit_reached."
       - name: indirect_strides
         type: u32
         array: indirect_stride_count
@@ -1174,6 +1211,12 @@ structs:
         doc: >-
           It holds shader binding table records. It starts at an address that
           is a multiple of bfr_caps_ray_tracing.table_alignment.
+      - name: acceleration_structure_data
+        type: bool
+        doc: >-
+          bfr_serialize_acceleration_structure writes it and
+          bfr_deserialize_acceleration_structure reads it. It starts at an
+          address that is a multiple of 256.
 
   buffer_desc:
     doc: How to create a buffer.
@@ -1466,6 +1509,12 @@ structs:
       - {name: max_payload_size, type: u32}
       - {name: max_attribute_size, type: u32}
       - {name: cache, type: pipeline_cache, doc: "Where the pipeline is looked for, and added on a miss; null is none."}
+      - name: stack_size
+        type: u64
+        doc: >-
+          The bytes of stack its traces take, large enough for every trace it
+          makes (bfr_get_ray_tracing_stack_size gives each shader's); 0 leaves
+          the backend's own size.
 
   shader_table_region:
     doc: >-
@@ -1707,6 +1756,8 @@ structs:
       - {name: preference, type: build_preference, doc: 0 is none.}
       - {name: allow_update, type: bool, doc: Later builds may update the structure.}
       - {name: minimize_memory, type: bool}
+      - {name: allow_compaction, type: bool, doc: "bfr_compact_acceleration_structure may copy it, and its compacted_size be written."}
+      - {name: allow_data_access, type: bool, doc: "Shaders read its triangles' positions, where bfr_caps_features.ray_position_fetch."}
 
   triangle_geometry:
     doc: >-
@@ -1807,6 +1858,13 @@ structs:
       - {name: front_counter_clockwise, type: bool}
       - {name: opacity, type: instance_opacity, doc: 0 is as each geometry says.}
       - {name: bottom_structure, type: acceleration_structure, doc: Null is an instance no ray hits.}
+
+  acceleration_structure_property_pool_desc:
+    doc: How to create a property pool of count entries of property, at least 1.
+    extensible: true
+    members:
+      - {name: property, type: acceleration_structure_property, doc: 0 is compacted_size.}
+      - {name: count, type: u32}
 
   swapchain_query:
     doc: Which window to ask about.
@@ -1952,6 +2010,9 @@ structs:
       - {name: max_shader_group_stride, type: u32}
       - {name: max_trace_rays, type: u32, doc: The most rays one trace makes.}
       - {name: max_hit_attribute_size, type: u32}
+      - {name: property_entry_bytes, type: u32, doc: The bytes of one entry bfr_resolve_acceleration_structure_properties writes.}
+      - {name: reorders_invocations, type: bool, doc: "Shaders that reorder invocations may see them reordered: the backend says it reorders."}
+      - {name: max_binding_table_record_index, type: u32, doc: The highest binding table record index a reordered hit names.}
       - {name: instance_size, type: u32, doc: The bytes of one record bfr_write_instances writes.}
 
   caps_features:
@@ -1964,6 +2025,11 @@ structs:
       - {name: ray_primitive_culling, type: bool, doc: Rays that skip triangles or boxes.}
       - {name: acceleration_structure, type: bool}
       - {name: buffer_address, type: bool, doc: bfr_get_buffer_address.}
+      - {name: ray_position_fetch, type: bool, doc: "Shaders read a hit triangle's positions, of a structure built with allow_data_access."}
+      - {name: acceleration_structure_serialization, type: bool, doc: bfr_serialize_acceleration_structure and its kin.}
+      - {name: acceleration_structure_current_size, type: bool, doc: The current_size property.}
+      - {name: serialized_bottom_count, type: bool, doc: The serialized_bottom_count property.}
+      - {name: ray_invocation_reorder, type: bool, doc: Shaders reorder ray tracing invocations.}
       - {name: mesh_shader, type: bool}
       - {name: task_shader, type: bool}
       - {name: shading_rate, type: bool, doc: A shading rate per draw.}
@@ -3391,10 +3457,10 @@ functions:
 
   copy_acceleration_structure:
     doc: >-
-      Records a copy of src into dst, of the same type and size, not
+      Records a copy of src into dst, at least src's size, or its current_size
+      where bfr_caps_features.acceleration_structure_current_size, not
       overlapping, as builds are recorded. Fails with error_unsupported as
-      bfr_build_acceleration_structure does, error_invalid_argument for
-      structures of different types or sizes, and error_invalid_handle for a
+      bfr_build_acceleration_structure does, and error_invalid_handle for a
       structure that is gone.
     returns: result
     params:
@@ -3432,7 +3498,8 @@ functions:
       the frame path. A desc.cache is looked in first, and the pipeline added
       on a miss. Fails with error_unsupported where
       bfr_caps_features.ray_tracing_pipeline is false, error_invalid_argument
-      for an enum value BFR doesn't have, error_invalid_handle for a shader or
+      for an enum value BFR doesn't have or a stack_size past 32 bits on
+      Vulkan, which takes no more, error_invalid_handle for a shader or
       desc.cache that is gone, error_limit_reached at the device's maximum of
       pipelines, and error_device_failed when the backend refuses the desc;
       the message carries what it said.
@@ -3496,6 +3563,150 @@ functions:
       - {name: device, type: device}
       - {name: buffer, type: buffer}
       - {name: address, type: u64, pointer: out}
+
+  create_acceleration_structure_property_pool:
+    doc: >-
+      Creates a pool of desc's count entries of its property. Not for the
+      frame path. Fails with error_unsupported where
+      bfr_caps_features.acceleration_structure, or the property's own feature,
+      is false, error_invalid_argument for an enum value BFR doesn't have,
+      error_limit_reached at the device's
+      max_acceleration_structure_property_pools, and error_device_failed when
+      the backend refuses.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: acceleration_structure_property_pool_desc, pointer: in}
+      - {name: pool, type: acceleration_structure_property_pool, pointer: out}
+
+  destroy_acceleration_structure_property_pool:
+    doc: >-
+      Destroys a property pool once the GPU has passed every submit made
+      before the call; the handle is invalid at once. Not for the frame path.
+      A handle that is already destroyed does nothing.
+    params:
+      - {name: device, type: device}
+      - {name: pool, type: acceleration_structure_property_pool}
+
+  reset_acceleration_structure_properties:
+    doc: >-
+      Records a reset of count entries from first, which a backend that needs
+      one before an entry is written, the first time too, is given; the others
+      record nothing. Outside rendering, on a queue whose kind runs compute.
+      Fails with error_unsupported on a copy queue.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: pool, type: acceleration_structure_property_pool}
+      - {name: first, type: u32}
+      - {name: count, type: u32}
+
+  write_acceleration_structure_properties:
+    doc: >-
+      Records writes of structures' property into the pool's entries from
+      first, in order, outside rendering, on a queue whose kind runs compute.
+      A barrier orders their builds before it. A compacted_size is of
+      structures built with allow_compaction, a serialized_bottom_count of top
+      ones. Fails with error_unsupported on a copy queue,
+      error_invalid_argument for more structures than the pool holds from
+      first, and error_invalid_handle for a structure that is gone.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: pool, type: acceleration_structure_property_pool}
+      - {name: first, type: u32}
+      - {name: structures, type: acceleration_structure, array: structure_count, pointer: in, optional: true}
+      - {name: structure_count, type: u32}
+
+  resolve_acceleration_structure_properties:
+    doc: >-
+      Records a copy of count entries from first into buffer at offset, a
+      multiple of 8, as bfr_caps_ray_tracing.property_entry_bytes each, once
+      the GPU has written them. buffer has copy_dst usage. Outside rendering,
+      on a queue whose kind runs compute. Fails with error_unsupported on a
+      copy queue.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: pool, type: acceleration_structure_property_pool}
+      - {name: first, type: u32}
+      - {name: count, type: u32}
+      - {name: buffer, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into the buffer.}
+
+  compact_acceleration_structure:
+    doc: >-
+      Records a compact copy of src, built with allow_compaction, into dst, at
+      least its compacted_size, as builds are recorded. Fails as
+      bfr_copy_acceleration_structure does.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: dst, type: acceleration_structure}
+      - {name: src, type: acceleration_structure}
+
+  serialize_acceleration_structure:
+    doc: >-
+      Records src serialized into buffer at offset, a multiple of 256, its
+      serialized_size bytes: serialized_identifier_size bytes of identifier,
+      then the backend's header and data. A top structure's data holds its
+      bottom structures' references, which the caller rewrites with
+      bfr_get_acceleration_structure_reference values before deserializing it
+      on another device. buffer has acceleration_structure_data usage. As
+      builds are recorded. Fails with error_unsupported where
+      bfr_caps_features.acceleration_structure_serialization is false or on a
+      copy queue.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: src, type: acceleration_structure}
+      - {name: buffer, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into the buffer.}
+
+  deserialize_acceleration_structure:
+    doc: >-
+      Records the structure buffer holds at offset, a multiple of 256,
+      deserialized into dst, of its type and at least the size the data names;
+      its identifier is one bfr_serialized_compatible says the device takes.
+      Fails as bfr_serialize_acceleration_structure does.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: buffer, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into the buffer.}
+      - {name: dst, type: acceleration_structure}
+
+  serialized_compatible:
+    doc: >-
+      Writes whether the device deserializes a structure that begins with
+      identifier, serialized_identifier_size bytes. Fails with
+      error_unsupported where
+      bfr_caps_features.acceleration_structure_serialization is false.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: identifier, type: opaque, doc: The serialized structure's first serialized_identifier_size bytes.}
+      - {name: compatible, type: bool, pointer: out}
+
+  get_ray_tracing_stack_size:
+    doc: >-
+      Writes the bytes of stack one shader of group takes, for
+      bfr_ray_tracing_pipeline_desc.stack_size. The group has that shader.
+      Fails with error_invalid_argument for a pipeline that is not a ray
+      tracing one or an enum value BFR doesn't have.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: pipeline, type: pipeline}
+      - {name: group, type: u32}
+      - {name: shader, type: ray_tracing_group_shader}
+      - {name: stack_size, type: u64, pointer: out}
 
   get_call_timings:
     doc: >-

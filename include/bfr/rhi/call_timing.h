@@ -103,10 +103,20 @@ enum class Call : std::uint32_t {
     TraceRays = 89,
     TraceRaysIndirect = 90,
     BufferAddress = 91,
+    CreateAccelerationStructurePropertyPool = 92,
+    DestroyAccelerationStructurePropertyPool = 93,
+    ResetAccelerationStructureProperties = 94,
+    WriteAccelerationStructureProperties = 95,
+    ResolveAccelerationStructureProperties = 96,
+    CompactAccelerationStructure = 97,
+    SerializeAccelerationStructure = 98,
+    DeserializeAccelerationStructure = 99,
+    SerializedCompatible = 100,
+    RayTracingStackSize = 101,
 };
 
 /// How many values Call has.
-inline constexpr std::size_t kCallCount = 92;
+inline constexpr std::size_t kCallCount = 102;
 
 /// The CPU time one kind of call has taken, read from std::chrono::steady_clock
 /// around each call: how many there were, their nanoseconds in all, and the

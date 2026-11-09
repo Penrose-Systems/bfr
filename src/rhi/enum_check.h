@@ -124,6 +124,13 @@ constexpr std::pair<RayTracingStage, RayTracingStage> rangeOf(RayTracingStage /*
 constexpr std::pair<RayTracingGroupType, RayTracingGroupType> rangeOf(RayTracingGroupType /*unused*/) {
     return {RayTracingGroupType::General, RayTracingGroupType::BoxHit};
 }
+constexpr std::pair<RayTracingGroupShader, RayTracingGroupShader> rangeOf(RayTracingGroupShader /*unused*/) {
+    return {RayTracingGroupShader::General, RayTracingGroupShader::Intersection};
+}
+constexpr std::pair<AccelerationStructureProperty, AccelerationStructureProperty> rangeOf(
+    AccelerationStructureProperty /*unused*/) {
+    return {AccelerationStructureProperty::CompactedSize, AccelerationStructureProperty::CurrentSize};
+}
 
 /// Fails with RhiInvalidCall when value is not one its enum has, such as a
 /// number cast to it; what names it in the message. Every backend's switch
