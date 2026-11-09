@@ -34,6 +34,8 @@ struct BufferAddressing {
     VkDeviceSize table = 0;
     /// A serialized structure's.
     VkDeviceSize data = 0;
+    /// Build inputs are opacity micromaps' too.
+    bool micromapInputs = false;
 };
 
 /// A VkBuffer and the memory VMA placed it in, which it frees when it goes:

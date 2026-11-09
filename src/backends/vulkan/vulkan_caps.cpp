@@ -84,6 +84,7 @@ struct PropertyQuery {
         accelerationStructure.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
         rayTracingPipeline.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
         invocationReorder.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_PROPERTIES_EXT;
+        opacityMicromap.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_PROPERTIES_EXT;
         mesh.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT;
         shadingRate.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR;
         customBorderColor.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_PROPERTIES_EXT;
@@ -106,6 +107,7 @@ struct PropertyQuery {
         linkIfListed(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, accelerationStructure);
         linkIfListed(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, rayTracingPipeline);
         linkIfListed(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME, invocationReorder);
+        linkIfListed(VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME, opacityMicromap);
         linkIfListed(VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh);
         linkIfListed(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, shadingRate);
         linkIfListed(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, customBorderColor);
@@ -139,6 +141,7 @@ struct PropertyQuery {
     VkPhysicalDeviceAccelerationStructurePropertiesKHR accelerationStructure{};
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR rayTracingPipeline{};
     VkPhysicalDeviceRayTracingInvocationReorderPropertiesEXT invocationReorder{};
+    VkPhysicalDeviceOpacityMicromapPropertiesEXT opacityMicromap{};
     VkPhysicalDeviceMeshShaderPropertiesEXT mesh{};
     VkPhysicalDeviceFragmentShadingRatePropertiesKHR shadingRate{};
     VkPhysicalDeviceCustomBorderColorPropertiesEXT customBorderColor{};
@@ -306,6 +309,7 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
             on(features.rayTracingPipeline.rayTracingPipelineShaderGroupHandleCaptureReplayMixed),
         .accelerationStructureIndirectBuild = hasAccelerationStructures(features) &&
                                               on(features.accelerationStructure.accelerationStructureIndirectBuild),
+        .opacityMicromap = hasAccelerationStructures(features) && on(features.opacityMicromap.micromap),
         .meshShader = on(features.mesh.meshShader),
         .taskShader = on(features.mesh.taskShader),
         // BFR has no call for shading rates or conservative raster yet (roadmap step
@@ -813,6 +817,7 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     rayTracingPositionFetch.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_POSITION_FETCH_FEATURES_KHR;
     invocationReorder.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_EXT;
     libraryGroupHandles.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_LIBRARY_GROUP_HANDLES_FEATURES_EXT;
+    opacityMicromap.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_FEATURES_EXT;
 
     void** tail = &core.pNext;
     link(tail, vulkan11);
@@ -887,6 +892,9 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
         linkIfListed(VK_KHR_RAY_TRACING_MAINTENANCE_1_EXTENSION_NAME, rayTracingMaintenance1);
         linkIfListed(VK_KHR_RAY_TRACING_POSITION_FETCH_EXTENSION_NAME, rayTracingPositionFetch);
         linkIfListed(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME, invocationReorder);
+        // VK_EXT_opacity_micromap needs acceleration structures and
+        // synchronization2 (vkdocs xml/vk.xml:28172), which BFR's minimum has.
+        linkIfListed(VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME, opacityMicromap);
         // VK_EXT_pipeline_library_group_handles needs VK_KHR_pipeline_library
         // and VK_KHR_ray_tracing_pipeline (vkdocs xml/vk.xml:29884).
         if (lists(extensions, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME)) {
@@ -996,6 +1004,10 @@ RayTracingLimits rayTracingFrom(const PropertyQuery& properties, const Features&
     }
     if (reported.rayTracingCaptureReplay) {
         limits.captureReplayIdentifierSize = properties.rayTracingPipeline.shaderGroupHandleCaptureReplaySize;
+    }
+    if (reported.opacityMicromap) {
+        limits.maxOpacity2StateSubdivisionLevel = properties.opacityMicromap.maxOpacity2StateSubdivisionLevel;
+        limits.maxOpacity4StateSubdivisionLevel = properties.opacityMicromap.maxOpacity4StateSubdivisionLevel;
     }
     if (reported.rayInvocationReorder) {
         const VkPhysicalDeviceRayTracingInvocationReorderPropertiesEXT& reorder = properties.invocationReorder;

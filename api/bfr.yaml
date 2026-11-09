@@ -667,6 +667,26 @@ enums:
     values:
       bottom: {value: 0, doc: Triangles or boxes.}
       top: {value: 1, doc: Instances of bottom structures; what shaders trace rays against.}
+      opacity_micromap: {value: 2, doc: "Micromaps, which say which parts of a bottom structure's triangles are opaque; where bfr_caps_features.opacity_micromap."}
+
+  opacity_micromap_format:
+    doc: >-
+      The states a micromap's subtriangles take: 1 bit each for two, opaque or
+      transparent, or 2 bits for four, adding unknown-opaque and
+      unknown-transparent, which any-hit shaders decide.
+    values:
+      two_state: {value: 1}
+      four_state: {value: 2}
+
+  opacity_micromap_special_index:
+    doc: >-
+      Micromap indices that name no micromap: the whole triangle in one state.
+      Written as they are into an index of the geometry's index type.
+    values:
+      fully_transparent: {value: -1}
+      fully_opaque: {value: -2}
+      fully_unknown_transparent: {value: -3}
+      fully_unknown_opaque: {value: -4}
 
   build_preference:
     doc: What an acceleration structure build favours; passed to the backend as given.
@@ -1549,6 +1569,7 @@ structs:
           and none with them while it makes one without. Read during the call
           only.
       - {name: replay_identifiers_size, type: size, doc: Bytes.}
+      - {name: allow_opacity_micromaps, type: bool, doc: "Its traces take the opacity micromaps structures hold, where bfr_caps_features.opacity_micromap."}
 
   shader_table_region:
     doc: >-
@@ -1792,6 +1813,47 @@ structs:
       - {name: minimize_memory, type: bool}
       - {name: allow_compaction, type: bool, doc: "bfr_compact_acceleration_structure may copy it, and its compacted_size be written."}
       - {name: allow_data_access, type: bool, doc: "Shaders read its triangles' positions, where bfr_caps_features.ray_position_fetch."}
+      - {name: allow_opacity_micromap_update, type: bool, doc: "Of a bottom structure with opacity micromaps: updates may name other micromaps."}
+      - {name: allow_disable_opacity_micromaps, type: bool, doc: Instances may disable its opacity micromaps.}
+      - {name: allow_opacity_micromap_data_update, type: bool, doc: "Updates may follow its opacity micromaps' data."}
+
+  opacity_micromap_usage:
+    doc: count micromaps, or triangles naming micromaps, of subdivision_level and format.
+    members:
+      - {name: count, type: u32}
+      - {name: subdivision_level, type: u32}
+      - {name: format, type: opacity_micromap_format}
+
+  opacity_micromap_record:
+    doc: >-
+      One micromap, as a buffer holds it for an opacity micromap's build: its
+      states from data_offset bytes into the build's data, of
+      subdivision_level and format (a bfr_opacity_micromap_format's value).
+      The layout every backend reads.
+    members:
+      - {name: data_offset, type: u32}
+      - {name: subdivision_level, type: u16}
+      - {name: format, type: u16}
+
+  triangle_opacity_micromap:
+    doc: >-
+      The micromaps a triangle geometry's triangles take their opacity from:
+      triangle i's is the micromap at the index read from indices (a null
+      indices is i), index_stride bytes apart from index_offset, plus
+      base_triangle, or a bfr_opacity_micromap_special_index. A null micromap
+      is none, where every index is special. usage_count usages from
+      first_usage in the inputs' micromap_usages count the geometry's
+      triangles of each subdivision level and format, passed to backends that
+      take them. None where micromap and indices are both null.
+    members:
+      - {name: micromap, type: acceleration_structure}
+      - {name: indices, type: buffer}
+      - {name: index_offset, type: u64, doc: Bytes into indices.}
+      - {name: index_type, type: index_type}
+      - {name: index_stride, type: u32}
+      - {name: base_triangle, type: u32}
+      - {name: first_usage, type: u32}
+      - {name: usage_count, type: u32}
 
   triangle_geometry:
     doc: >-
@@ -1816,6 +1878,7 @@ structs:
       - {name: transform_offset, type: u64, doc: Bytes into transform.}
       - {name: opaque, type: bool}
       - {name: no_duplicate_any_hit, type: bool}
+      - {name: opacity_micromap, type: triangle_opacity_micromap, doc: "Where bfr_caps_features.opacity_micromap."}
 
   box_geometry:
     doc: >-
@@ -1837,8 +1900,15 @@ structs:
       geometry index a hit group is chosen by. A top one holds instance_count
       instance records from instance_offset, a multiple of 16, in instances,
       which has acceleration_structure_input usage, laid out as
-      bfr_write_instances writes them. bfr_get_acceleration_structure_sizes
-      reads the counts, formats, flags and whether a transform is given.
+      bfr_write_instances writes them. A bottom one's triangles name their
+      micromaps' usages in micromap_usages. An opacity micromap holds
+      micromap_usages' micromaps: bfr_opacity_micromap_records,
+      micromap_record_stride bytes apart (at least 8, a multiple of 4) from
+      micromap_record_offset in micromap_records, whose states micromap_data
+      holds from micromap_data_offset; both buffers have
+      acceleration_structure_input usage, both offsets multiples of 256.
+      bfr_get_acceleration_structure_sizes reads the counts, formats, flags,
+      usages and whether a transform is given.
     members:
       - {name: type, type: acceleration_structure_type, doc: 0 is bottom.}
       - {name: flags, type: acceleration_structure_flags}
@@ -1849,13 +1919,24 @@ structs:
       - {name: instances, type: buffer}
       - {name: instance_offset, type: u64, doc: Bytes into instances.}
       - {name: instance_count, type: u32}
+      - {name: micromap_usages, type: opacity_micromap_usage, array: micromap_usage_count, pointer: in, optional: true, doc: Read during the call only.}
+      - {name: micromap_usage_count, type: u32}
+      - {name: micromap_data, type: buffer}
+      - {name: micromap_data_offset, type: u64, doc: Bytes into micromap_data.}
+      - {name: micromap_records, type: buffer}
+      - {name: micromap_record_offset, type: u64, doc: Bytes into micromap_records.}
+      - {name: micromap_record_stride, type: u32}
 
   acceleration_structure_sizes:
-    doc: The bytes an acceleration structure takes, and the scratch bytes its build and its update take.
+    doc: >-
+      The bytes an acceleration structure takes, and the scratch bytes its
+      build and its update take. discardable: the backend says an opacity
+      micromap may be destroyed once the structures built with it are built.
     members:
       - {name: size, type: u64}
       - {name: build_scratch, type: u64}
       - {name: update_scratch, type: u64}
+      - {name: discardable, type: bool}
 
   acceleration_structure_desc:
     doc: How to create an acceleration structure of size bytes, in memory the device allocates.
@@ -1906,14 +1987,20 @@ structs:
       - {name: cull_disable, type: bool}
       - {name: front_counter_clockwise, type: bool}
       - {name: opacity, type: instance_opacity, doc: 0 is as each geometry says.}
+      - {name: force_opacity_micromap_2_state, type: bool, doc: "Its opacity micromaps' unknown states are taken as known."}
+      - {name: disable_opacity_micromaps, type: bool, doc: "Its opacity micromaps are ignored, of a bottom structure built with allow_disable_opacity_micromaps."}
       - {name: bottom_structure, type: acceleration_structure, doc: Null is an instance no ray hits.}
 
   acceleration_structure_property_pool_desc:
-    doc: How to create a property pool of count entries of property, at least 1.
+    doc: >-
+      How to create a property pool of count entries of property, at least 1,
+      of opacity micromaps where opacity_micromaps, and of other structures
+      where not.
     extensible: true
     members:
       - {name: property, type: acceleration_structure_property, doc: 0 is compacted_size.}
       - {name: count, type: u32}
+      - {name: opacity_micromaps, type: bool}
 
   swapchain_query:
     doc: Which window to ask about.
@@ -2064,6 +2151,8 @@ structs:
       - {name: max_binding_table_record_index, type: u32, doc: The highest binding table record index a reordered hit names.}
       - {name: instance_size, type: u32, doc: The bytes of one record bfr_write_instances writes.}
       - {name: capture_replay_identifier_size, type: u32, doc: The bytes of one group's identifier bfr_get_capture_replay_identifiers writes.}
+      - {name: max_opacity_2_state_subdivision_level, type: u32, doc: The highest subdivision level of a two-state opacity micromap.}
+      - {name: max_opacity_4_state_subdivision_level, type: u32, doc: The highest subdivision level of a four-state opacity micromap.}
 
   caps_features:
     doc: Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and not listed.
@@ -2085,6 +2174,7 @@ structs:
       - {name: ray_tracing_capture_replay, type: bool, doc: bfr_ray_tracing_pipeline_desc.capture_replay.}
       - {name: ray_tracing_capture_replay_mixed, type: bool, doc: "A device makes pipelines with replayed identifiers and pipelines without them in any order, at once."}
       - {name: acceleration_structure_indirect_build, type: bool, doc: bfr_build_acceleration_structure_indirect.}
+      - {name: opacity_micromap, type: bool, doc: "Opacity micromap structures, which bottom structures' triangles take their opacity from."}
       - {name: mesh_shader, type: bool}
       - {name: task_shader, type: bool}
       - {name: shading_rate, type: bool, doc: A shading rate per draw.}
@@ -3452,7 +3542,9 @@ functions:
   get_acceleration_structure_reference:
     doc: >-
       Writes what an instance record names a bottom acceleration structure by,
-      for records the GPU writes, as bfr_write_instances lays them out.
+      for records the GPU writes, as bfr_write_instances lays them out. Fails
+      with error_invalid_argument for an opacity micromap where the backend
+      gives it none (Vulkan).
     returns: result
     params:
       - {name: device, type: device}
@@ -3484,7 +3576,8 @@ functions:
       bfr_caps_features.acceleration_structure is false,
       error_invalid_argument when size is too small, an index or offset is
       instance_index_limit or above, an enum value BFR doesn't have, or an
-      instance names a top structure, and error_invalid_handle for a
+      instance names a structure other than a bottom one, and
+      error_invalid_handle for a
       structure that is gone.
     returns: result
     params:
@@ -3573,8 +3666,9 @@ functions:
       on a miss. Fails with error_unsupported where
       bfr_caps_features.ray_tracing_pipeline is false, or for library or
       libraries where bfr_caps_features.ray_tracing_pipeline_library is false,
-      or capture_replay where bfr_caps_features.ray_tracing_capture_replay is
-      false,
+      capture_replay where bfr_caps_features.ray_tracing_capture_replay is
+      false, or allow_opacity_micromaps where
+      bfr_caps_features.opacity_micromap is false,
       error_invalid_argument for an enum value BFR doesn't have, a stack_size
       past 32 bits on Vulkan, which takes no more, or replay_identifiers
       neither none nor holding every group's, error_invalid_handle for a shader,
@@ -3780,13 +3874,15 @@ functions:
 
   serialized_compatible:
     doc: >-
-      Writes whether the device deserializes a structure that begins with
-      identifier, serialized_identifier_size bytes. Fails with
+      Writes whether the device deserializes a structure of type that begins
+      with identifier, serialized_identifier_size bytes. Fails with
       error_unsupported where
-      bfr_caps_features.acceleration_structure_serialization is false.
+      bfr_caps_features.acceleration_structure_serialization is false, and
+      error_invalid_argument for an enum value BFR doesn't have.
     returns: result
     params:
       - {name: device, type: device}
+      - {name: type, type: acceleration_structure_type}
       - {name: identifier, type: opaque, doc: The serialized structure's first serialized_identifier_size bytes.}
       - {name: compatible, type: bool, pointer: out}
 

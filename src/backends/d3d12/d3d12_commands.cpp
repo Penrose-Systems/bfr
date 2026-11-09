@@ -478,7 +478,7 @@ core::Result<void> D3D12Device::deserializeAccelerationStructure(CommandListHand
 }
 
 core::Result<bool> D3D12Device::serializedCompatible(
-    std::span<const std::byte, kSerializedIdentifierSize> /*identifier*/) const {
+    AccelerationStructureType /*type*/, std::span<const std::byte, kSerializedIdentifierSize> /*identifier*/) const {
     return std::unexpected(checkSerialization(features_.accelerationStructureSerialization).error());
 }
 

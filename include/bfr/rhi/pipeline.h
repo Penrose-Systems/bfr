@@ -364,6 +364,9 @@ struct RayTracingPipelineDesc {
     /// with them unless its first ray tracing pipeline had them, and none with
     /// them while it makes one without.
     std::span<const std::byte> replayIdentifiers{};
+    /// Its traces take the opacity micromaps structures hold, where
+    /// Features::opacityMicromap.
+    bool allowOpacityMicromaps = false;
 };
 
 } // namespace bfr::rhi

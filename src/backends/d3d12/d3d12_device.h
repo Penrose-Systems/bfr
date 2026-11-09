@@ -333,6 +333,7 @@ public:
                                                                       BufferHandle buffer, std::uint64_t offset,
                                                                       AccelerationStructureHandle dst) override;
     [[nodiscard]] core::Result<bool> serializedCompatible(
+        AccelerationStructureType type,
         std::span<const std::byte, kSerializedIdentifierSize> identifier) const override;
     [[nodiscard]] core::Result<std::uint64_t> rayTracingStackSize(PipelineHandle pipeline, std::uint32_t group,
                                                                   RayTracingGroupShader shader) override;

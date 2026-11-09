@@ -20,6 +20,7 @@
 #include <cstring>
 #include <expected>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <utility>
 
@@ -27,12 +28,13 @@ namespace bfr::rhi::vulkan {
 
 VulkanAccelerationStructure::VulkanAccelerationStructure(const VolkDeviceTable& table, VkDevice device,
                                                          VulkanBuffer storage, VkAccelerationStructureKHR structure,
-                                                         const AccelerationStructureDesc& desc, std::uint32_t slot,
-                                                         VkDeviceAddress reference)
+                                                         VkMicromapEXT micromap, const AccelerationStructureDesc& desc,
+                                                         std::uint32_t slot, VkDeviceAddress reference)
     : table_(&table),
       device_(device),
       storage_(std::move(storage)),
       structure_(structure),
+      micromap_(micromap),
       type_(desc.type),
       size_(desc.size),
       slot_(slot),
@@ -43,6 +45,7 @@ VulkanAccelerationStructure::VulkanAccelerationStructure(VulkanAccelerationStruc
       device_(other.device_),
       storage_(std::move(other.storage_)),
       structure_(std::exchange(other.structure_, VK_NULL_HANDLE)),
+      micromap_(std::exchange(other.micromap_, VK_NULL_HANDLE)),
       type_(other.type_),
       size_(other.size_),
       slot_(other.slot_),
@@ -51,6 +54,9 @@ VulkanAccelerationStructure::VulkanAccelerationStructure(VulkanAccelerationStruc
 VulkanAccelerationStructure::~VulkanAccelerationStructure() {
     if (structure_ != VK_NULL_HANDLE) {
         table_->vkDestroyAccelerationStructureKHR(device_, structure_, nullptr);
+    }
+    if (micromap_ != VK_NULL_HANDLE) {
+        table_->vkDestroyMicromapEXT(device_, micromap_, nullptr);
     }
 }
 
@@ -88,7 +94,62 @@ VkBuildAccelerationStructureFlagsKHR flagsFor(const AccelerationStructureFlags& 
     if (flags.minimizeMemory) {
         vulkan |= VK_BUILD_ACCELERATION_STRUCTURE_LOW_MEMORY_BIT_KHR;
     }
+    if (flags.allowOpacityMicromapUpdate) {
+        vulkan |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_OPACITY_MICROMAP_UPDATE_BIT_EXT;
+    }
+    if (flags.allowDisableOpacityMicromaps) {
+        vulkan |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_DISABLE_OPACITY_MICROMAPS_BIT_EXT;
+    }
+    if (flags.allowOpacityMicromapDataUpdate) {
+        vulkan |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_OPACITY_MICROMAP_DATA_UPDATE_BIT_EXT;
+    }
     return vulkan;
+}
+
+// A micromap build takes the preference and compaction of flags; the rest
+// are a bottom structure's.
+VkBuildMicromapFlagsEXT micromapFlagsFor(const AccelerationStructureFlags& flags) {
+    VkBuildMicromapFlagsEXT vulkan = 0;
+    if (flags.preference == BuildPreference::FastTrace) {
+        vulkan |= VK_BUILD_MICROMAP_PREFER_FAST_TRACE_BIT_EXT;
+    }
+    else if (flags.preference == BuildPreference::FastBuild) {
+        vulkan |= VK_BUILD_MICROMAP_PREFER_FAST_BUILD_BIT_EXT;
+    }
+    if (flags.allowCompaction) {
+        vulkan |= VK_BUILD_MICROMAP_ALLOW_COMPACTION_BIT_EXT;
+    }
+    return vulkan;
+}
+
+// usages as Vulkan reads them, in place: the layouts and format values are
+// the same.
+const VkMicromapUsageEXT* usagesOf(std::span<const OpacityMicromapUsage> usages) {
+    static_assert(sizeof(OpacityMicromapUsage) == sizeof(VkMicromapUsageEXT) &&
+                  offsetof(OpacityMicromapUsage, subdivisionLevel) == offsetof(VkMicromapUsageEXT, subdivisionLevel) &&
+                  offsetof(OpacityMicromapUsage, format) == offsetof(VkMicromapUsageEXT, format));
+    static_assert(std::to_underlying(OpacityMicromapFormat::TwoState) == VK_OPACITY_MICROMAP_FORMAT_2_STATE_EXT &&
+                  std::to_underlying(OpacityMicromapFormat::FourState) == VK_OPACITY_MICROMAP_FORMAT_4_STATE_EXT);
+    return usages.empty() ? nullptr : reinterpret_cast<const VkMicromapUsageEXT*>(usages.data());
+}
+
+// An opacity micromap's build of inputs; the caller sets its micromap,
+// data, records and scratch.
+VkMicromapBuildInfoEXT micromapBuildOf(const AccelerationStructureInputs& inputs) {
+    // A record is read as Vulkan's (VkMicromapTriangleEXT).
+    static_assert(sizeof(OpacityMicromapRecord) == sizeof(VkMicromapTriangleEXT) &&
+                  offsetof(OpacityMicromapRecord, subdivisionLevel) ==
+                      offsetof(VkMicromapTriangleEXT, subdivisionLevel) &&
+                  offsetof(OpacityMicromapRecord, format) == offsetof(VkMicromapTriangleEXT, format));
+    VkMicromapBuildInfoEXT info{};
+    info.sType = VK_STRUCTURE_TYPE_MICROMAP_BUILD_INFO_EXT;
+    info.type = VK_MICROMAP_TYPE_OPACITY_MICROMAP_EXT;
+    info.flags = micromapFlagsFor(inputs.flags);
+    info.mode = VK_BUILD_MICROMAP_MODE_BUILD_EXT;
+    info.usageCountsCount = static_cast<std::uint32_t>(inputs.micromapUsages.size());
+    info.pUsageCounts = usagesOf(inputs.micromapUsages);
+    info.triangleArrayStride = inputs.micromapRecordStride;
+    return info;
 }
 
 VkGeometryFlagsKHR geometryFlagsFor(bool opaque, bool noDuplicateAnyHit) {
@@ -110,6 +171,12 @@ VkGeometryInstanceFlagsKHR instanceFlagsFor(const AccelerationStructureInstance&
     else if (instance.opacity == InstanceOpacity::ForceNonOpaque) {
         flags |= VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR;
     }
+    if (instance.forceOpacityMicromap2State) {
+        flags |= VK_GEOMETRY_INSTANCE_FORCE_OPACITY_MICROMAP_2_STATE_BIT_EXT;
+    }
+    if (instance.disableOpacityMicromaps) {
+        flags |= VK_GEOMETRY_INSTANCE_DISABLE_OPACITY_MICROMAPS_BIT_EXT;
+    }
     return flags;
 }
 
@@ -124,12 +191,12 @@ VkAccelerationStructureGeometryKHR geometryOf(VkGeometryTypeKHR type, VkGeometry
 // Adds inputs' geometries to arrays, with a range and a primitive count for
 // each, and returns the build info naming them, a build of its type and
 // flags; the caller sets its mode, structures and scratch. addressOf gives a
-// buffer's device address, offset bytes in. The arrays have room, as
-// countGeometries has seen.
-template <class AddressOf>
+// buffer's device address, offset bytes in, and micromapOf a structure's
+// VkMicromapEXT. The arrays have room, as countGeometries has seen.
+template <class AddressOf, class MicromapOf>
 core::Result<VkAccelerationStructureBuildGeometryInfoKHR> addGeometries(const AccelerationStructureInputs& inputs,
-                                                                        VulkanBuildArrays& arrays,
-                                                                        AddressOf addressOf) {
+                                                                        VulkanBuildArrays& arrays, AddressOf addressOf,
+                                                                        MicromapOf micromapOf) {
     const std::size_t first = arrays.geometries.size();
     const auto add = [&arrays](const VkAccelerationStructureGeometryKHR& geometry, std::uint32_t primitives) {
         std::ignore = arrays.geometries.push(geometry);
@@ -173,6 +240,30 @@ core::Result<VkAccelerationStructureBuildGeometryInfoKHR> addGeometries(const Ac
                                                                         : VK_INDEX_TYPE_UINT32;
             data.indexData.deviceAddress = *indices;
             data.transformData.deviceAddress = *transform;
+            if (hasOpacityMicromap(triangles)) {
+                const TriangleOpacityMicromap& named = triangles.opacityMicromap;
+                const auto micromap = micromapOf(named.micromap);
+                if (!micromap) {
+                    return std::unexpected(micromap.error());
+                }
+                const auto micromapIndices = addressOf(named.indices, named.indexOffset);
+                if (!micromapIndices) {
+                    return std::unexpected(micromapIndices.error());
+                }
+                VkAccelerationStructureTrianglesOpacityMicromapEXT linked{};
+                linked.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_TRIANGLES_OPACITY_MICROMAP_EXT;
+                linked.indexType = named.indices.isNull()                 ? VK_INDEX_TYPE_NONE_KHR
+                                   : named.indexType == IndexType::Uint16 ? VK_INDEX_TYPE_UINT16
+                                                                          : VK_INDEX_TYPE_UINT32;
+                linked.indexBuffer.deviceAddress = *micromapIndices;
+                linked.indexStride = named.indexStride;
+                linked.baseTriangle = named.baseTriangle;
+                linked.usageCountsCount = named.usageCount;
+                linked.pUsageCounts = usagesOf(inputs.micromapUsages.subspan(named.firstUsage, named.usageCount));
+                linked.micromap = *micromap;
+                std::ignore = arrays.micromaps.push(linked);
+                data.pNext = &arrays.micromaps[arrays.micromaps.size() - 1];
+            }
             add(geometry, triangles.triangleCount);
         }
         for (const BoxGeometry& boxes : inputs.boxes) {
@@ -212,6 +303,21 @@ core::Result<VulkanAccelerationStructure*> VulkanDevice::accelerationStructureFo
     return found;
 }
 
+core::Result<VkMicromapEXT> VulkanDevice::micromapOf(AccelerationStructureHandle structure) {
+    if (structure.isNull()) {
+        return VkMicromapEXT{VK_NULL_HANDLE};
+    }
+    auto found = accelerationStructureFor(structure);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    if (!(*found)->isMicromap()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "triangles name a structure that is not an opacity "
+                                                              "micromap as their micromap");
+    }
+    return (*found)->micromap();
+}
+
 core::Result<void> VulkanDevice::checkRunsCompute(const VulkanCommandList& list) {
     const VulkanCommandPool* pool = commandPools_.find(list.pool);
     if (pool == nullptr) {
@@ -240,17 +346,33 @@ core::Result<AccelerationStructureSizes> VulkanDevice::accelerationStructureSize
     if (auto checked = checkAccelerationStructures(features_.accelerationStructure); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    if (auto checked = checkInputs(inputs); !checked) {
+    if (auto checked = checkInputs(inputs, features_.opacityMicromap); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto counted = countGeometries(inputs, desc_.maxBuildGeometries); !counted) {
         return std::unexpected(std::move(counted.error()));
     }
+    if (inputs.type == AccelerationStructureType::OpacityMicromap) {
+        const VkMicromapBuildInfoEXT info = micromapBuildOf(inputs);
+        VkMicromapBuildSizesInfoEXT sizes{};
+        sizes.sType = VK_STRUCTURE_TYPE_MICROMAP_BUILD_SIZES_INFO_EXT;
+        table_.vkGetMicromapBuildSizesEXT(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &info, &sizes);
+        return AccelerationStructureSizes{.size = sizes.micromapSize,
+                                          .buildScratch = sizes.buildScratchSize,
+                                          .updateScratch = 0,
+                                          .discardable = sizes.discardable == VK_TRUE};
+    }
     const std::scoped_lock lock{buildLock_};
     builds_.clear();
-    const auto info = addGeometries(inputs, builds_, [](BufferHandle buffer, std::uint64_t /*offset*/) {
-        return core::Result<VkDeviceAddress>{buffer.isNull() ? 0 : kNamedAddress};
-    });
+    const auto info = addGeometries(
+        inputs, builds_,
+        [](BufferHandle buffer, std::uint64_t /*offset*/) {
+            return core::Result<VkDeviceAddress>{buffer.isNull() ? 0 : kNamedAddress};
+        },
+        [this](AccelerationStructureHandle structure) { return micromapOf(structure); });
+    if (!info) {
+        return std::unexpected(std::move(info.error()));
+    }
     VkAccelerationStructureBuildSizesInfoKHR sizes{};
     sizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
     table_.vkGetAccelerationStructureBuildSizesKHR(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &*info,
@@ -268,6 +390,11 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     if (auto checked = checkKnown(desc.type, "acceleration structure type"); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkOpacityMicromaps(features_.opacityMicromap,
+                                             desc.type == AccelerationStructureType::OpacityMicromap);
+        !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     if (desc.size == 0) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "the acceleration structure has no bytes");
     }
@@ -281,14 +408,37 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
         bindless_.giveAccelerationStructure(*slot);
     };
     // The structure is at offset 0 of a buffer of its own, which a multiple
-    // of 256 is (resources.adoc:8756).
+    // of 256 is (resources.adoc:8756), as a micromap's must be too.
+    const bool micromap = desc.type == AccelerationStructureType::OpacityMicromap;
     auto storage = placeVulkanBuffer(table_, device_, allocator_, desc.size,
-                                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                     micromap
+                                         ? VkBufferUsageFlags{VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT}
+                                         : VkBufferUsageFlags{VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                                              VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT},
                                      BufferMemory::Device, families_, 0, core::SlotChains::kEnd);
     if (!storage) {
         giveBack();
         return std::unexpected(std::move(storage.error()));
+    }
+    if (micromap) {
+        VkMicromapCreateInfoEXT info{};
+        info.sType = VK_STRUCTURE_TYPE_MICROMAP_CREATE_INFO_EXT;
+        info.buffer = storage->buffer();
+        info.size = desc.size;
+        info.type = VK_MICROMAP_TYPE_OPACITY_MICROMAP_EXT;
+        VkMicromapEXT made = VK_NULL_HANDLE;
+        if (const VkResult result = table_.vkCreateMicromapEXT(device_, &info, nullptr, &made); result != VK_SUCCESS) {
+            giveBack();
+            return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateMicromapEXT", .result = result});
+        }
+        const AccelerationStructureHandle named = accelerationStructures_.emplace(
+            VulkanAccelerationStructure{table_, device_, std::move(*storage), VK_NULL_HANDLE, made, desc, *slot, 0});
+        if (named.isNull()) {
+            giveBack();
+            return core::failure(core::ErrorCode::RhiLimitReached,
+                                 "the device holds at most {} acceleration structures", kBufferLimit);
+        }
+        return named;
     }
     VkAccelerationStructureCreateInfoKHR info{};
     info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
@@ -308,7 +458,8 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     named.accelerationStructure = structure;
     const VkDeviceAddress reference = table_.vkGetAccelerationStructureDeviceAddressKHR(device_, &named);
     const AccelerationStructureHandle made = accelerationStructures_.emplace(
-        VulkanAccelerationStructure{table_, device_, std::move(*storage), structure, desc, *slot, reference});
+        VulkanAccelerationStructure{table_, device_, std::move(*storage), structure, VK_NULL_HANDLE, desc, *slot,
+                                    reference});
     if (made.isNull()) {
         giveBack();
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} acceleration structures",
@@ -332,6 +483,10 @@ core::Result<std::uint64_t> VulkanDevice::accelerationStructureReference(Acceler
     auto found = accelerationStructureFor(structure);
     if (!found) {
         return std::unexpected(std::move(found.error()));
+    }
+    // Vulkan gives a micromap no address (VK_EXT_opacity_micromap).
+    if ((*found)->isMicromap()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "an opacity micromap has no reference");
     }
     return (*found)->reference();
 }
@@ -371,7 +526,9 @@ core::Result<void> VulkanDevice::writeInstances(std::span<const AccelerationStru
             }
             if ((*found)->type() != AccelerationStructureType::Bottom) {
                 return core::failure(core::ErrorCode::RhiInvalidCall,
-                                     "instance {} names a top acceleration structure; instances are of bottom ones", i);
+                                     "instance {} names a structure that is not a bottom one; instances are of bottom "
+                                     "ones",
+                                     i);
             }
             reference = (*found)->reference();
         }
@@ -423,11 +580,17 @@ core::Result<void> VulkanDevice::recordBuild(CommandListHandle commandList, cons
                       offsetof(VkAccelerationStructureBuildRangeInfoKHR, firstVertex) &&
                   offsetof(AccelerationStructureBuildRange, transformOffset) ==
                       offsetof(VkAccelerationStructureBuildRangeInfoKHR, transformOffset));
-    if (auto checked = checkInputs(build.inputs); !checked) {
+    if (auto checked = checkInputs(build.inputs, features_.opacityMicromap); !checked) {
         return checked;
     }
     if (auto counted = countGeometries(build.inputs, desc_.maxBuildGeometries); !counted) {
         return counted;
+    }
+    // Vulkan builds a micromap whole, from counts the CPU gives
+    // (VkBuildMicromapModeEXT, vkCmdBuildMicromapsEXT).
+    if (build.inputs.type == AccelerationStructureType::OpacityMicromap && (build.update || ranges != nullptr)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "an opacity micromap is built whole, never updated or built from GPU counts");
     }
     auto list = commandListFor(commandList);
     if (!list) {
@@ -456,10 +619,27 @@ core::Result<void> VulkanDevice::recordBuild(CommandListHandle commandList, cons
     if (!scratch) {
         return std::unexpected(scratch.error());
     }
+    if (build.inputs.type == AccelerationStructureType::OpacityMicromap) {
+        const auto data = addressOf(build.inputs.micromapData, build.inputs.micromapDataOffset);
+        const auto records = addressOf(build.inputs.micromapRecords, build.inputs.micromapRecordOffset);
+        for (const auto* address : {&data, &records}) {
+            if (!*address) {
+                return std::unexpected(address->error());
+            }
+        }
+        VkMicromapBuildInfoEXT info = micromapBuildOf(build.inputs);
+        info.dstMicromap = (*dst)->micromap();
+        info.data.deviceAddress = *data;
+        info.triangleArray.deviceAddress = *records;
+        info.scratchData.deviceAddress = *scratch;
+        table_.vkCmdBuildMicromapsEXT((*list)->buffer, 1, &info);
+        return {};
+    }
     const std::scoped_lock lock{buildLock_};
     builds_.clear();
-    auto info = addGeometries(build.inputs, builds_,
-                              [this](BufferHandle buffer, std::uint64_t offset) { return addressOf(buffer, offset); });
+    auto info = addGeometries(
+        build.inputs, builds_, [this](BufferHandle buffer, std::uint64_t offset) { return addressOf(buffer, offset); },
+        [this](AccelerationStructureHandle structure) { return micromapOf(structure); });
     if (!info) {
         return std::unexpected(std::move(info.error()));
     }
@@ -500,6 +680,21 @@ core::Result<void> VulkanDevice::copyStructure(CommandListHandle commandList, Ac
     if (!from) {
         return std::unexpected(std::move(from.error()));
     }
+    if ((*from)->isMicromap() || (*to)->isMicromap()) {
+        // Vulkan copies micromaps only into micromaps (VkCopyMicromapInfoEXT).
+        if (!(*from)->isMicromap() || !(*to)->isMicromap()) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 "an opacity micromap is copied only into an opacity micromap");
+        }
+        VkCopyMicromapInfoEXT info{};
+        info.sType = VK_STRUCTURE_TYPE_COPY_MICROMAP_INFO_EXT;
+        info.src = (*from)->micromap();
+        info.dst = (*to)->micromap();
+        info.mode = mode == VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR ? VK_COPY_MICROMAP_MODE_COMPACT_EXT
+                                                                            : VK_COPY_MICROMAP_MODE_CLONE_EXT;
+        table_.vkCmdCopyMicromapEXT((*list)->buffer, &info);
+        return {};
+    }
     // The destination's size is the caller's to keep, as the API states it
     // (copy_acceleration_structure_common.adoc, VUID-...-mode-12418, -12419).
     VkCopyAccelerationStructureInfoKHR info{};
@@ -524,8 +719,15 @@ core::Result<void> VulkanDevice::compactAccelerationStructure(CommandListHandle 
 }
 
 VulkanPropertyPool::VulkanPropertyPool(const VolkDeviceTable& table, VkDevice device, VkQueryPool pool,
-                                       VkQueryType type, std::uint32_t count)
-    : table_(&table), device_(device), pool_(pool), type_(type), count_(count), structures_(count) {}
+                                       VkQueryType type, std::uint32_t count, bool micromaps)
+    : table_(&table),
+      device_(device),
+      pool_(pool),
+      type_(type),
+      count_(count),
+      micromaps_(micromaps),
+      structures_(micromaps ? 0 : count),
+      micromapList_(micromaps ? count : 0) {}
 
 VulkanPropertyPool::VulkanPropertyPool(VulkanPropertyPool&& other) noexcept
     : table_(other.table_),
@@ -533,7 +735,9 @@ VulkanPropertyPool::VulkanPropertyPool(VulkanPropertyPool&& other) noexcept
       pool_(std::exchange(other.pool_, VK_NULL_HANDLE)),
       type_(other.type_),
       count_(other.count_),
-      structures_(std::move(other.structures_)) {}
+      micromaps_(other.micromaps_),
+      structures_(std::move(other.structures_)),
+      micromapList_(std::move(other.micromapList_)) {}
 
 VulkanPropertyPool::~VulkanPropertyPool() {
     if (pool_ != VK_NULL_HANDLE) {
@@ -542,6 +746,21 @@ VulkanPropertyPool::~VulkanPropertyPool() {
 }
 
 namespace {
+
+// A micromap's query type for property; Vulkan has none for the others
+// (VkQueryType, VK_EXT_opacity_micromap).
+std::optional<VkQueryType> micromapQueryTypeFor(AccelerationStructureProperty property) {
+    switch (property) {
+        case AccelerationStructureProperty::CompactedSize:
+            return VK_QUERY_TYPE_MICROMAP_COMPACTED_SIZE_EXT;
+        case AccelerationStructureProperty::SerializedSize:
+            return VK_QUERY_TYPE_MICROMAP_SERIALIZATION_SIZE_EXT;
+        case AccelerationStructureProperty::SerializedBottomCount:
+        case AccelerationStructureProperty::CurrentSize:
+        default:
+            return std::nullopt;
+    }
+}
 
 VkQueryType queryTypeFor(AccelerationStructureProperty property) {
     switch (property) {
@@ -567,17 +786,26 @@ core::Result<AccelerationStructurePropertyPoolHandle> VulkanDevice::createAccele
     if (auto checked = checkProperty(desc.property, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkOpacityMicromaps(features_.opacityMicromap, desc.opacityMicromaps); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    const std::optional<VkQueryType> micromapType = micromapQueryTypeFor(desc.property);
+    if (desc.opacityMicromaps && !micromapType) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "Vulkan writes no property {} of opacity micromaps, only compacted and serialized sizes",
+                             static_cast<std::uint32_t>(desc.property));
+    }
     collectBuffers();
     VkQueryPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-    info.queryType = queryTypeFor(desc.property);
+    info.queryType = desc.opacityMicromaps ? *micromapType : queryTypeFor(desc.property);
     info.queryCount = desc.count;
     VkQueryPool pool = VK_NULL_HANDLE;
     if (const VkResult result = table_.vkCreateQueryPool(device_, &info, nullptr, &pool); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateQueryPool", .result = result});
     }
     const AccelerationStructurePropertyPoolHandle made = propertyPools_.emplace(
-        VulkanPropertyPool{table_, device_, pool, info.queryType, desc.count});
+        VulkanPropertyPool{table_, device_, pool, info.queryType, desc.count, desc.opacityMicromaps});
     if (made.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              "the device holds at most {} acceleration structure property pools",
@@ -643,12 +871,30 @@ core::Result<void> VulkanDevice::writeAccelerationStructureProperties(
     }
     // The pool's room holds count, which checkPropertyRange has seen is enough.
     found.structures().clear();
+    found.micromapList().clear();
     for (const AccelerationStructureHandle structure : structures) {
         auto named = accelerationStructureFor(structure);
         if (!named) {
             return std::unexpected(std::move(named.error()));
         }
-        std::ignore = found.structures().push((*named)->structure());
+        // A query pool is of one query type, a micromap's or a structure's.
+        if ((*named)->isMicromap() != found.micromaps()) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 found.micromaps() ? "a pool of opacity micromaps' properties names another structure"
+                                                   : "a pool of structures' properties names an opacity micromap");
+        }
+        if (found.micromaps()) {
+            std::ignore = found.micromapList().push((*named)->micromap());
+        }
+        else {
+            std::ignore = found.structures().push((*named)->structure());
+        }
+    }
+    if (found.micromaps()) {
+        table_.vkCmdWriteMicromapsPropertiesEXT(call->first->buffer,
+                                                static_cast<std::uint32_t>(found.micromapList().size()),
+                                                found.micromapList().data(), found.type(), found.pool(), first);
+        return {};
     }
     table_.vkCmdWriteAccelerationStructuresPropertiesKHR(call->first->buffer,
                                                          static_cast<std::uint32_t>(found.structures().size()),
@@ -697,6 +943,15 @@ core::Result<void> VulkanDevice::serializeAccelerationStructure(CommandListHandl
     if (!address) {
         return std::unexpected(address.error());
     }
+    if ((*from)->isMicromap()) {
+        VkCopyMicromapToMemoryInfoEXT info{};
+        info.sType = VK_STRUCTURE_TYPE_COPY_MICROMAP_TO_MEMORY_INFO_EXT;
+        info.src = (*from)->micromap();
+        info.dst.deviceAddress = *address;
+        info.mode = VK_COPY_MICROMAP_MODE_SERIALIZE_EXT;
+        table_.vkCmdCopyMicromapToMemoryEXT((*list)->buffer, &info);
+        return {};
+    }
     VkCopyAccelerationStructureToMemoryInfoKHR info{};
     info.sType = VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_TO_MEMORY_INFO_KHR;
     info.src = (*from)->structure();
@@ -727,6 +982,15 @@ core::Result<void> VulkanDevice::deserializeAccelerationStructure(CommandListHan
     if (!address) {
         return std::unexpected(address.error());
     }
+    if ((*to)->isMicromap()) {
+        VkCopyMemoryToMicromapInfoEXT info{};
+        info.sType = VK_STRUCTURE_TYPE_COPY_MEMORY_TO_MICROMAP_INFO_EXT;
+        info.src.deviceAddress = *address;
+        info.dst = (*to)->micromap();
+        info.mode = VK_COPY_MICROMAP_MODE_DESERIALIZE_EXT;
+        table_.vkCmdCopyMemoryToMicromapEXT((*list)->buffer, &info);
+        return {};
+    }
     VkCopyMemoryToAccelerationStructureInfoKHR info{};
     info.sType = VK_STRUCTURE_TYPE_COPY_MEMORY_TO_ACCELERATION_STRUCTURE_INFO_KHR;
     info.src.deviceAddress = *address;
@@ -737,12 +1001,28 @@ core::Result<void> VulkanDevice::deserializeAccelerationStructure(CommandListHan
 }
 
 core::Result<bool> VulkanDevice::serializedCompatible(
-    std::span<const std::byte, kSerializedIdentifierSize> identifier) const {
+    AccelerationStructureType type, std::span<const std::byte, kSerializedIdentifierSize> identifier) const {
     if (auto checked = checkSerialization(features_.accelerationStructureSerialization); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Two VK_UUID_SIZE identifiers (accelstructures.adoc:3393).
+    if (auto checked = checkKnown(type, "acceleration structure type"); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    // Two VK_UUID_SIZE identifiers (accelstructures.adoc:3393), a micromap's
+    // too (VkMicromapVersionInfoEXT).
     static_assert(kSerializedIdentifierSize == 2 * VK_UUID_SIZE);
+    if (type == AccelerationStructureType::OpacityMicromap) {
+        if (auto checked = checkOpacityMicromaps(features_.opacityMicromap, true); !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
+        VkMicromapVersionInfoEXT info{};
+        info.sType = VK_STRUCTURE_TYPE_MICROMAP_VERSION_INFO_EXT;
+        info.pVersionData = reinterpret_cast<const std::uint8_t*>(identifier.data());
+        VkAccelerationStructureCompatibilityKHR compatibility =
+            VK_ACCELERATION_STRUCTURE_COMPATIBILITY_INCOMPATIBLE_KHR;
+        table_.vkGetDeviceMicromapCompatibilityEXT(device_, &info, &compatibility);
+        return compatibility == VK_ACCELERATION_STRUCTURE_COMPATIBILITY_COMPATIBLE_KHR;
+    }
     VkAccelerationStructureVersionInfoKHR info{};
     info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_VERSION_INFO_KHR;
     info.pVersionData = reinterpret_cast<const std::uint8_t*>(identifier.data());

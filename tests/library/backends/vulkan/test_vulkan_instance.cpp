@@ -581,6 +581,62 @@ TEST_CASE("Vulkan without VK_KHR_pipeline_library reports no pipeline libraries,
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("Vulkan without VK_EXT_opacity_micromap reports no micromaps", "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride;
+    const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_EXT_opacity_micromap");
+    auto created = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(created));
+    REQUIRE(created.has_value());
+    const std::unique_ptr<Instance> instance = std::move(*created);
+    const Caps& caps = instance->adapters()[0].caps;
+    CHECK_FALSE(caps.features.opacityMicromap);
+    CHECK(caps.rayTracing.maxOpacity2StateSubdivisionLevel == 0);
+    CHECK(caps.rayTracing.maxOpacity4StateSubdivisionLevel == 0);
+}
+
+TEST_CASE("Vulkan refuses opacity micromap work it has no call for", "[vulkan][gpu]") {
+    auto created = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(created));
+    REQUIRE(created.has_value());
+    const std::unique_ptr<Instance> instance = std::move(*created);
+    if (!instance->adapters()[0].caps.features.opacityMicromap) {
+        SKIP("the adapter has no opacity micromaps");
+    }
+    auto made = instance->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& device) {
+                                           device.maxAccelerationStructurePropertyPools = 1;
+                                       }));
+    INFO(failureOf(made));
+    REQUIRE(made.has_value());
+    Device& device = **made;
+    const auto code = [](const auto& result) {
+        return result.has_value() ? bfr::core::ErrorCode{} : result.error().code;
+    };
+    constexpr std::uint64_t kSmall = 256;
+    const auto micromap = device.createAccelerationStructure(
+        {.type = AccelerationStructureType::OpacityMicromap, .size = kSmall});
+    INFO(failureOf(micromap));
+    REQUIRE(micromap.has_value());
+    // Vulkan gives a micromap no address, writes only its compacted and
+    // serialized sizes, and builds it whole.
+    CHECK(code(device.accelerationStructureReference(*micromap)) == bfr::core::ErrorCode::RhiInvalidCall);
+    CHECK(code(device.createAccelerationStructurePropertyPool(
+              {.property = AccelerationStructureProperty::CurrentSize, .count = 1, .opacityMicromaps = true})) ==
+          bfr::core::ErrorCode::RhiInvalidCall);
+    const auto pool = device.createCommandPool({.queue = 0, .listCount = 1});
+    REQUIRE(pool.has_value());
+    const auto list = device.beginCommands(*pool);
+    REQUIRE(list.has_value());
+    CHECK(code(device.buildAccelerationStructure(*list,
+                                                 {.dst = *micromap,
+                                                  .src = *micromap,
+                                                  .update = true,
+                                                  .inputs = {.type = AccelerationStructureType::OpacityMicromap}})) ==
+          bfr::core::ErrorCode::RhiInvalidCall);
+    CHECK(device.destroyCommandList(*list).has_value());
+    CHECK(device.destroyCommandPool(*pool).has_value());
+    CHECK(device.destroyAccelerationStructure(*micromap).has_value());
+}
+
 TEST_CASE("Vulkan refuses a ray tracing stack size past the 32 bits it takes", "[vulkan][gpu]") {
     auto created = Instance::create(vulkanDesc(), {});
     INFO(failureOf(created));

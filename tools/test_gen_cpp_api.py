@@ -345,6 +345,30 @@ class PlacementTests(unittest.TestCase):
         self.assertIn("static_assert(sizeof(Item) == sizeof(bfr_item)", rendered)
         self.assertIn("static_assert(offsetof(Item, weights) == offsetof(bfr_item, weights));", rendered)
 
+    def test_an_array_of_structs_holding_mirrored_structs_and_u16_passes_as_it_is(self) -> None:
+        spec = with_more(MINIMAL)
+        spec["structs"]["link"] = {
+            "doc": "A link.",
+            "members": [{"name": "buffer", "type": "buffer"}, {"name": "level", "type": "u16"}],
+        }
+        spec["structs"]["item"] = {
+            "doc": "An item.",
+            "members": [{"name": "weight", "type": "u32"}, {"name": "link", "type": "link"}],
+        }
+        spec["functions"]["device_send"] = {
+            "doc": "Sends.",
+            "returns": "result",
+            "params": [
+                {"name": "device", "type": "device"},
+                {"name": "items", "type": "item", "array": "item_count", "pointer": "in"},
+                {"name": "item_count", "type": "u32"},
+            ],
+        }
+        rendered = render(Api(spec))
+        self.assertIn("std::uint16_t level{};", rendered)
+        self.assertIn("reinterpret_cast<const bfr_item*>(items.data())", rendered)
+        self.assertIn("static_assert(offsetof(Item, link) == offsetof(bfr_item, link));", rendered)
+
     def test_an_array_member_that_would_need_a_copy_is_rejected(self) -> None:
         def change(spec: dict) -> None:
             spec["structs"]["label"] = {"doc": "A label.", "members": [{"name": "text", "type": "string"}]}

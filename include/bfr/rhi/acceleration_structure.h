@@ -15,7 +15,9 @@ namespace bfr::rhi {
 /// Geometry or instances arranged for rays to be traced against, in memory
 /// the device allocates. A bottom structure holds triangles or boxes; a top
 /// one holds instances of bottom ones, and is what shaders trace rays
-/// against. Only named, by an AccelerationStructureHandle.
+/// against. An opacity micromap holds micromaps, which say which parts of a
+/// bottom structure's triangles are opaque. Only named, by an
+/// AccelerationStructureHandle.
 struct AccelerationStructure;
 
 using AccelerationStructureHandle = core::Handle<AccelerationStructure>;
@@ -23,6 +25,63 @@ using AccelerationStructureHandle = core::Handle<AccelerationStructure>;
 enum class AccelerationStructureType : std::uint8_t {
     Bottom,
     Top,
+    /// Where Features::opacityMicromap.
+    OpacityMicromap,
+};
+
+/// The states a micromap's subtriangles take: 1 bit each for two, opaque or
+/// transparent, or 2 bits for four, adding unknown-opaque and
+/// unknown-transparent, which any-hit shaders decide. The values are the
+/// C API's.
+enum class OpacityMicromapFormat : std::uint32_t {
+    TwoState = 1,
+    FourState = 2,
+};
+
+/// Micromap indices that name no micromap: the whole triangle in one state.
+/// Written as they are into an index of the geometry's index type.
+enum class OpacityMicromapSpecialIndex : std::int32_t {
+    FullyTransparent = -1,
+    FullyOpaque = -2,
+    FullyUnknownTransparent = -3,
+    FullyUnknownOpaque = -4,
+};
+
+/// count micromaps, or triangles naming micromaps, of subdivisionLevel and
+/// format.
+struct OpacityMicromapUsage {
+    std::uint32_t count = 0;
+    std::uint32_t subdivisionLevel = 0;
+    OpacityMicromapFormat format = OpacityMicromapFormat::TwoState;
+};
+
+/// One micromap, as a buffer holds it for an opacity micromap's build: its
+/// states from dataOffset bytes into the build's data, of subdivisionLevel
+/// and format (an OpacityMicromapFormat's value). The layout every backend
+/// reads.
+struct OpacityMicromapRecord {
+    std::uint32_t dataOffset = 0;
+    std::uint16_t subdivisionLevel = 0;
+    std::uint16_t format = 0;
+};
+
+/// The micromaps a triangle geometry's triangles take their opacity from:
+/// triangle i's is the micromap at the index read from indices (a null
+/// indices is i), indexStride bytes apart from indexOffset, plus
+/// baseTriangle, or an OpacityMicromapSpecialIndex. A null micromap is none,
+/// where every index is special. usageCount usages from firstUsage in the
+/// inputs' micromapUsages count the geometry's triangles of each subdivision
+/// level and format, passed to backends that take them. None where micromap
+/// and indices are both null.
+struct TriangleOpacityMicromap {
+    AccelerationStructureHandle micromap{};
+    BufferHandle indices{};
+    std::uint64_t indexOffset = 0;
+    IndexType indexType = IndexType::Uint32;
+    std::uint32_t indexStride = 0;
+    std::uint32_t baseTriangle = 0;
+    std::uint32_t firstUsage = 0;
+    std::uint32_t usageCount = 0;
 };
 
 /// What a build favours; passed to the backend as given.
@@ -42,6 +101,12 @@ struct AccelerationStructureFlags {
     bool allowCompaction = false;
     /// Shaders read its triangles' positions, where Features::rayPositionFetch.
     bool allowDataAccess = false;
+    /// Of a bottom structure with opacity micromaps: updates may name other
+    /// micromaps, instances may disable them, and updates may follow their
+    /// micromaps' data.
+    bool allowOpacityMicromapUpdate = false;
+    bool allowDisableOpacityMicromaps = false;
+    bool allowOpacityMicromapDataUpdate = false;
 };
 
 /// Triangles in a bottom structure. A null indices is none: triangleCount * 3
@@ -64,6 +129,8 @@ struct TriangleGeometry {
     std::uint64_t transformOffset = 0;
     bool opaque = false;
     bool noDuplicateAnyHit = false;
+    /// Where Features::opacityMicromap.
+    TriangleOpacityMicromap opacityMicromap{};
 };
 
 /// Boxes in a bottom structure: six floats each, min xyz then max xyz, min
@@ -83,8 +150,14 @@ struct BoxGeometry {
 /// group is chosen by. A top one holds instanceCount instance records from
 /// instanceOffset, a multiple of 16, in instances, which has
 /// accelerationStructureInput usage, laid out as writeInstances writes them
-/// (bfr_write_instances in api/bfr.yaml). The size query reads the counts, formats, flags and
-/// whether a transform is given.
+/// (bfr_write_instances in api/bfr.yaml). A bottom one's triangles name
+/// their micromaps' usages in micromapUsages. An opacity micromap holds
+/// micromapUsages' micromaps: OpacityMicromapRecords, micromapRecordStride
+/// bytes apart (at least 8, a multiple of 4) from micromapRecordOffset in
+/// micromapRecords, whose states micromapData holds from micromapDataOffset;
+/// both buffers have accelerationStructureInput usage, both offsets
+/// multiples of 256. The size query reads the counts, formats, flags, usages
+/// and whether a transform is given.
 struct AccelerationStructureInputs {
     AccelerationStructureType type = AccelerationStructureType::Bottom;
     AccelerationStructureFlags flags{};
@@ -93,14 +166,22 @@ struct AccelerationStructureInputs {
     BufferHandle instances{};
     std::uint64_t instanceOffset = 0;
     std::uint32_t instanceCount = 0;
+    std::span<const OpacityMicromapUsage> micromapUsages{};
+    BufferHandle micromapData{};
+    std::uint64_t micromapDataOffset = 0;
+    BufferHandle micromapRecords{};
+    std::uint64_t micromapRecordOffset = 0;
+    std::uint32_t micromapRecordStride = 0;
 };
 
 /// The bytes a structure takes, and the scratch bytes its build and its
-/// update take.
+/// update take. discardable: the backend says an opacity micromap may be
+/// destroyed once the structures built with it are built.
 struct AccelerationStructureSizes {
     std::uint64_t size = 0;
     std::uint64_t buildScratch = 0;
     std::uint64_t updateScratch = 0;
+    bool discardable = false;
 };
 
 /// A structure of size bytes, in memory the device allocates.
@@ -166,10 +247,12 @@ struct AccelerationStructurePropertyPool;
 
 using AccelerationStructurePropertyPoolHandle = core::Handle<AccelerationStructurePropertyPool>;
 
-/// count entries of property, at least 1.
+/// count entries of property, at least 1, of opacity micromaps where
+/// opacityMicromaps, and of other structures where not.
 struct AccelerationStructurePropertyPoolDesc {
     AccelerationStructureProperty property = AccelerationStructureProperty::CompactedSize;
     std::uint32_t count = 0;
+    bool opacityMicromaps = false;
 };
 
 /// The bytes of the identifier a serialized structure begins with, which
@@ -205,6 +288,11 @@ struct AccelerationStructureInstance {
     bool cullDisable = false;
     bool frontCounterClockwise = false;
     InstanceOpacity opacity = InstanceOpacity::AsGeometry;
+    /// Its opacity micromaps' unknown states are taken as known, or the
+    /// micromaps ignored, of a bottom structure built with
+    /// allowDisableOpacityMicromaps.
+    bool forceOpacityMicromap2State = false;
+    bool disableOpacityMicromaps = false;
     AccelerationStructureHandle bottomStructure{};
 };
 

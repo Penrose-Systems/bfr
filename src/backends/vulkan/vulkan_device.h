@@ -342,6 +342,7 @@ public:
                                                                       BufferHandle buffer, std::uint64_t offset,
                                                                       AccelerationStructureHandle dst) override;
     [[nodiscard]] core::Result<bool> serializedCompatible(
+        AccelerationStructureType type,
         std::span<const std::byte, kSerializedIdentifierSize> identifier) const override;
     [[nodiscard]] core::Result<std::uint64_t> rayTracingStackSize(PipelineHandle pipeline, std::uint32_t group,
                                                                   RayTracingGroupShader shader) override;
@@ -395,6 +396,10 @@ private:
     // apart; else with the inputs' counts.
     [[nodiscard]] core::Result<void> recordBuild(CommandListHandle commandList, const AccelerationStructureBuild& build,
                                                  const std::pair<VkDeviceAddress, std::uint32_t>* ranges);
+    // structure's VkMicromapEXT; VK_NULL_HANDLE for a null handle. Fails with
+    // RhiInvalidCall for a structure that is not an opacity micromap, and
+    // RhiInvalidHandle for one that is gone.
+    [[nodiscard]] core::Result<VkMicromapEXT> micromapOf(AccelerationStructureHandle structure);
     // A copy of src into dst in mode, on a queue that runs compute.
     [[nodiscard]] core::Result<void> copyStructure(CommandListHandle commandList, AccelerationStructureHandle dst,
                                                    AccelerationStructureHandle src,

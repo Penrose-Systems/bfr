@@ -110,7 +110,10 @@ constexpr std::pair<TileMapping, TileMapping> rangeOf(TileMapping /*unused*/) {
 }
 constexpr std::pair<AccelerationStructureType, AccelerationStructureType> rangeOf(
     AccelerationStructureType /*unused*/) {
-    return {AccelerationStructureType::Bottom, AccelerationStructureType::Top};
+    return {AccelerationStructureType::Bottom, AccelerationStructureType::OpacityMicromap};
+}
+constexpr std::pair<OpacityMicromapFormat, OpacityMicromapFormat> rangeOf(OpacityMicromapFormat /*unused*/) {
+    return {OpacityMicromapFormat::TwoState, OpacityMicromapFormat::FourState};
 }
 constexpr std::pair<BuildPreference, BuildPreference> rangeOf(BuildPreference /*unused*/) {
     return {BuildPreference::None, BuildPreference::FastBuild};
@@ -186,6 +189,14 @@ template <class Enum>
             return checked;
         }
         if (auto checked = checkKnown(triangles.indexType, "index type"); !checked) {
+            return checked;
+        }
+        if (auto checked = checkKnown(triangles.opacityMicromap.indexType, "opacity micromap index type"); !checked) {
+            return checked;
+        }
+    }
+    for (const OpacityMicromapUsage& usage : inputs.micromapUsages) {
+        if (auto checked = checkKnown(usage.format, "opacity micromap format"); !checked) {
             return checked;
         }
     }

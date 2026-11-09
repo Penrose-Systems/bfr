@@ -45,6 +45,7 @@ HEADER = REPO_ROOT / "bindings" / "cpp" / "include" / "bfr.hpp"
 BUILTINS = {
     "bool": "bool",
     "u8": "std::uint8_t",
+    "u16": "std::uint16_t",
     "u32": "std::uint32_t",
     "u64": "std::uint64_t",
     "i32": "std::int32_t",
@@ -55,7 +56,7 @@ BUILTINS = {
 }
 # The types whose C++ and C forms are the same bits. bool is: C's is 8 bits,
 # as each struct's layout assert checks, and C++ writes it as 0 or 1.
-MIRRORED = {"bool", "u8", "u32", "u64", "i32", "f32", "size"}
+MIRRORED = {"bool", "u8", "u16", "u32", "u64", "i32", "f32", "size"}
 
 
 def pascal(name: str) -> str:
@@ -278,8 +279,8 @@ class Plan:
     def is_mirror(self, kind: str) -> bool:
         """Whether kind's C++ type is laid out exactly as its C type, so an
         array of it passes to C as it is: a number, a plain handle, or a struct
-        of numbers, bools, enums, handles and fixed arrays of numbers. The header
-        asserts the layout."""
+        of numbers, bools, enums, handles, fixed arrays of numbers and such
+        structs. The header asserts the layout."""
         api = self.api
         if kind in MIRRORED:
             return True
@@ -287,10 +288,11 @@ class Plan:
             return True
         struct = api.structs.get(kind)
         # An enum is laid out as its C type: both are 32-bit. A handle is its
-        # Ref or plain class, and a fixed array of numbers a std::array, each
-        # laid out as the C member.
+        # Ref or plain class, a fixed array of numbers a std::array, and a
+        # struct member one laid out so too, each laid out as the C member.
         return struct is not None and not struct.get("extensible") and not struct.get("extends") and all(
-            (m["type"] in MIRRORED or m["type"] in api.enums or m["type"] in api.handles)
+            (m["type"] in MIRRORED or m["type"] in api.enums or m["type"] in api.handles
+             or (m["type"] in api.structs and not m.get("fixed") and self.is_mirror(m["type"])))
             and (not m.get("fixed") or m["type"] in MIRRORED) and not m.get("array") and not m.get("pointer")
             for m in struct["members"])
 

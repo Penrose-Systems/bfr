@@ -531,7 +531,9 @@ void printAllShaders(const bfr::Caps& caps) {
            field("maxHitAttributeSize", r.maxHitAttributeSize), field("propertyEntryBytes", r.propertyEntryBytes),
            field("reordersInvocations", r.reordersInvocations),
            field("maxBindingTableRecordIndex", r.maxBindingTableRecordIndex), field("instanceSize", r.instanceSize),
-           field("captureReplayIdentifierSize", r.captureReplayIdentifierSize)});
+           field("captureReplayIdentifierSize", r.captureReplayIdentifierSize),
+           field("maxOpacity2StateSubdivisionLevel", r.maxOpacity2StateSubdivisionLevel),
+           field("maxOpacity4StateSubdivisionLevel", r.maxOpacity4StateSubdivisionLevel)});
 }
 
 void printAllFeatures(const bfr::CapsFeatures& f) {
@@ -551,6 +553,7 @@ void printAllFeatures(const bfr::CapsFeatures& f) {
                        field("rayTracingCaptureReplay", f.rayTracingCaptureReplay),
                        field("rayTracingCaptureReplayMixed", f.rayTracingCaptureReplayMixed),
                        field("accelerationStructureIndirectBuild", f.accelerationStructureIndirectBuild),
+                       field("opacityMicromap", f.opacityMicromap),
                        field("accelerationStructure", f.accelerationStructure),
                        field("meshShader", f.meshShader),
                        field("taskShader", f.taskShader),

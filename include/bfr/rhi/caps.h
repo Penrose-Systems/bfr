@@ -157,6 +157,10 @@ struct RayTracingLimits {
     /// The bytes of one group's identifier Device::captureReplayIdentifiers
     /// writes.
     std::uint32_t captureReplayIdentifierSize = 0;
+    /// The highest subdivision level of a two-state and a four-state
+    /// opacity micromap.
+    std::uint32_t maxOpacity2StateSubdivisionLevel = 0;
+    std::uint32_t maxOpacity4StateSubdivisionLevel = 0;
 };
 
 struct Features {
@@ -194,6 +198,9 @@ struct Features {
     bool rayTracingCaptureReplayMixed = false;
     /// Device::buildAccelerationStructureIndirect.
     bool accelerationStructureIndirectBuild = false;
+    /// AccelerationStructureType::OpacityMicromap: structures of micromaps,
+    /// which bottom structures' triangles take their opacity from.
+    bool opacityMicromap = false;
     bool meshShader = false;
     bool taskShader = false;
     bool shadingRate = false;

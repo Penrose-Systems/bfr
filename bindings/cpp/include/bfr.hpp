@@ -1472,6 +1472,9 @@ enum class AccelerationStructureType : std::int32_t {
     Bottom = BFR_ACCELERATION_STRUCTURE_TYPE_BOTTOM,
     /// Instances of bottom structures; what shaders trace rays against.
     Top = BFR_ACCELERATION_STRUCTURE_TYPE_TOP,
+    /// Micromaps, which say which parts of a bottom structure's triangles are opaque; where
+    /// bfr_caps_features.opacity_micromap.
+    OpacityMicromap = BFR_ACCELERATION_STRUCTURE_TYPE_OPACITY_MICROMAP,
 };
 
 /// value's name in bfr.yaml; empty for a value AccelerationStructureType doesn't have.
@@ -1479,6 +1482,43 @@ enum class AccelerationStructureType : std::int32_t {
     switch (value) {
     case AccelerationStructureType::Bottom: return "bottom";
     case AccelerationStructureType::Top: return "top";
+    case AccelerationStructureType::OpacityMicromap: return "opacity_micromap";
+    }
+    return {};
+}
+
+/// The states a micromap's subtriangles take: 1 bit each for two, opaque or transparent, or 2 bits
+/// for four, adding unknown-opaque and unknown-transparent, which any-hit shaders decide.
+enum class OpacityMicromapFormat : std::int32_t {
+    TwoState = BFR_OPACITY_MICROMAP_FORMAT_TWO_STATE,
+    FourState = BFR_OPACITY_MICROMAP_FORMAT_FOUR_STATE,
+};
+
+/// value's name in bfr.yaml; empty for a value OpacityMicromapFormat doesn't have.
+[[nodiscard]] constexpr std::string_view name(OpacityMicromapFormat value) {
+    switch (value) {
+    case OpacityMicromapFormat::TwoState: return "two_state";
+    case OpacityMicromapFormat::FourState: return "four_state";
+    }
+    return {};
+}
+
+/// Micromap indices that name no micromap: the whole triangle in one state. Written as they are
+/// into an index of the geometry's index type.
+enum class OpacityMicromapSpecialIndex : std::int32_t {
+    FullyTransparent = BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_TRANSPARENT,
+    FullyOpaque = BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_OPAQUE,
+    FullyUnknownTransparent = BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_UNKNOWN_TRANSPARENT,
+    FullyUnknownOpaque = BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_UNKNOWN_OPAQUE,
+};
+
+/// value's name in bfr.yaml; empty for a value OpacityMicromapSpecialIndex doesn't have.
+[[nodiscard]] constexpr std::string_view name(OpacityMicromapSpecialIndex value) {
+    switch (value) {
+    case OpacityMicromapSpecialIndex::FullyTransparent: return "fully_transparent";
+    case OpacityMicromapSpecialIndex::FullyOpaque: return "fully_opaque";
+    case OpacityMicromapSpecialIndex::FullyUnknownTransparent: return "fully_unknown_transparent";
+    case OpacityMicromapSpecialIndex::FullyUnknownOpaque: return "fully_unknown_opaque";
     }
     return {};
 }
@@ -2539,6 +2579,9 @@ struct RayTracingPipelineDesc {
     /// makes none with them unless its first ray tracing pipeline had them, and none with them
     /// while it makes one without. Read during the call only.
     std::span<const std::uint8_t> replayIdentifiers{};
+    /// Its traces take the opacity micromaps structures hold, where
+    /// bfr_caps_features.opacity_micromap.
+    bool allowOpacityMicromaps{};
 };
 
 /// Records in a shader binding table: size bytes from offset in buffer, which has
@@ -2788,6 +2831,42 @@ struct AccelerationStructureFlags {
     bool allowCompaction{};
     /// Shaders read its triangles' positions, where bfr_caps_features.ray_position_fetch.
     bool allowDataAccess{};
+    /// Of a bottom structure with opacity micromaps: updates may name other micromaps.
+    bool allowOpacityMicromapUpdate{};
+    /// Instances may disable its opacity micromaps.
+    bool allowDisableOpacityMicromaps{};
+    /// Updates may follow its opacity micromaps' data.
+    bool allowOpacityMicromapDataUpdate{};
+};
+
+/// count micromaps, or triangles naming micromaps, of subdivision_level and format.
+struct OpacityMicromapUsage {
+    std::uint32_t count{};
+    std::uint32_t subdivisionLevel{};
+    OpacityMicromapFormat format{};
+};
+static_assert(sizeof(OpacityMicromapUsage) == sizeof(bfr_opacity_micromap_usage) && alignof(OpacityMicromapUsage) == alignof(bfr_opacity_micromap_usage) &&
+              std::is_standard_layout_v<OpacityMicromapUsage> && std::is_trivially_copyable_v<OpacityMicromapUsage>);
+static_assert(offsetof(OpacityMicromapUsage, count) == offsetof(bfr_opacity_micromap_usage, count));
+static_assert(offsetof(OpacityMicromapUsage, subdivisionLevel) == offsetof(bfr_opacity_micromap_usage, subdivision_level));
+static_assert(offsetof(OpacityMicromapUsage, format) == offsetof(bfr_opacity_micromap_usage, format));
+
+/// The micromaps a triangle geometry's triangles take their opacity from: triangle i's is the
+/// micromap at the index read from indices (a null indices is i), index_stride bytes apart from
+/// index_offset, plus base_triangle, or a bfr_opacity_micromap_special_index. A null micromap is
+/// none, where every index is special. usage_count usages from first_usage in the inputs'
+/// micromap_usages count the geometry's triangles of each subdivision level and format, passed to
+/// backends that take them. None where micromap and indices are both null.
+struct TriangleOpacityMicromap {
+    AccelerationStructureRef micromap{};
+    BufferRef indices{};
+    /// Bytes into indices.
+    std::uint64_t indexOffset{};
+    IndexType indexType{};
+    std::uint32_t indexStride{};
+    std::uint32_t baseTriangle{};
+    std::uint32_t firstUsage{};
+    std::uint32_t usageCount{};
 };
 
 /// Triangles in a bottom acceleration structure. A null indices is none: triangle_count * 3
@@ -2814,6 +2893,8 @@ struct TriangleGeometry {
     std::uint64_t transformOffset{};
     bool opaque{};
     bool noDuplicateAnyHit{};
+    /// Where bfr_caps_features.opacity_micromap.
+    TriangleOpacityMicromap opacityMicromap{};
 };
 static_assert(sizeof(TriangleGeometry) == sizeof(bfr_triangle_geometry) && alignof(TriangleGeometry) == alignof(bfr_triangle_geometry) &&
               std::is_standard_layout_v<TriangleGeometry> && std::is_trivially_copyable_v<TriangleGeometry>);
@@ -2830,6 +2911,7 @@ static_assert(offsetof(TriangleGeometry, transform) == offsetof(bfr_triangle_geo
 static_assert(offsetof(TriangleGeometry, transformOffset) == offsetof(bfr_triangle_geometry, transform_offset));
 static_assert(offsetof(TriangleGeometry, opaque) == offsetof(bfr_triangle_geometry, opaque));
 static_assert(offsetof(TriangleGeometry, noDuplicateAnyHit) == offsetof(bfr_triangle_geometry, no_duplicate_any_hit));
+static_assert(offsetof(TriangleGeometry, opacityMicromap) == offsetof(bfr_triangle_geometry, opacity_micromap));
 
 /// Boxes in a bottom acceleration structure: six floats each, min xyz then max xyz, min at most
 /// max, stride bytes apart; offset and stride multiples of 8. The buffer has
@@ -2855,9 +2937,13 @@ static_assert(offsetof(BoxGeometry, noDuplicateAnyHit) == offsetof(bfr_box_geome
 /// What an acceleration structure is built from. A bottom one holds triangles or boxes, not both; a
 /// geometry's index in its array is the geometry index a hit group is chosen by. A top one holds
 /// instance_count instance records from instance_offset, a multiple of 16, in instances, which has
-/// acceleration_structure_input usage, laid out as bfr_write_instances writes them.
-/// bfr_get_acceleration_structure_sizes reads the counts, formats, flags and whether a transform is
-/// given.
+/// acceleration_structure_input usage, laid out as bfr_write_instances writes them. A bottom one's
+/// triangles name their micromaps' usages in micromap_usages. An opacity micromap holds
+/// micromap_usages' micromaps: bfr_opacity_micromap_records, micromap_record_stride bytes apart (at
+/// least 8, a multiple of 4) from micromap_record_offset in micromap_records, whose states
+/// micromap_data holds from micromap_data_offset; both buffers have acceleration_structure_input
+/// usage, both offsets multiples of 256. bfr_get_acceleration_structure_sizes reads the counts,
+/// formats, flags, usages and whether a transform is given.
 struct AccelerationStructureInputs {
     /// 0 is bottom.
     AccelerationStructureType type{};
@@ -2870,13 +2956,25 @@ struct AccelerationStructureInputs {
     /// Bytes into instances.
     std::uint64_t instanceOffset{};
     std::uint32_t instanceCount{};
+    /// Read during the call only.
+    std::span<const OpacityMicromapUsage> micromapUsages{};
+    BufferRef micromapData{};
+    /// Bytes into micromap_data.
+    std::uint64_t micromapDataOffset{};
+    BufferRef micromapRecords{};
+    /// Bytes into micromap_records.
+    std::uint64_t micromapRecordOffset{};
+    std::uint32_t micromapRecordStride{};
 };
 
 /// The bytes an acceleration structure takes, and the scratch bytes its build and its update take.
+/// discardable: the backend says an opacity micromap may be destroyed once the structures built
+/// with it are built.
 struct AccelerationStructureSizes {
     std::uint64_t size{};
     std::uint64_t buildScratch{};
     std::uint64_t updateScratch{};
+    bool discardable{};
 };
 
 /// How to create an acceleration structure of size bytes, in memory the device allocates.
@@ -2916,6 +3014,11 @@ struct AccelerationStructureInstance {
     bool frontCounterClockwise{};
     /// 0 is as each geometry says.
     InstanceOpacity opacity{};
+    /// Its opacity micromaps' unknown states are taken as known.
+    bool forceOpacityMicromap2State{};
+    /// Its opacity micromaps are ignored, of a bottom structure built with
+    /// allow_disable_opacity_micromaps.
+    bool disableOpacityMicromaps{};
     /// Null is an instance no ray hits.
     AccelerationStructureRef bottomStructure{};
 };
@@ -2928,13 +3031,17 @@ static_assert(offsetof(AccelerationStructureInstance, hitGroupOffset) == offseto
 static_assert(offsetof(AccelerationStructureInstance, cullDisable) == offsetof(bfr_acceleration_structure_instance, cull_disable));
 static_assert(offsetof(AccelerationStructureInstance, frontCounterClockwise) == offsetof(bfr_acceleration_structure_instance, front_counter_clockwise));
 static_assert(offsetof(AccelerationStructureInstance, opacity) == offsetof(bfr_acceleration_structure_instance, opacity));
+static_assert(offsetof(AccelerationStructureInstance, forceOpacityMicromap2State) == offsetof(bfr_acceleration_structure_instance, force_opacity_micromap_2_state));
+static_assert(offsetof(AccelerationStructureInstance, disableOpacityMicromaps) == offsetof(bfr_acceleration_structure_instance, disable_opacity_micromaps));
 static_assert(offsetof(AccelerationStructureInstance, bottomStructure) == offsetof(bfr_acceleration_structure_instance, bottom_structure));
 
-/// How to create a property pool of count entries of property, at least 1.
+/// How to create a property pool of count entries of property, at least 1, of opacity micromaps
+/// where opacity_micromaps, and of other structures where not.
 struct AccelerationStructurePropertyPoolDesc {
     /// 0 is compacted_size.
     AccelerationStructureProperty property{};
     std::uint32_t count{};
+    bool opacityMicromaps{};
 };
 
 /// Which window to ask about.
@@ -3149,6 +3256,10 @@ struct CapsRayTracing {
     std::uint32_t instanceSize{};
     /// The bytes of one group's identifier bfr_get_capture_replay_identifiers writes.
     std::uint32_t captureReplayIdentifierSize{};
+    /// The highest subdivision level of a two-state opacity micromap.
+    std::uint32_t maxOpacity2StateSubdivisionLevel{};
+    /// The highest subdivision level of a four-state opacity micromap.
+    std::uint32_t maxOpacity4StateSubdivisionLevel{};
 };
 
 /// Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and
@@ -3189,6 +3300,8 @@ struct CapsFeatures {
     bool rayTracingCaptureReplayMixed{};
     /// bfr_build_acceleration_structure_indirect.
     bool accelerationStructureIndirectBuild{};
+    /// Opacity micromap structures, which bottom structures' triangles take their opacity from.
+    bool opacityMicromap{};
     bool meshShader{};
     bool taskShader{};
     /// A shading rate per draw.
@@ -3927,6 +4040,17 @@ inline bfr_acceleration_structure_flags toC(const AccelerationStructureFlags& va
         .minimize_memory = static_cast<bfr_bool>(value.minimizeMemory),
         .allow_compaction = static_cast<bfr_bool>(value.allowCompaction),
         .allow_data_access = static_cast<bfr_bool>(value.allowDataAccess),
+        .allow_opacity_micromap_update = static_cast<bfr_bool>(value.allowOpacityMicromapUpdate),
+        .allow_disable_opacity_micromaps = static_cast<bfr_bool>(value.allowDisableOpacityMicromaps),
+        .allow_opacity_micromap_data_update = static_cast<bfr_bool>(value.allowOpacityMicromapDataUpdate),
+    };
+}
+
+inline bfr_opacity_micromap_usage toC(const OpacityMicromapUsage& value) {
+    return {
+        .count = value.count,
+        .subdivision_level = value.subdivisionLevel,
+        .format = static_cast<bfr_opacity_micromap_format>(value.format),
     };
 }
 
@@ -3943,6 +4067,7 @@ inline bfr_acceleration_structure_property_pool_desc toC(const AccelerationStruc
         .next = next,
         .property = static_cast<bfr_acceleration_structure_property>(value.property),
         .count = value.count,
+        .opacity_micromaps = static_cast<bfr_bool>(value.opacityMicromaps),
     };
 }
 
@@ -4027,6 +4152,7 @@ inline AccelerationStructureSizes fromC(const bfr_acceleration_structure_sizes& 
         .size = value.size,
         .buildScratch = value.build_scratch,
         .updateScratch = value.update_scratch,
+        .discardable = value.discardable != BFR_FALSE,
     };
 }
 
@@ -4166,6 +4292,8 @@ inline CapsRayTracing fromC(const bfr_caps_ray_tracing& value) {
         .maxBindingTableRecordIndex = value.max_binding_table_record_index,
         .instanceSize = value.instance_size,
         .captureReplayIdentifierSize = value.capture_replay_identifier_size,
+        .maxOpacity2StateSubdivisionLevel = value.max_opacity_2_state_subdivision_level,
+        .maxOpacity4StateSubdivisionLevel = value.max_opacity_4_state_subdivision_level,
     };
 }
 
@@ -4188,6 +4316,7 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .rayTracingCaptureReplay = value.ray_tracing_capture_replay != BFR_FALSE,
         .rayTracingCaptureReplayMixed = value.ray_tracing_capture_replay_mixed != BFR_FALSE,
         .accelerationStructureIndirectBuild = value.acceleration_structure_indirect_build != BFR_FALSE,
+        .opacityMicromap = value.opacity_micromap != BFR_FALSE,
         .meshShader = value.mesh_shader != BFR_FALSE,
         .taskShader = value.task_shader != BFR_FALSE,
         .shadingRate = value.shading_rate != BFR_FALSE,
@@ -4872,8 +5001,8 @@ public:
     /// bfr_get_acceleration_structure_reference gives, 0 for an instance no ray hits. Fails with
     /// error_unsupported where bfr_caps_features.acceleration_structure is false,
     /// error_invalid_argument when size is too small, an index or offset is instance_index_limit or
-    /// above, an enum value BFR doesn't have, or an instance names a top structure, and
-    /// error_invalid_handle for a structure that is gone.
+    /// above, an enum value BFR doesn't have, or an instance names a structure other than a bottom
+    /// one, and error_invalid_handle for a structure that is gone.
     [[nodiscard]] Expected<void> writeInstances(std::span<const AccelerationStructureInstance> instances, void* data, std::size_t size) const;
 
     /// Records build, outside rendering, on a queue whose kind runs compute. A barrier orders the
@@ -4908,9 +5037,10 @@ public:
     /// Creates a ray tracing pipeline, as desc says, before returning. Not for the frame path. A
     /// desc.cache is looked in first, and the pipeline added on a miss. Fails with
     /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false, or for library or
-    /// libraries where bfr_caps_features.ray_tracing_pipeline_library is false, or capture_replay
-    /// where bfr_caps_features.ray_tracing_capture_replay is false, error_invalid_argument for an
-    /// enum value BFR doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or
+    /// libraries where bfr_caps_features.ray_tracing_pipeline_library is false, capture_replay
+    /// where bfr_caps_features.ray_tracing_capture_replay is false, or allow_opacity_micromaps
+    /// where bfr_caps_features.opacity_micromap is false, error_invalid_argument for an enum value
+    /// BFR doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or
     /// replay_identifiers neither none nor holding every group's, error_invalid_handle for a
     /// shader, library or desc.cache that is gone, error_limit_reached at the device's maximum of
     /// pipelines, and error_device_failed when the backend refuses the desc; the message carries
@@ -4973,10 +5103,11 @@ public:
     /// bfr_serialize_acceleration_structure does.
     [[nodiscard]] Expected<void> deserializeAccelerationStructure(CommandList commandList, const Buffer& buffer, std::uint64_t offset, const AccelerationStructure& dst) const;
 
-    /// Writes whether the device deserializes a structure that begins with identifier,
+    /// Writes whether the device deserializes a structure of type that begins with identifier,
     /// serialized_identifier_size bytes. Fails with error_unsupported where
-    /// bfr_caps_features.acceleration_structure_serialization is false.
-    [[nodiscard]] Expected<bool> serializedCompatible(void* identifier) const;
+    /// bfr_caps_features.acceleration_structure_serialization is false, and error_invalid_argument
+    /// for an enum value BFR doesn't have.
+    [[nodiscard]] Expected<bool> serializedCompatible(AccelerationStructureType type, void* identifier) const;
 
     /// Lists the CPU time spent in each of the device's calls since it was made, indexed by
     /// bfr_call.
@@ -5439,7 +5570,8 @@ public:
     [[nodiscard]] Expected<std::uint32_t> accelerationStructureSlot();
 
     /// Writes what an instance record names a bottom acceleration structure by, for records the GPU
-    /// writes, as bfr_write_instances lays them out.
+    /// writes, as bfr_write_instances lays them out. Fails with error_invalid_argument for an
+    /// opacity micromap where the backend gives it none (Vulkan).
     [[nodiscard]] Expected<std::uint64_t> accelerationStructureReference();
 
 private:
@@ -5651,6 +5783,7 @@ inline bfr_ray_tracing_pipeline_desc toC(const RayTracingPipelineDesc& value, co
         .capture_replay = static_cast<bfr_bool>(value.captureReplay),
         .replay_identifiers = reinterpret_cast<const uint8_t*>(value.replayIdentifiers.data()),
         .replay_identifiers_size = static_cast<size_t>(value.replayIdentifiers.size()),
+        .allow_opacity_micromaps = static_cast<bfr_bool>(value.allowOpacityMicromaps),
     };
 }
 
@@ -5745,6 +5878,19 @@ inline bfr_tile_mapping_desc toC(const TileMappingDesc& value, const bfr_chain* 
     };
 }
 
+inline bfr_triangle_opacity_micromap toC(const TriangleOpacityMicromap& value) {
+    return {
+        .micromap = value.micromap.get(),
+        .indices = value.indices.get(),
+        .index_offset = value.indexOffset,
+        .index_type = static_cast<bfr_index_type>(value.indexType),
+        .index_stride = value.indexStride,
+        .base_triangle = value.baseTriangle,
+        .first_usage = value.firstUsage,
+        .usage_count = value.usageCount,
+    };
+}
+
 inline bfr_triangle_geometry toC(const TriangleGeometry& value) {
     return {
         .vertices = value.vertices.get(),
@@ -5760,6 +5906,7 @@ inline bfr_triangle_geometry toC(const TriangleGeometry& value) {
         .transform_offset = value.transformOffset,
         .opaque = static_cast<bfr_bool>(value.opaque),
         .no_duplicate_any_hit = static_cast<bfr_bool>(value.noDuplicateAnyHit),
+        .opacity_micromap = toC(value.opacityMicromap),
     };
 }
 
@@ -5785,6 +5932,13 @@ inline bfr_acceleration_structure_inputs toC(const AccelerationStructureInputs& 
         .instances = value.instances.get(),
         .instance_offset = value.instanceOffset,
         .instance_count = value.instanceCount,
+        .micromap_usages = reinterpret_cast<const bfr_opacity_micromap_usage*>(value.micromapUsages.data()),
+        .micromap_usage_count = static_cast<uint32_t>(value.micromapUsages.size()),
+        .micromap_data = value.micromapData.get(),
+        .micromap_data_offset = value.micromapDataOffset,
+        .micromap_records = value.micromapRecords.get(),
+        .micromap_record_offset = value.micromapRecordOffset,
+        .micromap_record_stride = value.micromapRecordStride,
     };
 }
 
@@ -5808,6 +5962,8 @@ inline bfr_acceleration_structure_instance toC(const AccelerationStructureInstan
         .cull_disable = static_cast<bfr_bool>(value.cullDisable),
         .front_counter_clockwise = static_cast<bfr_bool>(value.frontCounterClockwise),
         .opacity = static_cast<bfr_instance_opacity>(value.opacity),
+        .force_opacity_micromap_2_state = static_cast<bfr_bool>(value.forceOpacityMicromap2State),
+        .disable_opacity_micromaps = static_cast<bfr_bool>(value.disableOpacityMicromaps),
         .bottom_structure = value.bottomStructure.get(),
     };
 }
@@ -6402,6 +6558,9 @@ inline Expected<AccelerationStructureSizes> Device::accelerationStructureSizes(c
     if (!std::in_range<uint32_t>(inputs.boxes.size())) {
         return std::unexpected(detail::tooMany("inputs.boxes holds more elements than a uint32_t counts"));
     }
+    if (!std::in_range<uint32_t>(inputs.micromapUsages.size())) {
+        return std::unexpected(detail::tooMany("inputs.micromapUsages holds more elements than a uint32_t counts"));
+    }
     const bfr_acceleration_structure_inputs cInputs = detail::toC(inputs);
     bfr_acceleration_structure_sizes sizes{};
     if (const bfr_result result = bfr_get_acceleration_structure_sizes(device_, &cInputs, &sizes); result < 0) {
@@ -6548,9 +6707,9 @@ inline Expected<void> Device::deserializeAccelerationStructure(CommandList comma
     return {};
 }
 
-inline Expected<bool> Device::serializedCompatible(void* identifier) const {
+inline Expected<bool> Device::serializedCompatible(AccelerationStructureType type, void* identifier) const {
     bfr_bool compatible{};
-    if (const bfr_result result = bfr_serialized_compatible(device_, identifier, &compatible); result < 0) {
+    if (const bfr_result result = bfr_serialized_compatible(device_, static_cast<bfr_acceleration_structure_type>(type), identifier, &compatible); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return compatible != BFR_FALSE;

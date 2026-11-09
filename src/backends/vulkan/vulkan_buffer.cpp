@@ -44,6 +44,9 @@ VkBufferUsageFlags usageFor(const BufferUsage& usage, const BufferAddressing& ad
            // storage buffer (VUID-vkCmdBuildAccelerationStructuresKHR-pInfos-12260, -12261).
            flag(usage.accelerationStructureInput,
                 VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR) |
+           // Micromap builds read theirs by address too (VUID-vkCmdBuildMicromapsEXT-data-07510).
+           flag(usage.accelerationStructureInput && addressing.micromapInputs,
+                VK_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT) |
            flag(usage.accelerationStructureScratch, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) |
            // Traces read binding tables, and indirect traces their
            // arguments, by address (VUID-vkCmdTraceRaysIndirect2KHR-indirectDeviceAddress-03633).

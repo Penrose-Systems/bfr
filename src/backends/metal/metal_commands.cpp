@@ -589,7 +589,7 @@ core::Result<void> MetalDevice::deserializeAccelerationStructure(CommandListHand
 }
 
 core::Result<bool> MetalDevice::serializedCompatible(
-    std::span<const std::byte, kSerializedIdentifierSize> /*identifier*/) const {
+    AccelerationStructureType /*type*/, std::span<const std::byte, kSerializedIdentifierSize> /*identifier*/) const {
     return std::unexpected(checkSerialization(features_.accelerationStructureSerialization).error());
 }
 

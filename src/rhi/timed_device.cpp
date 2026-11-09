@@ -511,8 +511,8 @@ core::Result<void> TimedDevice::deserializeAccelerationStructure(CommandListHand
 }
 
 core::Result<bool> TimedDevice::serializedCompatible(
-    std::span<const std::byte, kSerializedIdentifierSize> identifier) const {
-    return counters_.time(Call::SerializedCompatible, [&] { return device_->serializedCompatible(identifier); });
+    AccelerationStructureType type, std::span<const std::byte, kSerializedIdentifierSize> identifier) const {
+    return counters_.time(Call::SerializedCompatible, [&] { return device_->serializedCompatible(type, identifier); });
 }
 
 core::Result<std::uint64_t> TimedDevice::rayTracingStackSize(PipelineHandle pipeline, std::uint32_t group,

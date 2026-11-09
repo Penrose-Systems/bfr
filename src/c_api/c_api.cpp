@@ -562,6 +562,17 @@ bfr::rhi::AccelerationStructureHandle fromC(bfr_acceleration_structure handle) {
 }
 
 static_assert(static_cast<int>(bfr::rhi::AccelerationStructureType::Top) == BFR_ACCELERATION_STRUCTURE_TYPE_TOP);
+static_assert(static_cast<int>(bfr::rhi::AccelerationStructureType::OpacityMicromap) ==
+              BFR_ACCELERATION_STRUCTURE_TYPE_OPACITY_MICROMAP);
+static_assert(static_cast<int>(bfr::rhi::OpacityMicromapFormat::FourState) == BFR_OPACITY_MICROMAP_FORMAT_FOUR_STATE);
+static_assert(static_cast<int>(bfr::rhi::OpacityMicromapSpecialIndex::FullyUnknownOpaque) ==
+              BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_UNKNOWN_OPAQUE);
+// Records are read in place on the GPU, so the C layout is the one the
+// backends read.
+static_assert(sizeof(bfr_opacity_micromap_record) == sizeof(bfr::rhi::OpacityMicromapRecord) &&
+              offsetof(bfr_opacity_micromap_record, subdivision_level) ==
+                  offsetof(bfr::rhi::OpacityMicromapRecord, subdivisionLevel) &&
+              offsetof(bfr_opacity_micromap_record, format) == offsetof(bfr::rhi::OpacityMicromapRecord, format));
 static_assert(static_cast<int>(bfr::rhi::BuildPreference::FastBuild) == BFR_BUILD_PREFERENCE_FAST_BUILD);
 static_assert(static_cast<int>(bfr::rhi::InstanceOpacity::ForceNonOpaque) == BFR_INSTANCE_OPACITY_FORCE_NON_OPAQUE);
 static_assert(bfr::rhi::kInstanceIndexLimit == BFR_INSTANCE_INDEX_LIMIT);
@@ -578,23 +589,46 @@ std::optional<bfr::rhi::AccelerationStructureInputs> inputsIn(const bfr_accelera
                                                               bfr::core::Message& error) {
     using namespace bfr::rhi;
     limit = false;
-    const auto type = enumIn(inputs.type, AccelerationStructureType::Top, "acceleration structure type", error);
+    const auto type = enumIn(inputs.type, AccelerationStructureType::OpacityMicromap, "acceleration structure type",
+                             error);
     const auto preference = enumIn(inputs.flags.preference, BuildPreference::FastBuild, "build preference", error);
     if (!type || !preference) {
         return std::nullopt;
     }
-    AccelerationStructureInputs made{.type = *type,
-                                     .flags = {.preference = *preference,
-                                               .allowUpdate = inputs.flags.allow_update != BFR_FALSE,
-                                               .minimizeMemory = inputs.flags.minimize_memory != BFR_FALSE,
-                                               .allowCompaction = inputs.flags.allow_compaction != BFR_FALSE,
-                                               .allowDataAccess = inputs.flags.allow_data_access != BFR_FALSE},
-                                     .triangles = {},
-                                     .boxes = {},
-                                     .instances = fromC(inputs.instances),
-                                     .instanceOffset = inputs.instance_offset,
-                                     .instanceCount = inputs.instance_count};
-    if (made.type == AccelerationStructureType::Top) {
+    AccelerationStructureInputs made{
+        .type = *type,
+        .flags = {.preference = *preference,
+                  .allowUpdate = inputs.flags.allow_update != BFR_FALSE,
+                  .minimizeMemory = inputs.flags.minimize_memory != BFR_FALSE,
+                  .allowCompaction = inputs.flags.allow_compaction != BFR_FALSE,
+                  .allowDataAccess = inputs.flags.allow_data_access != BFR_FALSE,
+                  .allowOpacityMicromapUpdate = inputs.flags.allow_opacity_micromap_update != BFR_FALSE,
+                  .allowDisableOpacityMicromaps = inputs.flags.allow_disable_opacity_micromaps != BFR_FALSE,
+                  .allowOpacityMicromapDataUpdate = inputs.flags.allow_opacity_micromap_data_update != BFR_FALSE},
+        .triangles = {},
+        .boxes = {},
+        .instances = fromC(inputs.instances),
+        .instanceOffset = inputs.instance_offset,
+        .instanceCount = inputs.instance_count,
+        .micromapUsages = {},
+        .micromapData = fromC(inputs.micromap_data),
+        .micromapDataOffset = inputs.micromap_data_offset,
+        .micromapRecords = fromC(inputs.micromap_records),
+        .micromapRecordOffset = inputs.micromap_record_offset,
+        .micromapRecordStride = inputs.micromap_record_stride};
+    if (inputs.micromap_usages == nullptr && inputs.micromap_usage_count != 0) {
+        error.format("micromap_usages is null with a count");
+        return std::nullopt;
+    }
+    // The usages are read in place: the C and C++ layouts are one, and the
+    // backend checks their formats.
+    static_assert(sizeof(bfr_opacity_micromap_usage) == sizeof(OpacityMicromapUsage) &&
+                  offsetof(bfr_opacity_micromap_usage, subdivision_level) ==
+                      offsetof(OpacityMicromapUsage, subdivisionLevel) &&
+                  offsetof(bfr_opacity_micromap_usage, format) == offsetof(OpacityMicromapUsage, format));
+    made.micromapUsages = {reinterpret_cast<const OpacityMicromapUsage*>(inputs.micromap_usages),
+                           inputs.micromap_usage_count};
+    if (made.type != AccelerationStructureType::Bottom) {
         return made;
     }
     if ((inputs.triangles == nullptr && inputs.triangle_count != 0) ||
@@ -612,9 +646,12 @@ std::optional<bfr::rhi::AccelerationStructureInputs> inputsIn(const bfr_accelera
         const bfr_triangle_geometry& from = std::span{inputs.triangles, inputs.triangle_count}[i];
         const auto format = formatIn(from.vertex_format, "vertex format", error);
         const auto indexType = enumIn(from.index_type, IndexType::Uint16, "index type", error);
-        if (!format || !indexType) {
+        const auto micromapIndexType = enumIn(from.opacity_micromap.index_type, IndexType::Uint16,
+                                              "opacity micromap index type", error);
+        if (!format || !indexType || !micromapIndexType) {
             return std::nullopt;
         }
+        const bfr_triangle_opacity_micromap& micromap = from.opacity_micromap;
         triangleOut[i] = {.vertices = fromC(from.vertices),
                           .vertexOffset = from.vertex_offset,
                           .vertexFormat = *format,
@@ -627,7 +664,15 @@ std::optional<bfr::rhi::AccelerationStructureInputs> inputsIn(const bfr_accelera
                           .transform = fromC(from.transform),
                           .transformOffset = from.transform_offset,
                           .opaque = from.opaque != BFR_FALSE,
-                          .noDuplicateAnyHit = from.no_duplicate_any_hit != BFR_FALSE};
+                          .noDuplicateAnyHit = from.no_duplicate_any_hit != BFR_FALSE,
+                          .opacityMicromap = {.micromap = fromC(micromap.micromap),
+                                              .indices = fromC(micromap.indices),
+                                              .indexOffset = micromap.index_offset,
+                                              .indexType = *micromapIndexType,
+                                              .indexStride = micromap.index_stride,
+                                              .baseTriangle = micromap.base_triangle,
+                                              .firstUsage = micromap.first_usage,
+                                              .usageCount = micromap.usage_count}};
     }
     const std::span boxOut = std::span{device.boxes}.subspan(boxes, inputs.box_count);
     for (std::size_t i = 0; i < boxOut.size(); ++i) {
@@ -1215,6 +1260,8 @@ bfr_caps_ray_tracing toC(const bfr::rhi::RayTracingLimits& rayTracing) {
         .max_binding_table_record_index = rayTracing.maxBindingTableRecordIndex,
         .instance_size = rayTracing.instanceSize,
         .capture_replay_identifier_size = rayTracing.captureReplayIdentifierSize,
+        .max_opacity_2_state_subdivision_level = rayTracing.maxOpacity2StateSubdivisionLevel,
+        .max_opacity_4_state_subdivision_level = rayTracing.maxOpacity4StateSubdivisionLevel,
     };
 }
 
@@ -1237,6 +1284,7 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .ray_tracing_capture_replay = toC(features.rayTracingCaptureReplay),
         .ray_tracing_capture_replay_mixed = toC(features.rayTracingCaptureReplayMixed),
         .acceleration_structure_indirect_build = toC(features.accelerationStructureIndirectBuild),
+        .opacity_micromap = toC(features.opacityMicromap),
         .mesh_shader = toC(features.meshShader),
         .task_shader = toC(features.taskShader),
         .shading_rate = toC(features.shadingRate),
@@ -2992,7 +3040,10 @@ bfr_result bfr_get_acceleration_structure_sizes(bfr_device* device, const bfr_ac
         if (!found) {
             return fail(found.error());
         }
-        *sizes = {.size = found->size, .build_scratch = found->buildScratch, .update_scratch = found->updateScratch};
+        *sizes = {.size = found->size,
+                  .build_scratch = found->buildScratch,
+                  .update_scratch = found->updateScratch,
+                  .discardable = toC(found->discardable)};
         return BFR_RESULT_SUCCESS;
     });
 }
@@ -3008,8 +3059,8 @@ bfr_result bfr_create_acceleration_structure(bfr_device* device, const bfr_accel
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_acceleration_structure_desc takes no chained structs");
         }
         bfr::core::Message error;
-        const auto type = enumIn(desc->type, bfr::rhi::AccelerationStructureType::Top, "acceleration structure type",
-                                 error);
+        const auto type = enumIn(desc->type, bfr::rhi::AccelerationStructureType::OpacityMicromap,
+                                 "acceleration structure type", error);
         if (!type) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
@@ -3104,6 +3155,8 @@ bfr_result bfr_write_instances(bfr_device* device, const bfr_acceleration_struct
                                .cullDisable = instance.cull_disable != BFR_FALSE,
                                .frontCounterClockwise = instance.front_counter_clockwise != BFR_FALSE,
                                .opacity = *opacity,
+                               .forceOpacityMicromap2State = instance.force_opacity_micromap_2_state != BFR_FALSE,
+                               .disableOpacityMicromaps = instance.disable_opacity_micromaps != BFR_FALSE,
                                .bottomStructure = fromC(instance.bottom_structure)};
             }
             const auto written = device->device->writeInstances(std::span{chunk}.first(count),
@@ -3274,7 +3327,8 @@ bfr_result bfr_create_ray_tracing_pipeline(bfr_device* device, const bfr_ray_tra
              .library = desc->library != BFR_FALSE,
              .libraries = libraries,
              .captureReplay = desc->capture_replay != BFR_FALSE,
-             .replayIdentifiers = std::as_bytes(std::span{desc->replay_identifiers, desc->replay_identifiers_size})});
+             .replayIdentifiers = std::as_bytes(std::span{desc->replay_identifiers, desc->replay_identifiers_size}),
+             .allowOpacityMicromaps = desc->allow_opacity_micromaps != BFR_FALSE});
         if (!created) {
             return fail(created.error());
         }
@@ -3377,7 +3431,7 @@ bfr_result bfr_create_acceleration_structure_property_pool(bfr_device* device,
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
         const auto made = device->device->createAccelerationStructurePropertyPool(
-            {.property = *property, .count = desc->count});
+            {.property = *property, .count = desc->count, .opacityMicromaps = desc->opacity_micromaps != BFR_FALSE});
         if (!made) {
             return fail(made.error());
         }
@@ -3476,13 +3530,21 @@ bfr_result bfr_deserialize_acceleration_structure(bfr_device* device, bfr_comman
     });
 }
 
-bfr_result bfr_serialized_compatible(bfr_device* device, void* identifier, bfr_bool* compatible) {
+bfr_result bfr_serialized_compatible(bfr_device* device, bfr_acceleration_structure_type type, void* identifier,
+                                     bfr_bool* compatible) {
     return guarded([&] {
         if (device == nullptr || identifier == nullptr || compatible == nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, identifier and compatible must not be null");
         }
         *compatible = BFR_FALSE;
+        bfr::core::Message error;
+        const auto which = enumIn(type, bfr::rhi::AccelerationStructureType::OpacityMicromap,
+                                  "acceleration structure type", error);
+        if (!which) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
         const auto found = device->device->serializedCompatible(
+            *which,
             std::span<const std::byte, bfr::rhi::kSerializedIdentifierSize>{static_cast<const std::byte*>(identifier),
                                                                             bfr::rhi::kSerializedIdentifierSize});
         if (!found) {

@@ -1797,7 +1797,8 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
                                              .transform = {},
                                              .transform_offset = 0,
                                              .opaque = BFR_TRUE,
-                                             .no_duplicate_any_hit = BFR_FALSE};
+                                             .no_duplicate_any_hit = BFR_FALSE,
+                                             .opacity_micromap = {}};
         const std::array<bfr_triangle_geometry, 2> two{triangle, triangle};
         bfr_acceleration_structure_inputs inputs{};
         inputs.type = BFR_ACCELERATION_STRUCTURE_TYPE_BOTTOM;
@@ -1963,7 +1964,8 @@ TEST_CASE("C API makes shaders and a ray tracing pipeline from them, and gives i
                                                  .library_count = 0,
                                                  .capture_replay = BFR_FALSE,
                                                  .replay_identifiers = nullptr,
-                                                 .replay_identifiers_size = 0};
+                                                 .replay_identifiers_size = 0,
+                                                 .allow_opacity_micromaps = BFR_FALSE};
         bfr_pipeline pipeline{};
         bfr_ray_tracing_pipeline_desc unnamed = desc;
         unnamed.library_count = 1;
@@ -1990,7 +1992,8 @@ TEST_CASE("C API refuses acceleration structure property and serialization calls
     CHECK(bfr_create_acceleration_structure_property_pool(nullptr, nullptr, &pool) ==
           BFR_RESULT_ERROR_INVALID_ARGUMENT);
     bfr_bool compatible = BFR_TRUE;
-    CHECK(bfr_serialized_compatible(nullptr, nullptr, &compatible) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_serialized_compatible(nullptr, BFR_ACCELERATION_STRUCTURE_TYPE_BOTTOM, nullptr, &compatible) ==
+          BFR_RESULT_ERROR_INVALID_ARGUMENT);
     uint64_t stack = 1;
     CHECK(bfr_get_ray_tracing_stack_size(nullptr, bfr_pipeline{}, 0, BFR_RAY_TRACING_GROUP_SHADER_GENERAL, &stack) ==
           BFR_RESULT_ERROR_INVALID_ARGUMENT);

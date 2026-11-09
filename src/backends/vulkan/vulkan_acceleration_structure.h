@@ -10,16 +10,17 @@
 
 namespace bfr::rhi::vulkan {
 
-/// A VkAccelerationStructureKHR at the start of a buffer of its own, which
-/// it destroys when it goes, before the buffer. slot is its place in the
-/// acceleration structure table, kEnd for a bottom one; the device gives it
-/// back when the structure is collected. reference is its device address,
-/// which instance records name it by.
+/// A VkAccelerationStructureKHR, or for an opacity micromap a VkMicromapEXT,
+/// at the start of a buffer of its own, which it destroys when it goes,
+/// before the buffer. slot is its place in the acceleration structure table,
+/// kEnd for any but a top one; the device gives it back when the structure
+/// is collected. reference is a structure's device address, which instance
+/// records name it by; a micromap has none.
 class VulkanAccelerationStructure {
 public:
     VulkanAccelerationStructure(const VolkDeviceTable& table, VkDevice device, VulkanBuffer storage,
-                                VkAccelerationStructureKHR structure, const AccelerationStructureDesc& desc,
-                                std::uint32_t slot, VkDeviceAddress reference);
+                                VkAccelerationStructureKHR structure, VkMicromapEXT micromap,
+                                const AccelerationStructureDesc& desc, std::uint32_t slot, VkDeviceAddress reference);
     ~VulkanAccelerationStructure();
     VulkanAccelerationStructure(const VulkanAccelerationStructure&) = delete;
     VulkanAccelerationStructure& operator=(const VulkanAccelerationStructure&) = delete;
@@ -27,7 +28,9 @@ public:
     VulkanAccelerationStructure& operator=(VulkanAccelerationStructure&&) = delete;
 
     [[nodiscard]] VkAccelerationStructureKHR structure() const { return structure_; }
+    [[nodiscard]] VkMicromapEXT micromap() const { return micromap_; }
     [[nodiscard]] AccelerationStructureType type() const { return type_; }
+    [[nodiscard]] bool isMicromap() const { return type_ == AccelerationStructureType::OpacityMicromap; }
     [[nodiscard]] std::uint64_t size() const { return size_; }
     [[nodiscard]] std::uint32_t slot() const { return slot_; }
     [[nodiscard]] VkDeviceAddress reference() const { return reference_; }
@@ -37,19 +40,20 @@ private:
     VkDevice device_;
     VulkanBuffer storage_;
     VkAccelerationStructureKHR structure_;
+    VkMicromapEXT micromap_;
     AccelerationStructureType type_;
     std::uint64_t size_;
     std::uint32_t slot_;
     VkDeviceAddress reference_;
 };
 
-/// A VkQueryPool of one acceleration structure property, destroyed when this
-/// goes, with room made with it for the structures a write names, so no write
-/// allocates.
+/// A VkQueryPool of one acceleration structure property, of opacity
+/// micromaps or of other structures, destroyed when this goes, with room made
+/// with it for the structures a write names, so no write allocates.
 class VulkanPropertyPool {
 public:
     VulkanPropertyPool(const VolkDeviceTable& table, VkDevice device, VkQueryPool pool, VkQueryType type,
-                       std::uint32_t count);
+                       std::uint32_t count, bool micromaps);
     ~VulkanPropertyPool();
     VulkanPropertyPool(const VulkanPropertyPool&) = delete;
     VulkanPropertyPool& operator=(const VulkanPropertyPool&) = delete;
@@ -59,8 +63,10 @@ public:
     [[nodiscard]] VkQueryPool pool() const { return pool_; }
     [[nodiscard]] VkQueryType type() const { return type_; }
     [[nodiscard]] std::uint32_t count() const { return count_; }
-    /// Where a write's structures go, count of them.
+    [[nodiscard]] bool micromaps() const { return micromaps_; }
+    /// Where a write's structures, or micromaps, go, count of them.
     [[nodiscard]] core::FixedVector<VkAccelerationStructureKHR>& structures() { return structures_; }
+    [[nodiscard]] core::FixedVector<VkMicromapEXT>& micromapList() { return micromapList_; }
 
 private:
     const VolkDeviceTable* table_;
@@ -68,26 +74,35 @@ private:
     VkQueryPool pool_;
     VkQueryType type_;
     std::uint32_t count_;
+    bool micromaps_;
     core::FixedVector<VkAccelerationStructureKHR> structures_;
+    core::FixedVector<VkMicromapEXT> micromapList_;
 };
 
 /// What one buildAccelerationStructure or accelerationStructureSizes call
 /// fills: a geometry, a range and a primitive count for each of its
-/// geometries. Made with the device at DeviceDesc::maxBuildGeometries, so no
-/// call allocates; used by one call at a time, under the device's lock.
+/// geometries, and the opacity micromap its triangles chain where they name
+/// one. Made with the device at DeviceDesc::maxBuildGeometries, so no call
+/// allocates, nor moves what a geometry points at; used by one call at a
+/// time, under the device's lock.
 struct VulkanBuildArrays {
     explicit VulkanBuildArrays(std::uint32_t maxBuildGeometries)
-        : geometries(maxBuildGeometries), ranges(maxBuildGeometries), primitiveCounts(maxBuildGeometries) {}
+        : geometries(maxBuildGeometries),
+          ranges(maxBuildGeometries),
+          primitiveCounts(maxBuildGeometries),
+          micromaps(maxBuildGeometries) {}
 
     void clear() {
         geometries.clear();
         ranges.clear();
         primitiveCounts.clear();
+        micromaps.clear();
     }
 
     core::FixedVector<VkAccelerationStructureGeometryKHR> geometries;
     core::FixedVector<VkAccelerationStructureBuildRangeInfoKHR> ranges;
     core::FixedVector<std::uint32_t> primitiveCounts;
+    core::FixedVector<VkAccelerationStructureTrianglesOpacityMicromapEXT> micromaps;
 };
 
 } // namespace bfr::rhi::vulkan

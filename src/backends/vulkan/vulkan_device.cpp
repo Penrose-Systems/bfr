@@ -53,6 +53,10 @@ constexpr std::uint32_t kNewestForVma = VK_API_VERSION_1_4;
 // 118-136).
 constexpr VkDeviceSize kInputAlignment = 16;
 
+// A micromap build's data and records' address alignment
+// (VUID-vkCmdBuildMicromapsEXT-pInfos-07515).
+constexpr VkDeviceSize kMicromapInputAlignment = 256;
+
 // A serialized structure's address alignment (accelstructures.adoc:3137,
 // VUID-vkCmdCopyMemoryToAccelerationStructureKHR-pInfo-03743).
 constexpr VkDeviceSize kSerializedAlignment = 256;
@@ -189,9 +193,12 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       rayTracing_(setup.rayTracing),
       addressing_{.indirectAddresses = setup.deviceAddresses,
                   .scratch = setup.rayTracing.scratchAlignment,
-                  .input = setup.features.accelerationStructure ? kInputAlignment : 0,
+                  .input = setup.features.opacityMicromap         ? kMicromapInputAlignment
+                           : setup.features.accelerationStructure ? kInputAlignment
+                                                                  : 0,
                   .table = setup.rayTracing.tableAlignment,
-                  .data = setup.features.accelerationStructure ? kSerializedAlignment : 0},
+                  .data = setup.features.accelerationStructure ? kSerializedAlignment : 0,
+                  .micromapInputs = setup.features.opacityMicromap},
       formats13_(setup.formats13),
       desc_(heldPart(desc)),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),

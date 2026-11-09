@@ -587,7 +587,8 @@ public:
 
     /// What an instance record names a bottom structure by (bfr_write_instances
     /// in api/bfr.yaml), for records the GPU writes. Fails with
-    /// RhiInvalidHandle when it is destroyed.
+    /// RhiInvalidHandle when it is destroyed, and RhiInvalidCall for an
+    /// opacity micromap where the backend gives it none (Vulkan).
     [[nodiscard]] virtual core::Result<std::uint64_t> accelerationStructureReference(
         AccelerationStructureHandle structure) = 0;
 
@@ -603,7 +604,8 @@ public:
     /// RhiUnsupported where Features::accelerationStructure is false,
     /// RhiInvalidCall when out is too small, an index or offset is
     /// kInstanceIndexLimit or above, an enum value BFR doesn't have, or an
-    /// instance names a top structure, and RhiInvalidHandle for a structure
+    /// instance names a structure other than a bottom one, and
+    /// RhiInvalidHandle for a structure
     /// that is gone.
     [[nodiscard]] virtual core::Result<void> writeInstances(std::span<const AccelerationStructureInstance> instances,
                                                             std::span<std::byte> out) = 0;
@@ -714,11 +716,12 @@ public:
                                                                               BufferHandle buffer, std::uint64_t offset,
                                                                               AccelerationStructureHandle dst) = 0;
 
-    /// Whether the device deserializes a structure that begins with
+    /// Whether the device deserializes a structure of type that begins with
     /// identifier. Fails with RhiUnsupported where
-    /// Features::accelerationStructureSerialization is false.
+    /// Features::accelerationStructureSerialization is false, and
+    /// RhiInvalidCall for an enum value BFR doesn't have.
     [[nodiscard]] virtual core::Result<bool> serializedCompatible(
-        std::span<const std::byte, kSerializedIdentifierSize> identifier) const = 0;
+        AccelerationStructureType type, std::span<const std::byte, kSerializedIdentifierSize> identifier) const = 0;
 
     /// The bytes of stack one shader of group takes, for
     /// RayTracingPipelineDesc::stackSize. The group has that shader. Fails
@@ -743,7 +746,8 @@ public:
     /// from desc.cache. Cold, as createComputePipeline is. Fails with
     /// RhiUnsupported where Features::rayTracingPipeline is false, or for
     /// library or libraries where Features::rayTracingPipelineLibrary is
-    /// false, or captureReplay where Features::rayTracingCaptureReplay is false,
+    /// false, captureReplay where Features::rayTracingCaptureReplay is false,
+    /// or allowOpacityMicromaps where Features::opacityMicromap is false,
     /// RhiInvalidCall for an enum value BFR doesn't have, a stackSize past 32
     /// bits on Vulkan, which takes no more, or replayIdentifiers neither empty
     /// nor holding every group's, RhiInvalidHandle for a shader, library or

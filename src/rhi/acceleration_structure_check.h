@@ -74,9 +74,27 @@ namespace bfr::rhi {
     return {};
 }
 
+/// Fails with RhiUnsupported for an opacity micromap, or triangles that
+/// take their opacity from one, where Features::opacityMicromap is false.
+[[nodiscard]] inline core::Result<void> checkOpacityMicromaps(bool opacityMicromap, bool named) {
+    if (named && !opacityMicromap) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device has no opacity micromaps (Features::opacityMicromap)");
+    }
+    return {};
+}
+
+/// Whether triangles take their opacity from a micromap.
+[[nodiscard]] inline bool hasOpacityMicromap(const TriangleGeometry& triangles) {
+    return !triangles.opacityMicromap.micromap.isNull() || !triangles.opacityMicromap.indices.isNull();
+}
+
 /// Fails with RhiInvalidCall when inputs hold an enum value BFR doesn't have,
-/// or a bottom structure of both triangles and boxes.
-[[nodiscard]] inline core::Result<void> checkInputs(const AccelerationStructureInputs& inputs) {
+/// a bottom structure of both triangles and boxes, or triangles naming
+/// micromap usages past micromapUsages, which BFR reads; and with
+/// RhiUnsupported for opacity micromaps where Features::opacityMicromap is
+/// false.
+[[nodiscard]] inline core::Result<void> checkInputs(const AccelerationStructureInputs& inputs, bool opacityMicromap) {
     if (auto checked = checkEnums(inputs); !checked) {
         return checked;
     }
@@ -84,13 +102,41 @@ namespace bfr::rhi {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "a bottom acceleration structure holds triangles or boxes, not both");
     }
+    if (auto checked = checkOpacityMicromaps(opacityMicromap,
+                                             inputs.type == AccelerationStructureType::OpacityMicromap);
+        !checked) {
+        return checked;
+    }
+    for (const TriangleGeometry& triangles : inputs.triangles) {
+        if (!hasOpacityMicromap(triangles)) {
+            continue;
+        }
+        if (auto checked = checkOpacityMicromaps(opacityMicromap, true); !checked) {
+            return checked;
+        }
+        const TriangleOpacityMicromap& named = triangles.opacityMicromap;
+        if (named.firstUsage > inputs.micromapUsages.size() ||
+            named.usageCount > inputs.micromapUsages.size() - named.firstUsage) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 "triangles name {} micromap usages from {}, past the inputs' {}", named.usageCount,
+                                 named.firstUsage, inputs.micromapUsages.size());
+        }
+    }
     return {};
 }
 
 /// The geometries a structure built from inputs holds: a top one's instances
 /// are one.
 [[nodiscard]] inline std::size_t geometriesOf(const AccelerationStructureInputs& inputs) {
-    return inputs.type == AccelerationStructureType::Top ? 1 : inputs.triangles.size() + inputs.boxes.size();
+    switch (inputs.type) {
+        case AccelerationStructureType::Top:
+            return 1;
+        case AccelerationStructureType::OpacityMicromap:
+            return 0;
+        case AccelerationStructureType::Bottom:
+        default:
+            return inputs.triangles.size() + inputs.boxes.size();
+    }
 }
 
 /// Fails with RhiLimitReached when inputs' geometries are more than

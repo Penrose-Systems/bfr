@@ -871,8 +871,29 @@ typedef enum bfr_acceleration_structure_type {
     BFR_ACCELERATION_STRUCTURE_TYPE_BOTTOM = 0,
     // Instances of bottom structures; what shaders trace rays against.
     BFR_ACCELERATION_STRUCTURE_TYPE_TOP = 1,
+    // Micromaps, which say which parts of a bottom structure's triangles are opaque; where
+    // bfr_caps_features.opacity_micromap.
+    BFR_ACCELERATION_STRUCTURE_TYPE_OPACITY_MICROMAP = 2,
     BFR_ACCELERATION_STRUCTURE_TYPE_FORCE32 = 0x7FFFFFFF
 } bfr_acceleration_structure_type;
+
+// The states a micromap's subtriangles take: 1 bit each for two, opaque or transparent, or 2 bits
+// for four, adding unknown-opaque and unknown-transparent, which any-hit shaders decide.
+typedef enum bfr_opacity_micromap_format {
+    BFR_OPACITY_MICROMAP_FORMAT_TWO_STATE = 1,
+    BFR_OPACITY_MICROMAP_FORMAT_FOUR_STATE = 2,
+    BFR_OPACITY_MICROMAP_FORMAT_FORCE32 = 0x7FFFFFFF
+} bfr_opacity_micromap_format;
+
+// Micromap indices that name no micromap: the whole triangle in one state. Written as they are into
+// an index of the geometry's index type.
+typedef enum bfr_opacity_micromap_special_index {
+    BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_TRANSPARENT = -1,
+    BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_OPAQUE = -2,
+    BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_UNKNOWN_TRANSPARENT = -3,
+    BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_UNKNOWN_OPAQUE = -4,
+    BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FORCE32 = 0x7FFFFFFF
+} bfr_opacity_micromap_special_index;
 
 // What an acceleration structure build favours; passed to the backend as given.
 typedef enum bfr_build_preference {
@@ -1762,6 +1783,9 @@ typedef struct bfr_ray_tracing_pipeline_desc {
     const uint8_t* replay_identifiers;
     // Bytes.
     size_t replay_identifiers_size;
+    // Its traces take the opacity micromaps structures hold, where
+    // bfr_caps_features.opacity_micromap.
+    bfr_bool allow_opacity_micromaps;
 } bfr_ray_tracing_pipeline_desc;
 
 // Records in a shader binding table: size bytes from offset in buffer, which has
@@ -2022,7 +2046,47 @@ typedef struct bfr_acceleration_structure_flags {
     bfr_bool allow_compaction;
     // Shaders read its triangles' positions, where bfr_caps_features.ray_position_fetch.
     bfr_bool allow_data_access;
+    // Of a bottom structure with opacity micromaps: updates may name other micromaps.
+    bfr_bool allow_opacity_micromap_update;
+    // Instances may disable its opacity micromaps.
+    bfr_bool allow_disable_opacity_micromaps;
+    // Updates may follow its opacity micromaps' data.
+    bfr_bool allow_opacity_micromap_data_update;
 } bfr_acceleration_structure_flags;
+
+// count micromaps, or triangles naming micromaps, of subdivision_level and format.
+typedef struct bfr_opacity_micromap_usage {
+    uint32_t count;
+    uint32_t subdivision_level;
+    bfr_opacity_micromap_format format;
+} bfr_opacity_micromap_usage;
+
+// One micromap, as a buffer holds it for an opacity micromap's build: its states from data_offset
+// bytes into the build's data, of subdivision_level and format (a bfr_opacity_micromap_format's
+// value). The layout every backend reads.
+typedef struct bfr_opacity_micromap_record {
+    uint32_t data_offset;
+    uint16_t subdivision_level;
+    uint16_t format;
+} bfr_opacity_micromap_record;
+
+// The micromaps a triangle geometry's triangles take their opacity from: triangle i's is the
+// micromap at the index read from indices (a null indices is i), index_stride bytes apart from
+// index_offset, plus base_triangle, or a bfr_opacity_micromap_special_index. A null micromap is
+// none, where every index is special. usage_count usages from first_usage in the inputs'
+// micromap_usages count the geometry's triangles of each subdivision level and format, passed to
+// backends that take them. None where micromap and indices are both null.
+typedef struct bfr_triangle_opacity_micromap {
+    bfr_acceleration_structure micromap;
+    bfr_buffer indices;
+    // Bytes into indices.
+    uint64_t index_offset;
+    bfr_index_type index_type;
+    uint32_t index_stride;
+    uint32_t base_triangle;
+    uint32_t first_usage;
+    uint32_t usage_count;
+} bfr_triangle_opacity_micromap;
 
 // Triangles in a bottom acceleration structure. A null indices is none: triangle_count * 3 vertices
 // are read in order. A null transform is none; else a 3x4 row-major float matrix at
@@ -2048,6 +2112,8 @@ typedef struct bfr_triangle_geometry {
     uint64_t transform_offset;
     bfr_bool opaque;
     bfr_bool no_duplicate_any_hit;
+    // Where bfr_caps_features.opacity_micromap.
+    bfr_triangle_opacity_micromap opacity_micromap;
 } bfr_triangle_geometry;
 
 // Boxes in a bottom acceleration structure: six floats each, min xyz then max xyz, min at most max,
@@ -2066,9 +2132,13 @@ typedef struct bfr_box_geometry {
 // What an acceleration structure is built from. A bottom one holds triangles or boxes, not both; a
 // geometry's index in its array is the geometry index a hit group is chosen by. A top one holds
 // instance_count instance records from instance_offset, a multiple of 16, in instances, which has
-// acceleration_structure_input usage, laid out as bfr_write_instances writes them.
-// bfr_get_acceleration_structure_sizes reads the counts, formats, flags and whether a transform is
-// given.
+// acceleration_structure_input usage, laid out as bfr_write_instances writes them. A bottom one's
+// triangles name their micromaps' usages in micromap_usages. An opacity micromap holds
+// micromap_usages' micromaps: bfr_opacity_micromap_records, micromap_record_stride bytes apart (at
+// least 8, a multiple of 4) from micromap_record_offset in micromap_records, whose states
+// micromap_data holds from micromap_data_offset; both buffers have acceleration_structure_input
+// usage, both offsets multiples of 256. bfr_get_acceleration_structure_sizes reads the counts,
+// formats, flags, usages and whether a transform is given.
 typedef struct bfr_acceleration_structure_inputs {
     // 0 is bottom.
     bfr_acceleration_structure_type type;
@@ -2083,13 +2153,26 @@ typedef struct bfr_acceleration_structure_inputs {
     // Bytes into instances.
     uint64_t instance_offset;
     uint32_t instance_count;
+    // Read during the call only. An array of micromap_usage_count elements. May be null.
+    const bfr_opacity_micromap_usage* micromap_usages;
+    uint32_t micromap_usage_count;
+    bfr_buffer micromap_data;
+    // Bytes into micromap_data.
+    uint64_t micromap_data_offset;
+    bfr_buffer micromap_records;
+    // Bytes into micromap_records.
+    uint64_t micromap_record_offset;
+    uint32_t micromap_record_stride;
 } bfr_acceleration_structure_inputs;
 
 // The bytes an acceleration structure takes, and the scratch bytes its build and its update take.
+// discardable: the backend says an opacity micromap may be destroyed once the structures built with
+// it are built.
 typedef struct bfr_acceleration_structure_sizes {
     uint64_t size;
     uint64_t build_scratch;
     uint64_t update_scratch;
+    bfr_bool discardable;
 } bfr_acceleration_structure_sizes;
 
 // How to create an acceleration structure of size bytes, in memory the device allocates.
@@ -2142,16 +2225,23 @@ typedef struct bfr_acceleration_structure_instance {
     bfr_bool front_counter_clockwise;
     // 0 is as each geometry says.
     bfr_instance_opacity opacity;
+    // Its opacity micromaps' unknown states are taken as known.
+    bfr_bool force_opacity_micromap_2_state;
+    // Its opacity micromaps are ignored, of a bottom structure built with
+    // allow_disable_opacity_micromaps.
+    bfr_bool disable_opacity_micromaps;
     // Null is an instance no ray hits.
     bfr_acceleration_structure bottom_structure;
 } bfr_acceleration_structure_instance;
 
-// How to create a property pool of count entries of property, at least 1.
+// How to create a property pool of count entries of property, at least 1, of opacity micromaps
+// where opacity_micromaps, and of other structures where not.
 typedef struct bfr_acceleration_structure_property_pool_desc {
     const bfr_chain* next;
     // 0 is compacted_size.
     bfr_acceleration_structure_property property;
     uint32_t count;
+    bfr_bool opacity_micromaps;
 } bfr_acceleration_structure_property_pool_desc;
 
 // Which window to ask about.
@@ -2369,6 +2459,10 @@ typedef struct bfr_caps_ray_tracing {
     uint32_t instance_size;
     // The bytes of one group's identifier bfr_get_capture_replay_identifiers writes.
     uint32_t capture_replay_identifier_size;
+    // The highest subdivision level of a two-state opacity micromap.
+    uint32_t max_opacity_2_state_subdivision_level;
+    // The highest subdivision level of a four-state opacity micromap.
+    uint32_t max_opacity_4_state_subdivision_level;
 } bfr_caps_ray_tracing;
 
 // Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and
@@ -2409,6 +2503,8 @@ typedef struct bfr_caps_features {
     bfr_bool ray_tracing_capture_replay_mixed;
     // bfr_build_acceleration_structure_indirect.
     bfr_bool acceleration_structure_indirect_build;
+    // Opacity micromap structures, which bottom structures' triangles take their opacity from.
+    bfr_bool opacity_micromap;
     bfr_bool mesh_shader;
     bfr_bool task_shader;
     // A shading rate per draw.
@@ -3526,7 +3622,8 @@ BFR_API bfr_result bfr_get_acceleration_structure_slot(
     uint32_t* slot);
 
 // Writes what an instance record names a bottom acceleration structure by, for records the GPU
-// writes, as bfr_write_instances lays them out.
+// writes, as bfr_write_instances lays them out. Fails with error_invalid_argument for an opacity
+// micromap where the backend gives it none (Vulkan).
 BFR_API bfr_result bfr_get_acceleration_structure_reference(
     bfr_device* device,
     bfr_acceleration_structure structure,
@@ -3548,8 +3645,8 @@ BFR_API void bfr_destroy_acceleration_structure(
 // bfr_get_acceleration_structure_reference gives, 0 for an instance no ray hits. Fails with
 // error_unsupported where bfr_caps_features.acceleration_structure is false, error_invalid_argument
 // when size is too small, an index or offset is instance_index_limit or above, an enum value BFR
-// doesn't have, or an instance names a top structure, and error_invalid_handle for a structure that
-// is gone.
+// doesn't have, or an instance names a structure other than a bottom one, and error_invalid_handle
+// for a structure that is gone.
 // instances: An array of instance_count elements. May be null.
 // data: Where the records go.
 // size: Bytes of data.
@@ -3614,12 +3711,13 @@ BFR_API void bfr_destroy_shader(bfr_device* device, bfr_shader shader);
 // Creates a ray tracing pipeline, as desc says, before returning. Not for the frame path. A
 // desc.cache is looked in first, and the pipeline added on a miss. Fails with error_unsupported
 // where bfr_caps_features.ray_tracing_pipeline is false, or for library or libraries where
-// bfr_caps_features.ray_tracing_pipeline_library is false, or capture_replay where
-// bfr_caps_features.ray_tracing_capture_replay is false, error_invalid_argument for an enum value
-// BFR doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or replay_identifiers
-// neither none nor holding every group's, error_invalid_handle for a shader, library or desc.cache
-// that is gone, error_limit_reached at the device's maximum of pipelines, and error_device_failed
-// when the backend refuses the desc; the message carries what it said.
+// bfr_caps_features.ray_tracing_pipeline_library is false, capture_replay where
+// bfr_caps_features.ray_tracing_capture_replay is false, or allow_opacity_micromaps where
+// bfr_caps_features.opacity_micromap is false, error_invalid_argument for an enum value BFR doesn't
+// have, a stack_size past 32 bits on Vulkan, which takes no more, or replay_identifiers neither
+// none nor holding every group's, error_invalid_handle for a shader, library or desc.cache that is
+// gone, error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
+// backend refuses the desc; the message carries what it said.
 BFR_API bfr_result bfr_create_ray_tracing_pipeline(
     bfr_device* device,
     const bfr_ray_tracing_pipeline_desc* desc,
@@ -3765,12 +3863,14 @@ BFR_API bfr_result bfr_deserialize_acceleration_structure(
     uint64_t offset,
     bfr_acceleration_structure dst);
 
-// Writes whether the device deserializes a structure that begins with identifier,
+// Writes whether the device deserializes a structure of type that begins with identifier,
 // serialized_identifier_size bytes. Fails with error_unsupported where
-// bfr_caps_features.acceleration_structure_serialization is false.
+// bfr_caps_features.acceleration_structure_serialization is false, and error_invalid_argument for
+// an enum value BFR doesn't have.
 // identifier: The serialized structure's first serialized_identifier_size bytes.
 BFR_API bfr_result bfr_serialized_compatible(
     bfr_device* device,
+    bfr_acceleration_structure_type type,
     void* identifier,
     bfr_bool* compatible);
 

@@ -146,10 +146,15 @@ Built allocated(Device& device, const AccelerationStructureInputs& inputs) {
 // of three instances: the triangle at x = 0 and at x = 10, and the box at
 // x = 20, which rays 0, 2 and 4 hit; the others miss.
 struct Scene {
-    // topFlags build the top structure, bottomFlags the bottom ones.
+    // topFlags build the top structure, bottomFlags the bottom ones. A
+    // triangle that takes its opacity from micromap, counted by usages, is
+    // not opaque by itself, so a ray query takes it as hit only where the
+    // micromap says it is opaque.
     explicit Scene(Device& device, const AccelerationStructureFlags& topFlags = {},
-                   const AccelerationStructureFlags& bottomFlags = {})
+                   const AccelerationStructureFlags& bottomFlags = {}, const TriangleOpacityMicromap& micromap = {},
+                   std::span<const OpacityMicromapUsage> usages = {})
         : device(&device),
+          usages(usages),
           vertices(input(device, std::array<float, kVertexFloats * kTriangleVertices>{-1, -1, 0, 1, -1, 0, 0, 1, 0})),
           boxes(input(device, std::array<float, kBoxFloats>{-1, -1, -1, 1, 1, 1})) {
         triangleGeometry = {.vertices = vertices,
@@ -157,7 +162,8 @@ struct Scene {
                             .vertexStride = kVertexFloats * sizeof(float),
                             .vertexCount = kTriangleVertices,
                             .triangleCount = 1,
-                            .opaque = true};
+                            .opaque = micromap.micromap.isNull() && micromap.indices.isNull(),
+                            .opacityMicromap = micromap};
         boxGeometry = {.boxes = boxes, .stride = kBoxFloats * sizeof(float), .count = 1};
         flags = topFlags;
         this->bottomFlags = bottomFlags;
@@ -181,7 +187,8 @@ struct Scene {
     [[nodiscard]] AccelerationStructureInputs triangleInputs() const {
         return {.type = AccelerationStructureType::Bottom,
                 .flags = bottomFlags,
-                .triangles = std::span{&triangleGeometry, 1}};
+                .triangles = std::span{&triangleGeometry, 1},
+                .micromapUsages = usages};
     }
     [[nodiscard]] AccelerationStructureInputs boxInputs() const {
         return {.type = AccelerationStructureType::Bottom, .flags = bottomFlags, .boxes = std::span{&boxGeometry, 1}};
@@ -256,6 +263,7 @@ struct Scene {
     }
 
     Device* device;
+    std::span<const OpacityMicromapUsage> usages;
     BufferHandle vertices;
     BufferHandle boxes;
     BufferHandle instances;
@@ -352,6 +360,7 @@ struct TracingOptions {
     bool linked = false;
     bool captureReplay = false;
     std::span<const std::byte> replayIdentifiers{};
+    bool allowOpacityMicromaps = false;
 };
 
 // trace.rgen, trace.rmiss, and hit groups of trace.rchit for triangles and
@@ -387,7 +396,8 @@ struct RayTracing {
                                            .maxPayloadSize = sizeof(std::uint32_t),
                                            .stackSize = options.stackSize,
                                            .captureReplay = options.captureReplay,
-                                           .replayIdentifiers = options.replayIdentifiers};
+                                           .replayIdentifiers = options.replayIdentifiers,
+                                           .allowOpacityMicromaps = options.allowOpacityMicromaps};
         if (options.linked) {
             // The library's shader indices are its own, from the miss shader.
             const std::array<RayTracingGroup, kGroups - 1> libraryGroups{{
@@ -515,6 +525,62 @@ std::vector<std::uint64_t> propertyOf(Device& device, const Caps& caps, Accelera
 }
 
 constexpr std::array<std::uint32_t, kRays> kPlaced{kFirst, kMiss, kSecond, kMiss, kBox, kMiss, kMiss, kMiss};
+// The rays of a scene whose triangles are transparent: only the box is hit.
+constexpr std::array<std::uint32_t, kRays> kBoxOnly{kMiss, kMiss, kMiss, kMiss, kBox, kMiss, kMiss, kMiss};
+
+// One two-state micromap of subdivision level 0, whose one subtriangle is
+// opaque where opaque, else transparent, and the usage that counts it.
+constexpr OpacityMicromapUsage kOneMicromap{.count = 1,
+                                            .subdivisionLevel = 0,
+                                            .format = OpacityMicromapFormat::TwoState};
+constexpr std::uint8_t kOpaqueState = 1;
+
+struct Micromap {
+    Micromap(Device& device, bool opaque, const AccelerationStructureFlags& flags = {})
+        : device(&device),
+          flags(flags),
+          data(input(device, std::array<std::uint8_t, 1>{opaque ? kOpaqueState : std::uint8_t{0}})),
+          records(input(device, std::array<OpacityMicromapRecord, 1>{{{.dataOffset = 0,
+                                                                       .subdivisionLevel = 0,
+                                                                       .format = static_cast<std::uint16_t>(
+                                                                           OpacityMicromapFormat::TwoState)}}})),
+          built(allocated(device, inputs())) {}
+    Micromap(const Micromap&) = delete;
+    Micromap& operator=(const Micromap&) = delete;
+    Micromap(Micromap&&) = delete;
+    Micromap& operator=(Micromap&&) = delete;
+    ~Micromap() {
+        CHECK(device->destroyAccelerationStructure(built.structure).has_value());
+        for (const BufferHandle buffer : {data, records, built.scratch}) {
+            CHECK(device->destroyBuffer(buffer).has_value());
+        }
+    }
+
+    [[nodiscard]] AccelerationStructureInputs inputs() const {
+        return {.type = AccelerationStructureType::OpacityMicromap,
+                .flags = flags,
+                .micromapUsages = std::span{&kOneMicromap, 1},
+                .micromapData = data,
+                .micromapRecords = records,
+                .micromapRecordStride = sizeof(OpacityMicromapRecord)};
+    }
+
+    // Records its build and a barrier after it.
+    void build(CommandListHandle list) const {
+        const auto recorded = device->buildAccelerationStructure(list, {.dst = built.structure,
+                                                                        .inputs = inputs(),
+                                                                        .scratch = built.scratch});
+        INFO(failureOf(recorded));
+        CHECK(recorded.has_value());
+        CHECK(device->barrier(list).has_value());
+    }
+
+    Device* device;
+    AccelerationStructureFlags flags;
+    BufferHandle data;
+    BufferHandle records;
+    Built built;
+};
 
 } // namespace
 
@@ -877,6 +943,9 @@ TEST_CASE("Device refuses ray tracing pipeline work it can't pass on", "[rhi][ag
         if (made.caps.features.rayTracingPipeline && !made.caps.features.rayTracingPipelineLibrary) {
             CHECK(code(device.createRayTracingPipeline({.library = true})) == ErrorCode::RhiUnsupported);
         }
+        if (made.caps.features.rayTracingPipeline && !made.caps.features.opacityMicromap) {
+            CHECK(code(device.createRayTracingPipeline({.allowOpacityMicromaps = true})) == ErrorCode::RhiUnsupported);
+        }
         if (!made.caps.features.rayTracingCaptureReplay) {
             std::vector<std::byte> out(1);
             CHECK(code(device.captureReplayIdentifiers({}, 0, 1, out)) == ErrorCode::RhiUnsupported);
@@ -977,7 +1046,8 @@ TEST_CASE("Device compacts, serializes and deserializes structures, and writes t
             });
             const auto bytes = device.mapBuffer(data);
             REQUIRE(bytes.has_value());
-            const auto compatible = device.serializedCompatible(std::span{*bytes}.first<kSerializedIdentifierSize>());
+            const auto compatible = device.serializedCompatible(AccelerationStructureType::Bottom,
+                                                                std::span{*bytes}.first<kSerializedIdentifierSize>());
             INFO(failureOf(compatible));
             REQUIRE(compatible.has_value());
             CHECK(*compatible);
@@ -1050,6 +1120,203 @@ TEST_CASE("Device lets shaders read a hit triangle's positions, of a structure b
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("Device builds opacity micromaps, and rays take triangles' opacity from them, where it has them",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const RayDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        if (!made.caps.features.opacityMicromap) {
+            SKIP("the adapter has no opacity micromaps");
+        }
+        if (!takesSpirv(backend)) {
+            SKIP("no " << backend.name << " bytecode is checked in");
+        }
+        CHECK(made.caps.rayTracing.maxOpacity2StateSubdivisionLevel != 0);
+        const RayQuery query{device};
+        const std::span usages{&kOneMicromap, 1};
+        // The rays a scene whose triangles take their opacity from micromap,
+        // or from indices, hit.
+        const auto tracedWith = [&](const TriangleOpacityMicromap& linked, const Micromap* micromap) {
+            Scene scene{device, {}, {}, linked, usages};
+            scene.place(made.caps, 2 * kSpacing);
+            const auto built = [&](CommandListHandle list) {
+                if (micromap != nullptr) {
+                    micromap->build(list);
+                }
+                scene.build(list);
+            };
+            return traced(device, scene.top.structure, built, query);
+        };
+
+        SECTION("an opaque micromap's triangles are hit, a transparent one's are not") {
+            const Micromap opaque{device, true};
+            const Micromap clear{device, false};
+            CHECK(tracedWith({.micromap = opaque.built.structure, .usageCount = 1}, &opaque) == kPlaced);
+            CHECK(tracedWith({.micromap = clear.built.structure, .usageCount = 1}, &clear) == kBoxOnly);
+        }
+        SECTION("special indices make triangles opaque or transparent with no micromap") {
+            const auto special = [&](OpacityMicromapSpecialIndex index) {
+                const BufferHandle indices = input(device, std::array<std::int32_t, 1>{std::to_underlying(index)});
+                const auto hits = tracedWith(
+                    {.indices = indices, .indexType = IndexType::Uint32, .indexStride = sizeof(std::int32_t)}, nullptr);
+                CHECK(device.destroyBuffer(indices).has_value());
+                return hits;
+            };
+            CHECK(special(OpacityMicromapSpecialIndex::FullyOpaque) == kPlaced);
+            CHECK(special(OpacityMicromapSpecialIndex::FullyTransparent) == kBoxOnly);
+        }
+        SECTION("a ray tracing pipeline made to take micromaps takes them, where the device has one") {
+            if (!made.caps.features.rayTracingPipeline) {
+                SKIP("the adapter has no ray tracing pipelines");
+            }
+            const RayTracing tracing{device, made.caps, {.allowOpacityMicromaps = true}};
+            const auto trace = [&](CommandListHandle list, std::span<const std::byte> push) {
+                CHECK(device.bindPipeline(list, tracing.pipeline).has_value());
+                CHECK(device.pushConstants(list, push).has_value());
+                CHECK(device.traceRays(list, tracing.desc()).has_value());
+            };
+            const Micromap clear{device, false};
+            Scene scene{device, {}, {}, {.micromap = clear.built.structure, .usageCount = 1}, usages};
+            scene.place(made.caps, 2 * kSpacing);
+            const auto built = [&](CommandListHandle list) {
+                clear.build(list);
+                scene.build(list);
+            };
+            CHECK(traced(device, scene.top.structure, built, trace) == kBoxOnly);
+        }
+        SECTION("a micromap is not taken where another structure is, nor another where a micromap is") {
+            const auto code = [](const auto& result) {
+                return result.has_value() ? ErrorCode{} : result.error().code;
+            };
+            const Micromap micromap{device, true};
+            Scene scene{device};
+            const auto pool = device.createCommandPool({.queue = 0, .listCount = 1});
+            REQUIRE(pool.has_value());
+            const auto list = device.beginCommands(*pool);
+            REQUIRE(list.has_value());
+            CHECK(code(device.copyAccelerationStructure(*list, scene.triangles.structure, micromap.built.structure)) ==
+                  ErrorCode::RhiInvalidCall);
+            // Triangles take their opacity only from a micromap.
+            TriangleGeometry named = scene.triangleGeometry;
+            named.opacityMicromap = {.micromap = scene.box.structure, .usageCount = 1};
+            CHECK(code(device.accelerationStructureSizes({.type = AccelerationStructureType::Bottom,
+                                                          .triangles = std::span{&named, 1},
+                                                          .micromapUsages = usages})) == ErrorCode::RhiInvalidCall);
+            // Usages past the inputs'.
+            named.opacityMicromap = {.micromap = micromap.built.structure, .firstUsage = 1, .usageCount = 1};
+            CHECK(code(device.accelerationStructureSizes({.type = AccelerationStructureType::Bottom,
+                                                          .triangles = std::span{&named, 1},
+                                                          .micromapUsages = usages})) == ErrorCode::RhiInvalidCall);
+            // Instances are of bottom structures.
+            std::vector<std::byte> out(made.caps.rayTracing.instanceSize);
+            const AccelerationStructureInstance instance{.bottomStructure = micromap.built.structure};
+            CHECK(code(device.writeInstances(std::span{&instance, 1}, out)) == ErrorCode::RhiInvalidCall);
+            CHECK(device.destroyCommandList(*list).has_value());
+            CHECK(device.destroyCommandPool(*pool).has_value());
+        }
+        SECTION("a copied micromap says what the built one does") {
+            const Micromap original{device, true};
+            const auto whole = device.accelerationStructureSizes(original.inputs());
+            REQUIRE(whole.has_value());
+            const AccelerationStructureHandle copy = created(device,
+                                                             {.type = AccelerationStructureType::OpacityMicromap,
+                                                              .size = whole->size});
+            run(device, [&](CommandListHandle list) {
+                original.build(list);
+                const auto copied = device.copyAccelerationStructure(list, copy, original.built.structure);
+                INFO(failureOf(copied));
+                CHECK(copied.has_value());
+            });
+            CHECK(tracedWith({.micromap = copy, .usageCount = 1}, nullptr) == kPlaced);
+            CHECK(device.destroyAccelerationStructure(copy).has_value());
+        }
+        SECTION("a compacted micromap, and a deserialized one, say what the built one does") {
+            const Micromap original{device, true, {.allowCompaction = true}};
+            const std::array structures{original.built.structure};
+            // A driver may make no pool of micromaps' properties; it says so
+            // as it fails (the RTX 3070's: VK_ERROR_UNKNOWN).
+            {
+                const auto pool = device.createAccelerationStructurePropertyPool(
+                    {.property = AccelerationStructureProperty::CompactedSize, .count = 1, .opacityMicromaps = true});
+                if (!pool.has_value() && pool.error().code == ErrorCode::RhiDeviceFailed) {
+                    SKIP("the driver makes no pool of micromaps' properties: " << failureOf(pool));
+                }
+                REQUIRE(pool.has_value());
+                CHECK(device.destroyAccelerationStructurePropertyPool(*pool).has_value());
+            }
+            const auto sizeOf = [&](AccelerationStructureProperty property) {
+                const auto pool = device.createAccelerationStructurePropertyPool(
+                    {.property = property, .count = 1, .opacityMicromaps = true});
+                INFO(failureOf(pool));
+                REQUIRE(pool.has_value());
+                const BufferHandle readback = created(device, {.size = sizeof(std::uint64_t),
+                                                               .memory = BufferMemory::Readback,
+                                                               .usage = {.copyDst = true}});
+                run(device, [&](CommandListHandle list) {
+                    CHECK(device.resetAccelerationStructureProperties(list, *pool, 0, 1).has_value());
+                    original.build(list);
+                    const auto written = device.writeAccelerationStructureProperties(list, *pool, 0, structures);
+                    INFO(failureOf(written));
+                    CHECK(written.has_value());
+                    CHECK(device.barrier(list).has_value());
+                    CHECK(device.resolveAccelerationStructureProperties(list, *pool, 0, 1, readback, 0).has_value());
+                });
+                std::uint64_t value = 0;
+                const auto read = device.mapBuffer(readback);
+                REQUIRE(read.has_value());
+                std::memcpy(&value, read->data(), sizeof(value));
+                CHECK(device.destroyBuffer(readback).has_value());
+                CHECK(device.destroyAccelerationStructurePropertyPool(*pool).has_value());
+                return value;
+            };
+            const std::uint64_t compacted = sizeOf(AccelerationStructureProperty::CompactedSize);
+            REQUIRE(compacted != 0);
+            const AccelerationStructureHandle small = created(device,
+                                                              {.type = AccelerationStructureType::OpacityMicromap,
+                                                               .size = compacted});
+            run(device, [&](CommandListHandle list) {
+                const auto copied = device.compactAccelerationStructure(list, small, original.built.structure);
+                INFO(failureOf(copied));
+                CHECK(copied.has_value());
+            });
+            CHECK(tracedWith({.micromap = small, .usageCount = 1}, nullptr) == kPlaced);
+
+            const std::uint64_t serialized = sizeOf(AccelerationStructureProperty::SerializedSize);
+            REQUIRE(serialized > kSerializedIdentifierSize);
+            const BufferHandle bytes = created(device, {.size = serialized,
+                                                        .memory = BufferMemory::Readback,
+                                                        .usage = {.accelerationStructureData = true}});
+            run(device, [&](CommandListHandle list) {
+                CHECK(device.serializeAccelerationStructure(list, original.built.structure, bytes, 0).has_value());
+            });
+            const auto mapped = device.mapBuffer(bytes);
+            REQUIRE(mapped.has_value());
+            const auto compatible = device.serializedCompatible(AccelerationStructureType::OpacityMicromap,
+                                                                mapped->first<kSerializedIdentifierSize>());
+            INFO(failureOf(compatible));
+            REQUIRE(compatible.has_value());
+            CHECK(*compatible);
+            // Deserialized at the size the original was made with.
+            const auto whole = device.accelerationStructureSizes(original.inputs());
+            REQUIRE(whole.has_value());
+            const AccelerationStructureHandle restored = created(device,
+                                                                 {.type = AccelerationStructureType::OpacityMicromap,
+                                                                  .size = whole->size});
+            run(device, [&](CommandListHandle list) {
+                CHECK(device.deserializeAccelerationStructure(list, bytes, 0, restored).has_value());
+            });
+            CHECK(tracedWith({.micromap = restored, .usageCount = 1}, nullptr) == kPlaced);
+            for (const AccelerationStructureHandle structure : {small, restored}) {
+                CHECK(device.destroyAccelerationStructure(structure).has_value());
+            }
+            CHECK(device.destroyBuffer(bytes).has_value());
+        }
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
@@ -1066,6 +1333,14 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
         CHECK(device.destroyAccelerationStructure(AccelerationStructureHandle{}).has_value());
         if (!made.caps.features.accelerationStructureIndirectBuild) {
             CHECK(code(device.buildAccelerationStructureIndirect(*list, {}, {}, 0, 0)) == ErrorCode::RhiUnsupported);
+        }
+        if (made.caps.features.accelerationStructure && !made.caps.features.opacityMicromap) {
+            CHECK(code(device.createAccelerationStructure({.type = AccelerationStructureType::OpacityMicromap,
+                                                           .size = kSmall})) == ErrorCode::RhiUnsupported);
+            CHECK(code(device.accelerationStructureSizes({.type = AccelerationStructureType::OpacityMicromap})) ==
+                  ErrorCode::RhiUnsupported);
+            CHECK(code(device.createAccelerationStructurePropertyPool({.count = 1, .opacityMicromaps = true})) ==
+                  ErrorCode::RhiUnsupported);
         }
         if (!made.caps.features.accelerationStructure) {
             std::array<std::byte, 1> out{};

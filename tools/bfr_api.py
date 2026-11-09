@@ -24,6 +24,7 @@ WIDTH = 100
 BUILTINS = {
     "bool": "bfr_bool",
     "u8": "uint8_t",
+    "u16": "uint16_t",
     "u32": "uint32_t",
     "u64": "uint64_t",
     "i32": "int32_t",
