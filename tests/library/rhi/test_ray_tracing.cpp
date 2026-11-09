@@ -215,10 +215,15 @@ struct Scene {
                                           .usage = {.accelerationStructureInput = true}});
         }
         const std::array<AccelerationStructureInstance, kInstances> placed{{
-            {.transform = movedBy(0), .customIndex = kFirst, .mask = kAllRays, .bottomStructure = triangleStructure},
+            {.transform = movedBy(0),
+             .customIndex = kFirst,
+             .mask = kAllRays,
+             .disableOpacityMicromaps = disableOpacityMicromaps,
+             .bottomStructure = triangleStructure},
             {.transform = movedBy(secondX),
              .customIndex = kSecond,
              .mask = kAllRays,
+             .disableOpacityMicromaps = disableOpacityMicromaps,
              .bottomStructure = triangleStructure},
             // A ray tracing pipeline's second hit group is the box's.
             {.transform = movedBy(4 * kSpacing),
@@ -264,6 +269,8 @@ struct Scene {
 
     Device* device;
     std::span<const OpacityMicromapUsage> usages;
+    // The triangles' instances disable their opacity micromaps.
+    bool disableOpacityMicromaps = false;
     BufferHandle vertices;
     BufferHandle boxes;
     BufferHandle instances;
@@ -1143,12 +1150,17 @@ TEST_CASE("Device builds opacity micromaps, and rays take triangles' opacity fro
             SKIP("no " << backend.name << " bytecode is checked in");
         }
         CHECK(made.caps.rayTracing.maxOpacity2StateSubdivisionLevel != 0);
-        const RayQuery query{device};
+        // Every triangle a ray meets is hit unless a micromap makes it
+        // transparent.
+        const RayQuery query{device, bfr::test::spirv::kRayQueryAnyComp};
         const std::span usages{&kOneMicromap, 1};
         // The rays a scene whose triangles take their opacity from micromap,
-        // or from indices, hit.
-        const auto tracedWith = [&](const TriangleOpacityMicromap& linked, const Micromap* micromap) {
-            Scene scene{device, {}, {}, linked, usages};
+        // or from indices, hit; with disabled, instances disable the
+        // micromaps.
+        const auto tracedWith = [&](const TriangleOpacityMicromap& linked, const Micromap* micromap,
+                                    bool disabled = false) {
+            Scene scene{device, {}, {.allowDisableOpacityMicromaps = disabled}, linked, usages};
+            scene.disableOpacityMicromaps = disabled;
             scene.place(made.caps, 2 * kSpacing);
             const auto built = [&](CommandListHandle list) {
                 if (micromap != nullptr) {
@@ -1164,6 +1176,8 @@ TEST_CASE("Device builds opacity micromaps, and rays take triangles' opacity fro
             const Micromap clear{device, false};
             CHECK(tracedWith({.micromap = opaque.built.structure, .usageCount = 1}, &opaque) == kPlaced);
             CHECK(tracedWith({.micromap = clear.built.structure, .usageCount = 1}, &clear) == kBoxOnly);
+            // Instances that disable it see its triangles as they are.
+            CHECK(tracedWith({.micromap = clear.built.structure, .usageCount = 1}, &clear, true) == kPlaced);
         }
         SECTION("special indices make triangles opaque or transparent with no micromap") {
             const auto special = [&](OpacityMicromapSpecialIndex index) {
@@ -1249,7 +1263,11 @@ TEST_CASE("Device builds opacity micromaps, and rays take triangles' opacity fro
             {
                 const auto pool = device.createAccelerationStructurePropertyPool(
                     {.property = AccelerationStructureProperty::CompactedSize, .count = 1, .opacityMicromaps = true});
-                if (!pool.has_value() && pool.error().code == ErrorCode::RhiDeviceFailed) {
+                // Only the driver's own refusal of the pool skips, after the
+                // sections before have said whether validation spoke.
+                if (!pool.has_value() && pool.error().code == ErrorCode::RhiDeviceFailed &&
+                    failureOf(pool).find("vkCreateQueryPool") != std::string::npos) {
+                    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
                     SKIP("the driver makes no pool of micromaps' properties: " << failureOf(pool));
                 }
                 REQUIRE(pool.has_value());

@@ -887,7 +887,7 @@ typedef enum bfr_opacity_micromap_format {
 } bfr_opacity_micromap_format;
 
 // Micromap indices that name no micromap: the whole triangle in one state. Written as they are into
-// an index of the geometry's index type.
+// an index of bfr_triangle_opacity_micromap.index_type.
 typedef enum bfr_opacity_micromap_special_index {
     BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_TRANSPARENT = -1,
     BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_OPAQUE = -2,
@@ -2058,7 +2058,8 @@ typedef struct bfr_acceleration_structure_flags {
     bfr_bool allow_compaction;
     // Shaders read its triangles' positions, where bfr_caps_features.ray_position_fetch.
     bfr_bool allow_data_access;
-    // Of a bottom structure with opacity micromaps: updates may name other micromaps.
+    // Of a bottom structure with opacity micromaps, where bfr_caps_features.opacity_micromap:
+    // updates may name other micromaps.
     bfr_bool allow_opacity_micromap_update;
     // Instances may disable its opacity micromaps.
     bfr_bool allow_disable_opacity_micromaps;
@@ -2154,11 +2155,11 @@ typedef struct bfr_box_geometry {
 // instance_count instance records from instance_offset, a multiple of 16, in instances, which has
 // acceleration_structure_input usage, laid out as bfr_write_instances writes them. A bottom one's
 // triangles name their micromaps' usages in micromap_usages. An opacity micromap holds
-// micromap_usages' micromaps: bfr_opacity_micromap_records, micromap_record_stride bytes apart (at
-// least 8, a multiple of 4) from micromap_record_offset in micromap_records, whose states
-// micromap_data holds from micromap_data_offset; both buffers have acceleration_structure_input
-// usage, both offsets multiples of 256. bfr_get_acceleration_structure_sizes reads the counts,
-// formats, flags, usages and whether a transform is given.
+// micromap_usages' micromaps: bfr_opacity_micromap_records, micromap_record_stride bytes apart from
+// micromap_record_offset in micromap_records, whose states micromap_data holds from
+// micromap_data_offset; both buffers have acceleration_structure_input usage, both offsets
+// multiples of 256. bfr_get_acceleration_structure_sizes reads the counts, formats, flags, usages
+// and whether a transform is given.
 typedef struct bfr_acceleration_structure_inputs {
     // 0 is bottom.
     bfr_acceleration_structure_type type;
@@ -2254,7 +2255,8 @@ typedef struct bfr_acceleration_structure_instance {
     bfr_bool front_counter_clockwise;
     // 0 is as each geometry says.
     bfr_instance_opacity opacity;
-    // Its opacity micromaps' unknown states are taken as known.
+    // Its opacity micromaps' unknown states are taken as known, where
+    // bfr_caps_features.opacity_micromap.
     bfr_bool force_opacity_micromap_2_state;
     // Its opacity micromaps are ignored, of a bottom structure built with
     // allow_disable_opacity_micromaps.
@@ -3660,9 +3662,13 @@ BFR_API bfr_result bfr_update_tile_mappings(
 
 // Writes the bytes an acceleration structure built from inputs takes, and the scratch bytes its
 // build and update take, as the backend says. Fails with error_unsupported where
-// bfr_caps_features.acceleration_structure is false, error_invalid_argument for a bottom structure
-// of both triangles and boxes or an enum value BFR doesn't have, and error_limit_reached past the
-// device's max_build_geometries.
+// bfr_caps_features.acceleration_structure is false, or for opacity micromaps, their flags or
+// triangles that take their opacity from one where bfr_caps_features.opacity_micromap is, or motion
+// where bfr_caps_features.ray_tracing_motion is, error_invalid_argument for a bottom structure of
+// both triangles and boxes, an enum value BFR doesn't have, triangles naming a structure other than
+// an opacity micromap as theirs or usages past micromap_usages, or motion keyframes other than the
+// backend takes (Vulkan, two), error_invalid_handle for a micromap that is gone, and
+// error_limit_reached past the device's max_build_geometries.
 BFR_API bfr_result bfr_get_acceleration_structure_sizes(
     bfr_device* device,
     const bfr_acceleration_structure_inputs* inputs,
@@ -3683,8 +3689,8 @@ BFR_API bfr_result bfr_create_acceleration_structure(
     bfr_acceleration_structure* structure);
 
 // Writes a top acceleration structure's index in the acceleration structure table bfr_pipeline
-// states, held from creation to destruction. Fails with error_invalid_argument for a bottom one, or
-// on a device made with no max_bindless_acceleration_structures.
+// states, held from creation to destruction. Fails with error_invalid_argument for any but a top
+// one, or on a device made with no max_bindless_acceleration_structures.
 BFR_API bfr_result bfr_get_acceleration_structure_slot(
     bfr_device* device,
     bfr_acceleration_structure structure,
@@ -3748,9 +3754,10 @@ BFR_API bfr_result bfr_write_instances(
 // Records build, outside rendering, on a queue whose kind runs compute. A barrier orders the work
 // that wrote its inputs before it, and its readers and any reuse of its scratch after. Fails with
 // error_unsupported where bfr_caps_features.acceleration_structure is false or on a copy queue,
-// error_invalid_argument for inputs bfr_get_acceleration_structure_sizes refuses or of a type
-// unlike its structure's, error_limit_reached past the device's max_build_geometries, and
-// error_invalid_handle for a structure or buffer that is gone.
+// error_invalid_argument for inputs bfr_get_acceleration_structure_sizes refuses, of a type unlike
+// its structure's, or an opacity micromap updated where the backend builds one only whole (Vulkan),
+// error_limit_reached past the device's max_build_geometries, and error_invalid_handle for a
+// structure or buffer that is gone.
 BFR_API bfr_result bfr_build_acceleration_structure(
     bfr_device* device,
     bfr_command_list command_list,
@@ -3760,7 +3767,8 @@ BFR_API bfr_result bfr_build_acceleration_structure(
 // the GPU as it runs: one bfr_acceleration_structure_build_range per geometry of build's inputs, in
 // order, stride bytes apart from offset in ranges, which has indirect usage; offset and stride are
 // multiples of 4. The inputs' counts are the most a range names. Fails with error_unsupported where
-// bfr_caps_features.acceleration_structure_indirect_build is false, and as
+// bfr_caps_features.acceleration_structure_indirect_build is false, error_invalid_argument for an
+// opacity micromap where the backend builds none so (Vulkan), and as
 // bfr_build_acceleration_structure does.
 // offset: Bytes into ranges.
 // stride: Bytes from one range to the next.
@@ -3772,10 +3780,11 @@ BFR_API bfr_result bfr_build_acceleration_structure_indirect(
     uint64_t offset,
     uint32_t stride);
 
-// Records a copy of src into dst, at least src's size, or its current_size where
-// bfr_caps_features.acceleration_structure_current_size, not overlapping, as builds are recorded.
-// Fails with error_unsupported as bfr_build_acceleration_structure does, and error_invalid_handle
-// for a structure that is gone.
+// Records a copy of src into dst, not overlapping, as builds are recorded: dst at least src's size,
+// or its current_size where bfr_caps_features.acceleration_structure_current_size; of an opacity
+// micromap, a micromap made as src was. Fails with error_unsupported as
+// bfr_build_acceleration_structure does, error_invalid_argument for a micromap and a structure of
+// another type, and error_invalid_handle for a structure that is gone.
 BFR_API bfr_result bfr_copy_acceleration_structure(
     bfr_device* device,
     bfr_command_list command_list,
@@ -3867,9 +3876,10 @@ BFR_API bfr_result bfr_get_buffer_address(bfr_device* device, bfr_buffer buffer,
 
 // Creates a pool of desc's count entries of its property. Not for the frame path. Fails with
 // error_unsupported where bfr_caps_features.acceleration_structure, or the property's own feature,
-// is false, error_invalid_argument for an enum value BFR doesn't have, error_limit_reached at the
-// device's max_acceleration_structure_property_pools, and error_device_failed when the backend
-// refuses.
+// or for opacity_micromaps bfr_caps_features.opacity_micromap, is false, error_invalid_argument for
+// an enum value BFR doesn't have or a property of micromaps the backend writes none of (Vulkan
+// writes only compacted and serialized sizes), error_limit_reached at the device's
+// max_acceleration_structure_property_pools, and error_device_failed when the backend refuses.
 BFR_API bfr_result bfr_create_acceleration_structure_property_pool(
     bfr_device* device,
     const bfr_acceleration_structure_property_pool_desc* desc,
@@ -3895,7 +3905,8 @@ BFR_API bfr_result bfr_reset_acceleration_structure_properties(
 // rendering, on a queue whose kind runs compute. A barrier orders their builds before it. A
 // compacted_size is of structures built with allow_compaction, a serialized_bottom_count of top
 // ones. Fails with error_unsupported on a copy queue, error_invalid_argument for more structures
-// than the pool holds from first, and error_invalid_handle for a structure that is gone.
+// than the pool holds from first, or for opacity micromaps in a pool of other structures'
+// properties or the reverse, and error_invalid_handle for a structure that is gone.
 // structures: An array of structure_count elements. May be null.
 BFR_API bfr_result bfr_write_acceleration_structure_properties(
     bfr_device* device,
@@ -3954,8 +3965,9 @@ BFR_API bfr_result bfr_deserialize_acceleration_structure(
 
 // Writes whether the device deserializes a structure of type that begins with identifier,
 // serialized_identifier_size bytes. Fails with error_unsupported where
-// bfr_caps_features.acceleration_structure_serialization is false, and error_invalid_argument for
-// an enum value BFR doesn't have.
+// bfr_caps_features.acceleration_structure_serialization is false, or for an opacity micromap where
+// bfr_caps_features.opacity_micromap is, and error_invalid_argument for an enum value BFR doesn't
+// have.
 // identifier: The serialized structure's first serialized_identifier_size bytes.
 BFR_API bfr_result bfr_serialized_compatible(
     bfr_device* device,

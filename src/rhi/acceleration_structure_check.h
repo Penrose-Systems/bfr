@@ -102,8 +102,13 @@ namespace bfr::rhi {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "a bottom acceleration structure holds triangles or boxes, not both");
     }
+    // The micromap build flags are the extension's (VUID-VkAccelerationStructureBuildGeometryInfoKHR-flags-11710).
+    const AccelerationStructureFlags& flags = inputs.flags;
+    const bool micromapFlags = flags.allowOpacityMicromapUpdate || flags.allowDisableOpacityMicromaps ||
+                               flags.allowOpacityMicromapDataUpdate;
     if (auto checked = checkOpacityMicromaps(opacityMicromap,
-                                             inputs.type == AccelerationStructureType::OpacityMicromap);
+                                             inputs.type == AccelerationStructureType::OpacityMicromap ||
+                                                 micromapFlags);
         !checked) {
         return checked;
     }
@@ -151,26 +156,36 @@ namespace bfr::rhi {
     return {};
 }
 
-/// Fails with RhiInvalidCall when out holds fewer than instances' records of
-/// instanceSize bytes, or an instance has an index or offset
-/// kInstanceIndexLimit or above or an opacity BFR doesn't have.
-[[nodiscard]] inline core::Result<void> checkInstance(const AccelerationStructureInstance& instance) {
+/// Fails with RhiInvalidCall when an instance has an index or offset
+/// kInstanceIndexLimit or above or an opacity BFR doesn't have, and
+/// RhiUnsupported for its opacity micromap flags where
+/// Features::opacityMicromap is false.
+[[nodiscard]] inline core::Result<void> checkInstance(const AccelerationStructureInstance& instance,
+                                                      bool opacityMicromap) {
     if (instance.customIndex >= kInstanceIndexLimit || instance.hitGroupOffset >= kInstanceIndexLimit) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "an instance's custom index {} and hit group offset {} are below {}", instance.customIndex,
                              instance.hitGroupOffset, kInstanceIndexLimit);
     }
+    if (auto checked = checkOpacityMicromaps(opacityMicromap,
+                                             instance.forceOpacityMicromap2State || instance.disableOpacityMicromaps);
+        !checked) {
+        return checked;
+    }
     return checkKnown(instance.opacity, "instance opacity");
 }
 
+/// Fails with RhiInvalidCall when out holds fewer than instances' records of
+/// instanceSize bytes, and as checkInstance does.
 [[nodiscard]] inline core::Result<void> checkInstances(std::span<const AccelerationStructureInstance> instances,
-                                                       std::span<const std::byte> out, std::uint32_t instanceSize) {
+                                                       std::span<const std::byte> out, std::uint32_t instanceSize,
+                                                       bool opacityMicromap) {
     if (out.size() / instanceSize < instances.size()) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes hold fewer than {} instance records of {}",
                              out.size(), instances.size(), instanceSize);
     }
     for (const AccelerationStructureInstance& instance : instances) {
-        if (auto checked = checkInstance(instance); !checked) {
+        if (auto checked = checkInstance(instance, opacityMicromap); !checked) {
             return checked;
         }
     }
@@ -197,7 +212,8 @@ namespace bfr::rhi {
 /// BFR doesn't have or keyframes past keyframes, which BFR reads.
 [[nodiscard]] inline core::Result<void> checkMotionInstances(
     bool rayTracingMotion, std::span<const AccelerationStructureMotionInstance> instances,
-    std::span<const MotionKeyframe> keyframes, std::span<const std::byte> out, std::uint32_t instanceSize) {
+    std::span<const MotionKeyframe> keyframes, std::span<const std::byte> out, std::uint32_t instanceSize,
+    bool opacityMicromap) {
     if (auto checked = checkRayTracingMotion(rayTracingMotion); !checked) {
         return checked;
     }
@@ -207,7 +223,7 @@ namespace bfr::rhi {
                              instanceSize);
     }
     for (const AccelerationStructureMotionInstance& moving : instances) {
-        if (auto checked = checkInstance(moving.instance); !checked) {
+        if (auto checked = checkInstance(moving.instance, opacityMicromap); !checked) {
             return checked;
         }
         if (auto checked = checkKnown(moving.motion, "instance motion"); !checked) {

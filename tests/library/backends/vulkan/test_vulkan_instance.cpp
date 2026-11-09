@@ -581,7 +581,7 @@ TEST_CASE("Vulkan without VK_KHR_pipeline_library reports no pipeline libraries,
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Vulkan without VK_EXT_opacity_micromap reports no micromaps", "[vulkan][gpu]") {
+TEST_CASE("Vulkan without VK_EXT_opacity_micromap reports no micromaps, and refuses them", "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_EXT_opacity_micromap");
     auto created = Instance::create(vulkanDesc(), {});
@@ -592,6 +592,33 @@ TEST_CASE("Vulkan without VK_EXT_opacity_micromap reports no micromaps", "[vulka
     CHECK_FALSE(caps.features.opacityMicromap);
     CHECK(caps.rayTracing.maxOpacity2StateSubdivisionLevel == 0);
     CHECK(caps.rayTracing.maxOpacity4StateSubdivisionLevel == 0);
+    if (!caps.features.accelerationStructure) {
+        SKIP("the adapter has no acceleration structures");
+    }
+    auto made = instance->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& device) {
+                                           device.maxAccelerationStructurePropertyPools = 1;
+                                       }));
+    INFO(failureOf(made));
+    REQUIRE(made.has_value());
+    Device& device = **made;
+    const auto code = [](const auto& result) {
+        return result.has_value() ? bfr::core::ErrorCode{} : result.error().code;
+    };
+    constexpr std::uint64_t kSmall = 256;
+    using bfr::core::ErrorCode;
+    CHECK(code(device.createAccelerationStructure(
+              {.type = AccelerationStructureType::OpacityMicromap, .size = kSmall})) == ErrorCode::RhiUnsupported);
+    CHECK(code(device.accelerationStructureSizes(
+              {.type = AccelerationStructureType::Bottom, .flags = {.allowDisableOpacityMicromaps = true}})) ==
+          ErrorCode::RhiUnsupported);
+    CHECK(code(device.createAccelerationStructurePropertyPool({.count = 1, .opacityMicromaps = true})) ==
+          ErrorCode::RhiUnsupported);
+    std::vector<std::byte> out(caps.rayTracing.instanceSize);
+    const AccelerationStructureInstance disabled{.disableOpacityMicromaps = true};
+    CHECK(code(device.writeInstances(std::span{&disabled, 1}, out)) == ErrorCode::RhiUnsupported);
+    if (caps.features.rayTracingPipeline) {
+        CHECK(code(device.createRayTracingPipeline({.allowOpacityMicromaps = true})) == ErrorCode::RhiUnsupported);
+    }
 }
 
 TEST_CASE("Vulkan without VK_NV_ray_tracing_motion_blur reports no motion", "[vulkan][gpu]") {
@@ -660,9 +687,11 @@ TEST_CASE("Vulkan refuses opacity micromap work it has no call for", "[vulkan][g
     // Vulkan gives a micromap no address, writes only its compacted and
     // serialized sizes, and builds it whole.
     CHECK(code(device.accelerationStructureReference(*micromap)) == bfr::core::ErrorCode::RhiInvalidCall);
-    CHECK(code(device.createAccelerationStructurePropertyPool(
-              {.property = AccelerationStructureProperty::CurrentSize, .count = 1, .opacityMicromaps = true})) ==
-          bfr::core::ErrorCode::RhiInvalidCall);
+    if (instance->adapters()[0].caps.features.accelerationStructureCurrentSize) {
+        CHECK(code(device.createAccelerationStructurePropertyPool(
+                  {.property = AccelerationStructureProperty::CurrentSize, .count = 1, .opacityMicromaps = true})) ==
+              bfr::core::ErrorCode::RhiInvalidCall);
+    }
     const auto pool = device.createCommandPool({.queue = 0, .listCount = 1});
     REQUIRE(pool.has_value());
     const auto list = device.beginCommands(*pool);

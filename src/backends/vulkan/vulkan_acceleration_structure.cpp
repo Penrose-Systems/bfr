@@ -144,6 +144,15 @@ const VkMicromapUsageEXT* usagesOf(std::span<const OpacityMicromapUsage> usages)
                   offsetof(OpacityMicromapUsage, format) == offsetof(VkMicromapUsageEXT, format));
     static_assert(std::to_underlying(OpacityMicromapFormat::TwoState) == VK_OPACITY_MICROMAP_FORMAT_2_STATE_EXT &&
                   std::to_underlying(OpacityMicromapFormat::FourState) == VK_OPACITY_MICROMAP_FORMAT_4_STATE_EXT);
+    // Special indices are written into index buffers as they are.
+    static_assert(std::to_underlying(OpacityMicromapSpecialIndex::FullyTransparent) ==
+                      VK_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_TRANSPARENT_EXT &&
+                  std::to_underlying(OpacityMicromapSpecialIndex::FullyOpaque) ==
+                      VK_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_OPAQUE_EXT &&
+                  std::to_underlying(OpacityMicromapSpecialIndex::FullyUnknownTransparent) ==
+                      VK_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_UNKNOWN_TRANSPARENT_EXT &&
+                  std::to_underlying(OpacityMicromapSpecialIndex::FullyUnknownOpaque) ==
+                      VK_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_UNKNOWN_OPAQUE_EXT);
     return usages.empty() ? nullptr : reinterpret_cast<const VkMicromapUsageEXT*>(usages.data());
 }
 
@@ -557,7 +566,7 @@ core::Result<void> VulkanDevice::writeInstances(std::span<const AccelerationStru
     if (auto checked = checkAccelerationStructures(features_.accelerationStructure); !checked) {
         return checked;
     }
-    if (auto checked = checkInstances(instances, out, rayTracing_.instanceSize); !checked) {
+    if (auto checked = checkInstances(instances, out, rayTracing_.instanceSize, features_.opacityMicromap); !checked) {
         return checked;
     }
     for (std::size_t i = 0; i < instances.size(); ++i) {
@@ -638,7 +647,7 @@ core::Result<void> VulkanDevice::writeMotionInstances(std::span<const Accelerati
         return checked;
     }
     if (auto checked = checkMotionInstances(features_.rayTracingMotion, instances, keyframes, out,
-                                            rayTracing_.motionInstanceSize);
+                                            rayTracing_.motionInstanceSize, features_.opacityMicromap);
         !checked) {
         return checked;
     }

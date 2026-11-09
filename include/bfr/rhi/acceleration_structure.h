@@ -39,7 +39,7 @@ enum class OpacityMicromapFormat : std::uint32_t {
 };
 
 /// Micromap indices that name no micromap: the whole triangle in one state.
-/// Written as they are into an index of the geometry's index type.
+/// Written as they are into an index of TriangleOpacityMicromap::indexType.
 enum class OpacityMicromapSpecialIndex : std::int32_t {
     FullyTransparent = -1,
     FullyOpaque = -2,
@@ -52,7 +52,7 @@ enum class OpacityMicromapSpecialIndex : std::int32_t {
 struct OpacityMicromapUsage {
     std::uint32_t count = 0;
     std::uint32_t subdivisionLevel = 0;
-    OpacityMicromapFormat format = OpacityMicromapFormat::TwoState;
+    OpacityMicromapFormat format{};
 };
 
 /// One micromap, as a buffer holds it for an opacity micromap's build: its
@@ -101,9 +101,9 @@ struct AccelerationStructureFlags {
     bool allowCompaction = false;
     /// Shaders read its triangles' positions, where Features::rayPositionFetch.
     bool allowDataAccess = false;
-    /// Of a bottom structure with opacity micromaps: updates may name other
-    /// micromaps, instances may disable them, and updates may follow their
-    /// micromaps' data.
+    /// Of a bottom structure with opacity micromaps, where
+    /// Features::opacityMicromap: updates may name other micromaps, instances
+    /// may disable them, and updates may follow their micromaps' data.
     bool allowOpacityMicromapUpdate = false;
     bool allowDisableOpacityMicromaps = false;
     bool allowOpacityMicromapDataUpdate = false;
@@ -161,7 +161,7 @@ struct BoxGeometry {
 /// (bfr_write_instances in api/bfr.yaml). A bottom one's triangles name
 /// their micromaps' usages in micromapUsages. An opacity micromap holds
 /// micromapUsages' micromaps: OpacityMicromapRecords, micromapRecordStride
-/// bytes apart (at least 8, a multiple of 4) from micromapRecordOffset in
+/// bytes apart from micromapRecordOffset in
 /// micromapRecords, whose states micromapData holds from micromapDataOffset;
 /// both buffers have accelerationStructureInput usage, both offsets
 /// multiples of 256. The size query reads the counts, formats, flags, usages
@@ -308,7 +308,7 @@ struct AccelerationStructureInstance {
     InstanceOpacity opacity = InstanceOpacity::AsGeometry;
     /// Its opacity micromaps' unknown states are taken as known, or the
     /// micromaps ignored, of a bottom structure built with
-    /// allowDisableOpacityMicromaps.
+    /// allowDisableOpacityMicromaps; where Features::opacityMicromap.
     bool forceOpacityMicromap2State = false;
     bool disableOpacityMicromaps = false;
     AccelerationStructureHandle bottomStructure{};
