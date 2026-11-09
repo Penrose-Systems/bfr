@@ -315,6 +315,12 @@ struct Timestamps {
     TimestampStages insideRendering;
     TimestampStages computeStages;
     TimestampStages copyStages;
+    /// The kinds of queue that record resetTimestamps. A pool written on one
+    /// that can't is reset on one that can, ordered before the writes by a
+    /// submit's wait.
+    bool graphicsResets = false;
+    bool computeResets = false;
+    bool copyResets = false;
     bool granularity = false;
     std::uint32_t entryBytes = 0;
     HostClocks hostClocks;

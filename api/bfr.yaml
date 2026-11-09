@@ -1821,6 +1821,14 @@ structs:
       - {name: inside_rendering, type: timestamp_stages, doc: The stages a write between bfr_begin_rendering and bfr_end_rendering takes.}
       - {name: compute_stages, type: timestamp_stages, doc: The stages a write on a compute queue takes.}
       - {name: copy_stages, type: timestamp_stages, doc: The stages a write on a copy queue takes.}
+      - name: graphics_resets
+        type: bool
+        doc: >-
+          Graphics queues record bfr_reset_timestamps. A pool written on a kind
+          of queue that can't is reset on one that can, ordered before the
+          writes by a submit's wait.
+      - {name: compute_resets, type: bool, doc: Compute queues record bfr_reset_timestamps.}
+      - {name: copy_resets, type: bool, doc: Copy queues record bfr_reset_timestamps.}
       - {name: granularity, type: bool, doc: The backend takes a bfr_timestamp_granularity; where false the value is unused.}
       - {name: entry_bytes, type: u32, doc: What one timestamp takes in a buffer bfr_resolve_timestamps writes.}
       - {name: host_clocks, type: host_clocks, doc: The clocks bfr_calibrate_timestamps reads.}
@@ -2825,7 +2833,8 @@ functions:
     doc: >-
       Records a reset of count timestamps from first, which a backend that
       needs one before a timestamp is written again is given; the others
-      record nothing. Outside rendering.
+      record nothing. Outside rendering. Fails with error_unsupported on a
+      kind of queue whose reset flag in bfr_caps_timestamps is false.
     returns: result
     params:
       - {name: device, type: device}

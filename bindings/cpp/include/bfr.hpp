@@ -2677,6 +2677,13 @@ struct CapsTimestamps {
     TimestampStages computeStages{};
     /// The stages a write on a copy queue takes.
     TimestampStages copyStages{};
+    /// Graphics queues record bfr_reset_timestamps. A pool written on a kind of queue that can't is
+    /// reset on one that can, ordered before the writes by a submit's wait.
+    bool graphicsResets{};
+    /// Compute queues record bfr_reset_timestamps.
+    bool computeResets{};
+    /// Copy queues record bfr_reset_timestamps.
+    bool copyResets{};
     /// The backend takes a bfr_timestamp_granularity; where false the value is unused.
     bool granularity{};
     /// What one timestamp takes in a buffer bfr_resolve_timestamps writes.
@@ -3542,6 +3549,9 @@ inline CapsTimestamps fromC(const bfr_caps_timestamps& value) {
         .insideRendering = fromC(value.inside_rendering),
         .computeStages = fromC(value.compute_stages),
         .copyStages = fromC(value.copy_stages),
+        .graphicsResets = value.graphics_resets != BFR_FALSE,
+        .computeResets = value.compute_resets != BFR_FALSE,
+        .copyResets = value.copy_resets != BFR_FALSE,
         .granularity = value.granularity != BFR_FALSE,
         .entryBytes = value.entry_bytes,
         .hostClocks = fromC(value.host_clocks),
@@ -3990,7 +4000,8 @@ public:
     [[nodiscard]] Expected<TimestampPool> createTimestampPool(const TimestampPoolDesc& desc) const;
 
     /// Records a reset of count timestamps from first, which a backend that needs one before a
-    /// timestamp is written again is given; the others record nothing. Outside rendering.
+    /// timestamp is written again is given; the others record nothing. Outside rendering. Fails
+    /// with error_unsupported on a kind of queue whose reset flag in bfr_caps_timestamps is false.
     [[nodiscard]] Expected<void> resetTimestamps(CommandList commandList, const TimestampPool& pool, std::uint32_t first, std::uint32_t count) const;
 
     /// Records the GPU's timestamp at stage into the pool's timestamp index, with granularity where

@@ -2155,6 +2155,13 @@ typedef struct bfr_caps_timestamps {
     bfr_timestamp_stages compute_stages;
     // The stages a write on a copy queue takes.
     bfr_timestamp_stages copy_stages;
+    // Graphics queues record bfr_reset_timestamps. A pool written on a kind of queue that can't is
+    // reset on one that can, ordered before the writes by a submit's wait.
+    bfr_bool graphics_resets;
+    // Compute queues record bfr_reset_timestamps.
+    bfr_bool compute_resets;
+    // Copy queues record bfr_reset_timestamps.
+    bfr_bool copy_resets;
     // The backend takes a bfr_timestamp_granularity; where false the value is unused.
     bfr_bool granularity;
     // What one timestamp takes in a buffer bfr_resolve_timestamps writes.
@@ -2921,7 +2928,8 @@ BFR_API bfr_result bfr_create_timestamp_pool(
 BFR_API void bfr_destroy_timestamp_pool(bfr_device* device, bfr_timestamp_pool pool);
 
 // Records a reset of count timestamps from first, which a backend that needs one before a timestamp
-// is written again is given; the others record nothing. Outside rendering.
+// is written again is given; the others record nothing. Outside rendering. Fails with
+// error_unsupported on a kind of queue whose reset flag in bfr_caps_timestamps is false.
 BFR_API bfr_result bfr_reset_timestamps(
     bfr_device* device,
     bfr_command_list command_list,

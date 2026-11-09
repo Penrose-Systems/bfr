@@ -108,11 +108,29 @@ core::Result<void> VulkanDevice::destroyTimestampPool(TimestampPoolHandle pool) 
     return {};
 }
 
+core::Result<QueueType> VulkanDevice::queueTypeOf(const VulkanCommandList& list) {
+    const VulkanCommandPool* commands = commandPools_.find(list.pool);
+    if (commands == nullptr) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the list's pool is gone");
+    }
+    return queues_[commands->queue]->type;
+}
+
 core::Result<void> VulkanDevice::resetTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
                                                  std::uint32_t first, std::uint32_t count) {
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
+    }
+    const auto type = queueTypeOf(**list);
+    if (!type) {
+        return std::unexpected(std::move(type.error()));
+    }
+    if (!(*type == QueueType::Graphics  ? timestamps_.graphicsResets
+          : *type == QueueType::Compute ? timestamps_.computeResets
+                                        : timestamps_.copyResets)) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "this kind of queue resets no timestamps (Caps::timestamps); reset them on one that does");
     }
     const VulkanTimestampPool* found = timestampPools_.find(pool);
     if (found == nullptr) {
@@ -137,14 +155,13 @@ core::Result<void> VulkanDevice::writeTimestamp(CommandListHandle commandList, T
         return std::unexpected(std::move(list.error()));
     }
     // Each kind of queue takes the stages its caps list (Caps::timestamps).
-    const VulkanCommandPool* commands = commandPools_.find((*list)->pool);
-    if (commands == nullptr) {
-        return core::failure(core::ErrorCode::RhiInvalidHandle, "the list's pool is gone");
+    const auto type = queueTypeOf(**list);
+    if (!type) {
+        return std::unexpected(std::move(type.error()));
     }
-    const QueueType type = queues_[commands->queue]->type;
-    const TimestampStages& stages = type == QueueType::Graphics  ? timestamps_.outsideRendering
-                                    : type == QueueType::Compute ? timestamps_.computeStages
-                                                                 : timestamps_.copyStages;
+    const TimestampStages& stages = *type == QueueType::Graphics  ? timestamps_.outsideRendering
+                                    : *type == QueueType::Compute ? timestamps_.computeStages
+                                                                  : timestamps_.copyStages;
     if (!takes(stages, stage)) {
         return core::failure(core::ErrorCode::RhiUnsupported, "this kind of queue takes no timestamp at stage {}",
                              static_cast<std::uint32_t>(stage));

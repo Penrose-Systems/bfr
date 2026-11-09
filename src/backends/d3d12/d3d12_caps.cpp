@@ -478,6 +478,10 @@ Timestamps timestampsOf(ID3D12Device* device) {
             .insideRendering = kEnd,
             .computeStages = kEnd,
             .copyStages = copy ? kEnd : TimestampStages{},
+            // resetTimestamps records nothing, so every queue takes it.
+            .graphicsResets = true,
+            .computeResets = true,
+            .copyResets = true,
             .granularity = false,
             .entryBytes = sizeof(UINT64),
             .hostClocks = {.performanceCounter = true}};

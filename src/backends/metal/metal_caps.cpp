@@ -303,6 +303,10 @@ Timestamps timestampsOf(MTL::Device* device) {
             .insideRendering = {.vertex = true, .fragment = true},
             .computeStages = {.end = true},
             .copyStages = {.end = true},
+            // resetTimestamps records nothing, so every queue takes it.
+            .graphicsResets = true,
+            .computeResets = true,
+            .copyResets = true,
             .granularity = true,
             .entryBytes = clampTo32(device->sizeOfCounterHeapEntry(MTL4::CounterHeapTypeTimestamp)),
             .hostClocks = {}};

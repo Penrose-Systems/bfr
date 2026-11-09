@@ -943,6 +943,12 @@ HostClocks hostClocksFrom(const InstanceTable& vk, VkPhysicalDevice adapter,
 // (stagesFor), in rendering and out of it, on a queue whose family has valid
 // timestamp bits; it takes no granularity. A VK_QUERY_RESULT_64_BIT copy
 // writes each as a uint64_t.
+// Whether a queue of a family with flags records vkCmdResetQueryPool, which
+// takes a graphics or compute queue (VUID-vkCmdResetQueryPool-commandBuffer-cmdpool).
+bool resets(VkQueueFlags flags) {
+    return (flags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0;
+}
+
 Timestamps timestampsFrom(const InstanceTable& vk, VkPhysicalDevice adapter,
                           std::span<const VkExtensionProperties> extensions, const Queues& queues,
                           const KindFlags& kinds, const Features& features) {
@@ -954,6 +960,9 @@ Timestamps timestampsFrom(const InstanceTable& vk, VkPhysicalDevice adapter,
             .insideRendering = graphics,
             .computeStages = stagesFor(kinds.compute, features),
             .copyStages = stagesFor(kinds.copy, features),
+            .graphicsResets = resets(kinds.graphics),
+            .computeResets = resets(kinds.compute),
+            .copyResets = resets(kinds.copy),
             .granularity = false,
             .entryBytes = sizeof(std::uint64_t),
             .hostClocks = hostClocksFrom(vk, adapter, extensions)};

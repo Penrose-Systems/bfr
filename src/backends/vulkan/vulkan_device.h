@@ -311,6 +311,9 @@ private:
     [[nodiscard]] core::Result<VulkanSwapchain*> swapchainFor(SwapchainHandle swapchain);
     [[nodiscard]] core::Result<VulkanCommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<VulkanCommandList*> commandListFor(CommandListHandle commandList);
+    // The kind of queue list records for. Fails with RhiInvalidHandle when its
+    // pool is gone.
+    [[nodiscard]] core::Result<QueueType> queueTypeOf(const VulkanCommandList& list);
     [[nodiscard]] core::Result<VulkanBuffer*> bufferFor(BufferHandle buffer);
     [[nodiscard]] core::Result<VulkanTexture*> textureFor(TextureHandle texture);
     [[nodiscard]] core::Result<VulkanPipeline*> pipelineFor(PipelineHandle pipeline);

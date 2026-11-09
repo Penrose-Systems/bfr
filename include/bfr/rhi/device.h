@@ -474,8 +474,9 @@ public:
 
     /// Records a reset of count timestamps from first, which a backend that
     /// needs one before a timestamp is written again is given; the others
-    /// record nothing. Outside rendering. Fails with RhiInvalidHandle for a
-    /// list or pool that is gone.
+    /// record nothing. Outside rendering. Fails with RhiUnsupported on a kind
+    /// of queue whose reset flag in Caps::timestamps is false, and
+    /// RhiInvalidHandle for a list or pool that is gone.
     [[nodiscard]] virtual core::Result<void> resetTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
                                                              std::uint32_t first, std::uint32_t count) = 0;
 

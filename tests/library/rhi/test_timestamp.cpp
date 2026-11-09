@@ -316,12 +316,12 @@ TEST_CASE("Device writes a timestamp at each stage a compute or copy queue's cap
         constexpr auto kStages = static_cast<std::uint32_t>(kEveryStage.size());
         const auto pool = device.createTimestampPool({.queue = queue, .count = kStages});
         REQUIRE(pool.has_value());
-        // Vulkan resets queries only on graphics and compute queues
-        // (vkCmdResetQueryPool's command pool), so the graphics queue resets
-        // them first.
-        const auto resets = device.createCommandPool({.queue = kGraphics, .listCount = kPoolLists});
-        REQUIRE(resets.has_value());
-        const auto reset = device.beginCommands(*resets);
+        // Where this kind of queue resets no timestamps, the graphics queue
+        // resets them first.
+        const bool resets = queue == kCompute ? caps.timestamps.computeResets : caps.timestamps.copyResets;
+        const auto resetting = device.createCommandPool({.queue = kGraphics, .listCount = kPoolLists});
+        REQUIRE(resetting.has_value());
+        const auto reset = device.beginCommands(*resetting);
         REQUIRE(reset.has_value());
         CHECK(device.resetTimestamps(*reset, *pool, 0, kStages).has_value());
         const auto sent = device.submit({.queue = kGraphics, .commandLists = std::span{&*reset, 1}, .waits = {}});
@@ -332,6 +332,14 @@ TEST_CASE("Device writes a timestamp at each stage a compute or copy queue's cap
         REQUIRE(commands.has_value());
         const auto list = device.beginCommands(*commands);
         REQUIRE(list.has_value());
+        const auto ownReset = device.resetTimestamps(*list, *pool, 0, 0);
+        if (resets) {
+            CHECK(ownReset.has_value());
+        }
+        else {
+            REQUIRE_FALSE(ownReset.has_value());
+            CHECK(ownReset.error().code == ErrorCode::RhiUnsupported);
+        }
 
         for (std::uint32_t index = 0; index < kStages; ++index) {
             const TimestampStage stage = kEveryStage.at(index);
@@ -347,7 +355,7 @@ TEST_CASE("Device writes a timestamp at each stage a compute or copy queue's cap
         }
         CHECK(device.destroyCommandList(*list).has_value());
         CHECK(device.destroyCommandPool(*commands).has_value());
-        CHECK(device.destroyCommandPool(*resets).has_value());
+        CHECK(device.destroyCommandPool(*resetting).has_value());
         CHECK(device.destroyTimestampPool(*pool).has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
