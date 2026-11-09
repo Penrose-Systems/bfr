@@ -5,6 +5,7 @@
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/acceleration_structure.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
@@ -26,6 +27,7 @@
 #include <format>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <ranges>
@@ -48,6 +50,15 @@ struct bfr_instance {
 struct bfr_device {
     std::shared_ptr<bfr::rhi::Instance> instance;
     std::unique_ptr<bfr::rhi::Device> device;
+    // What a build and the size query turn the caller's geometry arrays
+    // into: made with the device, max_build_geometries of each, so no call
+    // allocates; one call at a time uses them.
+    std::mutex conversions;
+    std::vector<bfr::rhi::TriangleGeometry> triangles;
+    std::vector<bfr::rhi::BoxGeometry> boxes;
+    // The adapter's bfr_caps_ray_tracing.instance_size: the bytes each record
+    // bfr_write_instances writes takes.
+    std::uint32_t instanceSize = 0;
 };
 
 namespace {
@@ -280,7 +291,9 @@ std::optional<bfr::rhi::BufferDesc> bufferIn(const bfr_buffer_desc& desc, bfr::c
                                 .uniform = desc.usage.uniform != BFR_FALSE,
                                 .storage = desc.usage.storage != BFR_FALSE,
                                 .index = desc.usage.index != BFR_FALSE,
-                                .indirect = desc.usage.indirect != BFR_FALSE},
+                                .indirect = desc.usage.indirect != BFR_FALSE,
+                                .accelerationStructureInput = desc.usage.acceleration_structure_input != BFR_FALSE,
+                                .accelerationStructureScratch = desc.usage.acceleration_structure_scratch != BFR_FALSE},
                       .sparse = desc.sparse != BFR_FALSE,
                       .sparseAliased = desc.sparse_aliased != BFR_FALSE,
                       .tileBytes = desc.tile_bytes};
@@ -467,14 +480,17 @@ static_assert(sizeof(bfr_buffer_tile_region) == sizeof(bfr::rhi::BufferTileRegio
               offsetof(bfr_buffer_tile_region, memory_tile) == offsetof(bfr::rhi::BufferTileRegion, memoryTile));
 
 static_assert(static_cast<int>(bfr::rhi::TimestampStage::Copy) == BFR_TIMESTAMP_STAGE_COPY);
-static_assert(static_cast<int>(bfr::rhi::TimestampStage::Mesh) == BFR_TIMESTAMP_STAGE_MESH);
+static_assert(static_cast<int>(bfr::rhi::TimestampStage::AccelerationStructureBuild) ==
+              BFR_TIMESTAMP_STAGE_ACCELERATION_STRUCTURE_BUILD);
 static_assert(static_cast<int>(bfr::rhi::TimestampGranularity::Precise) == BFR_TIMESTAMP_GRANULARITY_PRECISE);
 static_assert(static_cast<int>(bfr::rhi::HostClock::PerformanceCounter) == BFR_HOST_CLOCK_PERFORMANCE_COUNTER);
 static_assert(static_cast<int>(bfr::rhi::Call::InstanceSwapchainFormats) == BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS);
 static_assert(static_cast<int>(bfr::rhi::Call::SetTopology) == BFR_CALL_SET_TOPOLOGY);
 static_assert(static_cast<int>(bfr::rhi::Call::ResolveTexture) == BFR_CALL_RESOLVE_TEXTURE);
 static_assert(static_cast<int>(bfr::rhi::Call::DrawMeshIndirectCount) == BFR_CALL_DRAW_MESH_INDIRECT_COUNT);
-static_assert(bfr::rhi::kCallCount == BFR_CALL_DRAW_MESH_INDIRECT_COUNT + 1);
+static_assert(static_cast<int>(bfr::rhi::Call::BuildAccelerationStructure) == BFR_CALL_BUILD_ACCELERATION_STRUCTURE);
+static_assert(static_cast<int>(bfr::rhi::Call::CopyAccelerationStructure) == BFR_CALL_COPY_ACCELERATION_STRUCTURE);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_COPY_ACCELERATION_STRUCTURE + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
@@ -482,6 +498,97 @@ bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
 
 bfr::rhi::SamplerHandle fromC(bfr_sampler handle) {
     return bfr::rhi::SamplerHandle::fromBits(handle.bits);
+}
+
+bfr_acceleration_structure toC(bfr::rhi::AccelerationStructureHandle handle) {
+    return {.bits = handle.bits};
+}
+
+bfr::rhi::AccelerationStructureHandle fromC(bfr_acceleration_structure handle) {
+    return bfr::rhi::AccelerationStructureHandle::fromBits(handle.bits);
+}
+
+static_assert(static_cast<int>(bfr::rhi::AccelerationStructureType::Top) == BFR_ACCELERATION_STRUCTURE_TYPE_TOP);
+static_assert(static_cast<int>(bfr::rhi::BuildPreference::FastBuild) == BFR_BUILD_PREFERENCE_FAST_BUILD);
+static_assert(static_cast<int>(bfr::rhi::InstanceOpacity::ForceNonOpaque) == BFR_INSTANCE_OPACITY_FORCE_NON_OPAQUE);
+static_assert(bfr::rhi::kInstanceIndexLimit == BFR_INSTANCE_INDEX_LIMIT);
+static_assert(bfr::rhi::kTransformFloats == BFR_TRANSFORM_FLOATS);
+
+// The rhi form of a structure's inputs, its triangles and boxes written to
+// device's arrays from triangles and boxes on, which those advance past; a
+// top structure's are none, as the rhi reads none. Nothing when an array is
+// null with a count, there is no room left, or an enum is not one BFR has;
+// error says which, and limit whether it was room.
+std::optional<bfr::rhi::AccelerationStructureInputs> inputsIn(const bfr_acceleration_structure_inputs& inputs,
+                                                              bfr_device& device, std::size_t& triangles,
+                                                              std::size_t& boxes, bool& limit,
+                                                              bfr::core::Message& error) {
+    using namespace bfr::rhi;
+    limit = false;
+    const auto type = enumIn(inputs.type, AccelerationStructureType::Top, "acceleration structure type", error);
+    const auto preference = enumIn(inputs.flags.preference, BuildPreference::FastBuild, "build preference", error);
+    if (!type || !preference) {
+        return std::nullopt;
+    }
+    AccelerationStructureInputs made{.type = *type,
+                                     .flags = {.preference = *preference,
+                                               .allowUpdate = inputs.flags.allow_update != BFR_FALSE,
+                                               .minimizeMemory = inputs.flags.minimize_memory != BFR_FALSE},
+                                     .triangles = {},
+                                     .boxes = {},
+                                     .instances = fromC(inputs.instances),
+                                     .instanceOffset = inputs.instance_offset,
+                                     .instanceCount = inputs.instance_count};
+    if (made.type == AccelerationStructureType::Top) {
+        return made;
+    }
+    if ((inputs.triangles == nullptr && inputs.triangle_count != 0) ||
+        (inputs.boxes == nullptr && inputs.box_count != 0)) {
+        error.format("triangles or boxes is null with a count");
+        return std::nullopt;
+    }
+    if (inputs.triangle_count > device.triangles.size() - triangles || inputs.box_count > device.boxes.size() - boxes) {
+        limit = true;
+        error.format("the geometries are more than the device's max_build_geometries, {}", device.triangles.size());
+        return std::nullopt;
+    }
+    const std::span triangleOut = std::span{device.triangles}.subspan(triangles, inputs.triangle_count);
+    for (std::size_t i = 0; i < triangleOut.size(); ++i) {
+        const bfr_triangle_geometry& from = std::span{inputs.triangles, inputs.triangle_count}[i];
+        const auto format = formatIn(from.vertex_format, "vertex format", error);
+        const auto indexType = enumIn(from.index_type, IndexType::Uint16, "index type", error);
+        if (!format || !indexType) {
+            return std::nullopt;
+        }
+        triangleOut[i] = {.vertices = fromC(from.vertices),
+                          .vertexOffset = from.vertex_offset,
+                          .vertexFormat = *format,
+                          .vertexStride = from.vertex_stride,
+                          .vertexCount = from.vertex_count,
+                          .indices = fromC(from.indices),
+                          .indexOffset = from.index_offset,
+                          .indexType = *indexType,
+                          .triangleCount = from.triangle_count,
+                          .transform = fromC(from.transform),
+                          .transformOffset = from.transform_offset,
+                          .opaque = from.opaque != BFR_FALSE,
+                          .noDuplicateAnyHit = from.no_duplicate_any_hit != BFR_FALSE};
+    }
+    const std::span boxOut = std::span{device.boxes}.subspan(boxes, inputs.box_count);
+    for (std::size_t i = 0; i < boxOut.size(); ++i) {
+        const bfr_box_geometry& from = std::span{inputs.boxes, inputs.box_count}[i];
+        boxOut[i] = {.boxes = fromC(from.boxes),
+                     .offset = from.offset,
+                     .stride = from.stride,
+                     .count = from.count,
+                     .opaque = from.opaque != BFR_FALSE,
+                     .noDuplicateAnyHit = from.no_duplicate_any_hit != BFR_FALSE};
+    }
+    triangles += triangleOut.size();
+    boxes += boxOut.size();
+    made.triangles = triangleOut;
+    made.boxes = boxOut;
+    return made;
 }
 
 static_assert(static_cast<int>(bfr::rhi::Filter::Linear) == BFR_FILTER_LINEAR);
@@ -984,6 +1091,7 @@ bfr_caps_bindless toC(const bfr::rhi::BindlessLimits& bindless) {
         .max_uniform_buffers = bindless.maxUniformBuffers,
         .max_samplers = bindless.maxSamplers,
         .max_per_stage = bindless.maxPerStage,
+        .max_acceleration_structures = bindless.maxAccelerationStructures,
     };
 }
 
@@ -1044,12 +1152,14 @@ bfr_caps_ray_tracing toC(const bfr::rhi::RayTracingLimits& rayTracing) {
         .handle_size = rayTracing.handleSize,
         .handle_alignment = rayTracing.handleAlignment,
         .table_alignment = rayTracing.tableAlignment,
+        .instance_size = rayTracing.instanceSize,
     };
 }
 
 bfr_caps_features toC(const bfr::rhi::Features& features) {
     return {
         .ray_query = toC(features.rayQuery),
+        .ray_query_graphics = toC(features.rayQueryGraphics),
         .ray_tracing_pipeline = toC(features.rayTracingPipeline),
         .acceleration_structure = toC(features.accelerationStructure),
         .mesh_shader = toC(features.meshShader),
@@ -1151,7 +1261,9 @@ bfr_timestamp_stages toC(const bfr::rhi::TimestampStages& stages) {
             .compute = toC(stages.compute),
             .copy = toC(stages.copy),
             .task = toC(stages.task),
-            .mesh = toC(stages.mesh)};
+            .mesh = toC(stages.mesh),
+            .ray_tracing = toC(stages.rayTracing),
+            .acceleration_structure_build = toC(stages.accelerationStructureBuild)};
 }
 
 bfr_caps_timestamps toC(const bfr::rhi::Timestamps& timestamps) {
@@ -1273,6 +1385,7 @@ bfr_format_caps toC(const bfr::rhi::FormatCaps& caps) {
         .storage_texel_buffer_atomic = toC(caps.storageTexelBufferAtomic),
         .sample_counts = caps.sampleCounts,
         .resolve = toC(caps.resolve),
+        .acceleration_structure_vertices = toC(caps.accelerationStructureVertices),
     };
 }
 
@@ -1489,14 +1602,20 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
              .maxTimestampPools = desc->max_timestamp_pools,
              .maxSparseMemories = desc->max_sparse_memories,
              .maxTileMappings = desc->max_tile_mappings,
+             .maxBindlessAccelerationStructures = desc->max_bindless_acceleration_structures,
+             .maxBuildGeometries = desc->max_build_geometries,
              .indirectStrides = {desc->indirect_strides, desc->indirect_stride_count}});
         if (!created) {
             return fail(created.error());
         }
+        auto made = std::make_unique<bfr_device>();
+        made->instance = instance->instance;
+        made->device = std::move(*created);
+        made->triangles.resize(desc->max_build_geometries);
+        made->boxes.resize(desc->max_build_geometries);
+        made->instanceSize = instance->instance->adapters()[desc->adapter].caps.rayTracing.instanceSize;
         // The caller owns it until bfr_destroy_device.
-        *device = std::make_unique<bfr_device>(
-                      bfr_device{.instance = instance->instance, .device = std::move(*created)})
-                      .release();
+        *device = made.release();
         return BFR_RESULT_SUCCESS;
     });
 }
@@ -2556,7 +2675,7 @@ bfr_result bfr_write_timestamp(bfr_device* device, bfr_command_list command_list
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
         }
         bfr::core::Message error;
-        const auto at = enumIn(stage, bfr::rhi::TimestampStage::Mesh, "timestamp stage", error);
+        const auto at = enumIn(stage, bfr::rhi::TimestampStage::AccelerationStructureBuild, "timestamp stage", error);
         if (!at) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
@@ -2774,6 +2893,188 @@ bfr_result bfr_update_tile_mappings(bfr_device* device, const bfr_tile_mapping_d
             *token = toC(*mapped);
         }
         return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_get_acceleration_structure_sizes(bfr_device* device, const bfr_acceleration_structure_inputs* inputs,
+                                                bfr_acceleration_structure_sizes* sizes) {
+    return guarded([&] {
+        if (device == nullptr || inputs == nullptr || sizes == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, inputs and sizes must not be null");
+        }
+        *sizes = {};
+        const std::scoped_lock lock{device->conversions};
+        bfr::core::Message error;
+        std::size_t triangles = 0;
+        std::size_t boxes = 0;
+        bool limit = false;
+        const auto made = inputsIn(*inputs, *device, triangles, boxes, limit, error);
+        if (!made) {
+            return fail(limit ? BFR_RESULT_ERROR_LIMIT_REACHED : BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto found = device->device->accelerationStructureSizes(*made);
+        if (!found) {
+            return fail(found.error());
+        }
+        *sizes = {.size = found->size, .build_scratch = found->buildScratch, .update_scratch = found->updateScratch};
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_create_acceleration_structure(bfr_device* device, const bfr_acceleration_structure_desc* desc,
+                                             bfr_acceleration_structure* structure) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr || structure == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and structure must not be null");
+        }
+        *structure = {};
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_acceleration_structure_desc takes no chained structs");
+        }
+        bfr::core::Message error;
+        const auto type = enumIn(desc->type, bfr::rhi::AccelerationStructureType::Top, "acceleration structure type",
+                                 error);
+        if (!type) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto made = device->device->createAccelerationStructure({.type = *type, .size = desc->size});
+        if (!made) {
+            return fail(made.error());
+        }
+        *structure = toC(*made);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_get_acceleration_structure_slot(bfr_device* device, bfr_acceleration_structure structure,
+                                               uint32_t* slot) {
+    return guarded([&] {
+        if (device == nullptr || slot == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and slot must not be null");
+        }
+        *slot = 0;
+        const auto found = device->device->accelerationStructureSlot(fromC(structure));
+        if (!found) {
+            return fail(found.error());
+        }
+        *slot = *found;
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_get_acceleration_structure_reference(bfr_device* device, bfr_acceleration_structure structure,
+                                                    uint64_t* reference) {
+    return guarded([&] {
+        if (device == nullptr || reference == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and reference must not be null");
+        }
+        *reference = 0;
+        const auto found = device->device->accelerationStructureReference(fromC(structure));
+        if (!found) {
+            return fail(found.error());
+        }
+        *reference = *found;
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+void bfr_destroy_acceleration_structure(bfr_device* device, bfr_acceleration_structure structure) {
+    quietly([&] {
+        if (device == nullptr) {
+            return;
+        }
+        if (const auto destroyed = device->device->destroyAccelerationStructure(fromC(structure)); !destroyed) {
+            lastError() = destroyed.error().message;
+        }
+    });
+}
+
+bfr_result bfr_write_instances(bfr_device* device, const bfr_acceleration_structure_instance* instances,
+                               uint32_t instance_count, void* data, size_t size) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        if ((instances == nullptr && instance_count != 0) || (data == nullptr && size != 0)) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instances and data must not be null with a count");
+        }
+        using namespace bfr::rhi;
+        const std::span out{static_cast<std::byte*>(data), size};
+        const std::span from{instances, instance_count};
+        const std::size_t recordSize = device->instanceSize;
+        // Converted a chunk at a time on the stack, so no call allocates; a
+        // device without acceleration structures refuses the first.
+        constexpr std::size_t kChunk = 64;
+        std::array<AccelerationStructureInstance, kChunk> chunk{};
+        if (recordSize != 0 && size / recordSize < from.size()) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "{} bytes hold fewer than {} instance records of {}", size,
+                        from.size(), recordSize);
+        }
+        std::size_t done = 0;
+        do {
+            const std::size_t count = std::min(kChunk, from.size() - done);
+            for (std::size_t i = 0; i < count; ++i) {
+                const bfr_acceleration_structure_instance& instance = from[done + i];
+                bfr::core::Message error;
+                const auto opacity = enumIn(instance.opacity, InstanceOpacity::ForceNonOpaque, "instance opacity",
+                                            error);
+                if (!opacity) {
+                    return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+                }
+                chunk.at(i) = {.transform = std::to_array(instance.transform),
+                               .customIndex = instance.custom_index,
+                               .mask = instance.mask,
+                               .hitGroupOffset = instance.hit_group_offset,
+                               .cullDisable = instance.cull_disable != BFR_FALSE,
+                               .frontCounterClockwise = instance.front_counter_clockwise != BFR_FALSE,
+                               .opacity = *opacity,
+                               .bottomStructure = fromC(instance.bottom_structure)};
+            }
+            const auto written = device->device->writeInstances(std::span{chunk}.first(count),
+                                                                out.subspan(std::min(done * recordSize, out.size())));
+            if (!written) {
+                return fail(written.error());
+            }
+            done += count;
+        } while (done < from.size());
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_build_acceleration_structure(bfr_device* device, bfr_command_list command_list,
+                                            const bfr_acceleration_structure_build* build) {
+    return guarded([&] {
+        if (device == nullptr || build == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and build must not be null");
+        }
+        const std::scoped_lock lock{device->conversions};
+        bfr::core::Message error;
+        std::size_t triangles = 0;
+        std::size_t boxes = 0;
+        bool limit = false;
+        const auto inputs = inputsIn(build->inputs, *device, triangles, boxes, limit, error);
+        if (!inputs) {
+            return fail(limit ? BFR_RESULT_ERROR_LIMIT_REACHED : BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto built = device->device->buildAccelerationStructure(fromC(command_list),
+                                                                      {.dst = fromC(build->dst),
+                                                                       .src = fromC(build->src),
+                                                                       .update = build->update != BFR_FALSE,
+                                                                       .inputs = *inputs,
+                                                                       .scratch = fromC(build->scratch),
+                                                                       .scratchOffset = build->scratch_offset});
+        return built ? BFR_RESULT_SUCCESS : fail(built.error());
+    });
+}
+
+bfr_result bfr_copy_acceleration_structure(bfr_device* device, bfr_command_list command_list,
+                                           bfr_acceleration_structure dst, bfr_acceleration_structure src) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto copied = device->device->copyAccelerationStructure(fromC(command_list), fromC(dst), fromC(src));
+        return copied ? BFR_RESULT_SUCCESS : fail(copied.error());
     });
 }
 

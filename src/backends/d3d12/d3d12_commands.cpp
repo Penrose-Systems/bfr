@@ -4,6 +4,7 @@
 #include "bfr/rhi/pipeline.h"
 #include "d3d12/d3d12_device.h"
 #include "d3d12/d3d12_pipeline.h"
+#include "rhi/acceleration_structure_check.h"
 #include "rhi/command_check.h"
 #include "rhi/enum_check.h"
 
@@ -329,6 +330,51 @@ core::Result<void> D3D12Device::drawMeshIndirectCount(CommandListHandle /*comman
                                                       std::uint64_t /*countOffset*/, std::uint32_t /*maxDrawCount*/,
                                                       std::uint32_t /*stride*/) {
     return noMeshDraws(features_);
+}
+
+// BFR has no D3D12 acceleration structures yet, and
+// Features::accelerationStructure is false until it does (owner, 2026-11-08),
+// so checkAccelerationStructures refuses every call.
+
+core::Result<AccelerationStructureSizes> D3D12Device::accelerationStructureSizes(
+    const AccelerationStructureInputs& /*inputs*/) {
+    return std::unexpected(checkAccelerationStructures(features_.accelerationStructure).error());
+}
+
+core::Result<AccelerationStructureHandle> D3D12Device::createAccelerationStructure(
+    const AccelerationStructureDesc& /*desc*/) {
+    return std::unexpected(checkAccelerationStructures(features_.accelerationStructure).error());
+}
+
+core::Result<std::uint32_t> D3D12Device::accelerationStructureSlot(AccelerationStructureHandle /*structure*/) {
+    return std::unexpected(checkAccelerationStructures(features_.accelerationStructure).error());
+}
+
+core::Result<std::uint64_t> D3D12Device::accelerationStructureReference(AccelerationStructureHandle /*structure*/) {
+    return std::unexpected(checkAccelerationStructures(features_.accelerationStructure).error());
+}
+
+core::Result<void> D3D12Device::destroyAccelerationStructure(AccelerationStructureHandle structure) {
+    if (structure.isNull()) {
+        return {};
+    }
+    return checkAccelerationStructures(features_.accelerationStructure);
+}
+
+core::Result<void> D3D12Device::writeInstances(std::span<const AccelerationStructureInstance> /*instances*/,
+                                               std::span<std::byte> /*out*/) {
+    return checkAccelerationStructures(features_.accelerationStructure);
+}
+
+core::Result<void> D3D12Device::buildAccelerationStructure(CommandListHandle /*commandList*/,
+                                                           const AccelerationStructureBuild& /*build*/) {
+    return checkAccelerationStructures(features_.accelerationStructure);
+}
+
+core::Result<void> D3D12Device::copyAccelerationStructure(CommandListHandle /*commandList*/,
+                                                          AccelerationStructureHandle /*dst*/,
+                                                          AccelerationStructureHandle /*src*/) {
+    return checkAccelerationStructures(features_.accelerationStructure);
 }
 
 } // namespace bfr::rhi::d3d12

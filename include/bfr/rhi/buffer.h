@@ -34,6 +34,13 @@ struct BufferUsage {
     bool index = false;
     /// Indirect draws and dispatches read their arguments from it.
     bool indirect = false;
+    /// Acceleration structure builds read vertices, indices, transforms,
+    /// boxes or instances from it. It starts at an address of the alignment
+    /// those take.
+    bool accelerationStructureInput = false;
+    /// Acceleration structure builds use it as scratch. It starts at an
+    /// address that is a multiple of RayTracingLimits::scratchAlignment.
+    bool accelerationStructureScratch = false;
 };
 
 /// How to create a buffer.

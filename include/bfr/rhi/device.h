@@ -2,6 +2,7 @@
 
 #include "bfr/core/error.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/acceleration_structure.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/call_timing.h"
 #include "bfr/rhi/caps.h"
@@ -556,6 +557,76 @@ public:
     /// RhiInvalidHandle for a resource or memory that is gone, and
     /// RhiDeviceFailed when the API refuses.
     [[nodiscard]] virtual core::Result<Token> updateTileMappings(const TileMappingDesc& desc) = 0;
+
+    /// The bytes a structure built from inputs takes, and the scratch bytes
+    /// its build and update take, as the backend says. Fails with
+    /// RhiUnsupported where Features::accelerationStructure is false,
+    /// RhiInvalidCall for a bottom structure of both triangles and boxes or
+    /// an enum value BFR doesn't have, and RhiLimitReached past
+    /// DeviceDesc::maxBuildGeometries.
+    [[nodiscard]] virtual core::Result<AccelerationStructureSizes> accelerationStructureSizes(
+        const AccelerationStructureInputs& inputs) = 0;
+
+    /// An empty structure of desc.size bytes, which a build fills. Cold: it
+    /// frees structures the GPU is done with. Fails with RhiUnsupported where
+    /// Features::accelerationStructure is false, RhiInvalidCall for a size of
+    /// 0 or an enum value BFR doesn't have, RhiLimitReached at the device's
+    /// maximum or, for a top structure on a device with table slots, when
+    /// they are all held,
+    /// RhiOutOfMemory when the API says memory ran out, and RhiDeviceFailed
+    /// when it refuses.
+    [[nodiscard]] virtual core::Result<AccelerationStructureHandle> createAccelerationStructure(
+        const AccelerationStructureDesc& desc) = 0;
+
+    /// A top structure's index in the acceleration structure table, held
+    /// from creation to destruction. Fails with RhiInvalidCall for a bottom
+    /// one or on a device made with no table slots, and RhiInvalidHandle when
+    /// it is destroyed.
+    [[nodiscard]] virtual core::Result<std::uint32_t> accelerationStructureSlot(
+        AccelerationStructureHandle structure) = 0;
+
+    /// What an instance record names a bottom structure by (bfr_write_instances
+    /// in api/bfr.yaml), for records the GPU writes. Fails with
+    /// RhiInvalidHandle when it is destroyed.
+    [[nodiscard]] virtual core::Result<std::uint64_t> accelerationStructureReference(
+        AccelerationStructureHandle structure) = 0;
+
+    /// Destroys the structure once the GPU has passed every submit made
+    /// before the call; the handle is invalid at once. A top structure reads
+    /// the bottom ones built into it while rays are traced against it. Cold,
+    /// as destroyBuffer is. A null handle does nothing. Fails with
+    /// RhiInvalidHandle when it is already destroyed.
+    [[nodiscard]] virtual core::Result<void> destroyAccelerationStructure(AccelerationStructureHandle structure) = 0;
+
+    /// Writes instances to out as the records a top structure is built from,
+    /// RayTracingLimits::instanceSize bytes each, on the CPU. Fails with
+    /// RhiUnsupported where Features::accelerationStructure is false,
+    /// RhiInvalidCall when out is too small, an index or offset is
+    /// kInstanceIndexLimit or above, an enum value BFR doesn't have, or an
+    /// instance names a top structure, and RhiInvalidHandle for a structure
+    /// that is gone.
+    [[nodiscard]] virtual core::Result<void> writeInstances(std::span<const AccelerationStructureInstance> instances,
+                                                            std::span<std::byte> out) = 0;
+
+    /// Records build, outside rendering, on a queue whose kind runs compute.
+    /// A barrier orders the work that wrote its inputs before it, and its
+    /// readers and any reuse of its scratch after. Fails with RhiUnsupported
+    /// where Features::accelerationStructure is false or on a copy queue,
+    /// RhiInvalidCall for inputs Device::accelerationStructureSizes refuses
+    /// or of a type unlike its structure's, RhiLimitReached past
+    /// DeviceDesc::maxBuildGeometries, and RhiInvalidHandle for a list,
+    /// structure or buffer that is gone.
+    [[nodiscard]] virtual core::Result<void> buildAccelerationStructure(CommandListHandle commandList,
+                                                                        const AccelerationStructureBuild& build) = 0;
+
+    /// Records a copy of src into dst, of the same type and size, not
+    /// overlapping, as builds are recorded. Fails with RhiUnsupported as
+    /// buildAccelerationStructure does, RhiInvalidCall for structures of
+    /// different types or sizes, and RhiInvalidHandle for a list or structure
+    /// that is gone.
+    [[nodiscard]] virtual core::Result<void> copyAccelerationStructure(CommandListHandle commandList,
+                                                                       AccelerationStructureHandle dst,
+                                                                       AccelerationStructureHandle src) = 0;
 
     /// The CPU time spent in each of the device's calls since it was made,
     /// written to timings by Call, as many as it holds. Fails with

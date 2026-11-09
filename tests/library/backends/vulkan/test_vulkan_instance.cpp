@@ -4,6 +4,7 @@
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/acceleration_structure.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/swapchain.h"
@@ -24,6 +25,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <vulkan/vulkan_core.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -436,6 +438,97 @@ TEST_CASE("Vulkan without VK_EXT_mesh_shader reports no mesh shaders, and refuse
         CHECK(device.destroyCommandPool(*pool).has_value());
     }
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Vulkan without VK_KHR_acceleration_structure reports none, and refuses structures and their table",
+          "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
+    const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_KHR_acceleration_structure");
+    std::vector<std::string> errors;
+    {
+        auto created = Instance::create(recordingErrorsInto(errors), kValidation);
+        INFO(failureOf(created));
+        REQUIRE(created.has_value());
+        const std::unique_ptr<Instance> instance = std::move(*created);
+        const Caps& caps = instance->adapters()[0].caps;
+        CHECK_FALSE(caps.features.accelerationStructure);
+        CHECK_FALSE(caps.features.rayQuery);
+        CHECK_FALSE(caps.features.rayQueryGraphics);
+        CHECK(caps.rayTracing.maxInstances == 0);
+        CHECK(caps.rayTracing.instanceSize == 0);
+        CHECK(caps.bindless.maxAccelerationStructures == 0);
+        CHECK_FALSE(caps.timestamps.outsideRendering.accelerationStructureBuild);
+        const auto tabled = instance->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& desc) {
+                                                       desc.maxBindlessAccelerationStructures = 1;
+                                                   }));
+        REQUIRE_FALSE(tabled.has_value());
+        CHECK(tabled.error().code == bfr::core::ErrorCode::RhiLimitReached);
+        auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+        INFO(failureOf(made));
+        REQUIRE(made.has_value());
+        Device& device = **made;
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+        std::array<std::byte, 1> out{};
+
+        const auto sized = device.accelerationStructureSizes({});
+        const auto structure = device.createAccelerationStructure({.size = 1});
+        const auto written = device.writeInstances({}, out);
+        const auto built = device.buildAccelerationStructure(*list, {});
+        const auto copied = device.copyAccelerationStructure(*list, {}, {});
+        const auto timestamps = device.createTimestampPool({.queue = 0, .count = 1});
+        REQUIRE(timestamps.has_value());
+        const auto timed = device.writeTimestamp(*list, *timestamps, 0, TimestampStage::AccelerationStructureBuild,
+                                                 TimestampGranularity::Relaxed);
+
+        CHECK(sized.error().code == bfr::core::ErrorCode::RhiUnsupported);
+        CHECK(structure.error().code == bfr::core::ErrorCode::RhiUnsupported);
+        for (const auto* result : {&written, &built, &copied, &timed}) {
+            REQUIRE_FALSE(result->has_value());
+            CHECK(result->error().code == bfr::core::ErrorCode::RhiUnsupported);
+        }
+        CHECK(device.destroyTimestampPool(*timestamps).has_value());
+        CHECK(device.destroyCommandList(*list).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Vulkan with acceleration structures but no table updated after bind has no table, and makes top structures "
+          "with no slot",
+          "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride;
+    const ScopedEnv hidden("BFR_ADAPTER_NO_FEATURE", "descriptorBindingAccelerationStructureUpdateAfterBind");
+    auto created = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(created));
+    REQUIRE(created.has_value());
+    const std::unique_ptr<Instance> instance = std::move(*created);
+    const Caps& caps = instance->adapters()[0].caps;
+    if (!caps.features.accelerationStructure) {
+        SKIP("the adapter has no acceleration structures");
+    }
+    CHECK(caps.bindless.maxAccelerationStructures == 0);
+    const auto tabled = instance->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& desc) {
+                                                   desc.maxBindlessAccelerationStructures = 1;
+                                               }));
+    REQUIRE_FALSE(tabled.has_value());
+    CHECK(tabled.error().code == bfr::core::ErrorCode::RhiLimitReached);
+    auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+    INFO(failureOf(made));
+    REQUIRE(made.has_value());
+    Device& device = **made;
+    // A top structure is made with no slot.
+    constexpr std::uint64_t kSmallStructure = 256;
+    const auto top = device.createAccelerationStructure(
+        {.type = AccelerationStructureType::Top, .size = kSmallStructure});
+    INFO(failureOf(top));
+    REQUIRE(top.has_value());
+    const auto slot = device.accelerationStructureSlot(*top);
+    REQUIRE_FALSE(slot.has_value());
+    CHECK(slot.error().code == bfr::core::ErrorCode::RhiInvalidCall);
+    CHECK(device.destroyAccelerationStructure(*top).has_value());
 }
 
 TEST_CASE("Vulkan with mesh shaders but no task shaders refuses a task pipeline and a task timestamp",

@@ -185,6 +185,10 @@ struct RecordState {
             return stages.task;
         case TimestampStage::Mesh:
             return stages.mesh;
+        case TimestampStage::RayTracing:
+            return stages.rayTracing;
+        case TimestampStage::AccelerationStructureBuild:
+            return stages.accelerationStructureBuild;
     }
     return false;
 }

@@ -92,6 +92,14 @@ struct DeviceDesc {
     /// The most texture regions and the most buffer regions one
     /// updateTileMappings call takes.
     std::uint32_t maxTileMappings = 0;
+    /// The slots of the fifth bindless table, of top acceleration structures;
+    /// with none, top structures are made with no slot. Where
+    /// BindlessLimits::maxAccelerationStructures is 0 the adapter has no such
+    /// table, and more than 0 fails with RhiLimitReached.
+    std::uint32_t maxBindlessAccelerationStructures = 0;
+    /// The most geometries one build takes, in buildAccelerationStructure
+    /// and the size query; a top structure's instances are one geometry.
+    std::uint32_t maxBuildGeometries = 0;
     /// The strides, in bytes, the device's indirect draws take, read during
     /// createDevice only: D3D12 fixes a stride in the command signature it
     /// makes for them, so it makes one for each here and fails an indirect

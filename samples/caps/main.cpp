@@ -229,6 +229,7 @@ void printFeatures(const bfr::CapsFeatures& f, const bfr::CapsSparse& sparse) {
     };
     const std::initializer_list<Named> features{
         {.has = f.rayQuery, .name = "ray query"},
+        {.has = f.rayQueryGraphics, .name = "ray query in graphics stages"},
         {.has = f.rayTracingPipeline, .name = "ray tracing pipelines"},
         {.has = f.meshShader, .name = "mesh shaders"},
         {.has = f.taskShader, .name = "task shaders"},
@@ -491,7 +492,8 @@ void printAllShaders(const bfr::Caps& caps) {
     const bfr::CapsBindless& b = caps.bindless;
     group("bindless", {field("maxTextures", b.maxTextures), field("maxStorageTextures", b.maxStorageTextures),
                        field("maxStorageBuffers", b.maxStorageBuffers), field("maxUniformBuffers", b.maxUniformBuffers),
-                       field("maxSamplers", b.maxSamplers), field("maxPerStage", b.maxPerStage)});
+                       field("maxSamplers", b.maxSamplers), field("maxPerStage", b.maxPerStage),
+                       field("maxAccelerationStructures", b.maxAccelerationStructures)});
     const bfr::CapsCompute& c = caps.compute;
     group("compute", {field("maxWorkgroupCount", c.maxWorkgroupCount), field("maxWorkgroupSize", c.maxWorkgroupSize),
                       field("maxWorkgroupInvocations", c.maxWorkgroupInvocations),
@@ -523,11 +525,13 @@ void printAllShaders(const bfr::Caps& caps) {
     group("rayTracing", {field("maxGeometries", r.maxGeometries), field("maxInstances", r.maxInstances),
                          field("maxPrimitives", r.maxPrimitives), field("scratchAlignment", r.scratchAlignment),
                          field("maxRecursionDepth", r.maxRecursionDepth), field("handleSize", r.handleSize),
-                         field("handleAlignment", r.handleAlignment), field("tableAlignment", r.tableAlignment)});
+                         field("handleAlignment", r.handleAlignment), field("tableAlignment", r.tableAlignment),
+                         field("instanceSize", r.instanceSize)});
 }
 
 void printAllFeatures(const bfr::CapsFeatures& f) {
     group("features", {field("rayQuery", f.rayQuery),
+                       field("rayQueryGraphics", f.rayQueryGraphics),
                        field("rayTracingPipeline", f.rayTracingPipeline),
                        field("accelerationStructure", f.accelerationStructure),
                        field("meshShader", f.meshShader),

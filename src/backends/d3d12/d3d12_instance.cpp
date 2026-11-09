@@ -242,6 +242,9 @@ core::Result<std::unique_ptr<Device>> D3D12Instance::createDevice(std::size_t ad
     if (auto checked = checkLimits(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkTables(desc, adapters_[adapter].caps.bindless); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Only direct queues present (Godot's rendering_device_driver_d3d12.cpp, command_queue_family_get).
     if (auto checked = checkPresentQueue(presentTo, desc.graphics.size()); !checked) {
         return std::unexpected(std::move(checked.error()));

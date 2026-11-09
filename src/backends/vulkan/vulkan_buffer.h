@@ -13,22 +13,33 @@
 namespace bfr::rhi::vulkan {
 
 /// The allocator a device's buffers take their memory from, over device,
-/// which instance made on adapter at apiVersion. Destroy it with
-/// vmaDestroyAllocator once every buffer is gone. Fails with RhiDeviceFailed
-/// when VMA refuses.
+/// which instance made on adapter at apiVersion, giving buffers device
+/// addresses where deviceAddresses (the bufferDeviceAddress feature is on).
+/// Destroy it with vmaDestroyAllocator once every buffer is gone. Fails with
+/// RhiDeviceFailed when VMA refuses.
 [[nodiscard]] core::Result<VmaAllocator> createAllocator(VkInstance instance, VkPhysicalDevice adapter, VkDevice device,
-                                                         std::uint32_t apiVersion);
+                                                         std::uint32_t apiVersion, bool deviceAddresses);
+
+/// The address alignment a buffer of each usage starts at, beyond what its
+/// memory requirements give; 0 where the device has none of that usage.
+struct BufferAlignments {
+    /// RayTracingLimits::scratchAlignment.
+    VkDeviceSize scratch = 0;
+    /// The largest a build input's address keeps.
+    VkDeviceSize input = 0;
+};
 
 /// A VkBuffer and the memory VMA placed it in, which it frees when it goes:
 /// before the allocator does. mapped is where the CPU reaches upload and
 /// readback memory, empty for device memory. slot is its place in the storage
 /// buffer table, kEnd without storage usage; the device gives it back when
-/// the buffer is collected. A sparse one has no allocation; tileBytes and
+/// the buffer is collected. address is its device address, 0 for a buffer
+/// made without one. A sparse one has no allocation; tileBytes and
 /// memoryTypes are its memory requirements' alignment and memoryTypeBits.
 class VulkanBuffer {
 public:
     VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, VmaAllocation allocation, BufferMemory memory,
-                 std::span<std::byte> mapped, std::uint32_t slot);
+                 std::span<std::byte> mapped, std::uint32_t slot, VkDeviceAddress address);
     VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, std::uint32_t slot, const VkMemoryRequirements& sparse);
     ~VulkanBuffer();
     VulkanBuffer(const VulkanBuffer&) = delete;
@@ -43,6 +54,7 @@ public:
     [[nodiscard]] bool sparse() const { return sparse_; }
     [[nodiscard]] VkDeviceSize tileBytes() const { return tileBytes_; }
     [[nodiscard]] std::uint32_t memoryTypes() const { return memoryTypes_; }
+    [[nodiscard]] VkDeviceAddress address() const { return address_; }
 
 private:
     VmaAllocator allocator_;
@@ -54,9 +66,22 @@ private:
     bool sparse_ = false;
     VkDeviceSize tileBytes_ = 0;
     std::uint32_t memoryTypes_ = 0;
+    VkDeviceAddress address_ = 0;
 };
 
-/// A buffer as desc says, with no memory when it is sparse, shared by the
+/// A buffer of size bytes, of usage, in memory, shared by families as
+/// createVulkanBuffer's are, at an address that is a multiple of alignment,
+/// holding slot, with its device address read where usage has one. Fails with
+/// RhiDeviceFailed when VMA or the API refuses, and RhiOutOfMemory, as
+/// codeFor says, when memory runs out.
+[[nodiscard]] core::Result<VulkanBuffer> placeVulkanBuffer(const VolkDeviceTable& table, VkDevice device,
+                                                           VmaAllocator allocator, VkDeviceSize size,
+                                                           VkBufferUsageFlags usage, BufferMemory memory,
+                                                           std::span<const std::uint32_t> families,
+                                                           VkDeviceSize alignment, std::uint32_t slot);
+
+/// A buffer as desc says, starting at the alignments its usage takes, with
+/// no memory when it is sparse, shared by the
 /// queue families in families when there is more than one, so any of the
 /// device's queues may use it without an ownership transfer, holding slot.
 /// table is device's. Fails with RhiInvalidCall for a sparse buffer in host
@@ -66,6 +91,6 @@ private:
 [[nodiscard]] core::Result<VulkanBuffer> createVulkanBuffer(const VolkDeviceTable& table, VkDevice device,
                                                             VmaAllocator allocator, const BufferDesc& desc,
                                                             std::span<const std::uint32_t> families,
-                                                            std::uint32_t slot);
+                                                            const BufferAlignments& alignments, std::uint32_t slot);
 
 } // namespace bfr::rhi::vulkan

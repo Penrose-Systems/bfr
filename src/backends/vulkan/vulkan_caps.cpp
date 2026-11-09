@@ -145,6 +145,12 @@ bool on(VkBool32 value) {
     return value == VK_TRUE;
 }
 
+// Builds read their inputs and scratch by device address
+// (VUID-vkGetBufferDeviceAddress-bufferDeviceAddress-03324).
+bool hasAccelerationStructures(const DeviceFeatures& features) {
+    return on(features.accelerationStructure.accelerationStructure) && on(features.vulkan12.bufferDeviceAddress);
+}
+
 // A custom border colour needs both features: BFR's sampler desc gives no
 // format to go with it (VUID-VkSamplerCustomBorderColorCreateInfoEXT-format-04014).
 bool customBorderColors(const DeviceFeatures& features) {
@@ -223,8 +229,12 @@ Limits limitsFrom(const PropertyQuery& properties, const DeviceFeatures& feature
     };
 }
 
-BindlessLimits bindlessFrom(const PropertyQuery& properties) {
+BindlessLimits bindlessFrom(const PropertyQuery& properties, const DeviceFeatures& features) {
     const VkPhysicalDeviceVulkan12Properties& vulkan12 = properties.vulkan12;
+    // The table updates after bind, as the others do, which needs its feature
+    // (VUID-VkDescriptorSetLayoutBindingFlagsCreateInfo-descriptorBindingAccelerationStructureUpdateAfterBind-03570).
+    const bool structures = hasAccelerationStructures(features) &&
+                            on(features.accelerationStructure.descriptorBindingAccelerationStructureUpdateAfterBind);
     return {
         .maxTextures = vulkan12.maxDescriptorSetUpdateAfterBindSampledImages,
         .maxStorageTextures = vulkan12.maxDescriptorSetUpdateAfterBindStorageImages,
@@ -233,6 +243,8 @@ BindlessLimits bindlessFrom(const PropertyQuery& properties) {
         .maxUniformBuffers = 0,
         .maxSamplers = vulkan12.maxDescriptorSetUpdateAfterBindSamplers,
         .maxPerStage = vulkan12.maxPerStageUpdateAfterBindResources,
+        .maxAccelerationStructures =
+            structures ? properties.accelerationStructure.maxDescriptorSetUpdateAfterBindAccelerationStructures : 0,
     };
 }
 
@@ -253,11 +265,13 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
                       std::span<const VkExtensionProperties> extensions) {
     const VkPhysicalDeviceFeatures& core = features.core.features;
     return {
+        // Vulkan's ray queries run in every stage.
+        .rayQuery = hasAccelerationStructures(features) && on(features.rayQuery.rayQuery),
+        .rayQueryGraphics = hasAccelerationStructures(features) && on(features.rayQuery.rayQuery),
         // BFR has no call for these, or conservative raster, yet (roadmap
         // steps 13 and 14), so the device enables none of their extensions.
-        .rayQuery = false,
         .rayTracingPipeline = false,
-        .accelerationStructure = false,
+        .accelerationStructure = hasAccelerationStructures(features),
         .meshShader = on(features.mesh.meshShader),
         .taskShader = on(features.mesh.taskShader),
         .shadingRate = false,
@@ -438,7 +452,8 @@ struct KindFlags {
 // a compute queue, copies on a graphics, compute or transfer one, and the
 // start and end of the work before it on any; none where flags is 0. The
 // task and mesh stages need their features (VUID-vkCmdWriteTimestamp2-stage-03934,
-// -03935).
+// -03935); the ray tracing and build stages need theirs (-07947, -10751) and
+// a compute queue (vkdocs xml/vk.xml:35792-35797).
 TimestampStages stagesFor(VkQueueFlags flags, const Features& features) {
     const bool graphics = (flags & VK_QUEUE_GRAPHICS_BIT) != 0;
     const bool compute = (flags & VK_QUEUE_COMPUTE_BIT) != 0;
@@ -450,7 +465,9 @@ TimestampStages stagesFor(VkQueueFlags flags, const Features& features) {
             .compute = compute,
             .copy = graphics || compute || (flags & VK_QUEUE_TRANSFER_BIT) != 0,
             .task = graphics && features.taskShader,
-            .mesh = graphics && features.meshShader};
+            .mesh = graphics && features.meshShader,
+            .rayTracing = compute && features.rayTracingPipeline,
+            .accelerationStructureBuild = compute && features.accelerationStructure};
 }
 
 Queues queuesFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
@@ -753,6 +770,8 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     maintenance9.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_9_FEATURES_KHR;
     listRestart.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVE_TOPOLOGY_LIST_RESTART_FEATURES_EXT;
     mesh.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
+    accelerationStructure.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    rayQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
 
     void** tail = &core.pNext;
     link(tail, vulkan11);
@@ -816,6 +835,13 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     linkIfListed(VK_KHR_MAINTENANCE_9_EXTENSION_NAME, maintenance9);
     linkIfListed(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME, listRestart);
     linkIfListed(VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh);
+    // VK_KHR_acceleration_structure needs VK_KHR_deferred_host_operations
+    // (vkdocs xml/vk.xml:24210); ray queries need acceleration structures.
+    if (lists(extensions, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)) {
+        enableIfListed(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+        linkIfListed(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, accelerationStructure);
+        linkIfListed(VK_KHR_RAY_QUERY_EXTENSION_NAME, rayQuery);
+    }
     vk.vkGetPhysicalDeviceFeatures2(adapter, &core);
 }
 
@@ -856,7 +882,7 @@ std::vector<std::string> missingRequirements(const DeviceFeatures& features) {
 }
 
 // The limits of what reported says the device has: none while a feature
-// reports false, as ray tracing and shading rate textures do until BFR has a
+// reports false, as ray tracing pipelines and shading rate textures do until BFR has a
 // call for them (roadmap steps 13 and 14).
 MeshLimits meshFrom(const PropertyQuery& properties, const Features& reported) {
     if (!reported.meshShader) {
@@ -899,6 +925,7 @@ RayTracingLimits rayTracingFrom(const PropertyQuery& properties, const Features&
         limits.maxInstances = structures.maxInstanceCount;
         limits.maxPrimitives = structures.maxPrimitiveCount;
         limits.scratchAlignment = structures.minAccelerationStructureScratchOffsetAlignment;
+        limits.instanceSize = sizeof(VkAccelerationStructureInstanceKHR);
     }
     if (reported.rayTracingPipeline) {
         const VkPhysicalDeviceRayTracingPipelinePropertiesKHR& pipeline = properties.rayTracingPipeline;
@@ -1002,7 +1029,7 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t v
     Caps caps{
         .info = infoFrom(properties),
         .limits = limitsFrom(properties, features),
-        .bindless = bindlessFrom(properties),
+        .bindless = bindlessFrom(properties, features),
         .compute = computeFrom(properties),
         .mesh = meshFrom(properties, reported),
         .rayTracing = rayTracingFrom(properties, reported),
@@ -1081,6 +1108,7 @@ core::Result<FormatCaps> readFormatCaps(const InstanceTable& vk, VkPhysicalDevic
         // and stencil modes are Caps::resolve's.
         .resolve = has(texture, VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT) ||
                    has(texture, VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT),
+        .accelerationStructureVertices = has(buffer, VK_FORMAT_FEATURE_2_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR),
     };
     if (!caps.colorAttachment && !caps.depthStencil) {
         return caps;

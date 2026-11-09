@@ -48,6 +48,11 @@ namespace {
 // The newest Vulkan VMA takes.
 constexpr std::uint32_t kNewestForVma = VK_API_VERSION_1_4;
 
+// The largest alignment a build input's address keeps: a transform's and an
+// instance array's (build_acceleration_structure_device_common.adoc:100-104,
+// 118-136).
+constexpr VkDeviceSize kInputAlignment = 16;
+
 VkAttachmentLoadOp loadOpFor(LoadOp op) {
     switch (op) {
         case LoadOp::Load:
@@ -148,12 +153,14 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
     }
     // VMA takes Vulkan 1.0 to 1.4 (vk_mem_alloc.h:1142); a later device
     // still runs at its own version.
-    auto allocator = createAllocator(rhi.handle(), adapter, device, std::min(setup.apiVersion, kNewestForVma));
+    auto allocator = createAllocator(rhi.handle(), adapter, device, std::min(setup.apiVersion, kNewestForVma),
+                                     setup.deviceAddresses);
     if (!allocator) {
         return std::unexpected(std::move(allocator.error()));
     }
     made->allocator_ = *allocator;
-    auto layout = VulkanBindlessLayout::create(made->table_, device, desc, setup.pushConstantsSize);
+    auto layout = VulkanBindlessLayout::create(made->table_, device, desc, setup.pushConstantsSize,
+                                               setup.accelerationStructureTable);
     if (!layout) {
         return std::unexpected(std::move(layout.error()));
     }
@@ -175,6 +182,9 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       drawIndirectCount_(setup.drawIndirectCount),
       features_(setup.features),
       resolve_(setup.resolve),
+      rayTracing_(setup.rayTracing),
+      alignments_{.scratch = setup.rayTracing.scratchAlignment,
+                  .input = setup.features.accelerationStructure ? kInputAlignment : 0},
       formats13_(setup.formats13),
       desc_(heldPart(desc)),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
@@ -191,6 +201,8 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       timestampPools_("timestamp pools", desc.maxTimestampPools, desc.maxTimestampPools, rhi.logger()),
       sparseMemories_("sparse memories", desc.maxSparseMemories, desc.maxSparseMemories, rhi.logger()),
       pipelineCaches_("pipeline caches", kBufferCapacity, kBufferLimit, rhi.logger()),
+      accelerationStructures_("acceleration structures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      builds_(desc.maxBuildGeometries),
       bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
@@ -221,6 +233,7 @@ core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const
         queue->type = type;
         queue->family = family;
         queue->sparse = (properties[family].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) != 0;
+        queue->compute = (properties[family].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0;
         table_.vkGetDeviceQueue(device_, family, index, &queue->queue);
         VkSemaphoreTypeCreateInfo timeline{};
         timeline.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
@@ -1047,6 +1060,10 @@ void VulkanDevice::warnLeftovers() const {
     if (sparseMemories_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} sparse memories were left when the device went", sparseMemories_.size());
     }
+    if (accelerationStructures_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} acceleration structures were left when the device went",
+                     accelerationStructures_.size());
+    }
     if (pipelineCaches_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} pipeline caches were left when the device went", pipelineCaches_.size());
     }
@@ -1068,6 +1085,7 @@ VulkanDevice::~VulkanDevice() {
     swapchains_.clear();
     // Every buffer and texture gives its memory back before the allocator goes,
     // and every pipeline goes before the layout it was made on.
+    accelerationStructures_.clear();
     buffers_.clear();
     textures_.clear();
     sparseMemories_.clear();

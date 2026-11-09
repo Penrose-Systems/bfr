@@ -15,6 +15,7 @@
 #include "rhi/command_check.h"
 #include "vulkan/queue_families.h"
 #include "vulkan/vma.h"
+#include "vulkan/vulkan_acceleration_structure.h"
 #include "vulkan/vulkan_buffer.h"
 #include "vulkan/vulkan_caps.h"
 #include "vulkan/vulkan_pipeline.h"
@@ -70,6 +71,13 @@ struct VulkanDeviceSetup {
     /// depth-stencil attachments resolve.
     Features features{};
     ResolveCaps resolve{};
+    /// The limits builds and instance records keep to.
+    RayTracingLimits rayTracing{};
+    /// The device enabled bufferDeviceAddress, so its buffers have addresses.
+    bool deviceAddresses = false;
+    /// The device has an acceleration structure table: the adapter's
+    /// BindlessLimits::maxAccelerationStructures is not 0.
+    bool accelerationStructureTable = false;
 };
 
 struct VulkanCommandPool {
@@ -111,6 +119,8 @@ struct VulkanQueue {
     std::uint32_t family = 0;
     /// The family reports VK_QUEUE_SPARSE_BINDING_BIT.
     bool sparse = false;
+    /// The family reports VK_QUEUE_COMPUTE_BIT.
+    bool compute = false;
     VkQueue queue = VK_NULL_HANDLE;
     VkSemaphore timeline = VK_NULL_HANDLE;
     std::atomic<std::uint64_t> submitted{0};
@@ -289,6 +299,21 @@ public:
     [[nodiscard]] core::Result<BufferTiling> bufferTiling(BufferHandle buffer) override;
     [[nodiscard]] core::Result<SparseFormat> sparseFormat(const SparseFormatDesc& desc) const override;
     [[nodiscard]] core::Result<Token> updateTileMappings(const TileMappingDesc& desc) override;
+    [[nodiscard]] core::Result<AccelerationStructureSizes> accelerationStructureSizes(
+        const AccelerationStructureInputs& inputs) override;
+    [[nodiscard]] core::Result<AccelerationStructureHandle> createAccelerationStructure(
+        const AccelerationStructureDesc& desc) override;
+    [[nodiscard]] core::Result<std::uint32_t> accelerationStructureSlot(AccelerationStructureHandle structure) override;
+    [[nodiscard]] core::Result<std::uint64_t> accelerationStructureReference(
+        AccelerationStructureHandle structure) override;
+    [[nodiscard]] core::Result<void> destroyAccelerationStructure(AccelerationStructureHandle structure) override;
+    [[nodiscard]] core::Result<void> writeInstances(std::span<const AccelerationStructureInstance> instances,
+                                                    std::span<std::byte> out) override;
+    [[nodiscard]] core::Result<void> buildAccelerationStructure(CommandListHandle commandList,
+                                                                const AccelerationStructureBuild& build) override;
+    [[nodiscard]] core::Result<void> copyAccelerationStructure(CommandListHandle commandList,
+                                                               AccelerationStructureHandle dst,
+                                                               AccelerationStructureHandle src) override;
 
 private:
     [[nodiscard]] core::Result<void> openQueues(const QueueFamilies& families, const DeviceDesc& desc);
@@ -318,6 +343,14 @@ private:
     [[nodiscard]] core::Result<VulkanTexture*> textureFor(TextureHandle texture);
     [[nodiscard]] core::Result<VulkanPipeline*> pipelineFor(PipelineHandle pipeline);
     [[nodiscard]] core::Result<VulkanSparseMemory*> sparseMemoryFor(SparseMemoryHandle memory);
+    [[nodiscard]] core::Result<VulkanAccelerationStructure*> accelerationStructureFor(
+        AccelerationStructureHandle structure);
+    // Fails with RhiUnsupported when list's queue runs no compute, which
+    // builds and traces need, and RhiInvalidHandle when its pool is gone.
+    [[nodiscard]] core::Result<void> checkRunsCompute(const VulkanCommandList& list);
+    // buffer's device address, offset bytes in; 0 for a null buffer. Fails
+    // with RhiInvalidHandle when the buffer is gone.
+    [[nodiscard]] core::Result<VkDeviceAddress> addressOf(BufferHandle buffer, std::uint64_t offset);
     // VK_NULL_HANDLE for a null handle.
     [[nodiscard]] core::Result<VkPipelineCache> pipelineCacheFor(PipelineCacheHandle cache);
     // The binds of desc's texture and buffer regions into queue's arrays.
@@ -341,6 +374,8 @@ private:
     bool drawIndirectCount_;
     Features features_;
     ResolveCaps resolve_;
+    RayTracingLimits rayTracing_;
+    BufferAlignments alignments_;
     Formats13 formats13_;
     DeviceDesc desc_;
     std::vector<std::unique_ptr<VulkanQueue>> queues_;
@@ -371,6 +406,11 @@ private:
     core::Pool<VulkanTimestampPool, TimestampPool> timestampPools_;
     core::Pool<VulkanSparseMemory, SparseMemory> sparseMemories_;
     core::Pool<VulkanPipelineCache, PipelineCache> pipelineCaches_;
+    core::Pool<VulkanAccelerationStructure, AccelerationStructure> accelerationStructures_;
+    // What one build or size query fills, made at maxBuildGeometries; one
+    // call at a time uses it, since pools record on many threads.
+    std::mutex buildLock_;
+    VulkanBuildArrays builds_;
     BindlessSlots bindless_;
     // Declared before pipelines_, which are made on it, so it outlives them.
     VulkanBindlessLayout layout_;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bfr/core/error.h"
+#include "bfr/rhi/acceleration_structure.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/format.h"
@@ -96,7 +97,7 @@ constexpr std::pair<QueueLevel, QueueLevel> rangeOf(QueueLevel /*unused*/) {
     return {QueueLevel::Normal, QueueLevel::Realtime};
 }
 constexpr std::pair<TimestampStage, TimestampStage> rangeOf(TimestampStage /*unused*/) {
-    return {TimestampStage::End, TimestampStage::Mesh};
+    return {TimestampStage::End, TimestampStage::AccelerationStructureBuild};
 }
 constexpr std::pair<TimestampGranularity, TimestampGranularity> rangeOf(TimestampGranularity /*unused*/) {
     return {TimestampGranularity::Relaxed, TimestampGranularity::Precise};
@@ -106,6 +107,16 @@ constexpr std::pair<HostClock, HostClock> rangeOf(HostClock /*unused*/) {
 }
 constexpr std::pair<TileMapping, TileMapping> rangeOf(TileMapping /*unused*/) {
     return {TileMapping::Map, TileMapping::Unmap};
+}
+constexpr std::pair<AccelerationStructureType, AccelerationStructureType> rangeOf(
+    AccelerationStructureType /*unused*/) {
+    return {AccelerationStructureType::Bottom, AccelerationStructureType::Top};
+}
+constexpr std::pair<BuildPreference, BuildPreference> rangeOf(BuildPreference /*unused*/) {
+    return {BuildPreference::None, BuildPreference::FastBuild};
+}
+constexpr std::pair<InstanceOpacity, InstanceOpacity> rangeOf(InstanceOpacity /*unused*/) {
+    return {InstanceOpacity::AsGeometry, InstanceOpacity::ForceNonOpaque};
 }
 
 /// Fails with RhiInvalidCall when value is not one its enum has, such as a
@@ -146,6 +157,26 @@ template <class Enum>
         return checked;
     }
     return checkFormat(desc.format);
+}
+
+/// Fails with RhiInvalidCall when one of inputs' enums, or a vertex format
+/// its triangles name, is not one BFR has.
+[[nodiscard]] inline core::Result<void> checkEnums(const AccelerationStructureInputs& inputs) {
+    if (auto checked = checkKnown(inputs.type, "acceleration structure type"); !checked) {
+        return checked;
+    }
+    if (auto checked = checkKnown(inputs.flags.preference, "build preference"); !checked) {
+        return checked;
+    }
+    for (const TriangleGeometry& triangles : inputs.triangles) {
+        if (auto checked = checkFormat(triangles.vertexFormat); !checked) {
+            return checked;
+        }
+        if (auto checked = checkKnown(triangles.indexType, "index type"); !checked) {
+            return checked;
+        }
+    }
+    return {};
 }
 
 /// Fails with RhiInvalidCall when desc's dimension or format is not one BFR has.

@@ -399,6 +399,51 @@ core::Result<Token> TimedDevice::updateTileMappings(const TileMappingDesc& desc)
     return counters_.time(Call::UpdateTileMappings, [&] { return device_->updateTileMappings(desc); });
 }
 
+core::Result<AccelerationStructureSizes> TimedDevice::accelerationStructureSizes(
+    const AccelerationStructureInputs& inputs) {
+    return counters_.time(Call::AccelerationStructureSizes,
+                          [&] { return device_->accelerationStructureSizes(inputs); });
+}
+
+core::Result<AccelerationStructureHandle> TimedDevice::createAccelerationStructure(
+    const AccelerationStructureDesc& desc) {
+    return counters_.time(Call::CreateAccelerationStructure,
+                          [&] { return device_->createAccelerationStructure(desc); });
+}
+
+core::Result<std::uint32_t> TimedDevice::accelerationStructureSlot(AccelerationStructureHandle structure) {
+    return counters_.time(Call::AccelerationStructureSlot,
+                          [&] { return device_->accelerationStructureSlot(structure); });
+}
+
+core::Result<std::uint64_t> TimedDevice::accelerationStructureReference(AccelerationStructureHandle structure) {
+    return counters_.time(Call::AccelerationStructureReference,
+                          [&] { return device_->accelerationStructureReference(structure); });
+}
+
+core::Result<void> TimedDevice::destroyAccelerationStructure(AccelerationStructureHandle structure) {
+    return counters_.time(Call::DestroyAccelerationStructure,
+                          [&] { return device_->destroyAccelerationStructure(structure); });
+}
+
+core::Result<void> TimedDevice::writeInstances(std::span<const AccelerationStructureInstance> instances,
+                                               std::span<std::byte> out) {
+    return counters_.time(Call::WriteInstances, [&] { return device_->writeInstances(instances, out); });
+}
+
+core::Result<void> TimedDevice::buildAccelerationStructure(CommandListHandle commandList,
+                                                           const AccelerationStructureBuild& build) {
+    return counters_.time(Call::BuildAccelerationStructure,
+                          [&] { return device_->buildAccelerationStructure(commandList, build); });
+}
+
+core::Result<void> TimedDevice::copyAccelerationStructure(CommandListHandle commandList,
+                                                          AccelerationStructureHandle dst,
+                                                          AccelerationStructureHandle src) {
+    return counters_.time(Call::CopyAccelerationStructure,
+                          [&] { return device_->copyAccelerationStructure(commandList, dst, src); });
+}
+
 core::Result<void> TimedDevice::callTimings(std::span<CallTiming> timings) const {
     counters_.write(timings);
     return {};

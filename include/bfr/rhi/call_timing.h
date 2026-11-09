@@ -88,10 +88,18 @@ enum class Call : std::uint32_t {
     DrawMesh = 74,
     DrawMeshIndirect = 75,
     DrawMeshIndirectCount = 76,
+    AccelerationStructureSizes = 77,
+    CreateAccelerationStructure = 78,
+    AccelerationStructureSlot = 79,
+    AccelerationStructureReference = 80,
+    DestroyAccelerationStructure = 81,
+    WriteInstances = 82,
+    BuildAccelerationStructure = 83,
+    CopyAccelerationStructure = 84,
 };
 
 /// How many values Call has.
-inline constexpr std::size_t kCallCount = 77;
+inline constexpr std::size_t kCallCount = 85;
 
 /// The CPU time one kind of call has taken, read from std::chrono::steady_clock
 /// around each call: how many there were, their nanoseconds in all, and the

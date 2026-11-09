@@ -105,6 +105,9 @@ core::Result<std::unique_ptr<Device>> MetalInstance::createDevice(std::size_t ad
     if (auto checked = checkLimits(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkTables(desc, adapters_[adapter].caps.bindless); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Any queue's command buffer can present a drawable.
     if (auto checked = checkPresentQueue(presentTo, queueCount(desc)); !checked) {
         return std::unexpected(std::move(checked.error()));

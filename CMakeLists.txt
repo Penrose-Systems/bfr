@@ -136,6 +136,7 @@ if(BFR_BACKEND_VULKAN)
         src/backends/vulkan/vulkan_pipeline_cache.cpp
         src/backends/vulkan/vulkan_sampler.cpp
         src/backends/vulkan/vulkan_sparse.cpp
+        src/backends/vulkan/vulkan_acceleration_structure.cpp
         src/backends/vulkan/vulkan_timestamp.cpp
         src/backends/vulkan/vulkan_commands.cpp
         src/backends/vulkan/vulkan_surface.cpp

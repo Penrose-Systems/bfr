@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bfr/core/error.h"
+#include "bfr/rhi/acceleration_structure.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/texture.h"
@@ -28,7 +29,8 @@ public:
           textures_(desc.maxBindlessTextures),
           storageTextures_(desc.maxBindlessStorageTextures),
           storageBuffers_(desc.maxBindlessStorageBuffers),
-          samplers_(desc.maxBindlessSamplers) {}
+          samplers_(desc.maxBindlessSamplers),
+          accelerationStructures_(desc.maxBindlessAccelerationStructures) {}
 
     /// A storage buffer slot when desc's usage is storage, else kEnd. Fails
     /// with RhiLimitReached when the table is full.
@@ -89,6 +91,37 @@ public:
 
     void giveSampler(std::uint32_t slot) { samplers_.give(slot); }
 
+    /// An acceleration structure table slot for a top structure where the
+    /// device has the table, else kEnd: shaders trace rays against top
+    /// structures only, and reach them without the table where the backend
+    /// lets them. Fails with RhiLimitReached when the table is full.
+    [[nodiscard]] core::Result<std::uint32_t> takeAccelerationStructure(AccelerationStructureType type) {
+        if (type != AccelerationStructureType::Top || desc_.maxBindlessAccelerationStructures == 0) {
+            return core::SlotChains::kEnd;
+        }
+        const auto slot = accelerationStructures_.take(1);
+        if (!slot) {
+            return core::failure(core::ErrorCode::RhiLimitReached,
+                                 "the acceleration structure table holds at most {} structures",
+                                 desc_.maxBindlessAccelerationStructures);
+        }
+        return *slot;
+    }
+
+    void giveAccelerationStructure(std::uint32_t slot) { accelerationStructures_.give(slot); }
+
+    /// slot as accelerationStructureSlot reports it. Fails with
+    /// RhiInvalidCall for kEnd: a bottom structure, or one on a device with no
+    /// table.
+    [[nodiscard]] static core::Result<std::uint32_t> reportedStructure(std::uint32_t slot) {
+        if (slot == core::SlotChains::kEnd) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 "the acceleration structure has no slot: only top ones are in the table, on a device "
+                                 "made with one");
+        }
+        return slot;
+    }
+
     /// held as the API reports it: kNoSlot, the chains' kEnd, for a table
     /// the texture is not in.
     [[nodiscard]] static TextureSlots reported(const TextureSlotsHeld& held) {
@@ -111,6 +144,7 @@ private:
     core::SlotChains storageTextures_;
     core::SlotChains storageBuffers_;
     core::SlotChains samplers_;
+    core::SlotChains accelerationStructures_;
 };
 
 } // namespace bfr::rhi

@@ -6,6 +6,7 @@
 #include "metal/metal_device.h"
 #include "metal/metal_pipeline.h"
 #include "metal/metal_util.h"
+#include "rhi/acceleration_structure_check.h"
 #include "rhi/command_check.h"
 #include "rhi/enum_check.h"
 
@@ -440,6 +441,51 @@ core::Result<void> MetalDevice::drawMeshIndirectCount(CommandListHandle /*comman
                                                       std::uint64_t /*countOffset*/, std::uint32_t /*maxDrawCount*/,
                                                       std::uint32_t /*stride*/) {
     return noMeshDraws(features_);
+}
+
+// BFR has no Metal acceleration structures yet, and
+// Features::accelerationStructure is false until it does (owner, 2026-11-08),
+// so checkAccelerationStructures refuses every call.
+
+core::Result<AccelerationStructureSizes> MetalDevice::accelerationStructureSizes(
+    const AccelerationStructureInputs& /*inputs*/) {
+    return std::unexpected(checkAccelerationStructures(features_.accelerationStructure).error());
+}
+
+core::Result<AccelerationStructureHandle> MetalDevice::createAccelerationStructure(
+    const AccelerationStructureDesc& /*desc*/) {
+    return std::unexpected(checkAccelerationStructures(features_.accelerationStructure).error());
+}
+
+core::Result<std::uint32_t> MetalDevice::accelerationStructureSlot(AccelerationStructureHandle /*structure*/) {
+    return std::unexpected(checkAccelerationStructures(features_.accelerationStructure).error());
+}
+
+core::Result<std::uint64_t> MetalDevice::accelerationStructureReference(AccelerationStructureHandle /*structure*/) {
+    return std::unexpected(checkAccelerationStructures(features_.accelerationStructure).error());
+}
+
+core::Result<void> MetalDevice::destroyAccelerationStructure(AccelerationStructureHandle structure) {
+    if (structure.isNull()) {
+        return {};
+    }
+    return checkAccelerationStructures(features_.accelerationStructure);
+}
+
+core::Result<void> MetalDevice::writeInstances(std::span<const AccelerationStructureInstance> /*instances*/,
+                                               std::span<std::byte> /*out*/) {
+    return checkAccelerationStructures(features_.accelerationStructure);
+}
+
+core::Result<void> MetalDevice::buildAccelerationStructure(CommandListHandle /*commandList*/,
+                                                           const AccelerationStructureBuild& /*build*/) {
+    return checkAccelerationStructures(features_.accelerationStructure);
+}
+
+core::Result<void> MetalDevice::copyAccelerationStructure(CommandListHandle /*commandList*/,
+                                                          AccelerationStructureHandle /*dst*/,
+                                                          AccelerationStructureHandle /*src*/) {
+    return checkAccelerationStructures(features_.accelerationStructure);
 }
 
 } // namespace bfr::rhi::metal

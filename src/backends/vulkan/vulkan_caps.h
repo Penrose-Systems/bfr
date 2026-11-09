@@ -93,6 +93,10 @@ struct DeviceFeatures {
     /// primitiveFragmentShadingRateMeshShader, which needs fragment shading
     /// rate turned on (VUID-VkPhysicalDeviceMeshShaderFeaturesEXT-primitiveFragmentShadingRateMeshShader-07033).
     VkPhysicalDeviceMeshShaderFeaturesEXT mesh{};
+    /// Acceleration structures, with VK_KHR_deferred_host_operations, which
+    /// the extension needs and which has no struct.
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructure{};
+    VkPhysicalDeviceRayQueryFeaturesKHR rayQuery{};
     /// The extensions whose structs are chained, which the device enables.
     std::vector<const char*> enabledExtensions;
     std::uint32_t version = 0;

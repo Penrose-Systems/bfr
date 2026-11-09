@@ -84,6 +84,7 @@ struct BindlessLimits {
     std::uint32_t maxUniformBuffers = 0;
     std::uint32_t maxSamplers = 0;
     std::uint32_t maxPerStage = 0;
+    std::uint32_t maxAccelerationStructures = 0;
 };
 
 /// Dimensions of a workgroup.
@@ -137,10 +138,15 @@ struct RayTracingLimits {
     std::uint32_t handleSize = 0;
     std::uint32_t handleAlignment = 0;
     std::uint32_t tableAlignment = 0;
+    /// The bytes of one record Device::writeInstances writes.
+    std::uint32_t instanceSize = 0;
 };
 
 struct Features {
+    /// Rays traced inline from compute shaders.
     bool rayQuery = false;
+    /// Rays traced inline from vertex, fragment, task and mesh shaders.
+    bool rayQueryGraphics = false;
     bool rayTracingPipeline = false;
     bool accelerationStructure = false;
     bool meshShader = false;
@@ -290,6 +296,8 @@ struct TimestampStages {
     bool copy = false;
     bool task = false;
     bool mesh = false;
+    bool rayTracing = false;
+    bool accelerationStructureBuild = false;
 };
 
 /// The HostClock values calibrateTimestamps reads beside a GPU timestamp.
@@ -417,6 +425,8 @@ struct FormatCaps {
     /// formats in a rendering and by Device::resolveTexture, depth and stencil
     /// formats in a rendering, by the modes ResolveCaps names.
     bool resolve = false;
+    /// TriangleGeometry::vertexFormat takes it.
+    bool accelerationStructureVertices = false;
 };
 
 struct SwapchainCaps {

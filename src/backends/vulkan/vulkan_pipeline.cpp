@@ -51,7 +51,9 @@ namespace {
 constexpr std::uint32_t kSampleMaskBits = std::numeric_limits<VkSampleMask>::digits;
 
 constexpr std::uint32_t kBindlessSet = 0;
-constexpr std::uint32_t kBindingCount = 4;
+// The four tables every device has, and the acceleration structure table.
+constexpr std::uint32_t kCoreBindings = 4;
+constexpr std::uint32_t kBindingCount = 5;
 constexpr VkDescriptorBindingFlags kTableFlags = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
                                                  VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
 
@@ -61,7 +63,7 @@ struct Table {
     std::uint32_t count;
 };
 
-// The four tables, in binding order, sized as desc asks.
+// The tables, in binding order, sized as desc asks.
 std::array<Table, kBindingCount> tablesFor(const DeviceDesc& desc) {
     return {{
         {.binding = kSampledTextureBinding,
@@ -74,6 +76,9 @@ std::array<Table, kBindingCount> tablesFor(const DeviceDesc& desc) {
          .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
          .count = desc.maxBindlessStorageBuffers},
         {.binding = kSamplerBinding, .type = VK_DESCRIPTOR_TYPE_SAMPLER, .count = desc.maxBindlessSamplers},
+        {.binding = kAccelerationStructureBinding,
+         .type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+         .count = desc.maxBindlessAccelerationStructures},
     }};
 }
 
@@ -305,14 +310,18 @@ VkPipelineColorBlendAttachmentState blendFor(const BlendState& blend) {
 } // namespace
 
 core::Result<VulkanBindlessLayout> VulkanBindlessLayout::create(const VolkDeviceTable& table, VkDevice device,
-                                                                const DeviceDesc& desc,
-                                                                std::uint32_t pushConstantsSize) {
+                                                                const DeviceDesc& desc, std::uint32_t pushConstantsSize,
+                                                                bool accelerationStructures) {
+    // The acceleration structure table's type exists only with its
+    // extension, and its update after bind only with its feature, so a device
+    // without them has no such binding; checkTables refused slots for it.
+    const std::uint32_t bindingCount = accelerationStructures ? kBindingCount : kCoreBindings;
     const std::array<Table, kBindingCount> tables = tablesFor(desc);
     std::array<VkDescriptorSetLayoutBinding, kBindingCount> bindings{};
     std::array<VkDescriptorBindingFlags, kBindingCount> flags{};
     std::array<VkDescriptorPoolSize, kBindingCount> sizes{};
     std::uint32_t sizeCount = 0;
-    for (std::size_t i = 0; i < kBindingCount; ++i) {
+    for (std::size_t i = 0; i < bindingCount; ++i) {
         bindings.at(i) = {.binding = tables.at(i).binding,
                           .descriptorType = tables.at(i).type,
                           .descriptorCount = tables.at(i).count,
@@ -326,13 +335,13 @@ core::Result<VulkanBindlessLayout> VulkanBindlessLayout::create(const VolkDevice
     }
     VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlags{};
     bindingFlags.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-    bindingFlags.bindingCount = kBindingCount;
+    bindingFlags.bindingCount = bindingCount;
     bindingFlags.pBindingFlags = flags.data();
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.pNext = &bindingFlags;
     layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    layoutInfo.bindingCount = kBindingCount;
+    layoutInfo.bindingCount = bindingCount;
     layoutInfo.pBindings = bindings.data();
 
     // The API says first whether it can hold a set this large; the per-type
@@ -344,9 +353,9 @@ core::Result<VulkanBindlessLayout> VulkanBindlessLayout::create(const VolkDevice
     if (support.supported == VK_FALSE) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              "the adapter cannot hold bindless tables of {} textures, {} storage textures, {} "
-                             "storage buffers and {} samplers together",
+                             "storage buffers, {} samplers and {} acceleration structures together",
                              desc.maxBindlessTextures, desc.maxBindlessStorageTextures, desc.maxBindlessStorageBuffers,
-                             desc.maxBindlessSamplers);
+                             desc.maxBindlessSamplers, desc.maxBindlessAccelerationStructures);
     }
 
     VulkanBindlessLayout made;
@@ -439,6 +448,17 @@ void VulkanBindlessLayout::writeSampler(std::uint32_t slot, VkSampler sampler) c
                                      .imageLayout = VK_IMAGE_LAYOUT_UNDEFINED};
     VkWriteDescriptorSet write = writeFor(set_, kSamplerBinding, slot, VK_DESCRIPTOR_TYPE_SAMPLER);
     write.pImageInfo = &info;
+    table_->vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+}
+
+void VulkanBindlessLayout::writeAccelerationStructure(std::uint32_t slot, VkAccelerationStructureKHR structure) const {
+    VkWriteDescriptorSetAccelerationStructureKHR named{};
+    named.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+    named.accelerationStructureCount = 1;
+    named.pAccelerationStructures = &structure;
+    VkWriteDescriptorSet write = writeFor(set_, kAccelerationStructureBinding, slot,
+                                          VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
+    write.pNext = &named;
     table_->vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
 }
 

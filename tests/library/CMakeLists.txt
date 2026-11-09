@@ -75,6 +75,7 @@ add_executable(bfr_tests
     rhi/test_frame_allocations.cpp
     rhi/test_instance.cpp
     rhi/test_pipeline.cpp
+    rhi/test_ray_tracing.cpp
     rhi/test_draw.cpp
     rhi/test_present.cpp
     rhi/test_sampler.cpp

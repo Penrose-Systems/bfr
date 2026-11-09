@@ -16,6 +16,7 @@
 
 #include <vulkan/vulkan_core.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -37,7 +38,19 @@ VkBufferUsageFlags usageFor(const BufferUsage& usage) {
            flag(usage.uniform, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT) |
            flag(usage.storage, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) |
            flag(usage.index, VK_BUFFER_USAGE_INDEX_BUFFER_BIT) |
-           flag(usage.indirect, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
+           flag(usage.indirect, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT) |
+           // Builds read their inputs and scratch by address; scratch is a
+           // storage buffer (VUID-vkCmdBuildAccelerationStructuresKHR-pInfos-12260, -12261).
+           flag(usage.accelerationStructureInput,
+                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR) |
+           flag(usage.accelerationStructureInput || usage.accelerationStructureScratch,
+                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) |
+           flag(usage.accelerationStructureScratch, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+}
+
+VkDeviceSize alignmentFor(const BufferUsage& usage, const BufferAlignments& alignments) {
+    return std::max(usage.accelerationStructureScratch ? alignments.scratch : 0,
+                    usage.accelerationStructureInput ? alignments.input : 0);
 }
 
 // The memory properties each BufferMemory requires, and the ones it would
@@ -63,10 +76,29 @@ MemoryProperties propertiesFor(BufferMemory memory) {
     return {};
 }
 
+// A buffer's create info, shared by the queue families in families when
+// there is more than one, so any of the device's queues may use it without
+// an ownership transfer. It points into families.
+VkBufferCreateInfo bufferInfo(VkDeviceSize size, VkBufferUsageFlags usage, std::span<const std::uint32_t> families) {
+    VkBufferCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    info.size = size;
+    info.usage = usage;
+    if (families.size() > 1) {
+        info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+        info.queueFamilyIndexCount = static_cast<std::uint32_t>(families.size());
+        info.pQueueFamilyIndices = families.data();
+    }
+    else {
+        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
+    return info;
+}
+
 } // namespace
 
 core::Result<VmaAllocator> createAllocator(VkInstance instance, VkPhysicalDevice adapter, VkDevice device,
-                                           std::uint32_t apiVersion) {
+                                           std::uint32_t apiVersion, bool deviceAddresses) {
     VmaVulkanFunctions functions{};
     functions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
     functions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
@@ -76,6 +108,9 @@ core::Result<VmaAllocator> createAllocator(VkInstance instance, VkPhysicalDevice
     info.instance = instance;
     info.vulkanApiVersion = apiVersion;
     info.pVulkanFunctions = &functions;
+    if (deviceAddresses) {
+        info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+    }
     VmaAllocator allocator = VK_NULL_HANDLE;
     if (const VkResult result = vmaCreateAllocator(&info, &allocator); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vmaCreateAllocator", .result = result});
@@ -84,8 +119,14 @@ core::Result<VmaAllocator> createAllocator(VkInstance instance, VkPhysicalDevice
 }
 
 VulkanBuffer::VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, VmaAllocation allocation, BufferMemory memory,
-                           std::span<std::byte> mapped, std::uint32_t slot)
-    : allocator_(allocator), buffer_(buffer), allocation_(allocation), memory_(memory), mapped_(mapped), slot_(slot) {}
+                           std::span<std::byte> mapped, std::uint32_t slot, VkDeviceAddress address)
+    : allocator_(allocator),
+      buffer_(buffer),
+      allocation_(allocation),
+      memory_(memory),
+      mapped_(mapped),
+      slot_(slot),
+      address_(address) {}
 
 VulkanBuffer::VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, std::uint32_t slot,
                            const VkMemoryRequirements& sparse)
@@ -107,7 +148,8 @@ VulkanBuffer::VulkanBuffer(VulkanBuffer&& other) noexcept
       slot_(other.slot_),
       sparse_(other.sparse_),
       tileBytes_(other.tileBytes_),
-      memoryTypes_(other.memoryTypes_) {}
+      memoryTypes_(other.memoryTypes_),
+      address_(other.address_) {}
 
 VulkanBuffer::~VulkanBuffer() {
     if (buffer_ != VK_NULL_HANDLE) {
@@ -115,9 +157,43 @@ VulkanBuffer::~VulkanBuffer() {
     }
 }
 
+core::Result<VulkanBuffer> placeVulkanBuffer(const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator,
+                                             VkDeviceSize size, VkBufferUsageFlags usage, BufferMemory memory,
+                                             std::span<const std::uint32_t> families, VkDeviceSize alignment,
+                                             std::uint32_t slot) {
+    VkBufferCreateInfo info = bufferInfo(size, usage, families);
+    VmaAllocationCreateInfo allocation{};
+    const MemoryProperties properties = propertiesFor(memory);
+    allocation.requiredFlags = properties.required;
+    allocation.preferredFlags = properties.preferred;
+    if (memory != BufferMemory::Device) {
+        allocation.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    }
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VmaAllocation made = VK_NULL_HANDLE;
+    VmaAllocationInfo placed{};
+    if (const VkResult result = vmaCreateBufferWithAlignment(allocator, &info, &allocation, alignment, &buffer, &made,
+                                                             &placed);
+        result != VK_SUCCESS) {
+        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vmaCreateBufferWithAlignment", .result = result});
+    }
+    std::span<std::byte> mapped;
+    if (placed.pMappedData != nullptr) {
+        mapped = {static_cast<std::byte*>(placed.pMappedData), static_cast<std::size_t>(size)};
+    }
+    VkDeviceAddress address = 0;
+    if ((usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0) {
+        VkBufferDeviceAddressInfo named{};
+        named.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+        named.buffer = buffer;
+        address = table.vkGetBufferDeviceAddress(device, &named);
+    }
+    return VulkanBuffer{allocator, buffer, made, memory, mapped, slot, address};
+}
+
 core::Result<VulkanBuffer> createVulkanBuffer(const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator,
                                               const BufferDesc& desc, std::span<const std::uint32_t> families,
-                                              std::uint32_t slot) {
+                                              const BufferAlignments& alignments, std::uint32_t slot) {
     if (desc.sparse && desc.memory != BufferMemory::Device) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "a sparse buffer's memory is the sparse memory mapped into it, so it is device");
@@ -126,50 +202,22 @@ core::Result<VulkanBuffer> createVulkanBuffer(const VolkDeviceTable& table, VkDe
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "Vulkan sets a sparse buffer's tile size itself; tileBytes is 0");
     }
-    VkBufferCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    info.size = desc.size;
-    info.usage = usageFor(desc.usage);
-    if (families.size() > 1) {
-        info.sharingMode = VK_SHARING_MODE_CONCURRENT;
-        info.queueFamilyIndexCount = static_cast<std::uint32_t>(families.size());
-        info.pQueueFamilyIndices = families.data();
+    if (!desc.sparse) {
+        return placeVulkanBuffer(table, device, allocator, desc.size, usageFor(desc.usage), desc.memory, families,
+                                 alignmentFor(desc.usage, alignments), slot);
     }
-    else {
-        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    }
-    if (desc.sparse) {
-        // Bound tile by tile, partly resident, and aliased where asked; no
-        // memory is placed now.
-        info.flags = VK_BUFFER_CREATE_SPARSE_BINDING_BIT | VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT |
-                     (desc.sparseAliased ? VkBufferCreateFlags{VK_BUFFER_CREATE_SPARSE_ALIASED_BIT} : 0U);
-        VkBuffer buffer = VK_NULL_HANDLE;
-        if (const VkResult result = table.vkCreateBuffer(device, &info, nullptr, &buffer); result != VK_SUCCESS) {
-            return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateBuffer", .result = result});
-        }
-        VkMemoryRequirements requirements{};
-        table.vkGetBufferMemoryRequirements(device, buffer, &requirements);
-        return VulkanBuffer{allocator, buffer, slot, requirements};
-    }
-    VmaAllocationCreateInfo allocation{};
-    const MemoryProperties properties = propertiesFor(desc.memory);
-    allocation.requiredFlags = properties.required;
-    allocation.preferredFlags = properties.preferred;
-    if (desc.memory != BufferMemory::Device) {
-        allocation.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
-    }
+    // Bound tile by tile, partly resident, and aliased where asked; no
+    // memory is placed now.
+    VkBufferCreateInfo info = bufferInfo(desc.size, usageFor(desc.usage), families);
+    info.flags = VK_BUFFER_CREATE_SPARSE_BINDING_BIT | VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT |
+                 (desc.sparseAliased ? VkBufferCreateFlags{VK_BUFFER_CREATE_SPARSE_ALIASED_BIT} : 0U);
     VkBuffer buffer = VK_NULL_HANDLE;
-    VmaAllocation made = VK_NULL_HANDLE;
-    VmaAllocationInfo placed{};
-    if (const VkResult result = vmaCreateBuffer(allocator, &info, &allocation, &buffer, &made, &placed);
-        result != VK_SUCCESS) {
-        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vmaCreateBuffer", .result = result});
+    if (const VkResult result = table.vkCreateBuffer(device, &info, nullptr, &buffer); result != VK_SUCCESS) {
+        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateBuffer", .result = result});
     }
-    std::span<std::byte> mapped;
-    if (placed.pMappedData != nullptr) {
-        mapped = {static_cast<std::byte*>(placed.pMappedData), static_cast<std::size_t>(desc.size)};
-    }
-    return VulkanBuffer{allocator, buffer, made, desc.memory, mapped, slot};
+    VkMemoryRequirements requirements{};
+    table.vkGetBufferMemoryRequirements(device, buffer, &requirements);
+    return VulkanBuffer{allocator, buffer, slot, requirements};
 }
 
 // The device's buffer calls, beside the buffers they make.
@@ -196,6 +244,9 @@ void VulkanDevice::collectBuffers() {
     timestampPools_.collect(completed);
     sparseMemories_.collect(completed);
     pipelines_.collect(completed);
+    accelerationStructures_.collect(completed, [this](const VulkanAccelerationStructure& structure) {
+        bindless_.giveAccelerationStructure(structure.slot());
+    });
 }
 
 core::Result<BufferHandle> VulkanDevice::createBuffer(const BufferDesc& desc) {
@@ -209,7 +260,7 @@ core::Result<BufferHandle> VulkanDevice::createBuffer(const BufferDesc& desc) {
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
     }
-    auto made = createVulkanBuffer(table_, device_, allocator_, desc, families_, *slot);
+    auto made = createVulkanBuffer(table_, device_, allocator_, desc, families_, alignments_, *slot);
     if (!made) {
         bindless_.giveBuffer(*slot);
         return std::unexpected(std::move(made.error()));

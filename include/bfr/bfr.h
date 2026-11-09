@@ -45,6 +45,13 @@ typedef uint8_t bfr_bool;
 // this high.
 #define BFR_NO_SLOT 4294967295u
 
+// Instance custom indices and hit group offsets are below this: every backend's record holds them
+// in 24 bits.
+#define BFR_INSTANCE_INDEX_LIMIT 16777216u
+
+// The floats of a 3x4 row-major transform.
+#define BFR_TRANSFORM_FLOATS 12u
+
 // The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".
 #define BFR_MAX_MESSAGE_LENGTH 1024u
 
@@ -485,6 +492,14 @@ typedef enum bfr_call {
     BFR_CALL_DRAW_MESH = 74,
     BFR_CALL_DRAW_MESH_INDIRECT = 75,
     BFR_CALL_DRAW_MESH_INDIRECT_COUNT = 76,
+    BFR_CALL_ACCELERATION_STRUCTURE_SIZES = 77,
+    BFR_CALL_CREATE_ACCELERATION_STRUCTURE = 78,
+    BFR_CALL_ACCELERATION_STRUCTURE_SLOT = 79,
+    BFR_CALL_ACCELERATION_STRUCTURE_REFERENCE = 80,
+    BFR_CALL_DESTROY_ACCELERATION_STRUCTURE = 81,
+    BFR_CALL_WRITE_INSTANCES = 82,
+    BFR_CALL_BUILD_ACCELERATION_STRUCTURE = 83,
+    BFR_CALL_COPY_ACCELERATION_STRUCTURE = 84,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -507,6 +522,10 @@ typedef enum bfr_timestamp_stage {
     BFR_TIMESTAMP_STAGE_TASK = 6,
     // Once the mesh shading recorded before it is done.
     BFR_TIMESTAMP_STAGE_MESH = 7,
+    // Once the ray tracing shading recorded before it is done.
+    BFR_TIMESTAMP_STAGE_RAY_TRACING = 8,
+    // Once the acceleration structure builds and copies recorded before it are done.
+    BFR_TIMESTAMP_STAGE_ACCELERATION_STRUCTURE_BUILD = 9,
     BFR_TIMESTAMP_STAGE_FORCE32 = 0x7FFFFFFF
 } bfr_timestamp_stage;
 
@@ -820,6 +839,32 @@ typedef enum bfr_sampler_reduction {
     BFR_SAMPLER_REDUCTION_FORCE32 = 0x7FFFFFFF
 } bfr_sampler_reduction;
 
+// What an acceleration structure holds.
+typedef enum bfr_acceleration_structure_type {
+    // Triangles or boxes.
+    BFR_ACCELERATION_STRUCTURE_TYPE_BOTTOM = 0,
+    // Instances of bottom structures; what shaders trace rays against.
+    BFR_ACCELERATION_STRUCTURE_TYPE_TOP = 1,
+    BFR_ACCELERATION_STRUCTURE_TYPE_FORCE32 = 0x7FFFFFFF
+} bfr_acceleration_structure_type;
+
+// What an acceleration structure build favours; passed to the backend as given.
+typedef enum bfr_build_preference {
+    BFR_BUILD_PREFERENCE_NONE = 0,
+    BFR_BUILD_PREFERENCE_FAST_TRACE = 1,
+    BFR_BUILD_PREFERENCE_FAST_BUILD = 2,
+    BFR_BUILD_PREFERENCE_FORCE32 = 0x7FFFFFFF
+} bfr_build_preference;
+
+// How an instance's geometry counts as opaque.
+typedef enum bfr_instance_opacity {
+    // As each geometry says.
+    BFR_INSTANCE_OPACITY_AS_GEOMETRY = 0,
+    BFR_INSTANCE_OPACITY_FORCE_OPAQUE = 1,
+    BFR_INSTANCE_OPACITY_FORCE_NON_OPAQUE = 2,
+    BFR_INSTANCE_OPACITY_FORCE32 = 0x7FFFFFFF
+} bfr_instance_opacity;
+
 // Which window system a bfr_window comes from, for the platforms that have more than one.
 typedef enum bfr_window_system {
     // The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -902,9 +947,12 @@ typedef struct bfr_texture {
 // buffer at buffer(0), holding the sampled textures, storage textures, storage buffers and samplers
 // in that order, each a region of as many 8-byte entries as the bfr_device_desc's max_bindless
 // member for its kind, so a shader declares them with the sizes the device was opened with; the
-// push constants are at buffer(1). Uniform buffers have no table: not every backend's minimum has
-// them. A pipeline's shaders are bytecode for the backend the device runs on. A generational
-// handle; 0 is never valid.
+// push constants are at buffer(1). Where bfr_caps_bindless.max_acceleration_structures is not 0
+// there is a fifth table, of top acceleration structures, by the slot
+// bfr_get_acceleration_structure_slot reports: on Vulkan binding 4, acceleration structures, as the
+// others are. D3D12 and Metal have none yet. Uniform buffers have no table: not every backend's
+// minimum has them. A pipeline's shaders are bytecode for the backend the device runs on. A
+// generational handle; 0 is never valid.
 typedef struct bfr_pipeline {
     uint64_t bits;
 } bfr_pipeline;
@@ -926,6 +974,13 @@ typedef struct bfr_timestamp_pool {
 typedef struct bfr_sparse_memory {
     uint64_t bits;
 } bfr_sparse_memory;
+
+// Geometry or instances arranged for rays to be traced against, in memory the device allocates. A
+// bottom structure holds triangles or boxes; a top one holds instances of bottom ones, and is what
+// shaders trace rays against. A generational handle; 0 is never valid.
+typedef struct bfr_acceleration_structure {
+    uint64_t bits;
+} bfr_acceleration_structure;
 
 // Pipelines the backend has compiled, which it reads back as bytes for a later run to start from.
 // Pipelines made with one look in it first and add themselves on a miss. A generational handle; 0
@@ -1072,6 +1127,16 @@ typedef struct bfr_device_desc {
     // for them is made with the device, so mapping never allocates. More fails with
     // error_invalid_argument. 0 is none.
     uint32_t max_tile_mappings;
+    // Slots in the acceleration structure table, of top structures, passed as max_bindless_textures
+    // is; bfr_caps_bindless.max_acceleration_structures says how many the adapter holds. Where that
+    // is 0 the device has no such table, and more than 0 fails with error_limit_reached. With 0
+    // slots, top structures are made with none.
+    uint32_t max_bindless_acceleration_structures;
+    // The most geometries one build takes, in bfr_build_acceleration_structure and
+    // bfr_get_acceleration_structure_sizes; a top structure's instances are one geometry. Room for
+    // them is made with the device, so building never allocates. More fails with
+    // error_limit_reached. 0 is none.
+    uint32_t max_build_geometries;
     // The strides, in bytes, the device's indirect draws take, read during the call only. D3D12
     // fixes a stride in the command signature it makes for them, so it makes one for each here and
     // fails an indirect draw of any other with error_unsupported; Vulkan and Metal take any stride.
@@ -1234,6 +1299,12 @@ typedef struct bfr_buffer_usage {
     bfr_bool index;
     // Indirect draws and dispatches read their arguments from it.
     bfr_bool indirect;
+    // Acceleration structure builds read vertices, indices, transforms, boxes or instances from it.
+    // It starts at an address of the alignment those take.
+    bfr_bool acceleration_structure_input;
+    // Acceleration structure builds use it as scratch. It starts at an address that is a multiple
+    // of bfr_caps_ray_tracing.scratch_alignment.
+    bfr_bool acceleration_structure_scratch;
 } bfr_buffer_usage;
 
 // How to create a buffer.
@@ -1740,6 +1811,125 @@ typedef struct bfr_tile_mapping_desc {
     uint32_t buffer_region_count;
 } bfr_tile_mapping_desc;
 
+// How an acceleration structure is built.
+typedef struct bfr_acceleration_structure_flags {
+    // 0 is none.
+    bfr_build_preference preference;
+    // Later builds may update the structure.
+    bfr_bool allow_update;
+    bfr_bool minimize_memory;
+} bfr_acceleration_structure_flags;
+
+// Triangles in a bottom acceleration structure. A null indices is none: triangle_count * 3 vertices
+// are read in order. A null transform is none; else a 3x4 row-major float matrix at
+// transform_offset, a multiple of 16. vertex_format is one
+// bfr_format_caps.acceleration_structure_vertices is true for; vertex_offset and vertex_stride are
+// multiples of its component size, index_offset of the index size. The buffers have
+// acceleration_structure_input usage.
+typedef struct bfr_triangle_geometry {
+    bfr_buffer vertices;
+    // Bytes into vertices.
+    uint64_t vertex_offset;
+    bfr_format vertex_format;
+    // Bytes between two vertices.
+    uint32_t vertex_stride;
+    uint32_t vertex_count;
+    bfr_buffer indices;
+    // Bytes into indices.
+    uint64_t index_offset;
+    bfr_index_type index_type;
+    uint32_t triangle_count;
+    bfr_buffer transform;
+    // Bytes into transform.
+    uint64_t transform_offset;
+    bfr_bool opaque;
+    bfr_bool no_duplicate_any_hit;
+} bfr_triangle_geometry;
+
+// Boxes in a bottom acceleration structure: six floats each, min xyz then max xyz, min at most max,
+// stride bytes apart; offset and stride multiples of 8. The buffer has acceleration_structure_input
+// usage.
+typedef struct bfr_box_geometry {
+    bfr_buffer boxes;
+    // Bytes into boxes.
+    uint64_t offset;
+    uint32_t stride;
+    uint32_t count;
+    bfr_bool opaque;
+    bfr_bool no_duplicate_any_hit;
+} bfr_box_geometry;
+
+// What an acceleration structure is built from. A bottom one holds triangles or boxes, not both; a
+// geometry's index in its array is the geometry index a hit group is chosen by. A top one holds
+// instance_count instance records from instance_offset, a multiple of 16, in instances, which has
+// acceleration_structure_input usage, laid out as bfr_write_instances writes them.
+// bfr_get_acceleration_structure_sizes reads the counts, formats, flags and whether a transform is
+// given.
+typedef struct bfr_acceleration_structure_inputs {
+    // 0 is bottom.
+    bfr_acceleration_structure_type type;
+    bfr_acceleration_structure_flags flags;
+    // Read during the call only. An array of triangle_count elements. May be null.
+    const bfr_triangle_geometry* triangles;
+    uint32_t triangle_count;
+    // Read during the call only. An array of box_count elements. May be null.
+    const bfr_box_geometry* boxes;
+    uint32_t box_count;
+    bfr_buffer instances;
+    // Bytes into instances.
+    uint64_t instance_offset;
+    uint32_t instance_count;
+} bfr_acceleration_structure_inputs;
+
+// The bytes an acceleration structure takes, and the scratch bytes its build and its update take.
+typedef struct bfr_acceleration_structure_sizes {
+    uint64_t size;
+    uint64_t build_scratch;
+    uint64_t update_scratch;
+} bfr_acceleration_structure_sizes;
+
+// How to create an acceleration structure of size bytes, in memory the device allocates.
+typedef struct bfr_acceleration_structure_desc {
+    const bfr_chain* next;
+    // 0 is bottom.
+    bfr_acceleration_structure_type type;
+    // Bytes, as bfr_get_acceleration_structure_sizes gives them.
+    uint64_t size;
+} bfr_acceleration_structure_desc;
+
+// A build of dst, of inputs' type, from inputs; or, with update, an update of src into dst (they
+// may be the same), src built with allow_update and inputs as its last build gave them but for the
+// data the buffers hold. Scratch is scratch_offset bytes into scratch, which has
+// acceleration_structure_scratch usage, a multiple of bfr_caps_ray_tracing.scratch_alignment, at
+// least the build's or update's scratch bytes, and overlaps neither structure.
+typedef struct bfr_acceleration_structure_build {
+    bfr_acceleration_structure dst;
+    bfr_acceleration_structure src;
+    bfr_bool update;
+    bfr_acceleration_structure_inputs inputs;
+    bfr_buffer scratch;
+    // Bytes into scratch.
+    uint64_t scratch_offset;
+} bfr_acceleration_structure_build;
+
+// One instance of a bottom acceleration structure in a top one.
+typedef struct bfr_acceleration_structure_instance {
+    // 3x4 row-major object-to-world transform.
+    float transform[BFR_TRANSFORM_FLOATS];
+    // What the shader reads as the instance's custom index; below instance_index_limit.
+    uint32_t custom_index;
+    // Rays whose mask ANDs to 0 with it miss the instance.
+    uint8_t mask;
+    // The instance's offset, in records, into the hit region; below instance_index_limit.
+    uint32_t hit_group_offset;
+    bfr_bool cull_disable;
+    bfr_bool front_counter_clockwise;
+    // 0 is as each geometry says.
+    bfr_instance_opacity opacity;
+    // Null is an instance no ray hits.
+    bfr_acceleration_structure bottom_structure;
+} bfr_acceleration_structure_instance;
+
 // Which window to ask about.
 typedef struct bfr_swapchain_query {
     const bfr_chain* next;
@@ -1871,6 +2061,8 @@ typedef struct bfr_caps_bindless {
     uint32_t max_samplers;
     // All of them together that one shader stage can reach.
     uint32_t max_per_stage;
+    // Top acceleration structures; 0 where the device has no such table.
+    uint32_t max_acceleration_structures;
 } bfr_caps_bindless;
 
 // The adapter's compute limits.
@@ -1939,13 +2131,17 @@ typedef struct bfr_caps_ray_tracing {
     uint32_t handle_alignment;
     // Alignment in bytes of the table's start.
     uint32_t table_alignment;
+    // The bytes of one record bfr_write_instances writes.
+    uint32_t instance_size;
 } bfr_caps_ray_tracing;
 
 // Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and
 // not listed.
 typedef struct bfr_caps_features {
-    // Rays traced inline from any shader.
+    // Rays traced inline from compute shaders.
     bfr_bool ray_query;
+    // Rays traced inline from vertex, fragment, task and mesh shaders.
+    bfr_bool ray_query_graphics;
     // Ray tracing pipelines and shader binding tables.
     bfr_bool ray_tracing_pipeline;
     bfr_bool acceleration_structure;
@@ -2130,6 +2326,8 @@ typedef struct bfr_timestamp_stages {
     bfr_bool copy;
     bfr_bool task;
     bfr_bool mesh;
+    bfr_bool ray_tracing;
+    bfr_bool acceleration_structure_build;
 } bfr_timestamp_stages;
 
 // The bfr_host_clock values bfr_calibrate_timestamps reads beside a GPU timestamp.
@@ -2269,6 +2467,8 @@ typedef struct bfr_format_caps {
     // by bfr_resolve_texture, depth and stencil formats in a rendering, by the modes
     // bfr_caps_resolve names.
     bfr_bool resolve;
+    // bfr_triangle_geometry's vertex_format takes it.
+    bfr_bool acceleration_structure_vertices;
 } bfr_format_caps;
 
 // What a window's swapchain may be, on one adapter.
@@ -3031,6 +3231,91 @@ BFR_API bfr_result bfr_update_tile_mappings(
     bfr_device* device,
     const bfr_tile_mapping_desc* desc,
     bfr_token* token);
+
+// Writes the bytes an acceleration structure built from inputs takes, and the scratch bytes its
+// build and update take, as the backend says. Fails with error_unsupported where
+// bfr_caps_features.acceleration_structure is false, error_invalid_argument for a bottom structure
+// of both triangles and boxes or an enum value BFR doesn't have, and error_limit_reached past the
+// device's max_build_geometries.
+BFR_API bfr_result bfr_get_acceleration_structure_sizes(
+    bfr_device* device,
+    const bfr_acceleration_structure_inputs* inputs,
+    bfr_acceleration_structure_sizes* sizes);
+
+// Creates an empty acceleration structure of desc's size bytes, which a build fills. Not for the
+// frame path: it frees structures the GPU is done with. Fails with error_unsupported where
+// bfr_caps_features.acceleration_structure is false, error_invalid_argument for a size of 0 or an
+// enum value BFR doesn't have, error_limit_reached at the device's maximum or, for a top structure
+// on a device with table slots, when they are all held, error_out_of_memory when the backend says
+// memory ran out, and error_device_failed when it refuses.
+BFR_API bfr_result bfr_create_acceleration_structure(
+    bfr_device* device,
+    const bfr_acceleration_structure_desc* desc,
+    bfr_acceleration_structure* structure);
+
+// Writes a top acceleration structure's index in the acceleration structure table bfr_pipeline
+// states, held from creation to destruction. Fails with error_invalid_argument for a bottom one, or
+// on a device made with no max_bindless_acceleration_structures.
+BFR_API bfr_result bfr_get_acceleration_structure_slot(
+    bfr_device* device,
+    bfr_acceleration_structure structure,
+    uint32_t* slot);
+
+// Writes what an instance record names a bottom acceleration structure by, for records the GPU
+// writes, as bfr_write_instances lays them out.
+BFR_API bfr_result bfr_get_acceleration_structure_reference(
+    bfr_device* device,
+    bfr_acceleration_structure structure,
+    uint64_t* reference);
+
+// Destroys an acceleration structure once the GPU has passed every submit made before the call; the
+// handle is invalid at once. A top structure reads the bottom ones built into it while rays are
+// traced against it. Not for the frame path. A handle that is already destroyed does nothing.
+BFR_API void bfr_destroy_acceleration_structure(
+    bfr_device* device,
+    bfr_acceleration_structure structure);
+
+// Writes instances to data as the records a top acceleration structure is built from,
+// bfr_caps_ray_tracing.instance_size bytes each, on the CPU. On Vulkan a record is
+// VkAccelerationStructureInstanceKHR's 64 bytes: the transform's 12 floats, then the custom index
+// in the low 24 bits of a 32-bit value and the mask in its high 8, then the hit group offset in the
+// low 24 bits of another and the flags in its high 8 (1 cull disable, 2 front counter-clockwise, 4
+// force opaque, 8 force non-opaque), then the 64-bit reference
+// bfr_get_acceleration_structure_reference gives, 0 for an instance no ray hits. Fails with
+// error_unsupported where bfr_caps_features.acceleration_structure is false, error_invalid_argument
+// when size is too small, an index or offset is instance_index_limit or above, an enum value BFR
+// doesn't have, or an instance names a top structure, and error_invalid_handle for a structure that
+// is gone.
+// instances: An array of instance_count elements. May be null.
+// data: Where the records go.
+// size: Bytes of data.
+BFR_API bfr_result bfr_write_instances(
+    bfr_device* device,
+    const bfr_acceleration_structure_instance* instances,
+    uint32_t instance_count,
+    void* data,
+    size_t size);
+
+// Records build, outside rendering, on a queue whose kind runs compute. A barrier orders the work
+// that wrote its inputs before it, and its readers and any reuse of its scratch after. Fails with
+// error_unsupported where bfr_caps_features.acceleration_structure is false or on a copy queue,
+// error_invalid_argument for inputs bfr_get_acceleration_structure_sizes refuses or of a type
+// unlike its structure's, error_limit_reached past the device's max_build_geometries, and
+// error_invalid_handle for a structure or buffer that is gone.
+BFR_API bfr_result bfr_build_acceleration_structure(
+    bfr_device* device,
+    bfr_command_list command_list,
+    const bfr_acceleration_structure_build* build);
+
+// Records a copy of src into dst, of the same type and size, not overlapping, as builds are
+// recorded. Fails with error_unsupported as bfr_build_acceleration_structure does,
+// error_invalid_argument for structures of different types or sizes, and error_invalid_handle for a
+// structure that is gone.
+BFR_API bfr_result bfr_copy_acceleration_structure(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_acceleration_structure dst,
+    bfr_acceleration_structure src);
 
 // Lists the CPU time spent in each of the device's calls since it was made, indexed by bfr_call.
 // With timings null, writes how many there are to count. Otherwise writes up to count of them, sets

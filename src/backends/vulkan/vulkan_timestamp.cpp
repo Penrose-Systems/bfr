@@ -36,6 +36,11 @@ VkPipelineStageFlags2 stageFor(TimestampStage stage) {
             return VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT;
         case TimestampStage::Mesh:
             return VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT;
+        case TimestampStage::RayTracing:
+            return VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+        // Builds and copies both (synchronization.adoc:428-431).
+        case TimestampStage::AccelerationStructureBuild:
+            return VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
         case TimestampStage::End:
         default:
             return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;

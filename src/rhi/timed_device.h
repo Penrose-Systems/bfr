@@ -179,6 +179,21 @@ public:
     [[nodiscard]] core::Result<BufferTiling> bufferTiling(BufferHandle buffer) override;
     [[nodiscard]] core::Result<SparseFormat> sparseFormat(const SparseFormatDesc& desc) const override;
     [[nodiscard]] core::Result<Token> updateTileMappings(const TileMappingDesc& desc) override;
+    [[nodiscard]] core::Result<AccelerationStructureSizes> accelerationStructureSizes(
+        const AccelerationStructureInputs& inputs) override;
+    [[nodiscard]] core::Result<AccelerationStructureHandle> createAccelerationStructure(
+        const AccelerationStructureDesc& desc) override;
+    [[nodiscard]] core::Result<std::uint32_t> accelerationStructureSlot(AccelerationStructureHandle structure) override;
+    [[nodiscard]] core::Result<std::uint64_t> accelerationStructureReference(
+        AccelerationStructureHandle structure) override;
+    [[nodiscard]] core::Result<void> destroyAccelerationStructure(AccelerationStructureHandle structure) override;
+    [[nodiscard]] core::Result<void> writeInstances(std::span<const AccelerationStructureInstance> instances,
+                                                    std::span<std::byte> out) override;
+    [[nodiscard]] core::Result<void> buildAccelerationStructure(CommandListHandle commandList,
+                                                                const AccelerationStructureBuild& build) override;
+    [[nodiscard]] core::Result<void> copyAccelerationStructure(CommandListHandle commandList,
+                                                               AccelerationStructureHandle dst,
+                                                               AccelerationStructureHandle src) override;
     [[nodiscard]] core::Result<void> callTimings(std::span<CallTiming> timings) const override;
 
 private:

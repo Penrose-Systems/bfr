@@ -1,6 +1,7 @@
 #include "allocation/allocation_counter.h"
 #include "bfr/core/error.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/acceleration_structure.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
@@ -189,6 +190,124 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
         CHECK(device->destroyBuffer(*source).has_value());
         CHECK(device->destroyBuffer(*target).has_value());
         CHECK(device->destroyTexture(*texture).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+// A top structure rebuilt each frame from instances written that frame, as a
+// scene that moves does it, and its bottom one with it.
+TEST_CASE("Device allocates nothing building acceleration structures frame after frame", "[rhi][agnostic]") {
+    if (!bfr::test::AllocationCounter::counts()) {
+        SKIP("a sanitizer replaces operator new, so allocations are not counted");
+    }
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        auto created = createInstance(recordingInto(backend, messages), RhiConfig{});
+        INFO(failureOf(created));
+        REQUIRE(created.has_value());
+        const std::unique_ptr<Instance> instance = std::move(*created);
+        const Caps& caps = instance->adapters()[0].caps;
+        if (!caps.features.accelerationStructure) {
+            SKIP("the adapter has no acceleration structures");
+        }
+        auto made = instance->createDevice(0, bfr::core::window::NativeWindow{},
+                                           testDeviceWith([](DeviceDesc& desc) { desc.maxBuildGeometries = 1; }));
+        INFO(failureOf(made));
+        REQUIRE(made.has_value());
+        Device& device = **made;
+        constexpr std::uint32_t kVertexFloats = 3;
+        constexpr std::array<float, kVertexFloats * 3> kTriangle{-1, -1, 0, 1, -1, 0, 0, 1, 0};
+        const auto vertices = device.createBuffer(
+            {.size = sizeof(kTriangle), .memory = BufferMemory::Upload, .usage = {.accelerationStructureInput = true}});
+        REQUIRE(vertices.has_value());
+        const auto instances = device.createBuffer({.size = caps.rayTracing.instanceSize,
+                                                    .memory = BufferMemory::Upload,
+                                                    .usage = {.accelerationStructureInput = true}});
+        REQUIRE(instances.has_value());
+        const TriangleGeometry triangle{.vertices = *vertices,
+                                        .vertexFormat = Format::Rgb32Float,
+                                        .vertexStride = kVertexFloats * sizeof(float),
+                                        .vertexCount = 3,
+                                        .triangleCount = 1,
+                                        .opaque = true};
+        const AccelerationStructureInputs bottomInputs{.triangles = std::span{&triangle, 1}};
+        const AccelerationStructureInputs topInputs{.type = AccelerationStructureType::Top,
+                                                    .instances = *instances,
+                                                    .instanceCount = 1};
+        const auto bottomSizes = device.accelerationStructureSizes(bottomInputs);
+        const auto topSizes = device.accelerationStructureSizes(topInputs);
+        REQUIRE(bottomSizes.has_value());
+        REQUIRE(topSizes.has_value());
+        const auto bottom = device.createAccelerationStructure({.size = bottomSizes->size});
+        const auto top = device.createAccelerationStructure(
+            {.type = AccelerationStructureType::Top, .size = topSizes->size});
+        REQUIRE(bottom.has_value());
+        REQUIRE(top.has_value());
+        const auto bottomScratch = device.createBuffer(
+            {.size = bottomSizes->buildScratch, .usage = {.accelerationStructureScratch = true}});
+        const auto topScratch = device.createBuffer(
+            {.size = topSizes->buildScratch, .usage = {.accelerationStructureScratch = true}});
+        REQUIRE(bottomScratch.has_value());
+        REQUIRE(topScratch.has_value());
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = 1});
+        REQUIRE(pool.has_value());
+        const auto mapped = device.mapBuffer(*instances);
+        REQUIRE(mapped.has_value());
+
+        FrameFailure failed;
+        std::size_t allocations = 0;
+        std::size_t frees = 0;
+        {
+            const bfr::test::AllocationCounter counter;
+            Token last;
+            const auto check = [&failed](const char* call, const auto& result) {
+                if (!result.has_value() && failed.call == nullptr) {
+                    failed = {.call = call, .code = result.error().code};
+                }
+                return result.has_value();
+            };
+            for (int frame = 0; frame < kFrames && failed.call == nullptr; ++frame) {
+                check("wait", device.wait(last, kTestWait));
+                check("resetCommandPool", device.resetCommandPool(*pool));
+                const AccelerationStructureInstance placed{.transform = {1, 0, 0, static_cast<float>(frame), 0, 1, 0, 0,
+                                                                         0, 0, 1, 0},
+                                                           .mask = 1,
+                                                           .bottomStructure = *bottom};
+                check("writeInstances", device.writeInstances(std::span{&placed, 1}, *mapped));
+                check("accelerationStructureSizes", device.accelerationStructureSizes(topInputs));
+                const auto commands = device.beginCommands(*pool);
+                if (!check("beginCommands", commands)) {
+                    break;
+                }
+                check("buildAccelerationStructure",
+                      device.buildAccelerationStructure(
+                          *commands, {.dst = *bottom, .inputs = bottomInputs, .scratch = *bottomScratch}));
+                check("barrier", device.barrier(*commands));
+                check("buildAccelerationStructure",
+                      device.buildAccelerationStructure(*commands,
+                                                        {.dst = *top, .inputs = topInputs, .scratch = *topScratch}));
+                const auto submitted = device.submit(
+                    {.queue = 0, .commandLists = std::span{&*commands, 1}, .waits = {}});
+                if (check("submit", submitted)) {
+                    last = *submitted;
+                }
+            }
+            check("wait", device.wait(last, kTestWait));
+            allocations = counter.allocations();
+            frees = counter.frees();
+        }
+        INFO("first failure: " << (failed.call == nullptr ? "none" : failed.call) << " "
+                               << bfr::core::name(failed.code));
+        CHECK(failed.call == nullptr);
+        CHECK(allocations == 0);
+        CHECK(frees == 0);
+        CHECK(device.destroyCommandPool(*pool).has_value());
+        CHECK(device.destroyAccelerationStructure(*top).has_value());
+        CHECK(device.destroyAccelerationStructure(*bottom).has_value());
+        for (const auto* buffer : {&vertices, &instances, &bottomScratch, &topScratch}) {
+            CHECK(device.destroyBuffer(**buffer).has_value());
+        }
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

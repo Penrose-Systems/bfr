@@ -32,7 +32,9 @@ namespace bfr::rhi {
           std::pair{"maxBindlessStorageBuffers", desc.maxBindlessStorageBuffers},
           std::pair{"maxBindlessSamplers", desc.maxBindlessSamplers},
           std::pair{"maxTimestampPools", desc.maxTimestampPools},
-          std::pair{"maxSparseMemories", desc.maxSparseMemories}, std::pair{"maxTileMappings", desc.maxTileMappings}}) {
+          std::pair{"maxSparseMemories", desc.maxSparseMemories}, std::pair{"maxTileMappings", desc.maxTileMappings},
+          std::pair{"maxBindlessAccelerationStructures", desc.maxBindlessAccelerationStructures},
+          std::pair{"maxBuildGeometries", desc.maxBuildGeometries}}) {
         if (value > kMost) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "{} is {}; it is at most {}", name, value, kMost);
         }
@@ -49,6 +51,19 @@ namespace bfr::rhi {
                 return checked;
             }
         }
+    }
+    return {};
+}
+
+/// Fails with RhiLimitReached when desc asks for acceleration structure
+/// slots on an adapter with no such table, as bindless says: the backend has
+/// nothing to pass them to. Each backend's createDevice calls it.
+[[nodiscard]] inline core::Result<void> checkTables(const DeviceDesc& desc, const BindlessLimits& bindless) {
+    if (desc.maxBindlessAccelerationStructures != 0 && bindless.maxAccelerationStructures == 0) {
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             "the adapter holds no acceleration structure table (BindlessLimits::"
+                             "maxAccelerationStructures is 0); {} slots were asked for",
+                             desc.maxBindlessAccelerationStructures);
     }
     return {};
 }

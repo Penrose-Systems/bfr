@@ -37,6 +37,11 @@ enum class TimestampStage : std::uint32_t {
     Task = 6,
     /// Once the mesh shading recorded before it is done.
     Mesh = 7,
+    /// Once the ray tracing shading recorded before it is done.
+    RayTracing = 8,
+    /// Once the acceleration structure builds and copies recorded before it
+    /// are done.
+    AccelerationStructureBuild = 9,
 };
 
 /// How exactly a timestamp marks its stage, where the backend takes it, as

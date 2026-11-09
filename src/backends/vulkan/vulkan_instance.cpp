@@ -404,6 +404,9 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     if (auto checked = checkLimits(wanted); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkTables(wanted, adapters_[adapter].caps.bindless); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     const Adapter& listed = adapters_[adapter];
     VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
     const auto properties = queueFamilies(vk_, physicalDevice);
@@ -499,7 +502,11 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
                                       .multiDrawIndirect = listed.caps.features.multiDrawIndirect,
                                       .drawIndirectCount = listed.caps.features.drawIndirectCount,
                                       .features = listed.caps.features,
-                                      .resolve = listed.caps.resolve});
+                                      .resolve = listed.caps.resolve,
+                                      .rayTracing = listed.caps.rayTracing,
+                                      .deviceAddresses = features.vulkan12.bufferDeviceAddress == VK_TRUE,
+                                      .accelerationStructureTable = listed.caps.bindless.maxAccelerationStructures !=
+                                                                    0});
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }

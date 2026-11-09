@@ -35,6 +35,8 @@ constants:
   max_color_targets: {value: 8, doc: "The most color targets a graphics pipeline renders to. Fixed at D3D12's D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT so the descs hold fixed arrays; a Vulkan device may report more in max_color_attachments. Taking a span sized by that cap instead may be revisited."}
   mask_all: {value: 4294967295, doc: Every bit of a 32-bit mask set.}
   no_slot: {value: 4294967295, doc: "A bindless slot a texture doesn't have, in a table its usage doesn't set; no table has a slot this high."}
+  instance_index_limit: {value: 16777216, doc: "Instance custom indices and hit group offsets are below this: every backend's record holds them in 24 bits."}
+  transform_floats: {value: 12, doc: The floats of a 3x4 row-major transform.}
   max_message_length: {value: 1024, doc: The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".}
 
 enums:
@@ -392,6 +394,14 @@ enums:
       draw_mesh: {value: 74}
       draw_mesh_indirect: {value: 75}
       draw_mesh_indirect_count: {value: 76}
+      acceleration_structure_sizes: {value: 77}
+      create_acceleration_structure: {value: 78}
+      acceleration_structure_slot: {value: 79}
+      acceleration_structure_reference: {value: 80}
+      destroy_acceleration_structure: {value: 81}
+      write_instances: {value: 82}
+      build_acceleration_structure: {value: 83}
+      copy_acceleration_structure: {value: 84}
 
   timestamp_stage:
     doc: >-
@@ -406,6 +416,8 @@ enums:
       copy: {value: 5, doc: Once the copies recorded before it are done.}
       task: {value: 6, doc: Once the task shading recorded before it is done.}
       mesh: {value: 7, doc: Once the mesh shading recorded before it is done.}
+      ray_tracing: {value: 8, doc: Once the ray tracing shading recorded before it is done.}
+      acceleration_structure_build: {value: 9, doc: Once the acceleration structure builds and copies recorded before it are done.}
 
   timestamp_granularity:
     doc: How exactly a timestamp marks its stage, where bfr_caps_timestamps.granularity says the backend takes it.
@@ -629,6 +641,26 @@ enums:
       minimum: {value: 2, doc: The least of each component; bfr_caps_features.sampler_minmax.}
       maximum: {value: 3, doc: The greatest of each component; bfr_caps_features.sampler_minmax.}
 
+  acceleration_structure_type:
+    doc: What an acceleration structure holds.
+    values:
+      bottom: {value: 0, doc: Triangles or boxes.}
+      top: {value: 1, doc: Instances of bottom structures; what shaders trace rays against.}
+
+  build_preference:
+    doc: What an acceleration structure build favours; passed to the backend as given.
+    values:
+      none: {value: 0}
+      fast_trace: {value: 1}
+      fast_build: {value: 2}
+
+  instance_opacity:
+    doc: How an instance's geometry counts as opaque.
+    values:
+      as_geometry: {value: 0, doc: As each geometry says.}
+      force_opaque: {value: 1}
+      force_non_opaque: {value: 2}
+
   window_system:
     doc: >-
       Which window system a bfr_window comes from, for the platforms that have
@@ -714,6 +746,11 @@ handles:
       each a region of as many 8-byte entries as the bfr_device_desc's
       max_bindless member for its kind, so a shader declares them with the
       sizes the device was opened with; the push constants are at buffer(1).
+      Where bfr_caps_bindless.max_acceleration_structures is not 0 there is a
+      fifth table, of top acceleration structures, by the slot
+      bfr_get_acceleration_structure_slot reports: on Vulkan binding 4,
+      acceleration structures, as the others are. D3D12 and Metal have none
+      yet.
       Uniform buffers have no table: not every backend's minimum has them. A
       pipeline's shaders are bytecode for the backend the device runs on.
 
@@ -731,6 +768,15 @@ handles:
     parent: device
     destroy: destroy_sparse_memory
     doc: Device memory that sparse textures' and buffers' tiles are mapped into by bfr_update_tile_mappings.
+
+  acceleration_structure:
+    parent: device
+    destroy: destroy_acceleration_structure
+    doc: >-
+      Geometry or instances arranged for rays to be traced against, in memory
+      the device allocates. A bottom structure holds triangles or boxes; a
+      top one holds instances of bottom ones, and is what shaders trace rays
+      against.
 
   pipeline_cache:
     parent: device
@@ -912,6 +958,20 @@ structs:
           The most texture regions and the most buffer regions one bfr_update_tile_mappings takes; room
           for them is made with the device, so mapping never allocates. More fails with
           error_invalid_argument. 0 is none.
+      - name: max_bindless_acceleration_structures
+        type: u32
+        doc: >-
+          Slots in the acceleration structure table, of top structures, passed as max_bindless_textures
+          is; bfr_caps_bindless.max_acceleration_structures says how many the adapter holds. Where that
+          is 0 the device has no such table, and more than 0 fails with error_limit_reached. With 0
+          slots, top structures are made with none.
+      - name: max_build_geometries
+        type: u32
+        doc: >-
+          The most geometries one build takes, in bfr_build_acceleration_structure and
+          bfr_get_acceleration_structure_sizes; a top structure's instances are one geometry. Room
+          for them is made with the device, so building never allocates. More fails with
+          error_limit_reached. 0 is none.
       - name: indirect_strides
         type: u32
         array: indirect_stride_count
@@ -1066,6 +1126,17 @@ structs:
       - {name: storage, type: bool, doc: "Shaders read and write it. D3D12 views it in 32-bit values, so there its size must be a multiple of 4."}
       - {name: index, type: bool, doc: Indexed draws read it.}
       - {name: indirect, type: bool, doc: Indirect draws and dispatches read their arguments from it.}
+      - name: acceleration_structure_input
+        type: bool
+        doc: >-
+          Acceleration structure builds read vertices, indices, transforms,
+          boxes or instances from it. It starts at an address of the alignment
+          those take.
+      - name: acceleration_structure_scratch
+        type: bool
+        doc: >-
+          Acceleration structure builds use it as scratch. It starts at an
+          address that is a multiple of bfr_caps_ray_tracing.scratch_alignment.
 
   buffer_desc:
     doc: How to create a buffer.
@@ -1509,6 +1580,113 @@ structs:
       - {name: buffer_regions, type: buffer_tile_region, array: buffer_region_count, pointer: in, optional: true}
       - {name: buffer_region_count, type: u32}
 
+  acceleration_structure_flags:
+    doc: How an acceleration structure is built.
+    members:
+      - {name: preference, type: build_preference, doc: 0 is none.}
+      - {name: allow_update, type: bool, doc: Later builds may update the structure.}
+      - {name: minimize_memory, type: bool}
+
+  triangle_geometry:
+    doc: >-
+      Triangles in a bottom acceleration structure. A null indices is none:
+      triangle_count * 3 vertices are read in order. A null transform is none;
+      else a 3x4 row-major float matrix at transform_offset, a multiple of 16.
+      vertex_format is one bfr_format_caps.acceleration_structure_vertices is
+      true for; vertex_offset and vertex_stride are multiples of its component
+      size, index_offset of the index size. The buffers have
+      acceleration_structure_input usage.
+    members:
+      - {name: vertices, type: buffer}
+      - {name: vertex_offset, type: u64, doc: Bytes into vertices.}
+      - {name: vertex_format, type: format}
+      - {name: vertex_stride, type: u32, doc: Bytes between two vertices.}
+      - {name: vertex_count, type: u32}
+      - {name: indices, type: buffer}
+      - {name: index_offset, type: u64, doc: Bytes into indices.}
+      - {name: index_type, type: index_type}
+      - {name: triangle_count, type: u32}
+      - {name: transform, type: buffer}
+      - {name: transform_offset, type: u64, doc: Bytes into transform.}
+      - {name: opaque, type: bool}
+      - {name: no_duplicate_any_hit, type: bool}
+
+  box_geometry:
+    doc: >-
+      Boxes in a bottom acceleration structure: six floats each, min xyz then
+      max xyz, min at most max, stride bytes apart; offset and stride
+      multiples of 8. The buffer has acceleration_structure_input usage.
+    members:
+      - {name: boxes, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into boxes.}
+      - {name: stride, type: u32}
+      - {name: count, type: u32}
+      - {name: opaque, type: bool}
+      - {name: no_duplicate_any_hit, type: bool}
+
+  acceleration_structure_inputs:
+    doc: >-
+      What an acceleration structure is built from. A bottom one holds
+      triangles or boxes, not both; a geometry's index in its array is the
+      geometry index a hit group is chosen by. A top one holds instance_count
+      instance records from instance_offset, a multiple of 16, in instances,
+      which has acceleration_structure_input usage, laid out as
+      bfr_write_instances writes them. bfr_get_acceleration_structure_sizes
+      reads the counts, formats, flags and whether a transform is given.
+    members:
+      - {name: type, type: acceleration_structure_type, doc: 0 is bottom.}
+      - {name: flags, type: acceleration_structure_flags}
+      - {name: triangles, type: triangle_geometry, array: triangle_count, pointer: in, optional: true, doc: Read during the call only.}
+      - {name: triangle_count, type: u32}
+      - {name: boxes, type: box_geometry, array: box_count, pointer: in, optional: true, doc: Read during the call only.}
+      - {name: box_count, type: u32}
+      - {name: instances, type: buffer}
+      - {name: instance_offset, type: u64, doc: Bytes into instances.}
+      - {name: instance_count, type: u32}
+
+  acceleration_structure_sizes:
+    doc: The bytes an acceleration structure takes, and the scratch bytes its build and its update take.
+    members:
+      - {name: size, type: u64}
+      - {name: build_scratch, type: u64}
+      - {name: update_scratch, type: u64}
+
+  acceleration_structure_desc:
+    doc: How to create an acceleration structure of size bytes, in memory the device allocates.
+    extensible: true
+    members:
+      - {name: type, type: acceleration_structure_type, doc: 0 is bottom.}
+      - {name: size, type: u64, doc: "Bytes, as bfr_get_acceleration_structure_sizes gives them."}
+
+  acceleration_structure_build:
+    doc: >-
+      A build of dst, of inputs' type, from inputs; or, with update, an update
+      of src into dst (they may be the same), src built with allow_update and
+      inputs as its last build gave them but for the data the buffers hold.
+      Scratch is scratch_offset bytes into scratch, which has
+      acceleration_structure_scratch usage, a multiple of
+      bfr_caps_ray_tracing.scratch_alignment, at least the build's or
+      update's scratch bytes, and overlaps neither structure.
+    members:
+      - {name: dst, type: acceleration_structure}
+      - {name: src, type: acceleration_structure}
+      - {name: update, type: bool}
+      - {name: inputs, type: acceleration_structure_inputs}
+      - {name: scratch, type: buffer}
+      - {name: scratch_offset, type: u64, doc: Bytes into scratch.}
+
+  acceleration_structure_instance:
+    doc: One instance of a bottom acceleration structure in a top one.
+    members:
+      - {name: transform, type: f32, fixed: transform_floats, doc: 3x4 row-major object-to-world transform.}
+      - {name: custom_index, type: u32, doc: What the shader reads as the instance's custom index; below instance_index_limit.}
+      - {name: mask, type: u8, doc: Rays whose mask ANDs to 0 with it miss the instance.}
+      - {name: hit_group_offset, type: u32, doc: "The instance's offset, in records, into the hit region; below instance_index_limit."}
+      - {name: cull_disable, type: bool}
+      - {name: front_counter_clockwise, type: bool}
+      - {name: opacity, type: instance_opacity, doc: 0 is as each geometry says.}
+      - {name: bottom_structure, type: acceleration_structure, doc: Null is an instance no ray hits.}
+
   swapchain_query:
     doc: Which window to ask about.
     extensible: true
@@ -1589,6 +1767,7 @@ structs:
       - {name: max_uniform_buffers, type: u32}
       - {name: max_samplers, type: u32}
       - {name: max_per_stage, type: u32, doc: All of them together that one shader stage can reach.}
+      - {name: max_acceleration_structures, type: u32, doc: Top acceleration structures; 0 where the device has no such table.}
 
   caps_compute:
     doc: The adapter's compute limits.
@@ -1649,11 +1828,13 @@ structs:
       - {name: handle_size, type: u32, doc: Bytes in a shader binding table record's handle.}
       - {name: handle_alignment, type: u32, doc: Alignment in bytes of a handle in the table.}
       - {name: table_alignment, type: u32, doc: Alignment in bytes of the table's start.}
+      - {name: instance_size, type: u32, doc: The bytes of one record bfr_write_instances writes.}
 
   caps_features:
     doc: Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and not listed.
     members:
-      - {name: ray_query, type: bool, doc: Rays traced inline from any shader.}
+      - {name: ray_query, type: bool, doc: Rays traced inline from compute shaders.}
+      - {name: ray_query_graphics, type: bool, doc: "Rays traced inline from vertex, fragment, task and mesh shaders."}
       - {name: ray_tracing_pipeline, type: bool, doc: Ray tracing pipelines and shader binding tables.}
       - {name: acceleration_structure, type: bool}
       - {name: mesh_shader, type: bool}
@@ -1803,6 +1984,8 @@ structs:
       - {name: copy, type: bool}
       - {name: task, type: bool}
       - {name: mesh, type: bool}
+      - {name: ray_tracing, type: bool}
+      - {name: acceleration_structure_build, type: bool}
 
   host_clocks:
     doc: The bfr_host_clock values bfr_calibrate_timestamps reads beside a GPU timestamp.
@@ -1906,6 +2089,7 @@ structs:
       - {name: storage_texel_buffer_atomic, type: bool}
       - {name: sample_counts, type: u32, doc: "Sample counts for 2D textures of it: each set bit is a count, 1, 2, 4 and so on; 0 when it can't be rendered to."}
       - {name: resolve, type: bool, doc: "Multisampled textures of it resolve into single-sample ones: color formats in a rendering and by bfr_resolve_texture, depth and stencil formats in a rendering, by the modes bfr_caps_resolve names."}
+      - {name: acceleration_structure_vertices, type: bool, doc: bfr_triangle_geometry's vertex_format takes it.}
 
   swapchain_caps:
     doc: What a window's swapchain may be, on one adapter.
@@ -2973,6 +3157,124 @@ functions:
       - {name: device, type: device}
       - {name: desc, type: tile_mapping_desc, pointer: in}
       - {name: token, type: token, pointer: out, optional: true}
+
+  get_acceleration_structure_sizes:
+    doc: >-
+      Writes the bytes an acceleration structure built from inputs takes, and
+      the scratch bytes its build and update take, as the backend says. Fails
+      with error_unsupported where bfr_caps_features.acceleration_structure is
+      false, error_invalid_argument for a bottom structure of both triangles
+      and boxes or an enum value BFR doesn't have, and error_limit_reached
+      past the device's max_build_geometries.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: inputs, type: acceleration_structure_inputs, pointer: in}
+      - {name: sizes, type: acceleration_structure_sizes, pointer: out}
+
+  create_acceleration_structure:
+    doc: >-
+      Creates an empty acceleration structure of desc's size bytes, which a
+      build fills. Not for the frame path: it frees structures the GPU is done
+      with. Fails with error_unsupported where
+      bfr_caps_features.acceleration_structure is false,
+      error_invalid_argument for a size of 0 or an enum value BFR doesn't
+      have, error_limit_reached at the device's maximum or, for a top
+      structure on a device with table slots, when they are all held,
+      error_out_of_memory when the backend
+      says memory ran out, and error_device_failed when it refuses.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: acceleration_structure_desc, pointer: in}
+      - {name: structure, type: acceleration_structure, pointer: out}
+
+  get_acceleration_structure_slot:
+    doc: >-
+      Writes a top acceleration structure's index in the acceleration
+      structure table bfr_pipeline states, held from creation to destruction.
+      Fails with error_invalid_argument for a bottom one, or on a device made
+      with no max_bindless_acceleration_structures.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: structure, type: acceleration_structure}
+      - {name: slot, type: u32, pointer: out}
+
+  get_acceleration_structure_reference:
+    doc: >-
+      Writes what an instance record names a bottom acceleration structure by,
+      for records the GPU writes, as bfr_write_instances lays them out.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: structure, type: acceleration_structure}
+      - {name: reference, type: u64, pointer: out}
+
+  destroy_acceleration_structure:
+    doc: >-
+      Destroys an acceleration structure once the GPU has passed every submit
+      made before the call; the handle is invalid at once. A top structure
+      reads the bottom ones built into it while rays are traced against it.
+      Not for the frame path. A handle that is already destroyed does
+      nothing.
+    params:
+      - {name: device, type: device}
+      - {name: structure, type: acceleration_structure}
+
+  write_instances:
+    doc: >-
+      Writes instances to data as the records a top acceleration structure is
+      built from, bfr_caps_ray_tracing.instance_size bytes each, on the CPU.
+      On Vulkan a record is VkAccelerationStructureInstanceKHR's 64 bytes: the
+      transform's 12 floats, then the custom index in the low 24 bits of a
+      32-bit value and the mask in its high 8, then the hit group offset in
+      the low 24 bits of another and the flags in its high 8 (1 cull disable,
+      2 front counter-clockwise, 4 force opaque, 8 force non-opaque), then
+      the 64-bit reference bfr_get_acceleration_structure_reference gives, 0
+      for an instance no ray hits. Fails with error_unsupported where
+      bfr_caps_features.acceleration_structure is false,
+      error_invalid_argument when size is too small, an index or offset is
+      instance_index_limit or above, an enum value BFR doesn't have, or an
+      instance names a top structure, and error_invalid_handle for a
+      structure that is gone.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: instances, type: acceleration_structure_instance, array: instance_count, pointer: in, optional: true}
+      - {name: instance_count, type: u32}
+      - {name: data, type: opaque, doc: Where the records go.}
+      - {name: size, type: size, doc: Bytes of data.}
+
+  build_acceleration_structure:
+    doc: >-
+      Records build, outside rendering, on a queue whose kind runs compute. A
+      barrier orders the work that wrote its inputs before it, and its readers
+      and any reuse of its scratch after. Fails with error_unsupported where
+      bfr_caps_features.acceleration_structure is false or on a copy queue,
+      error_invalid_argument for inputs bfr_get_acceleration_structure_sizes
+      refuses or of a type unlike its structure's, error_limit_reached past
+      the device's max_build_geometries, and error_invalid_handle for a
+      structure or buffer that is gone.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: build, type: acceleration_structure_build, pointer: in}
+
+  copy_acceleration_structure:
+    doc: >-
+      Records a copy of src into dst, of the same type and size, not
+      overlapping, as builds are recorded. Fails with error_unsupported as
+      bfr_build_acceleration_structure does, error_invalid_argument for
+      structures of different types or sizes, and error_invalid_handle for a
+      structure that is gone.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: dst, type: acceleration_structure}
+      - {name: src, type: acceleration_structure}
 
   get_call_timings:
     doc: >-

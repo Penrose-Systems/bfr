@@ -732,6 +732,14 @@ enum class Call : std::int32_t {
     DrawMesh = BFR_CALL_DRAW_MESH,
     DrawMeshIndirect = BFR_CALL_DRAW_MESH_INDIRECT,
     DrawMeshIndirectCount = BFR_CALL_DRAW_MESH_INDIRECT_COUNT,
+    AccelerationStructureSizes = BFR_CALL_ACCELERATION_STRUCTURE_SIZES,
+    CreateAccelerationStructure = BFR_CALL_CREATE_ACCELERATION_STRUCTURE,
+    AccelerationStructureSlot = BFR_CALL_ACCELERATION_STRUCTURE_SLOT,
+    AccelerationStructureReference = BFR_CALL_ACCELERATION_STRUCTURE_REFERENCE,
+    DestroyAccelerationStructure = BFR_CALL_DESTROY_ACCELERATION_STRUCTURE,
+    WriteInstances = BFR_CALL_WRITE_INSTANCES,
+    BuildAccelerationStructure = BFR_CALL_BUILD_ACCELERATION_STRUCTURE,
+    CopyAccelerationStructure = BFR_CALL_COPY_ACCELERATION_STRUCTURE,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -814,6 +822,14 @@ enum class Call : std::int32_t {
     case Call::DrawMesh: return "draw_mesh";
     case Call::DrawMeshIndirect: return "draw_mesh_indirect";
     case Call::DrawMeshIndirectCount: return "draw_mesh_indirect_count";
+    case Call::AccelerationStructureSizes: return "acceleration_structure_sizes";
+    case Call::CreateAccelerationStructure: return "create_acceleration_structure";
+    case Call::AccelerationStructureSlot: return "acceleration_structure_slot";
+    case Call::AccelerationStructureReference: return "acceleration_structure_reference";
+    case Call::DestroyAccelerationStructure: return "destroy_acceleration_structure";
+    case Call::WriteInstances: return "write_instances";
+    case Call::BuildAccelerationStructure: return "build_acceleration_structure";
+    case Call::CopyAccelerationStructure: return "copy_acceleration_structure";
     }
     return {};
 }
@@ -837,6 +853,10 @@ enum class TimestampStage : std::int32_t {
     Task = BFR_TIMESTAMP_STAGE_TASK,
     /// Once the mesh shading recorded before it is done.
     Mesh = BFR_TIMESTAMP_STAGE_MESH,
+    /// Once the ray tracing shading recorded before it is done.
+    RayTracing = BFR_TIMESTAMP_STAGE_RAY_TRACING,
+    /// Once the acceleration structure builds and copies recorded before it are done.
+    AccelerationStructureBuild = BFR_TIMESTAMP_STAGE_ACCELERATION_STRUCTURE_BUILD,
 };
 
 /// value's name in bfr.yaml; empty for a value TimestampStage doesn't have.
@@ -850,6 +870,8 @@ enum class TimestampStage : std::int32_t {
     case TimestampStage::Copy: return "copy";
     case TimestampStage::Task: return "task";
     case TimestampStage::Mesh: return "mesh";
+    case TimestampStage::RayTracing: return "ray_tracing";
+    case TimestampStage::AccelerationStructureBuild: return "acceleration_structure_build";
     }
     return {};
 }
@@ -1406,6 +1428,58 @@ enum class SamplerReduction : std::int32_t {
     return {};
 }
 
+/// What an acceleration structure holds.
+enum class AccelerationStructureType : std::int32_t {
+    /// Triangles or boxes.
+    Bottom = BFR_ACCELERATION_STRUCTURE_TYPE_BOTTOM,
+    /// Instances of bottom structures; what shaders trace rays against.
+    Top = BFR_ACCELERATION_STRUCTURE_TYPE_TOP,
+};
+
+/// value's name in bfr.yaml; empty for a value AccelerationStructureType doesn't have.
+[[nodiscard]] constexpr std::string_view name(AccelerationStructureType value) {
+    switch (value) {
+    case AccelerationStructureType::Bottom: return "bottom";
+    case AccelerationStructureType::Top: return "top";
+    }
+    return {};
+}
+
+/// What an acceleration structure build favours; passed to the backend as given.
+enum class BuildPreference : std::int32_t {
+    None = BFR_BUILD_PREFERENCE_NONE,
+    FastTrace = BFR_BUILD_PREFERENCE_FAST_TRACE,
+    FastBuild = BFR_BUILD_PREFERENCE_FAST_BUILD,
+};
+
+/// value's name in bfr.yaml; empty for a value BuildPreference doesn't have.
+[[nodiscard]] constexpr std::string_view name(BuildPreference value) {
+    switch (value) {
+    case BuildPreference::None: return "none";
+    case BuildPreference::FastTrace: return "fast_trace";
+    case BuildPreference::FastBuild: return "fast_build";
+    }
+    return {};
+}
+
+/// How an instance's geometry counts as opaque.
+enum class InstanceOpacity : std::int32_t {
+    /// As each geometry says.
+    AsGeometry = BFR_INSTANCE_OPACITY_AS_GEOMETRY,
+    ForceOpaque = BFR_INSTANCE_OPACITY_FORCE_OPAQUE,
+    ForceNonOpaque = BFR_INSTANCE_OPACITY_FORCE_NON_OPAQUE,
+};
+
+/// value's name in bfr.yaml; empty for a value InstanceOpacity doesn't have.
+[[nodiscard]] constexpr std::string_view name(InstanceOpacity value) {
+    switch (value) {
+    case InstanceOpacity::AsGeometry: return "as_geometry";
+    case InstanceOpacity::ForceOpaque: return "force_opaque";
+    case InstanceOpacity::ForceNonOpaque: return "force_non_opaque";
+    }
+    return {};
+}
+
 /// Which window system a bfr_window comes from, for the platforms that have more than one.
 enum class WindowSystem : std::int32_t {
     /// The platform's own: Win32 on Windows, Cocoa on Apple, X11 on Linux.
@@ -1464,6 +1538,8 @@ class Sampler;
 class TimestampPool;
 
 class SparseMemory;
+
+class AccelerationStructure;
 
 class PipelineCache;
 
@@ -1594,6 +1670,22 @@ private:
 };
 static_assert(sizeof(SparseMemoryRef) == sizeof(bfr_sparse_memory) && alignof(SparseMemoryRef) == alignof(bfr_sparse_memory) &&
               std::is_standard_layout_v<SparseMemoryRef> && std::is_trivially_copyable_v<SparseMemoryRef>);
+
+/// A borrowed AccelerationStructure, laid out as bfr_acceleration_structure: what a struct names one by. It owns nothing;
+/// the AccelerationStructure outlives the call it is passed to. Null by default.
+class AccelerationStructureRef {
+public:
+    AccelerationStructureRef() = default;
+    AccelerationStructureRef(const AccelerationStructure& accelerationStructure); // NOLINT(google-explicit-constructor): a AccelerationStructure is passed as one
+
+    [[nodiscard]] bfr_acceleration_structure get() const { return accelerationStructure_; }
+    [[nodiscard]] explicit operator bool() const { return accelerationStructure_.bits != 0; }
+
+private:
+    bfr_acceleration_structure accelerationStructure_{};
+};
+static_assert(sizeof(AccelerationStructureRef) == sizeof(bfr_acceleration_structure) && alignof(AccelerationStructureRef) == alignof(bfr_acceleration_structure) &&
+              std::is_standard_layout_v<AccelerationStructureRef> && std::is_trivially_copyable_v<AccelerationStructureRef>);
 
 /// A borrowed PipelineCache, laid out as bfr_pipeline_cache: what a struct names one by. It owns nothing;
 /// the PipelineCache outlives the call it is passed to. Null by default.
@@ -1731,6 +1823,16 @@ struct DeviceDesc {
     /// room for them is made with the device, so mapping never allocates. More fails with
     /// error_invalid_argument. 0 is none.
     std::uint32_t maxTileMappings{};
+    /// Slots in the acceleration structure table, of top structures, passed as
+    /// max_bindless_textures is; bfr_caps_bindless.max_acceleration_structures says how many the
+    /// adapter holds. Where that is 0 the device has no such table, and more than 0 fails with
+    /// error_limit_reached. With 0 slots, top structures are made with none.
+    std::uint32_t maxBindlessAccelerationStructures{};
+    /// The most geometries one build takes, in bfr_build_acceleration_structure and
+    /// bfr_get_acceleration_structure_sizes; a top structure's instances are one geometry. Room for
+    /// them is made with the device, so building never allocates. More fails with
+    /// error_limit_reached. 0 is none.
+    std::uint32_t maxBuildGeometries{};
     /// The strides, in bytes, the device's indirect draws take, read during the call only. D3D12
     /// fixes a stride in the command signature it makes for them, so it makes one for each here and
     /// fails an indirect draw of any other with error_unsupported; Vulkan and Metal take any
@@ -1889,6 +1991,12 @@ struct BufferUsage {
     bool index{};
     /// Indirect draws and dispatches read their arguments from it.
     bool indirect{};
+    /// Acceleration structure builds read vertices, indices, transforms, boxes or instances from
+    /// it. It starts at an address of the alignment those take.
+    bool accelerationStructureInput{};
+    /// Acceleration structure builds use it as scratch. It starts at an address that is a multiple
+    /// of bfr_caps_ray_tracing.scratch_alignment.
+    bool accelerationStructureScratch{};
 };
 
 /// How to create a buffer.
@@ -2409,6 +2517,155 @@ struct TileMappingDesc {
     std::span<const BufferTileRegion> bufferRegions{};
 };
 
+/// How an acceleration structure is built.
+struct AccelerationStructureFlags {
+    /// 0 is none.
+    BuildPreference preference{};
+    /// Later builds may update the structure.
+    bool allowUpdate{};
+    bool minimizeMemory{};
+};
+
+/// Triangles in a bottom acceleration structure. A null indices is none: triangle_count * 3
+/// vertices are read in order. A null transform is none; else a 3x4 row-major float matrix at
+/// transform_offset, a multiple of 16. vertex_format is one
+/// bfr_format_caps.acceleration_structure_vertices is true for; vertex_offset and vertex_stride are
+/// multiples of its component size, index_offset of the index size. The buffers have
+/// acceleration_structure_input usage.
+struct TriangleGeometry {
+    BufferRef vertices{};
+    /// Bytes into vertices.
+    std::uint64_t vertexOffset{};
+    Format vertexFormat{};
+    /// Bytes between two vertices.
+    std::uint32_t vertexStride{};
+    std::uint32_t vertexCount{};
+    BufferRef indices{};
+    /// Bytes into indices.
+    std::uint64_t indexOffset{};
+    IndexType indexType{};
+    std::uint32_t triangleCount{};
+    BufferRef transform{};
+    /// Bytes into transform.
+    std::uint64_t transformOffset{};
+    bool opaque{};
+    bool noDuplicateAnyHit{};
+};
+static_assert(sizeof(TriangleGeometry) == sizeof(bfr_triangle_geometry) && alignof(TriangleGeometry) == alignof(bfr_triangle_geometry) &&
+              std::is_standard_layout_v<TriangleGeometry> && std::is_trivially_copyable_v<TriangleGeometry>);
+static_assert(offsetof(TriangleGeometry, vertices) == offsetof(bfr_triangle_geometry, vertices));
+static_assert(offsetof(TriangleGeometry, vertexOffset) == offsetof(bfr_triangle_geometry, vertex_offset));
+static_assert(offsetof(TriangleGeometry, vertexFormat) == offsetof(bfr_triangle_geometry, vertex_format));
+static_assert(offsetof(TriangleGeometry, vertexStride) == offsetof(bfr_triangle_geometry, vertex_stride));
+static_assert(offsetof(TriangleGeometry, vertexCount) == offsetof(bfr_triangle_geometry, vertex_count));
+static_assert(offsetof(TriangleGeometry, indices) == offsetof(bfr_triangle_geometry, indices));
+static_assert(offsetof(TriangleGeometry, indexOffset) == offsetof(bfr_triangle_geometry, index_offset));
+static_assert(offsetof(TriangleGeometry, indexType) == offsetof(bfr_triangle_geometry, index_type));
+static_assert(offsetof(TriangleGeometry, triangleCount) == offsetof(bfr_triangle_geometry, triangle_count));
+static_assert(offsetof(TriangleGeometry, transform) == offsetof(bfr_triangle_geometry, transform));
+static_assert(offsetof(TriangleGeometry, transformOffset) == offsetof(bfr_triangle_geometry, transform_offset));
+static_assert(offsetof(TriangleGeometry, opaque) == offsetof(bfr_triangle_geometry, opaque));
+static_assert(offsetof(TriangleGeometry, noDuplicateAnyHit) == offsetof(bfr_triangle_geometry, no_duplicate_any_hit));
+
+/// Boxes in a bottom acceleration structure: six floats each, min xyz then max xyz, min at most
+/// max, stride bytes apart; offset and stride multiples of 8. The buffer has
+/// acceleration_structure_input usage.
+struct BoxGeometry {
+    BufferRef boxes{};
+    /// Bytes into boxes.
+    std::uint64_t offset{};
+    std::uint32_t stride{};
+    std::uint32_t count{};
+    bool opaque{};
+    bool noDuplicateAnyHit{};
+};
+static_assert(sizeof(BoxGeometry) == sizeof(bfr_box_geometry) && alignof(BoxGeometry) == alignof(bfr_box_geometry) &&
+              std::is_standard_layout_v<BoxGeometry> && std::is_trivially_copyable_v<BoxGeometry>);
+static_assert(offsetof(BoxGeometry, boxes) == offsetof(bfr_box_geometry, boxes));
+static_assert(offsetof(BoxGeometry, offset) == offsetof(bfr_box_geometry, offset));
+static_assert(offsetof(BoxGeometry, stride) == offsetof(bfr_box_geometry, stride));
+static_assert(offsetof(BoxGeometry, count) == offsetof(bfr_box_geometry, count));
+static_assert(offsetof(BoxGeometry, opaque) == offsetof(bfr_box_geometry, opaque));
+static_assert(offsetof(BoxGeometry, noDuplicateAnyHit) == offsetof(bfr_box_geometry, no_duplicate_any_hit));
+
+/// What an acceleration structure is built from. A bottom one holds triangles or boxes, not both; a
+/// geometry's index in its array is the geometry index a hit group is chosen by. A top one holds
+/// instance_count instance records from instance_offset, a multiple of 16, in instances, which has
+/// acceleration_structure_input usage, laid out as bfr_write_instances writes them.
+/// bfr_get_acceleration_structure_sizes reads the counts, formats, flags and whether a transform is
+/// given.
+struct AccelerationStructureInputs {
+    /// 0 is bottom.
+    AccelerationStructureType type{};
+    AccelerationStructureFlags flags{};
+    /// Read during the call only.
+    std::span<const TriangleGeometry> triangles{};
+    /// Read during the call only.
+    std::span<const BoxGeometry> boxes{};
+    BufferRef instances{};
+    /// Bytes into instances.
+    std::uint64_t instanceOffset{};
+    std::uint32_t instanceCount{};
+};
+
+/// The bytes an acceleration structure takes, and the scratch bytes its build and its update take.
+struct AccelerationStructureSizes {
+    std::uint64_t size{};
+    std::uint64_t buildScratch{};
+    std::uint64_t updateScratch{};
+};
+
+/// How to create an acceleration structure of size bytes, in memory the device allocates.
+struct AccelerationStructureDesc {
+    /// 0 is bottom.
+    AccelerationStructureType type{};
+    /// Bytes, as bfr_get_acceleration_structure_sizes gives them.
+    std::uint64_t size{};
+};
+
+/// A build of dst, of inputs' type, from inputs; or, with update, an update of src into dst (they
+/// may be the same), src built with allow_update and inputs as its last build gave them but for the
+/// data the buffers hold. Scratch is scratch_offset bytes into scratch, which has
+/// acceleration_structure_scratch usage, a multiple of bfr_caps_ray_tracing.scratch_alignment, at
+/// least the build's or update's scratch bytes, and overlaps neither structure.
+struct AccelerationStructureBuild {
+    AccelerationStructureRef dst{};
+    AccelerationStructureRef src{};
+    bool update{};
+    AccelerationStructureInputs inputs{};
+    BufferRef scratch{};
+    /// Bytes into scratch.
+    std::uint64_t scratchOffset{};
+};
+
+/// One instance of a bottom acceleration structure in a top one.
+struct AccelerationStructureInstance {
+    /// 3x4 row-major object-to-world transform.
+    std::array<float, BFR_TRANSFORM_FLOATS> transform{};
+    /// What the shader reads as the instance's custom index; below instance_index_limit.
+    std::uint32_t customIndex{};
+    /// Rays whose mask ANDs to 0 with it miss the instance.
+    std::uint8_t mask{};
+    /// The instance's offset, in records, into the hit region; below instance_index_limit.
+    std::uint32_t hitGroupOffset{};
+    bool cullDisable{};
+    bool frontCounterClockwise{};
+    /// 0 is as each geometry says.
+    InstanceOpacity opacity{};
+    /// Null is an instance no ray hits.
+    AccelerationStructureRef bottomStructure{};
+};
+static_assert(sizeof(AccelerationStructureInstance) == sizeof(bfr_acceleration_structure_instance) && alignof(AccelerationStructureInstance) == alignof(bfr_acceleration_structure_instance) &&
+              std::is_standard_layout_v<AccelerationStructureInstance> && std::is_trivially_copyable_v<AccelerationStructureInstance>);
+static_assert(offsetof(AccelerationStructureInstance, transform) == offsetof(bfr_acceleration_structure_instance, transform));
+static_assert(offsetof(AccelerationStructureInstance, customIndex) == offsetof(bfr_acceleration_structure_instance, custom_index));
+static_assert(offsetof(AccelerationStructureInstance, mask) == offsetof(bfr_acceleration_structure_instance, mask));
+static_assert(offsetof(AccelerationStructureInstance, hitGroupOffset) == offsetof(bfr_acceleration_structure_instance, hit_group_offset));
+static_assert(offsetof(AccelerationStructureInstance, cullDisable) == offsetof(bfr_acceleration_structure_instance, cull_disable));
+static_assert(offsetof(AccelerationStructureInstance, frontCounterClockwise) == offsetof(bfr_acceleration_structure_instance, front_counter_clockwise));
+static_assert(offsetof(AccelerationStructureInstance, opacity) == offsetof(bfr_acceleration_structure_instance, opacity));
+static_assert(offsetof(AccelerationStructureInstance, bottomStructure) == offsetof(bfr_acceleration_structure_instance, bottom_structure));
+
 /// Which window to ask about.
 struct SwapchainQuery {
     Window window{};
@@ -2537,6 +2794,8 @@ struct CapsBindless {
     std::uint32_t maxSamplers{};
     /// All of them together that one shader stage can reach.
     std::uint32_t maxPerStage{};
+    /// Top acceleration structures; 0 where the device has no such table.
+    std::uint32_t maxAccelerationStructures{};
 };
 
 /// The adapter's compute limits.
@@ -2605,13 +2864,17 @@ struct CapsRayTracing {
     std::uint32_t handleAlignment{};
     /// Alignment in bytes of the table's start.
     std::uint32_t tableAlignment{};
+    /// The bytes of one record bfr_write_instances writes.
+    std::uint32_t instanceSize{};
 };
 
 /// Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and
 /// not listed.
 struct CapsFeatures {
-    /// Rays traced inline from any shader.
+    /// Rays traced inline from compute shaders.
     bool rayQuery{};
+    /// Rays traced inline from vertex, fragment, task and mesh shaders.
+    bool rayQueryGraphics{};
     /// Ray tracing pipelines and shader binding tables.
     bool rayTracingPipeline{};
     bool accelerationStructure{};
@@ -2796,6 +3059,8 @@ struct TimestampStages {
     bool copy{};
     bool task{};
     bool mesh{};
+    bool rayTracing{};
+    bool accelerationStructureBuild{};
 };
 
 /// The bfr_host_clock values bfr_calibrate_timestamps reads beside a GPU timestamp.
@@ -2935,6 +3200,8 @@ struct FormatCaps {
     /// and by bfr_resolve_texture, depth and stencil formats in a rendering, by the modes
     /// bfr_caps_resolve names.
     bool resolve{};
+    /// bfr_triangle_geometry's vertex_format takes it.
+    bool accelerationStructureVertices{};
 };
 
 /// What a window's swapchain may be, on one adapter.
@@ -3057,6 +3324,8 @@ inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
         .max_timestamp_pools = value.maxTimestampPools,
         .max_sparse_memories = value.maxSparseMemories,
         .max_tile_mappings = value.maxTileMappings,
+        .max_bindless_acceleration_structures = value.maxBindlessAccelerationStructures,
+        .max_build_geometries = value.maxBuildGeometries,
         .indirect_strides = reinterpret_cast<const uint32_t*>(value.indirectStrides.data()),
         .indirect_stride_count = static_cast<uint32_t>(value.indirectStrides.size()),
     };
@@ -3107,6 +3376,8 @@ inline bfr_buffer_usage toC(const BufferUsage& value) {
         .storage = static_cast<bfr_bool>(value.storage),
         .index = static_cast<bfr_bool>(value.index),
         .indirect = static_cast<bfr_bool>(value.indirect),
+        .acceleration_structure_input = static_cast<bfr_bool>(value.accelerationStructureInput),
+        .acceleration_structure_scratch = static_cast<bfr_bool>(value.accelerationStructureScratch),
     };
 }
 
@@ -3325,6 +3596,22 @@ inline bfr_buffer_tile_region toC(const BufferTileRegion& value) {
     };
 }
 
+inline bfr_acceleration_structure_flags toC(const AccelerationStructureFlags& value) {
+    return {
+        .preference = static_cast<bfr_build_preference>(value.preference),
+        .allow_update = static_cast<bfr_bool>(value.allowUpdate),
+        .minimize_memory = static_cast<bfr_bool>(value.minimizeMemory),
+    };
+}
+
+inline bfr_acceleration_structure_desc toC(const AccelerationStructureDesc& value, const bfr_chain* next) {
+    return {
+        .next = next,
+        .type = static_cast<bfr_acceleration_structure_type>(value.type),
+        .size = value.size,
+    };
+}
+
 inline bfr_swapchain_query toC(const SwapchainQuery& value, const bfr_chain* next) {
     return {.next = next, .window = toC(value.window)};
 }
@@ -3398,6 +3685,14 @@ inline SparseFormat fromC(const bfr_sparse_format& value) {
         .shape = fromC(value.shape),
         .singleTail = value.single_tail != BFR_FALSE,
         .alignedMipSize = value.aligned_mip_size != BFR_FALSE,
+    };
+}
+
+inline AccelerationStructureSizes fromC(const bfr_acceleration_structure_sizes& value) {
+    return {
+        .size = value.size,
+        .buildScratch = value.build_scratch,
+        .updateScratch = value.update_scratch,
     };
 }
 
@@ -3476,6 +3771,7 @@ inline CapsBindless fromC(const bfr_caps_bindless& value) {
         .maxUniformBuffers = value.max_uniform_buffers,
         .maxSamplers = value.max_samplers,
         .maxPerStage = value.max_per_stage,
+        .maxAccelerationStructures = value.max_acceleration_structures,
     };
 }
 
@@ -3528,12 +3824,14 @@ inline CapsRayTracing fromC(const bfr_caps_ray_tracing& value) {
         .handleSize = value.handle_size,
         .handleAlignment = value.handle_alignment,
         .tableAlignment = value.table_alignment,
+        .instanceSize = value.instance_size,
     };
 }
 
 inline CapsFeatures fromC(const bfr_caps_features& value) {
     return {
         .rayQuery = value.ray_query != BFR_FALSE,
+        .rayQueryGraphics = value.ray_query_graphics != BFR_FALSE,
         .rayTracingPipeline = value.ray_tracing_pipeline != BFR_FALSE,
         .accelerationStructure = value.acceleration_structure != BFR_FALSE,
         .meshShader = value.mesh_shader != BFR_FALSE,
@@ -3673,6 +3971,8 @@ inline TimestampStages fromC(const bfr_timestamp_stages& value) {
         .copy = value.copy != BFR_FALSE,
         .task = value.task != BFR_FALSE,
         .mesh = value.mesh != BFR_FALSE,
+        .rayTracing = value.ray_tracing != BFR_FALSE,
+        .accelerationStructureBuild = value.acceleration_structure_build != BFR_FALSE,
     };
 }
 
@@ -3773,6 +4073,7 @@ inline FormatCaps fromC(const bfr_format_caps& value) {
         .storageTexelBufferAtomic = value.storage_texel_buffer_atomic != BFR_FALSE,
         .sampleCounts = value.sample_counts,
         .resolve = value.resolve != BFR_FALSE,
+        .accelerationStructureVertices = value.acceleration_structure_vertices != BFR_FALSE,
     };
 }
 
@@ -3891,9 +4192,10 @@ public:
     /// Owns nothing, as a moved-from Device does.
     Device() = default;
     /// Destroys a device once the GPU has finished with it, with every handle it still owns. Null
-    /// does nothing. A Device with Buffer or CommandList or CommandPool or Pipeline or
-    /// PipelineCache or Sampler or SparseMemory or Swapchain or Texture or TimestampPool objects
-    /// left lives on until the last of them is destroyed, so they may be destroyed in any order.
+    /// does nothing. A Device with AccelerationStructure or Buffer or CommandList or CommandPool or
+    /// Pipeline or PipelineCache or Sampler or SparseMemory or Swapchain or Texture or
+    /// TimestampPool objects left lives on until the last of them is destroyed, so they may be
+    /// destroyed in any order.
     ~Device() = default;
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
@@ -4192,6 +4494,48 @@ public:
     /// backend has no form for, and error_device_failed when the backend refuses.
     [[nodiscard]] Expected<Token> updateTileMappings(const TileMappingDesc& desc) const;
 
+    /// Writes the bytes an acceleration structure built from inputs takes, and the scratch bytes
+    /// its build and update take, as the backend says. Fails with error_unsupported where
+    /// bfr_caps_features.acceleration_structure is false, error_invalid_argument for a bottom
+    /// structure of both triangles and boxes or an enum value BFR doesn't have, and
+    /// error_limit_reached past the device's max_build_geometries.
+    [[nodiscard]] Expected<AccelerationStructureSizes> accelerationStructureSizes(const AccelerationStructureInputs& inputs) const;
+
+    /// Creates an empty acceleration structure of desc's size bytes, which a build fills. Not for
+    /// the frame path: it frees structures the GPU is done with. Fails with error_unsupported where
+    /// bfr_caps_features.acceleration_structure is false, error_invalid_argument for a size of 0 or
+    /// an enum value BFR doesn't have, error_limit_reached at the device's maximum or, for a top
+    /// structure on a device with table slots, when they are all held, error_out_of_memory when the
+    /// backend says memory ran out, and error_device_failed when it refuses.
+    [[nodiscard]] Expected<AccelerationStructure> createAccelerationStructure(const AccelerationStructureDesc& desc) const;
+
+    /// Writes instances to data as the records a top acceleration structure is built from,
+    /// bfr_caps_ray_tracing.instance_size bytes each, on the CPU. On Vulkan a record is
+    /// VkAccelerationStructureInstanceKHR's 64 bytes: the transform's 12 floats, then the custom
+    /// index in the low 24 bits of a 32-bit value and the mask in its high 8, then the hit group
+    /// offset in the low 24 bits of another and the flags in its high 8 (1 cull disable, 2 front
+    /// counter-clockwise, 4 force opaque, 8 force non-opaque), then the 64-bit reference
+    /// bfr_get_acceleration_structure_reference gives, 0 for an instance no ray hits. Fails with
+    /// error_unsupported where bfr_caps_features.acceleration_structure is false,
+    /// error_invalid_argument when size is too small, an index or offset is instance_index_limit or
+    /// above, an enum value BFR doesn't have, or an instance names a top structure, and
+    /// error_invalid_handle for a structure that is gone.
+    [[nodiscard]] Expected<void> writeInstances(std::span<const AccelerationStructureInstance> instances, void* data, std::size_t size) const;
+
+    /// Records build, outside rendering, on a queue whose kind runs compute. A barrier orders the
+    /// work that wrote its inputs before it, and its readers and any reuse of its scratch after.
+    /// Fails with error_unsupported where bfr_caps_features.acceleration_structure is false or on a
+    /// copy queue, error_invalid_argument for inputs bfr_get_acceleration_structure_sizes refuses
+    /// or of a type unlike its structure's, error_limit_reached past the device's
+    /// max_build_geometries, and error_invalid_handle for a structure or buffer that is gone.
+    [[nodiscard]] Expected<void> buildAccelerationStructure(CommandList commandList, const AccelerationStructureBuild& build) const;
+
+    /// Records a copy of src into dst, of the same type and size, not overlapping, as builds are
+    /// recorded. Fails with error_unsupported as bfr_build_acceleration_structure does,
+    /// error_invalid_argument for structures of different types or sizes, and error_invalid_handle
+    /// for a structure that is gone.
+    [[nodiscard]] Expected<void> copyAccelerationStructure(CommandList commandList, const AccelerationStructure& dst, const AccelerationStructure& src) const;
+
     /// Lists the CPU time spent in each of the device's calls since it was made, indexed by
     /// bfr_call.
     [[nodiscard]] Expected<std::vector<CallTiming>> callTimings() const;
@@ -4440,8 +4784,12 @@ private:
 /// argument buffer at buffer(0), holding the sampled textures, storage textures, storage buffers
 /// and samplers in that order, each a region of as many 8-byte entries as the bfr_device_desc's
 /// max_bindless member for its kind, so a shader declares them with the sizes the device was opened
-/// with; the push constants are at buffer(1). Uniform buffers have no table: not every backend's
-/// minimum has them. A pipeline's shaders are bytecode for the backend the device runs on.
+/// with; the push constants are at buffer(1). Where bfr_caps_bindless.max_acceleration_structures
+/// is not 0 there is a fifth table, of top acceleration structures, by the slot
+/// bfr_get_acceleration_structure_slot reports: on Vulkan binding 4, acceleration structures, as
+/// the others are. D3D12 and Metal have none yet. Uniform buffers have no table: not every
+/// backend's minimum has them. A pipeline's shaders are bytecode for the backend the device runs
+/// on.
 class Pipeline {
 public:
     /// Owns nothing, as a moved-from Pipeline does.
@@ -4589,6 +4937,54 @@ private:
     detail::KeepAlive keepAlive_;
 };
 
+/// Geometry or instances arranged for rays to be traced against, in memory the device allocates. A
+/// bottom structure holds triangles or boxes; a top one holds instances of bottom ones, and is what
+/// shaders trace rays against.
+class AccelerationStructure {
+public:
+    /// Owns nothing, as a moved-from AccelerationStructure does.
+    AccelerationStructure() = default;
+    /// Destroys an acceleration structure once the GPU has passed every submit made before the
+    /// call; the handle is invalid at once. A top structure reads the bottom ones built into it
+    /// while rays are traced against it. Not for the frame path. A handle that is already destroyed
+    /// does nothing.
+    ~AccelerationStructure() { bfr_destroy_acceleration_structure(device_, accelerationStructure_); }
+    AccelerationStructure(const AccelerationStructure&) = delete;
+    AccelerationStructure& operator=(const AccelerationStructure&) = delete;
+    AccelerationStructure(AccelerationStructure&& other) noexcept : device_(std::exchange(other.device_, nullptr)), accelerationStructure_(std::exchange(other.accelerationStructure_, {})), keepAlive_(std::move(other.keepAlive_)) {}
+    AccelerationStructure& operator=(AccelerationStructure&& other) noexcept {
+        if (this != &other) {
+            bfr_destroy_acceleration_structure(device_, accelerationStructure_);
+            device_ = std::exchange(other.device_, nullptr);
+            accelerationStructure_ = std::exchange(other.accelerationStructure_, {});
+            keepAlive_ = std::move(other.keepAlive_);
+        }
+        return *this;
+    }
+
+    /// The C value, for calls bfr.hpp does not wrap; this still owns it.
+    [[nodiscard]] bfr_acceleration_structure get() const { return accelerationStructure_; }
+    [[nodiscard]] explicit operator bool() const { return accelerationStructure_.bits != 0; }
+
+    /// Writes a top acceleration structure's index in the acceleration structure table bfr_pipeline
+    /// states, held from creation to destruction. Fails with error_invalid_argument for a bottom
+    /// one, or on a device made with no max_bindless_acceleration_structures.
+    [[nodiscard]] Expected<std::uint32_t> accelerationStructureSlot();
+
+    /// Writes what an instance record names a bottom acceleration structure by, for records the GPU
+    /// writes, as bfr_write_instances lays them out.
+    [[nodiscard]] Expected<std::uint64_t> accelerationStructureReference();
+
+private:
+    AccelerationStructure(bfr_device* device, bfr_acceleration_structure accelerationStructure, detail::KeepAlive keepAlive) : device_(device), accelerationStructure_(accelerationStructure), keepAlive_(std::move(keepAlive)) {}
+    friend class Device;
+
+    bfr_device* device_ = nullptr;
+    bfr_acceleration_structure accelerationStructure_{};
+    // Keeps the Device that made this alive until this is destroyed.
+    detail::KeepAlive keepAlive_;
+};
+
 /// Pipelines the backend has compiled, which it reads back as bytes for a later run to start from.
 /// Pipelines made with one look in it first and add themselves on a miss.
 class PipelineCache {
@@ -4644,6 +5040,8 @@ inline SamplerRef::SamplerRef(const Sampler& sampler) : sampler_(sampler.get()) 
 inline TimestampPoolRef::TimestampPoolRef(const TimestampPool& timestampPool) : timestampPool_(timestampPool.get()) {}
 
 inline SparseMemoryRef::SparseMemoryRef(const SparseMemory& sparseMemory) : sparseMemory_(sparseMemory.get()) {}
+
+inline AccelerationStructureRef::AccelerationStructureRef(const AccelerationStructure& accelerationStructure) : accelerationStructure_(accelerationStructure.get()) {}
 
 inline PipelineCacheRef::PipelineCacheRef(const PipelineCache& pipelineCache) : pipelineCache_(pipelineCache.get()) {}
 
@@ -4753,6 +5151,73 @@ inline bfr_tile_mapping_desc toC(const TileMappingDesc& value, const bfr_chain* 
         .buffer = value.buffer.get(),
         .buffer_regions = reinterpret_cast<const bfr_buffer_tile_region*>(value.bufferRegions.data()),
         .buffer_region_count = static_cast<uint32_t>(value.bufferRegions.size()),
+    };
+}
+
+inline bfr_triangle_geometry toC(const TriangleGeometry& value) {
+    return {
+        .vertices = value.vertices.get(),
+        .vertex_offset = value.vertexOffset,
+        .vertex_format = static_cast<bfr_format>(value.vertexFormat),
+        .vertex_stride = value.vertexStride,
+        .vertex_count = value.vertexCount,
+        .indices = value.indices.get(),
+        .index_offset = value.indexOffset,
+        .index_type = static_cast<bfr_index_type>(value.indexType),
+        .triangle_count = value.triangleCount,
+        .transform = value.transform.get(),
+        .transform_offset = value.transformOffset,
+        .opaque = static_cast<bfr_bool>(value.opaque),
+        .no_duplicate_any_hit = static_cast<bfr_bool>(value.noDuplicateAnyHit),
+    };
+}
+
+inline bfr_box_geometry toC(const BoxGeometry& value) {
+    return {
+        .boxes = value.boxes.get(),
+        .offset = value.offset,
+        .stride = value.stride,
+        .count = value.count,
+        .opaque = static_cast<bfr_bool>(value.opaque),
+        .no_duplicate_any_hit = static_cast<bfr_bool>(value.noDuplicateAnyHit),
+    };
+}
+
+inline bfr_acceleration_structure_inputs toC(const AccelerationStructureInputs& value) {
+    return {
+        .type = static_cast<bfr_acceleration_structure_type>(value.type),
+        .flags = toC(value.flags),
+        .triangles = reinterpret_cast<const bfr_triangle_geometry*>(value.triangles.data()),
+        .triangle_count = static_cast<uint32_t>(value.triangles.size()),
+        .boxes = reinterpret_cast<const bfr_box_geometry*>(value.boxes.data()),
+        .box_count = static_cast<uint32_t>(value.boxes.size()),
+        .instances = value.instances.get(),
+        .instance_offset = value.instanceOffset,
+        .instance_count = value.instanceCount,
+    };
+}
+
+inline bfr_acceleration_structure_build toC(const AccelerationStructureBuild& value) {
+    return {
+        .dst = value.dst.get(),
+        .src = value.src.get(),
+        .update = static_cast<bfr_bool>(value.update),
+        .inputs = toC(value.inputs),
+        .scratch = value.scratch.get(),
+        .scratch_offset = value.scratchOffset,
+    };
+}
+
+inline bfr_acceleration_structure_instance toC(const AccelerationStructureInstance& value) {
+    return {
+        .transform = {value.transform[0], value.transform[1], value.transform[2], value.transform[3], value.transform[4], value.transform[5], value.transform[6], value.transform[7], value.transform[8], value.transform[9], value.transform[10], value.transform[11]},
+        .custom_index = value.customIndex,
+        .mask = value.mask,
+        .hit_group_offset = value.hitGroupOffset,
+        .cull_disable = static_cast<bfr_bool>(value.cullDisable),
+        .front_counter_clockwise = static_cast<bfr_bool>(value.frontCounterClockwise),
+        .opacity = static_cast<bfr_instance_opacity>(value.opacity),
+        .bottom_structure = value.bottomStructure.get(),
     };
 }
 
@@ -5339,6 +5804,55 @@ inline Expected<Token> Device::updateTileMappings(const TileMappingDesc& desc) c
     return detail::fromC(token);
 }
 
+inline Expected<AccelerationStructureSizes> Device::accelerationStructureSizes(const AccelerationStructureInputs& inputs) const {
+    if (!std::in_range<uint32_t>(inputs.triangles.size())) {
+        return std::unexpected(detail::tooMany("inputs.triangles holds more elements than a uint32_t counts"));
+    }
+    if (!std::in_range<uint32_t>(inputs.boxes.size())) {
+        return std::unexpected(detail::tooMany("inputs.boxes holds more elements than a uint32_t counts"));
+    }
+    const bfr_acceleration_structure_inputs cInputs = detail::toC(inputs);
+    bfr_acceleration_structure_sizes sizes{};
+    if (const bfr_result result = bfr_get_acceleration_structure_sizes(device_, &cInputs, &sizes); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(sizes);
+}
+
+inline Expected<AccelerationStructure> Device::createAccelerationStructure(const AccelerationStructureDesc& desc) const {
+    const bfr_acceleration_structure_desc cDesc = detail::toC(desc, nullptr);
+    bfr_acceleration_structure structure{};
+    if (const bfr_result result = bfr_create_acceleration_structure(device_, &cDesc, &structure); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return AccelerationStructure{device_, structure, keepAlive_};
+}
+
+inline Expected<void> Device::writeInstances(std::span<const AccelerationStructureInstance> instances, void* data, std::size_t size) const {
+    if (!std::in_range<uint32_t>(instances.size())) {
+        return std::unexpected(detail::tooMany("instances holds more elements than a uint32_t counts"));
+    }
+    if (const bfr_result result = bfr_write_instances(device_, reinterpret_cast<const bfr_acceleration_structure_instance*>(instances.data()), static_cast<uint32_t>(instances.size()), data, size); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::buildAccelerationStructure(CommandList commandList, const AccelerationStructureBuild& build) const {
+    const bfr_acceleration_structure_build cBuild = detail::toC(build);
+    if (const bfr_result result = bfr_build_acceleration_structure(device_, commandList.get(), &cBuild); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::copyAccelerationStructure(CommandList commandList, const AccelerationStructure& dst, const AccelerationStructure& src) const {
+    if (const bfr_result result = bfr_copy_acceleration_structure(device_, commandList.get(), dst.get(), src.get()); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
 inline Expected<std::vector<CallTiming>> Device::callTimings() const {
     std::vector<bfr_call_timing> timingsC;
     std::uint32_t count = 0;
@@ -5454,6 +5968,22 @@ inline Expected<std::uint32_t> Sampler::samplerSlot() {
         return std::unexpected(detail::failure(result));
     }
     return slot;
+}
+
+inline Expected<std::uint32_t> AccelerationStructure::accelerationStructureSlot() {
+    uint32_t slot{};
+    if (const bfr_result result = bfr_get_acceleration_structure_slot(device_, accelerationStructure_, &slot); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return slot;
+}
+
+inline Expected<std::uint64_t> AccelerationStructure::accelerationStructureReference() {
+    uint64_t reference{};
+    if (const bfr_result result = bfr_get_acceleration_structure_reference(device_, accelerationStructure_, &reference); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return reference;
 }
 
 inline Expected<std::vector<std::uint8_t>> PipelineCache::pipelineCacheData() {

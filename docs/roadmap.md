@@ -24,7 +24,9 @@ and read back as bytes, which pipelines are looked for in and added to).
 Vulkan only so far: the caller's API version, uncapped, with BFR's minimum
 requirements (Vulkan 1.2 with dynamic rendering and synchronization2); mesh
 and task shaders (mesh pipelines, direct, indirect and counted mesh draws,
-mesh limits, task and mesh timestamps).
+mesh limits, task and mesh timestamps); acceleration structures and inline
+ray queries (builds of triangles, boxes and instances, updates, copies,
+instance records, the acceleration structure table).
 
 D3D12 and Metal are paused while Vulkan takes shape (owner, 2026-11-08); they
 still type-check.
