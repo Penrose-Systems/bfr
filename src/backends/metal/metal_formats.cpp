@@ -230,7 +230,7 @@ FormatCaps formatCapsFor(MTL::Device* device, Format format) {
     // Godot's changes for one device (pixel_formats.cpp:897-1000), in its
     // order: whole rows, then bits added, then bits taken. Its changes for
     // families below Apple7 never apply, as Metal 4 runs on Apple7 and later
-    // (belowFloor); nor does the one it makes only for Vulkan's sake (:931).
+    // (belowMinimum); nor does the one it makes only for Vulkan's sake (:931).
     const bool iosBelowApple9 = TARGET_OS_OSX == 0 && !device->supportsFamily(MTL::GPUFamilyApple9);
     if (iosBelowApple9 && (format == Format::R32Float || format == Format::Rg32Float)) {
         caps = kRwcm | kBlend;

@@ -168,6 +168,8 @@ struct Features {
     bool triangleFans = false;
     /// PrimitiveRestart on list topologies, not only strips.
     bool listRestart = false;
+    /// Device::setTopology, which fails with RhiUnsupported where this is false.
+    bool dynamicTopology = false;
     /// GraphicsPipelineDesc::alphaToOne.
     bool alphaToOne = false;
     /// A GraphicsPipelineDesc::sampleMask that leaves samples out.
@@ -176,6 +178,9 @@ struct Features {
     bool pipelineCache = false;
     bool storageReadWithoutFormat = false;
     bool storageWriteWithoutFormat = false;
+    /// A storage texture table indexed by a value that differs within a
+    /// shader's invocation group.
+    bool storageTextureNonUniformIndexing = false;
     bool timestampsOnAllQueues = false;
     bool pipelineStatistics = false;
     bool occlusionQueryPrecise = false;

@@ -4,6 +4,7 @@
 //     bfr_caps --formats   a table of the formats each adapter supports
 //     bfr_caps --window    what a swapchain for a headless window may be
 //     bfr_caps --all       every field, as the API names it
+#include "api_version.hpp"
 #include "bfr.hpp"
 
 #include <array>
@@ -674,7 +675,9 @@ int run(std::span<char*> args) {
         return 1;
     }
     for (const bfr::Backend backend : *backends) {
-        const auto instance = bfr::Instance::create({.backend = backend});
+        const sample::ApiVersion version = sample::apiVersionFor(backend);
+        const auto instance = bfr::Instance::create(
+            {.backend = backend, .apiMajor = version.major, .apiMinor = version.minor});
         // A backend that won't start on this machine is said, and the next
         // is tried.
         if (!instance) {

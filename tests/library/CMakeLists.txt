@@ -27,7 +27,9 @@ endif()
 # Registers target's cases with ctest. The unit cases run everywhere, and so
 # do the agnostic cases, on lavapipe when it is there. Under the gpu label,
 # the [gpu] cases run, and the agnostic cases run again on each GPU backend
-# the build has. Hidden cases ([.]) run only through their own entries.
+# the build has. Vulkan's agnostic entries run again at Vulkan 1.2, BFR's
+# minimum, so the extension forms of what 1.3 made core run too. Hidden cases
+# ([.]) run only through their own entries.
 function(bfr_discover_tests target)
     catch_discover_tests(${target} TEST_SPEC "~[gpu]~[agnostic]")
     # Catch names each entry's script by its spec and arguments alone, so this
@@ -36,11 +38,16 @@ function(bfr_discover_tests target)
     if(BFR_LAVAPIPE_ICD)
         catch_discover_tests(${target} TEST_SPEC "[agnostic]~[gpu]" TEST_SUFFIX " (lavapipe)"
             EXTRA_ARGS --backend vulkan PROPERTIES ENVIRONMENT "VK_DRIVER_FILES=${BFR_LAVAPIPE_ICD}")
+        catch_discover_tests(${target} TEST_SPEC "[agnostic]~[gpu]" TEST_SUFFIX " (lavapipe, Vulkan 1.2)"
+            EXTRA_ARGS --backend vulkan --api-version 1.2
+            PROPERTIES ENVIRONMENT "VK_DRIVER_FILES=${BFR_LAVAPIPE_ICD}")
     endif()
     catch_discover_tests(${target} TEST_SPEC "[gpu]~[.]" PROPERTIES LABELS gpu)
     if(BFR_BACKEND_VULKAN)
         catch_discover_tests(${target} TEST_SPEC "[agnostic]" TEST_SUFFIX " (vulkan)"
             EXTRA_ARGS --backend vulkan PROPERTIES LABELS gpu)
+        catch_discover_tests(${target} TEST_SPEC "[agnostic]" TEST_SUFFIX " (vulkan 1.2)"
+            EXTRA_ARGS --backend vulkan --api-version 1.2 PROPERTIES LABELS gpu)
     endif()
     if(BFR_BACKEND_D3D12)
         catch_discover_tests(${target} TEST_SPEC "[agnostic]" TEST_SUFFIX " (d3d12)"

@@ -70,11 +70,11 @@ core::Result<void> MetalInstance::listAdapters() {
     std::vector<std::string> rejected;
     for (const Ref<MTL::Device>& device : found) {
         const std::string name = toString(device->name());
-        const std::string reason = belowFloor(device.get());
+        const std::string reason = belowMinimum(device.get());
         BFR_LOG_INFO(logger_, "adapter {}: {}", name,
-                     reason.empty() ? std::string{"listed"} : "below the floor, " + reason);
+                     reason.empty() ? std::string{"listed"} : "below BFR's minimum, " + reason);
         if (!reason.empty()) {
-            rejected.push_back(std::format("{}: below the floor, {}", name, reason));
+            rejected.push_back(std::format("{}: below BFR's minimum, {}", name, reason));
             continue;
         }
         adapters_.push_back({.name = name,

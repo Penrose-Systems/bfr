@@ -106,7 +106,8 @@ typedef enum bfr_result {
 
 // The native API an instance runs on.
 typedef enum bfr_backend {
-    // Vulkan 1.3.
+    // Vulkan 1.2 or later with dynamic rendering and synchronization2 (extensions before 1.3),
+    // descriptor indexing with update-after-bind and partially bound tables, and timelines.
     BFR_BACKEND_VULKAN = 1,
     // D3D12, Shader Model 6.6 with enhanced barriers.
     BFR_BACKEND_D3D12 = 2,
@@ -894,8 +895,8 @@ typedef struct bfr_texture {
 // buffer at buffer(0), holding the sampled textures, storage textures, storage buffers and samplers
 // in that order, each a region of as many 8-byte entries as the bfr_device_desc's max_bindless
 // member for its kind, so a shader declares them with the sizes the device was opened with; the
-// push constants are at buffer(1). Uniform buffers have no table: they are not in every backend's
-// floor. A pipeline's shaders are bytecode for the backend the device runs on. A generational
+// push constants are at buffer(1). Uniform buffers have no table: not every backend's minimum has
+// them. A pipeline's shaders are bytecode for the backend the device runs on. A generational
 // handle; 0 is never valid.
 typedef struct bfr_pipeline {
     uint64_t bits;
@@ -940,6 +941,12 @@ typedef void (*bfr_message_callback)(
 typedef struct bfr_instance_desc {
     const bfr_chain* next;
     bfr_backend backend;
+    // The API version the caller uses, in bfr_caps_info's terms (1, 2 is Vulkan 1.2), passed to the
+    // backend as it is. Below what BFR needs, which the backend's bfr_backend value states,
+    // bfr_create_instance fails with error_unsupported.
+    uint32_t api_major;
+    // The minor part of api_major's version.
+    uint32_t api_minor;
     // Enable the backend's validation layer. On Metal its messages go to the system log.
     bfr_bool validation;
     // May be null.
@@ -1899,7 +1906,8 @@ typedef struct bfr_caps_ray_tracing {
     uint32_t table_alignment;
 } bfr_caps_ray_tracing;
 
-// Optional features the adapter has. The floor's features are always there and not listed.
+// Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and
+// not listed.
 typedef struct bfr_caps_features {
     // Rays traced inline from any shader.
     bfr_bool ray_query;
@@ -1966,6 +1974,8 @@ typedef struct bfr_caps_features {
     bfr_bool triangle_fans;
     // primitive_restart on list topologies, not only strips.
     bfr_bool list_restart;
+    // bfr_set_topology, which fails with error_unsupported where this is false.
+    bfr_bool dynamic_topology;
     // bfr_graphics_pipeline_desc.alpha_to_one.
     bfr_bool alpha_to_one;
     // A bfr_graphics_pipeline_desc.sample_mask that leaves samples out.
@@ -1974,6 +1984,8 @@ typedef struct bfr_caps_features {
     bfr_bool pipeline_cache;
     bfr_bool storage_read_without_format;
     bfr_bool storage_write_without_format;
+    // A storage texture table indexed by a value that differs within a shader's invocation group.
+    bfr_bool storage_texture_non_uniform_indexing;
     // Every graphics and compute queue writes timestamps.
     bfr_bool timestamps_on_all_queues;
     bfr_bool pipeline_statistics;
@@ -2469,7 +2481,7 @@ BFR_API bfr_result bfr_bind_pipeline(
 // Makes the draws after it assemble topology, which is of the bound graphics pipeline's kind,
 // points, lines or triangles, as each backend requires, until the next bfr_bind_pipeline. Fails
 // with error_invalid_argument for a value BFR doesn't have, and error_unsupported for a topology
-// the backend has no form for (Metal's fan).
+// the backend has no form for (Metal's fan), or where bfr_caps_features.dynamic_topology is false.
 BFR_API bfr_result bfr_set_topology(
     bfr_device* device,
     bfr_command_list command_list,

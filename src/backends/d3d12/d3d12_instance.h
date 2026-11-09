@@ -39,7 +39,7 @@ public:
     /// An Instance over the adapters DXGI lists. With validation on, the D3D12 debug
     /// layer is switched on and its messages go to the logger. Fails with
     /// RhiValidationUnavailable when the debug layer is missing, and
-    /// RhiNoAdapter when no adapter meets the floor, naming each and why.
+    /// RhiNoAdapter when no adapter meets BFR's minimum, naming each and why.
     [[nodiscard]] static core::Result<std::unique_ptr<D3D12Instance>> create(const InstanceDesc& desc,
                                                                              const RhiConfig& config);
 
@@ -72,7 +72,7 @@ private:
     [[nodiscard]] static core::Result<void> enableDebugLayer();
     [[nodiscard]] core::Result<void> createFactory();
     [[nodiscard]] core::Result<void> listAdapters();
-    // Lists found, an adapter DXGI listed, when it meets the floor; otherwise adds
+    // Lists found, an adapter DXGI listed, when it meets BFR's minimum; otherwise adds
     // why not to rejected.
     [[nodiscard]] core::Result<void> listAdapter(IDXGIAdapter1* found, std::vector<std::string>& rejected);
     // Has native's device send the debug layer's messages to the logger.

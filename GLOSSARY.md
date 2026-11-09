@@ -36,13 +36,17 @@ _Avoid_: binding, FFI layer
 
 ## Capabilities
 
+**Minimum requirements**:
+What BFR needs of a backend, which each `backend` value in `api/bfr.yaml`
+states. An adapter below them is not listed, and an instance asked for at a
+version below them fails. Nothing above them is capped.
+_Avoid_: floor, baseline, minimum spec
+
 **Feature**:
-Something an adapter may or may not have. It is reported by the adapter and
-asked for when the device is created. BFR requires none: every adapter the
-backend lists is listed, and a call that needs a feature the device lacks
-fails with RhiUnsupported.
-_Avoid_: extension, capability bit, floor, baseline, minimum spec, required
-features
+Something an adapter may or may not have beyond BFR's minimum requirements.
+It is reported in the adapter's caps and turned on when the device is
+created; a call that needs one the device lacks fails with RhiUnsupported.
+_Avoid_: extension, capability bit, optional feature
 
 **Caps**:
 Everything about an adapter that stays the same while it runs: info, limits,

@@ -100,17 +100,25 @@ inline auto eachBackend() {
     return Instance::create(desc, config);
 }
 
-/// A description on backend, with nothing recorded.
+/// A description on backend at the version the tests ask it for
+/// (testApiVersion), with nothing recorded.
+inline InstanceDesc describe(Backend backend) {
+    const bfr::test::ApiVersion version = bfr::test::testApiVersion(name(backend));
+    return {.backend = backend, .apiMajor = version.major, .apiMinor = version.minor};
+}
+
+/// describe on a TestBackend.
 inline InstanceDesc describe(const TestBackend& backend) {
-    return {.backend = backend.backend};
+    return describe(backend.backend);
 }
 
 /// A description on backend that records every warning and error the Instance and
 /// validation report.
 inline InstanceDesc recordingInto(Backend backend, std::vector<std::string>& messages) {
-    return {.backend = backend,
-            .logger = {[&messages](core::Severity, std::string_view message) { messages.emplace_back(message); },
-                       core::Severity::Warning}};
+    InstanceDesc desc = describe(backend);
+    desc.logger = {[&messages](core::Severity, std::string_view message) { messages.emplace_back(message); },
+                   core::Severity::Warning};
+    return desc;
 }
 
 /// recordingInto on a TestBackend.
@@ -121,9 +129,10 @@ inline InstanceDesc recordingInto(const TestBackend& backend, std::vector<std::s
 /// A description on backend that records only errors: a backend's loader may
 /// warn about what the environment turned on.
 inline InstanceDesc recordingErrorsInto(Backend backend, std::vector<std::string>& errors) {
-    return {.backend = backend,
-            .logger = {[&errors](core::Severity, std::string_view message) { errors.emplace_back(message); },
-                       core::Severity::Error}};
+    InstanceDesc desc = describe(backend);
+    desc.logger = {[&errors](core::Severity, std::string_view message) { errors.emplace_back(message); },
+                   core::Severity::Error};
+    return desc;
 }
 
 /// The code and message of a failed result, for INFO; empty on success.

@@ -100,7 +100,7 @@ Limits limitsOf(const D3D12_FEATURE_DATA_D3D12_OPTIONS6& options6) {
     return limits;
 }
 
-// Resource binding tier 3, which the floor asks for, reads any descriptor in
+// Resource binding tier 3, which BFR needs, reads any descriptor in
 // a full shader-visible heap from any stage. Each heap is as OPTIONS19 says
 // when the device answers it, else as d3d12.h defines it for the tiers. The
 // three resource tables are regions of one heap (createD3D12BindlessLayout),
@@ -216,7 +216,7 @@ void addSamplerFeatures(ID3D12Device* device, const SamplerFeatures& sampler, Fe
 // the BC formats as a set. Devices are made at feature level 11_0 or above
 // (D3D12CreateDevice in d3d12_instance.cpp), where the Direct3D functional
 // spec requires all four; no header states that requirement.
-void addFloorFeatures(Features& features) {
+void addMinimumFeatures(Features& features) {
     features.independentBlend = true;
     features.wireframe = true;
     features.depthClamp = true;
@@ -237,7 +237,11 @@ void addMultisampleFeatures(Features& features) {
 // bit for any. Fans are OPTIONS15's. D3D12 cuts strips at the
 // IBStripCutValue (D3D12_INDEX_BUFFER_STRIP_CUT_VALUE) and no D3D12 source
 // says the cut applies to lists, so listRestart stays false.
+//
+// Topology is set per list by IASetPrimitiveTopology (d3d12.h:6439), with no
+// caps bit.
 void addDrawFeatures(ID3D12Device* device, Features& features) {
+    features.dynamicTopology = true;
     features.multiDrawIndirect = true;
     features.drawIndirectCount = true;
     features.drawIndirectFirstInstance = true;
@@ -263,7 +267,9 @@ Features featuresOf(ID3D12Device* device, const SamplerFeatures& sampler) {
     addBasicFeatures(device, features);
     addAdvancedFeatures(device, features);
     addSamplerFeatures(device, sampler, features);
-    addFloorFeatures(features);
+    // d3d12.h has no caps bit for a storage texture indexed by a value that
+    // varies within a wave, so storageTextureNonUniformIndexing stays false.
+    addMinimumFeatures(features);
     addDrawFeatures(device, features);
     addMultisampleFeatures(features);
     addPipelineCacheFeatures(device, features);
@@ -411,7 +417,7 @@ SamplerFeatures samplerFeaturesOf(ID3D12Device* device) {
     return sampler;
 }
 
-std::string belowFloor(ID3D12Device* device) {
+std::string belowMinimum(ID3D12Device* device) {
     std::string reasons;
     const auto add = [&reasons](const char* reason) {
         if (!reasons.empty()) {

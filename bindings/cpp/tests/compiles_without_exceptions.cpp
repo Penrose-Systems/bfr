@@ -3,6 +3,7 @@
 #include "bfr.hpp"
 
 #include <array>
+#include <cstdint>
 #include <string_view>
 
 namespace {
@@ -13,7 +14,12 @@ namespace {
     if (!backends || backends->empty()) {
         return false;
     }
+    // Vulkan 1.2, BFR's minimum there; never run, so any version compiles.
+    constexpr std::uint32_t kMajor = 1;
+    constexpr std::uint32_t kMinor = 2;
     auto instance = bfr::Instance::create({.backend = backends->front(),
+                                           .apiMajor = kMajor,
+                                           .apiMinor = kMinor,
                                            .validation = false,
                                            .messageCallback = [](bfr::MessageSeverity, std::string_view) {
                                            }});

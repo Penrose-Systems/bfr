@@ -28,44 +28,36 @@ namespace bfr::rhi::vulkan {
 
 namespace {
 
-// A floor feature: its Vulkan name, and its member in Features.
-template <class Features>
-struct FloorFeature {
-    const char* name;
-    VkBool32 Features::* member;
-};
-
 using Vulkan12 = VkPhysicalDeviceVulkan12Features;
-using Vulkan13 = VkPhysicalDeviceVulkan13Features;
 
-// What BFR's own calls use: bindless takes descriptor indexing with
-// update-after-bind and partially bound tables; queue progress takes
-// timelines; barriers take synchronization2; rendering takes dynamic
-// rendering. Every other feature is reported and enabled where the adapter
-// has it, and refuses no adapter.
-constexpr std::array kFloor12{
-    FloorFeature<Vulkan12>{.name = "descriptorIndexing", .member = &Vulkan12::descriptorIndexing},
-    FloorFeature<Vulkan12>{.name = "runtimeDescriptorArray", .member = &Vulkan12::runtimeDescriptorArray},
-    FloorFeature<Vulkan12>{.name = "descriptorBindingPartiallyBound",
-                           .member = &Vulkan12::descriptorBindingPartiallyBound},
-    FloorFeature<Vulkan12>{.name = "descriptorBindingSampledImageUpdateAfterBind",
-                           .member = &Vulkan12::descriptorBindingSampledImageUpdateAfterBind},
-    FloorFeature<Vulkan12>{.name = "descriptorBindingStorageImageUpdateAfterBind",
-                           .member = &Vulkan12::descriptorBindingStorageImageUpdateAfterBind},
-    FloorFeature<Vulkan12>{.name = "descriptorBindingStorageBufferUpdateAfterBind",
-                           .member = &Vulkan12::descriptorBindingStorageBufferUpdateAfterBind},
-    FloorFeature<Vulkan12>{.name = "shaderSampledImageArrayNonUniformIndexing",
-                           .member = &Vulkan12::shaderSampledImageArrayNonUniformIndexing},
-    FloorFeature<Vulkan12>{.name = "shaderStorageBufferArrayNonUniformIndexing",
-                           .member = &Vulkan12::shaderStorageBufferArrayNonUniformIndexing},
-    FloorFeature<Vulkan12>{.name = "shaderStorageImageArrayNonUniformIndexing",
-                           .member = &Vulkan12::shaderStorageImageArrayNonUniformIndexing},
-    FloorFeature<Vulkan12>{.name = "timelineSemaphore", .member = &Vulkan12::timelineSemaphore},
+// A Vulkan 1.2 feature BFR needs: its Vulkan name, and its member.
+struct Requirement {
+    const char* name;
+    VkBool32 Vulkan12::* member;
 };
 
-constexpr std::array kFloor13{
-    FloorFeature<Vulkan13>{.name = "dynamicRendering", .member = &Vulkan13::dynamicRendering},
-    FloorFeature<Vulkan13>{.name = "synchronization2", .member = &Vulkan13::synchronization2},
+// Bindless takes descriptor indexing with update-after-bind and partially
+// bound tables of the three kinds of descriptor it holds, indexed by a value
+// that may differ across invocations for sampled textures and storage buffers;
+// queue progress takes timelines. Storage textures indexed that way are
+// reported (storageTextureNonUniformIndexing): descriptorIndexing's minimum
+// set (features.adoc:910-913) leaves that feature out, as vk.xml's
+// requirements for it say (vkdocs xml/vk.xml:20980-20996).
+constexpr std::array kRequired12{
+    Requirement{.name = "descriptorIndexing", .member = &Vulkan12::descriptorIndexing},
+    Requirement{.name = "runtimeDescriptorArray", .member = &Vulkan12::runtimeDescriptorArray},
+    Requirement{.name = "descriptorBindingPartiallyBound", .member = &Vulkan12::descriptorBindingPartiallyBound},
+    Requirement{.name = "descriptorBindingSampledImageUpdateAfterBind",
+                .member = &Vulkan12::descriptorBindingSampledImageUpdateAfterBind},
+    Requirement{.name = "descriptorBindingStorageImageUpdateAfterBind",
+                .member = &Vulkan12::descriptorBindingStorageImageUpdateAfterBind},
+    Requirement{.name = "descriptorBindingStorageBufferUpdateAfterBind",
+                .member = &Vulkan12::descriptorBindingStorageBufferUpdateAfterBind},
+    Requirement{.name = "shaderSampledImageArrayNonUniformIndexing",
+                .member = &Vulkan12::shaderSampledImageArrayNonUniformIndexing},
+    Requirement{.name = "shaderStorageBufferArrayNonUniformIndexing",
+                .member = &Vulkan12::shaderStorageBufferArrayNonUniformIndexing},
+    Requirement{.name = "timelineSemaphore", .member = &Vulkan12::timelineSemaphore},
 };
 
 // Makes next the last link of the chain whose last pNext tail points at.
@@ -75,16 +67,20 @@ void link(void**& tail, Struct& next) {
     tail = &next.pNext;
 }
 
-// The property structs one query fills: the core ones always, and an
-// extension's only when the adapter lists it, since chaining one it lacks is
-// invalid. The chain points into itself, so it stays where it is made.
+// The property structs one query fills: those of each core version up to
+// version, and an extension's only when the adapter lists it, since chaining
+// one it lacks is invalid. Below 1.3, the extensions 1.3 made core stand in
+// for its struct. The chain points into itself, so it stays where it is made.
 struct PropertyQuery {
-    PropertyQuery(const InstanceTable& vk, VkPhysicalDevice adapter,
-                  std::span<const VkExtensionProperties> extensions) {
+    PropertyQuery(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
+                  std::span<const VkExtensionProperties> extensions)
+        : at13(hasCore13(version)) {
         core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         vulkan11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES;
         vulkan12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
         vulkan13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES;
+        maintenance4.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES_KHR;
+        subgroupSizeControl.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES_EXT;
         accelerationStructure.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
         rayTracingPipeline.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
         mesh.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT;
@@ -94,12 +90,18 @@ struct PropertyQuery {
         void** tail = &core.pNext;
         link(tail, vulkan11);
         link(tail, vulkan12);
-        link(tail, vulkan13);
         const auto linkIfListed = [&tail, extensions](const char* extension, auto& next) {
             if (lists(extensions, extension)) {
                 link(tail, next);
             }
         };
+        if (at13) {
+            link(tail, vulkan13);
+        }
+        else {
+            linkIfListed(VK_KHR_MAINTENANCE_4_EXTENSION_NAME, maintenance4);
+            linkIfListed(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME, subgroupSizeControl);
+        }
         linkIfListed(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, accelerationStructure);
         linkIfListed(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, rayTracingPipeline);
         linkIfListed(VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh);
@@ -113,10 +115,25 @@ struct PropertyQuery {
     PropertyQuery(PropertyQuery&&) = delete;
     PropertyQuery& operator=(PropertyQuery&&) = delete;
 
+    // What 1.3 made core: its struct's from 1.3, else the extension's, 0
+    // where the adapter lists neither.
+    [[nodiscard]] VkDeviceSize maxBufferSize() const {
+        return at13 ? vulkan13.maxBufferSize : maintenance4.maxBufferSize;
+    }
+    [[nodiscard]] std::uint32_t minSubgroupSize() const {
+        return at13 ? vulkan13.minSubgroupSize : subgroupSizeControl.minSubgroupSize;
+    }
+    [[nodiscard]] std::uint32_t maxSubgroupSize() const {
+        return at13 ? vulkan13.maxSubgroupSize : subgroupSizeControl.maxSubgroupSize;
+    }
+
+    bool at13;
     VkPhysicalDeviceProperties2 core{};
     VkPhysicalDeviceVulkan11Properties vulkan11{};
     VkPhysicalDeviceVulkan12Properties vulkan12{};
     VkPhysicalDeviceVulkan13Properties vulkan13{};
+    VkPhysicalDeviceMaintenance4PropertiesKHR maintenance4{};
+    VkPhysicalDeviceSubgroupSizeControlPropertiesEXT subgroupSizeControl{};
     VkPhysicalDeviceAccelerationStructurePropertiesKHR accelerationStructure{};
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR rayTracingPipeline{};
     VkPhysicalDeviceMeshShaderPropertiesEXT mesh{};
@@ -162,7 +179,7 @@ Limits limitsFrom(const PropertyQuery& properties, const DeviceFeatures& feature
         .maxTexture3d = core.maxImageDimension3D,
         .maxTextureCube = core.maxImageDimensionCube,
         .maxTextureLayers = core.maxImageArrayLayers,
-        .maxBufferSize = properties.vulkan13.maxBufferSize,
+        .maxBufferSize = properties.maxBufferSize(),
         .maxAllocationSize = properties.vulkan11.maxMemoryAllocationSize,
         .maxAllocations = core.maxMemoryAllocationCount,
         .maxSamplerObjects = core.maxSamplerAllocationCount,
@@ -227,8 +244,8 @@ ComputeLimits computeFrom(const PropertyQuery& properties) {
         .maxWorkgroupInvocations = core.maxComputeWorkGroupInvocations,
         .maxSharedMemory = core.maxComputeSharedMemorySize,
         .subgroupSize = properties.vulkan11.subgroupSize,
-        .minSubgroupSize = properties.vulkan13.minSubgroupSize,
-        .maxSubgroupSize = properties.vulkan13.maxSubgroupSize,
+        .minSubgroupSize = properties.minSubgroupSize(),
+        .maxSubgroupSize = properties.maxSubgroupSize(),
     };
 }
 
@@ -237,7 +254,7 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
     const VkPhysicalDeviceFeatures& core = features.core.features;
     return {
         // BFR has no call for these, or conservative raster, yet (roadmap
-        // steps 12 and 13), so the device enables none of their extensions.
+        // steps 13 and 14), so the device enables none of their extensions.
         .rayQuery = false,
         .rayTracingPipeline = false,
         .accelerationStructure = false,
@@ -285,7 +302,7 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
         .compressionBc = on(core.textureCompressionBC),
         .compressionEtc2 = on(core.textureCompressionETC2),
         .compressionAstc = on(core.textureCompressionASTC_LDR),
-        .compressionAstcHdr = on(features.vulkan13.textureCompressionASTC_HDR),
+        .compressionAstcHdr = features.hasAstcHdr(),
         .multiDrawIndirect = on(core.multiDrawIndirect),
         .drawIndirectCount = on(features.vulkan12.drawIndirectCount),
         .drawIndirectFirstInstance = on(core.drawIndirectFirstInstance),
@@ -295,6 +312,7 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
                         on(features.portability.triangleFans),
         // VUID-VkPipelineInputAssemblyStateCreateInfo-topology-06252.
         .listRestart = on(features.listRestart.primitiveTopologyListRestart),
+        .dynamicTopology = features.hasDynamicTopology(),
         .alphaToOne = on(core.alphaToOne),
         // pSampleMask is core 1.0, with no feature.
         .sampleMask = true,
@@ -302,6 +320,7 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
         .pipelineCache = true,
         .storageReadWithoutFormat = on(core.shaderStorageImageReadWithoutFormat),
         .storageWriteWithoutFormat = on(core.shaderStorageImageWriteWithoutFormat),
+        .storageTextureNonUniformIndexing = on(features.vulkan12.shaderStorageImageArrayNonUniformIndexing),
         .timestampsOnAllQueues = on(properties.core.properties.limits.timestampComputeAndGraphics),
         .pipelineStatistics = on(core.pipelineStatisticsQuery),
         .occlusionQueryPrecise = on(core.occlusionQueryPrecise),
@@ -405,11 +424,11 @@ QueueLevels levelsFrom(const VkQueueFamilyGlobalPriorityPropertiesKHR& listed) {
 // it on, none for a kind the device can't open. The levels are each family's
 // list where the adapter has VK_KHR_global_priority, none without it; ranks
 // is the adapter's discreteQueuePriorities.
-Queues queuesFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const VkExtensionProperties> extensions,
-                  const VkPhysicalDeviceLimits& limits) {
+Queues queuesFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
+                  std::span<const VkExtensionProperties> extensions, const VkPhysicalDeviceLimits& limits) {
     std::uint32_t count = 0;
     vk.vkGetPhysicalDeviceQueueFamilyProperties2(adapter, &count, nullptr);
-    const bool listsLevels = lists(extensions, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME);
+    const bool listsLevels = hasQueueLevels(version, extensions);
     std::vector<VkQueueFamilyGlobalPriorityPropertiesKHR> listed(count);
     std::vector<VkQueueFamilyProperties2> queried(count);
     for (std::uint32_t index = 0; index < count; ++index) {
@@ -662,12 +681,33 @@ bool has(VkFormatFeatureFlags2 features, VkFormatFeatureFlags2 feature) {
 
 } // namespace
 
-DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter,
-                               std::span<const VkExtensionProperties> extensions) {
+DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
+                               std::span<const VkExtensionProperties> extensions)
+    : version(version) {
     core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     vulkan11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
     vulkan12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     vulkan13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    vulkan14.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
+    dynamicRendering.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR;
+    synchronization2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR;
+    extendedDynamicState.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT;
+    astcHdr.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXTURE_COMPRESSION_ASTC_HDR_FEATURES_EXT;
+    formats4444.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_4444_FORMATS_FEATURES_EXT;
+    maintenance4.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES_KHR;
+    subgroupSizeControl.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
+    integerDotProduct.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES_KHR;
+    terminateInvocation.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_TERMINATE_INVOCATION_FEATURES_KHR;
+    zeroInitializeWorkgroupMemory.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ZERO_INITIALIZE_WORKGROUP_MEMORY_FEATURES_KHR;
+    extendedDynamicState2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_2_FEATURES_EXT;
+    imageRobustness.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_ROBUSTNESS_FEATURES_EXT;
+    inlineUniformBlock.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_FEATURES_EXT;
+    pipelineCreationCacheControl.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_CREATION_CACHE_CONTROL_FEATURES_EXT;
+    privateData.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_FEATURES_EXT;
+    demoteToHelperInvocation.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DEMOTE_TO_HELPER_INVOCATION_FEATURES_EXT;
+    texelBufferAlignment.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXEL_BUFFER_ALIGNMENT_FEATURES_EXT;
+    ycbcr2Plane444Formats.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_YCBCR_2_PLANE_444_FORMATS_FEATURES_EXT;
     atomicFloat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
     imageAtomicInt64.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_IMAGE_ATOMIC_INT64_FEATURES_EXT;
     barycentric.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR;
@@ -680,7 +720,6 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     void** tail = &core.pNext;
     link(tail, vulkan11);
     link(tail, vulkan12);
-    link(tail, vulkan13);
     // Chaining an extension's struct the adapter lacks is invalid.
     const auto linkIfListed = [this, &tail, extensions](const char* extension, auto& next) {
         if (lists(extensions, extension)) {
@@ -688,36 +727,99 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
             enabledExtensions.push_back(extension);
         }
     };
+    const auto enableIfListed = [this, extensions](const char* extension) {
+        if (lists(extensions, extension)) {
+            enabledExtensions.push_back(extension);
+        }
+    };
+    // Below 1.3, every extension 1.3 made core that the adapter lists, so a
+    // device has at 1.2 what it would have at 1.3.
+    if (hasCore13(version)) {
+        link(tail, vulkan13);
+    }
+    else {
+        enableIfListed(VK_KHR_COPY_COMMANDS_2_EXTENSION_NAME);
+        enableIfListed(VK_KHR_FORMAT_FEATURE_FLAGS_2_EXTENSION_NAME);
+        enableIfListed(VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME);
+        enableIfListed(VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME);
+        enableIfListed(VK_EXT_TOOLING_INFO_EXTENSION_NAME);
+        linkIfListed(VK_KHR_SHADER_INTEGER_DOT_PRODUCT_EXTENSION_NAME, integerDotProduct);
+        linkIfListed(VK_KHR_SHADER_TERMINATE_INVOCATION_EXTENSION_NAME, terminateInvocation);
+        linkIfListed(VK_KHR_ZERO_INITIALIZE_WORKGROUP_MEMORY_EXTENSION_NAME, zeroInitializeWorkgroupMemory);
+        linkIfListed(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME, extendedDynamicState2);
+        linkIfListed(VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME, imageRobustness);
+        linkIfListed(VK_EXT_INLINE_UNIFORM_BLOCK_EXTENSION_NAME, inlineUniformBlock);
+        linkIfListed(VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME, pipelineCreationCacheControl);
+        linkIfListed(VK_EXT_PRIVATE_DATA_EXTENSION_NAME, privateData);
+        linkIfListed(VK_EXT_SHADER_DEMOTE_TO_HELPER_INVOCATION_EXTENSION_NAME, demoteToHelperInvocation);
+        linkIfListed(VK_EXT_TEXEL_BUFFER_ALIGNMENT_EXTENSION_NAME, texelBufferAlignment);
+        linkIfListed(VK_EXT_YCBCR_2PLANE_444_FORMATS_EXTENSION_NAME, ycbcr2Plane444Formats);
+        linkIfListed(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, dynamicRendering);
+        linkIfListed(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME, synchronization2);
+        linkIfListed(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME, extendedDynamicState);
+        linkIfListed(VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME, astcHdr);
+        linkIfListed(VK_EXT_4444_FORMATS_EXTENSION_NAME, formats4444);
+        linkIfListed(VK_KHR_MAINTENANCE_4_EXTENSION_NAME, maintenance4);
+        linkIfListed(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME, subgroupSizeControl);
+    }
+    if (version >= VK_API_VERSION_1_4) {
+        link(tail, vulkan14);
+        if (lists(extensions, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME)) {
+            enabledExtensions.push_back(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME);
+        }
+    }
+    else {
+        linkIfListed(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME, globalPriority);
+    }
     linkIfListed(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME, portability);
     linkIfListed(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME, atomicFloat);
     linkIfListed(VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME, imageAtomicInt64);
     linkIfListed(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME, barycentric);
     linkIfListed(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, customBorderColor);
-    linkIfListed(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME, globalPriority);
     linkIfListed(VK_KHR_MAINTENANCE_9_EXTENSION_NAME, maintenance9);
     linkIfListed(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME, listRestart);
     vk.vkGetPhysicalDeviceFeatures2(adapter, &core);
 }
 
-std::vector<std::string> missingFloorFeatures(const InstanceTable& vk, VkPhysicalDevice adapter) {
-    const DeviceFeatures features(vk, adapter, {});
+bool DeviceFeatures::hasDynamicRendering() const {
+    return on(hasCore13(version) ? vulkan13.dynamicRendering : dynamicRendering.dynamicRendering);
+}
+
+bool DeviceFeatures::hasSynchronization2() const {
+    return on(hasCore13(version) ? vulkan13.synchronization2 : synchronization2.synchronization2);
+}
+
+bool DeviceFeatures::hasDynamicTopology() const {
+    return hasCore13(version) || on(extendedDynamicState.extendedDynamicState);
+}
+
+bool DeviceFeatures::hasAstcHdr() const {
+    return on(hasCore13(version) ? vulkan13.textureCompressionASTC_HDR : astcHdr.textureCompressionASTC_HDR);
+}
+
+bool hasQueueLevels(std::uint32_t version, std::span<const VkExtensionProperties> extensions) {
+    return version >= VK_API_VERSION_1_4 || lists(extensions, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME);
+}
+
+std::vector<std::string> missingRequirements(const DeviceFeatures& features) {
     std::vector<std::string> missing;
-    for (const auto& feature : kFloor12) {
+    for (const Requirement& feature : kRequired12) {
         if (!on(features.vulkan12.*feature.member)) {
             missing.emplace_back(feature.name);
         }
     }
-    for (const auto& feature : kFloor13) {
-        if (!on(features.vulkan13.*feature.member)) {
-            missing.emplace_back(feature.name);
-        }
+    if (!features.hasDynamicRendering()) {
+        missing.emplace_back("dynamicRendering");
+    }
+    if (!features.hasSynchronization2()) {
+        missing.emplace_back("synchronization2");
     }
     return missing;
 }
 
 // The limits of what reported says the device has: none while a feature
 // reports false, as mesh shaders, ray tracing and shading rate textures do
-// until BFR has a call for them (roadmap steps 12 and 13).
+// until BFR has a call for them (roadmap steps 13 and 14).
 MeshLimits meshFrom(const PropertyQuery& properties, const Features& reported) {
     if (!reported.meshShader) {
         return {};
@@ -826,9 +928,10 @@ ResolveCaps resolveFrom(const PropertyQuery& properties) {
             .independentNone = on(vulkan12.independentResolveNone)};
 }
 
-Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const VkExtensionProperties> extensions) {
-    const DeviceFeatures features(vk, adapter, extensions);
-    const PropertyQuery properties(vk, adapter, extensions);
+Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
+              std::span<const VkExtensionProperties> extensions) {
+    const DeviceFeatures features(vk, adapter, version, extensions);
+    const PropertyQuery properties(vk, adapter, version, extensions);
     const Features reported = featuresFrom(features, properties, extensions);
     Caps caps{
         .info = infoFrom(properties),
@@ -839,7 +942,7 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const
         .rayTracing = rayTracingFrom(properties, reported),
         .features = reported,
         .memory = memoryFrom(vk, adapter, properties.core.properties.deviceType),
-        .queues = queuesFrom(vk, adapter, extensions, properties.core.properties.limits),
+        .queues = queuesFrom(vk, adapter, version, extensions, properties.core.properties.limits),
         .timestamps = {},
         .sparse = sparseFrom(features, properties),
         .resolve = resolveFrom(properties),
@@ -854,16 +957,43 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const
     return caps;
 }
 
-core::Result<FormatCaps> readFormatCaps(const InstanceTable& vk, VkPhysicalDevice adapter, Format format) {
+Formats13 formats13Of(std::uint32_t version, std::span<const VkExtensionProperties> extensions) {
+    const bool at13 = hasCore13(version);
+    return {.a4r4g4b4 = at13 || lists(extensions, VK_EXT_4444_FORMATS_EXTENSION_NAME),
+            .astcHdr = at13 || lists(extensions, VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME)};
+}
+
+bool hasFormat(Format format, const Formats13& formats) {
     const VkFormat vulkan = vulkanFormat(format);
+    if (vulkan == VK_FORMAT_A4R4G4B4_UNORM_PACK16) {
+        return formats.a4r4g4b4;
+    }
+    // The ASTC float formats run in one block (vulkan_core.h:2073-2086).
+    const bool astcFloat = vulkan >= VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK && vulkan <= VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK;
+    return !astcFloat || formats.astcHdr;
+}
+
+core::Result<FormatCaps> readFormatCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
+                                        std::span<const VkExtensionProperties> extensions, Format format) {
+    if (!hasFormat(format, formats13Of(version, extensions))) {
+        return FormatCaps{.format = format};
+    }
+    const VkFormat vulkan = vulkanFormat(format);
+    // The 64-bit flags, where the device has them; the 32-bit ones are the
+    // same bits (VkFormatFeatureFlagBits2).
     VkFormatProperties3 properties3{};
     properties3.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3;
     VkFormatProperties2 properties{};
     properties.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
-    properties.pNext = &properties3;
+    const bool flags2 = hasCore13(version) || lists(extensions, VK_KHR_FORMAT_FEATURE_FLAGS_2_EXTENSION_NAME);
+    if (flags2) {
+        properties.pNext = &properties3;
+    }
     vk.vkGetPhysicalDeviceFormatProperties2(adapter, vulkan, &properties);
-    const VkFormatFeatureFlags2 texture = properties3.optimalTilingFeatures;
-    const VkFormatFeatureFlags2 buffer = properties3.bufferFeatures;
+    const VkFormatFeatureFlags2 texture = flags2 ? properties3.optimalTilingFeatures
+                                                 : properties.formatProperties.optimalTilingFeatures;
+    const VkFormatFeatureFlags2 buffer = flags2 ? properties3.bufferFeatures
+                                                : properties.formatProperties.bufferFeatures;
     FormatCaps caps{
         .format = format,
         .sampled = has(texture, VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT),

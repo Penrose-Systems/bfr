@@ -31,7 +31,7 @@ public:
     /// An Instance over the Metal devices the system lists. With validation on,
     /// Metal's own validation layer is switched on, which reports to the
     /// system and not to the logger. Fails with RhiNoAdapter when no device
-    /// meets the floor, naming each and why.
+    /// meets BFR's minimum, naming each and why.
     [[nodiscard]] static core::Result<std::unique_ptr<MetalInstance>> create(const InstanceDesc& desc,
                                                                              const RhiConfig& config);
 

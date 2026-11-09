@@ -113,6 +113,7 @@ private:
 /// the API refuses a module or the pipeline.
 [[nodiscard]] core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable& table, VkDevice device,
                                                                         VkPipelineLayout layout, VkPipelineCache cache,
+                                                                        bool dynamicTopology,
                                                                         const GraphicsPipelineDesc& desc);
 
 } // namespace bfr::rhi::vulkan

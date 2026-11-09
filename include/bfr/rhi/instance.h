@@ -34,9 +34,13 @@ struct Adapter {
     Caps caps;
 };
 
-/// The native graphics API an Instance runs on. The values are bfr_backend's, so
-/// that zero, which a default-initialised InstanceDesc holds, names no backend.
+/// The native graphics API an Instance runs on, and what BFR needs of it. The
+/// values are bfr_backend's, so that zero, which a default-initialised
+/// InstanceDesc holds, names no backend.
 enum class Backend : std::uint8_t {
+    /// Vulkan 1.2 or later with dynamic rendering and synchronization2
+    /// (extensions before 1.3), descriptor indexing with update-after-bind and
+    /// partially bound tables, and timelines.
     Vulkan = 1,
     D3D12 = 2,
     Metal = 3,
@@ -61,6 +65,13 @@ enum class Backend : std::uint8_t {
 struct InstanceDesc {
     /// The API the Instance runs on. The caller names one; there is no default.
     Backend backend{};
+
+    /// The API version the caller uses, in AdapterInfo's terms (1, 2 is
+    /// Vulkan 1.2), passed to the backend as it is. Below what BFR needs,
+    /// which the backend's Backend value states, create fails with
+    /// RhiUnsupported.
+    std::uint32_t apiMajor = 0;
+    std::uint32_t apiMinor = 0;
 
     /// Where the Instance, its devices and, when RhiConfig turns it on, validation
     /// send their messages. Nowhere, until the caller says.
@@ -87,8 +98,10 @@ public:
     /// desc.backend is not in backends(), RhiLoaderFailed when the API's loader
     /// won't load, giving the OS's reason, RhiValidationUnavailable when
     /// validation is asked for and the system can't provide it,
-    /// RhiInstanceFailed when the API refuses the instance, and RhiNoAdapter
-    /// when no adapter meets the floor, naming each and why. With validation
+    /// RhiInstanceFailed when the API refuses the instance, RhiUnsupported
+    /// when desc's version is below BFR's minimum, RhiInvalidCall when the
+    /// backend has no form for it, and RhiNoAdapter when no adapter meets
+    /// BFR's minimum, naming each and why. With validation
     /// on, a refused instance's error carries the messages the API sent
     /// meanwhile.
     [[nodiscard]] static core::Result<std::unique_ptr<Instance>> create(const InstanceDesc& desc,

@@ -104,7 +104,8 @@ enum class Result : std::int32_t {
 
 /// The native API an instance runs on.
 enum class Backend : std::int32_t {
-    /// Vulkan 1.3.
+    /// Vulkan 1.2 or later with dynamic rendering and synchronization2 (extensions before 1.3),
+    /// descriptor indexing with update-after-bind and partially bound tables, and timelines.
     Vulkan = BFR_BACKEND_VULKAN,
     /// D3D12, Shader Model 6.6 with enhanced barriers.
     D3d12 = BFR_BACKEND_D3D12,
@@ -1457,6 +1458,12 @@ class PipelineCache;
 /// How to create an instance.
 struct InstanceDesc {
     Backend backend{};
+    /// The API version the caller uses, in bfr_caps_info's terms (1, 2 is Vulkan 1.2), passed to
+    /// the backend as it is. Below what BFR needs, which the backend's bfr_backend value states,
+    /// bfr_create_instance fails with error_unsupported.
+    std::uint32_t apiMajor{};
+    /// The minor part of api_major's version.
+    std::uint32_t apiMinor{};
     /// Enable the backend's validation layer. On Metal its messages go to the system log.
     bool validation{};
     /// May be empty.
@@ -2416,7 +2423,8 @@ struct CapsRayTracing {
     std::uint32_t tableAlignment{};
 };
 
-/// Optional features the adapter has. The floor's features are always there and not listed.
+/// Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and
+/// not listed.
 struct CapsFeatures {
     /// Rays traced inline from any shader.
     bool rayQuery{};
@@ -2483,6 +2491,8 @@ struct CapsFeatures {
     bool triangleFans{};
     /// primitive_restart on list topologies, not only strips.
     bool listRestart{};
+    /// bfr_set_topology, which fails with error_unsupported where this is false.
+    bool dynamicTopology{};
     /// bfr_graphics_pipeline_desc.alpha_to_one.
     bool alphaToOne{};
     /// A bfr_graphics_pipeline_desc.sample_mask that leaves samples out.
@@ -2491,6 +2501,8 @@ struct CapsFeatures {
     bool pipelineCache{};
     bool storageReadWithoutFormat{};
     bool storageWriteWithoutFormat{};
+    /// A storage texture table indexed by a value that differs within a shader's invocation group.
+    bool storageTextureNonUniformIndexing{};
     /// Every graphics and compute queue writes timestamps.
     bool timestampsOnAllQueues{};
     bool pipelineStatistics{};
@@ -2797,6 +2809,8 @@ inline bfr_instance_desc toC(const InstanceDesc& value, const bfr_chain* next, M
     return {
         .next = next,
         .backend = static_cast<bfr_backend>(value.backend),
+        .api_major = value.apiMajor,
+        .api_minor = value.apiMinor,
         .validation = value.validation ? BFR_TRUE : BFR_FALSE,
         .message_callback = messageCallback != nullptr ? &messageCallbackTrampoline : nullptr,
         .min_severity = static_cast<bfr_message_severity>(value.minSeverity),
@@ -3351,11 +3365,13 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .drawIndirectFirstInstance = value.draw_indirect_first_instance != BFR_FALSE,
         .triangleFans = value.triangle_fans != BFR_FALSE,
         .listRestart = value.list_restart != BFR_FALSE,
+        .dynamicTopology = value.dynamic_topology != BFR_FALSE,
         .alphaToOne = value.alpha_to_one != BFR_FALSE,
         .sampleMask = value.sample_mask != BFR_FALSE,
         .pipelineCache = value.pipeline_cache != BFR_FALSE,
         .storageReadWithoutFormat = value.storage_read_without_format != BFR_FALSE,
         .storageWriteWithoutFormat = value.storage_write_without_format != BFR_FALSE,
+        .storageTextureNonUniformIndexing = value.storage_texture_non_uniform_indexing != BFR_FALSE,
         .timestampsOnAllQueues = value.timestamps_on_all_queues != BFR_FALSE,
         .pipelineStatistics = value.pipeline_statistics != BFR_FALSE,
         .occlusionQueryPrecise = value.occlusion_query_precise != BFR_FALSE,
@@ -3726,7 +3742,8 @@ public:
     /// Makes the draws after it assemble topology, which is of the bound graphics pipeline's kind,
     /// points, lines or triangles, as each backend requires, until the next bfr_bind_pipeline.
     /// Fails with error_invalid_argument for a value BFR doesn't have, and error_unsupported for a
-    /// topology the backend has no form for (Metal's fan).
+    /// topology the backend has no form for (Metal's fan), or where
+    /// bfr_caps_features.dynamic_topology is false.
     [[nodiscard]] Expected<void> setTopology(CommandList commandList, Topology topology) const;
 
     /// Sets the first size bytes of the push constants every shader reads, as bfr_pipeline states,
@@ -4184,8 +4201,8 @@ private:
 /// argument buffer at buffer(0), holding the sampled textures, storage textures, storage buffers
 /// and samplers in that order, each a region of as many 8-byte entries as the bfr_device_desc's
 /// max_bindless member for its kind, so a shader declares them with the sizes the device was opened
-/// with; the push constants are at buffer(1). Uniform buffers have no table: they are not in every
-/// backend's floor. A pipeline's shaders are bytecode for the backend the device runs on.
+/// with; the push constants are at buffer(1). Uniform buffers have no table: not every backend's
+/// minimum has them. A pipeline's shaders are bytecode for the backend the device runs on.
 class Pipeline {
 public:
     /// Owns nothing, as a moved-from Pipeline does.

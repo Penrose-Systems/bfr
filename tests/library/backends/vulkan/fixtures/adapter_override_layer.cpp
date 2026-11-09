@@ -4,7 +4,8 @@
 // - BFR_ADAPTER_DRIVER_ID: the adapter reports this VkDriverId.
 // - BFR_ADAPTER_VENDOR_ID: the adapter reports this vendor ID.
 // - BFR_ADAPTER_NO_FEATURE: the adapter reports this Vulkan 1.2 or 1.3
-//   feature, by its member name, as missing.
+//   feature, by its member name, as missing, in the core struct and in the
+//   struct of the extension 1.3 made core.
 // - BFR_ADAPTER_HIDE: the adapter leaves this device extension out.
 // - BFR_ADAPTER_ADD: the adapter lists this device extension too, and
 //   vkCreateDevice drops it, since the driver underneath lacks it.
@@ -296,6 +297,17 @@ constexpr std::array kVulkan13Features{
     NamedFeature<Vulkan13>{.name = "maintenance4", .member = &Vulkan13::maintenance4},
 };
 
+using DynamicRendering = VkPhysicalDeviceDynamicRenderingFeatures;
+using Synchronization2 = VkPhysicalDeviceSynchronization2Features;
+using ExtendedDynamicState = VkPhysicalDeviceExtendedDynamicStateFeaturesEXT;
+constexpr std::array kDynamicRenderingFeatures{
+    NamedFeature<DynamicRendering>{.name = "dynamicRendering", .member = &DynamicRendering::dynamicRendering}};
+constexpr std::array kSynchronization2Features{
+    NamedFeature<Synchronization2>{.name = "synchronization2", .member = &Synchronization2::synchronization2}};
+constexpr std::array kExtendedDynamicStateFeatures{
+    NamedFeature<ExtendedDynamicState>{.name = "extendedDynamicState",
+                                       .member = &ExtendedDynamicState::extendedDynamicState}};
+
 // Clears the feature BFR_ADAPTER_NO_FEATURE names in features, if it has it.
 template <class Features, std::size_t Count>
 void clearNamed(Features& features, const std::array<NamedFeature<Features>, Count>& named) {
@@ -315,6 +327,15 @@ VKAPI_ATTR void VKAPI_CALL getPhysicalDeviceFeatures2(VkPhysicalDevice device, V
         }
         else if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) {
             clearNamed(*std::bit_cast<Vulkan13*>(next), kVulkan13Features);
+        }
+        else if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES) {
+            clearNamed(*std::bit_cast<DynamicRendering*>(next), kDynamicRenderingFeatures);
+        }
+        else if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES) {
+            clearNamed(*std::bit_cast<Synchronization2*>(next), kSynchronization2Features);
+        }
+        else if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT) {
+            clearNamed(*std::bit_cast<ExtendedDynamicState*>(next), kExtendedDynamicStateFeatures);
         }
         else if (const char* lodBias = std::getenv("BFR_ADAPTER_LOD_BIAS");
                  lodBias != nullptr &&

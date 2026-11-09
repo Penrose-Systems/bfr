@@ -480,7 +480,7 @@ core::Result<VulkanPipeline> createVulkanComputePipeline(const VolkDeviceTable& 
 
 core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable& table, VkDevice device,
                                                           VkPipelineLayout layout, VkPipelineCache cache,
-                                                          const GraphicsPipelineDesc& desc) {
+                                                          bool dynamicTopology, const GraphicsPipelineDesc& desc) {
     const std::span targets{desc.colorTargets.data(), desc.colorTargetCount};
     std::array<VkFormat, kMaxColorTargets> colorFormats{};
     std::array<VkPipelineColorBlendAttachmentState, kMaxColorTargets> blends{};
@@ -556,12 +556,13 @@ core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable&
     blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     blend.attachmentCount = desc.colorTargetCount;
     blend.pAttachments = blends.data();
-    constexpr std::array kDynamic{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
-                                  VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY, VK_DYNAMIC_STATE_BLEND_CONSTANTS,
-                                  VK_DYNAMIC_STATE_STENCIL_REFERENCE};
+    // Topology, last, is dynamic only where the device sets it.
+    constexpr std::array kDynamic{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS,
+                                  VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY};
     VkPipelineDynamicStateCreateInfo dynamic{};
     dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamic.dynamicStateCount = static_cast<std::uint32_t>(kDynamic.size());
+    constexpr std::size_t kWithoutTopology = kDynamic.size() - 1;
+    dynamic.dynamicStateCount = static_cast<std::uint32_t>(dynamicTopology ? kDynamic.size() : kWithoutTopology);
     dynamic.pDynamicStates = kDynamic.data();
 
     // Dynamic rendering: the formats stand in for a render pass. A depth
@@ -644,7 +645,8 @@ core::Result<PipelineHandle> VulkanDevice::createGraphicsPipeline(const Graphics
     if (!cache) {
         return std::unexpected(std::move(cache.error()));
     }
-    auto made = createVulkanGraphicsPipeline(table_, device_, layout_.pipelineLayout(), *cache, desc);
+    auto made = createVulkanGraphicsPipeline(table_, device_, layout_.pipelineLayout(), *cache,
+                                             features_.dynamicTopology, desc);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }

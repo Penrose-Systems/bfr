@@ -86,7 +86,7 @@ core::Result<void> VulkanDevice::bindPipeline(CommandListHandle commandList, Pip
         return std::unexpected(std::move(found.error()));
     }
     table_.vkCmdBindPipeline((*list)->buffer, (*found)->bindPoint(), (*found)->pipeline());
-    if ((*found)->bindPoint() == VK_PIPELINE_BIND_POINT_GRAPHICS) {
+    if ((*found)->bindPoint() == VK_PIPELINE_BIND_POINT_GRAPHICS && features_.dynamicTopology) {
         // Topology is dynamic, so a pipeline's own is set as it is bound.
         table_.vkCmdSetPrimitiveTopology((*list)->buffer, (*found)->topology());
     }
@@ -100,6 +100,10 @@ core::Result<void> VulkanDevice::setTopology(CommandListHandle commandList, Topo
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
+    }
+    if (!features_.dynamicTopology) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device sets no topology: it has neither Vulkan 1.3 nor extendedDynamicState");
     }
     table_.vkCmdSetPrimitiveTopology((*list)->buffer, topologyFor(topology));
     return {};

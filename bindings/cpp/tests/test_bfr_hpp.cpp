@@ -1,5 +1,6 @@
 #include "bfr.hpp"
 #include "shaders/spirv.h"
+#include "test_backends.h"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -93,11 +94,18 @@ auto eachBackend() {
     return Catch::Generators::from_range(*backends);
 }
 
+// A description on backend at the version the tests ask it for.
+bfr::InstanceDesc describe(bfr::Backend backend) {
+    const bfr::test::ApiVersion version = bfr::test::testApiVersion(bfr::name(backend));
+    return {.backend = backend, .apiMajor = version.major, .apiMinor = version.minor};
+}
+
 bfr::Instance validatedInstance(bfr::Backend backend, Messages& messages) {
-    auto instance = bfr::Instance::create({.backend = backend,
-                                           .validation = true,
-                                           .messageCallback = messages.callback(),
-                                           .minSeverity = bfr::MessageSeverity::Warning});
+    bfr::InstanceDesc desc = describe(backend);
+    desc.validation = true;
+    desc.messageCallback = messages.callback();
+    desc.minSeverity = bfr::MessageSeverity::Warning;
+    auto instance = bfr::Instance::create(desc);
     INFO(bfr::name(backend) << ' ' << failureOf(instance));
     REQUIRE(instance.has_value());
     return std::move(*instance);
@@ -365,10 +373,12 @@ TEST_CASE("C++ API keeps the message callback alive while a device lives", "[cpp
     const bfr::Backend backend = GENERATE(eachBackend());
     auto state = std::make_shared<int>(0);
     const std::weak_ptr<int> watched = state;
-    auto instance = bfr::Instance::create(
-        {.backend = backend,
-         .messageCallback = [state](bfr::MessageSeverity /*severity*/, std::string_view /*message*/) {},
-         .minSeverity = bfr::MessageSeverity::Warning});
+    bfr::InstanceDesc desc = describe(backend);
+    desc.messageCallback = [state](bfr::MessageSeverity /*severity*/, std::string_view /*message*/) {
+    };
+    desc.minSeverity = bfr::MessageSeverity::Warning;
+    auto instance = bfr::Instance::create(desc);
+    desc.messageCallback = {};
     state.reset();
     REQUIRE(instance.has_value());
     bfr::Device device = headlessDevice(*instance);

@@ -1315,15 +1315,25 @@ TEST_CASE("Device assembles the exact topology a pipeline or setTopology names, 
             CHECK(image.at(kLeft, kBottom) == kRed);
             CHECK(image.at(kRight, kTop) == kBlack);
         }
-        SECTION("setTopology makes a list pipeline's draws a strip") {
-            const Rendered image{device, caps.limits, [&](CommandListHandle commands) {
-                                     bind(commands, list);
-                                     CHECK(device.setTopology(commands, Topology::TriangleStrip).has_value());
-                                     CHECK(device.bindIndexBuffer(commands, inOrder, 0, IndexType::Uint16).has_value());
-                                     CHECK(device.drawIndexed(commands, kCorners, 1, 0, 0, 0).has_value());
-                                 }};
-            CHECK(image.at(kLeft, kBottom) == kRed);
-            CHECK(image.at(kRight, kTop) == kRed);
+        SECTION("setTopology makes a list pipeline's draws a strip, and fails where the device sets none") {
+            if (caps.features.dynamicTopology) {
+                const Rendered image{
+                    device, caps.limits, [&](CommandListHandle commands) {
+                        bind(commands, list);
+                        CHECK(device.setTopology(commands, Topology::TriangleStrip).has_value());
+                        CHECK(device.bindIndexBuffer(commands, inOrder, 0, IndexType::Uint16).has_value());
+                        CHECK(device.drawIndexed(commands, kCorners, 1, 0, 0, 0).has_value());
+                    }};
+                CHECK(image.at(kLeft, kBottom) == kRed);
+                CHECK(image.at(kRight, kTop) == kRed);
+            }
+            else {
+                const Rendered image{device, caps.limits, [&](CommandListHandle commands) {
+                                         const auto set = device.setTopology(commands, Topology::TriangleStrip);
+                                         REQUIRE_FALSE(set.has_value());
+                                         CHECK(set.error().code == ErrorCode::RhiUnsupported);
+                                     }};
+            }
         }
         SECTION("a strip pipeline restarts at an index of all ones") {
             const Rendered image{device, caps.limits, [&](CommandListHandle commands) {
@@ -1334,9 +1344,9 @@ TEST_CASE("Device assembles the exact topology a pipeline or setTopology names, 
             CHECK(image.at(kLeft, kBottom) == kRed);
             CHECK(image.at(kRight, kTop) == kBlack);
         }
-        SECTION("a fan shares its first vertex, where the device has fans") {
-            if (!caps.features.triangleFans) {
-                SKIP("the adapter has no triangle fans");
+        SECTION("a fan shares its first vertex, where the device has fans and sets topology") {
+            if (!caps.features.triangleFans || !caps.features.dynamicTopology) {
+                SKIP("the adapter has no triangle fans, or sets no topology");
             }
             // Bottom left, bottom right, top right, top left: a fan covers it.
             constexpr std::array<float, std::size_t{kCorners} * kPositionFloats> kRound{-1, -1, 0, 1, 1,  -1, 0, 1,

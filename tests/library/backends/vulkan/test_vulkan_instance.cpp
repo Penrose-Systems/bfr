@@ -10,6 +10,8 @@
 #include "log_capture.h"
 #include "rhi/rhi_test_support.h"
 #include "scoped_env.h"
+#include "shaders/spirv.h"
+#include "test_backends.h"
 #include "vulkan_test_support.h"
 
 #include <catch2/catch_message.hpp>
@@ -21,13 +23,18 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <vulkan/vulkan_core.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <format>
 #include <fstream>
+#include <memory>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace bfr::rhi;
@@ -48,7 +55,9 @@ std::string lineStartingWith(const std::string& log, std::string_view prefix) {
 
 // A description on the Vulkan backend that logs into log.
 InstanceDesc vulkanLoggingInto(std::ostringstream& log) {
-    return {.backend = Backend::Vulkan, .logger = loggingInto(log)};
+    InstanceDesc desc = vulkanDesc();
+    desc.logger = loggingInto(log);
+    return desc;
 }
 
 } // namespace
@@ -121,7 +130,7 @@ TEST_CASE("Vulkan fails when no driver is installed", "[vulkan][gpu]") {
 // LD_LIBRARY_PATH at a broken loader, which glibc reads only when the process
 // starts.
 TEST_CASE("Vulkan reports why each loader library failed", "[vulkan][unit][.]") {
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiLoaderFailed);
@@ -130,7 +139,7 @@ TEST_CASE("Vulkan reports why each loader library failed", "[vulkan][unit][.]") 
 }
 
 TEST_CASE("Vulkan reports a loader library without vkGetInstanceProcAddr", "[vulkan][unit][.]") {
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiLoaderFailed);
@@ -142,7 +151,7 @@ TEST_CASE("Vulkan reports a loader library without vkGetInstanceProcAddr", "[vul
 // Hidden: only the vulkan.fake_loader_* ctest entries run these, each with
 // LD_LIBRARY_PATH at a loader that misbehaves as BFR_FAKE_LOADER_MODE says.
 TEST_CASE("Vulkan reports a failed extension listing", "[vulkan][unit][.]") {
-    const auto rhi = Instance::create(kVulkan, kValidation);
+    const auto rhi = Instance::create(vulkanDesc(), kValidation);
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiInstanceFailed);
@@ -151,7 +160,7 @@ TEST_CASE("Vulkan reports a failed extension listing", "[vulkan][unit][.]") {
 }
 
 TEST_CASE("Vulkan lists again when a listing grows", "[vulkan][unit][.]") {
-    const auto rhi = Instance::create(kVulkan, kValidation);
+    const auto rhi = Instance::create(vulkanDesc(), kValidation);
 
     // Past the listing: only the fake vkCreateInstance fails.
     INFO(failureOf(rhi));
@@ -164,7 +173,7 @@ TEST_CASE("Vulkan lists again when a listing grows", "[vulkan][unit][.]") {
 // Hidden: only the vulkan.portability_driver ctest entry runs this, with
 // VK_DRIVER_FILES at lavapipe marked as a portability driver.
 TEST_CASE("Vulkan lists an adapter from a portability driver", "[vulkan][gpu][.]") {
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
 
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
@@ -176,17 +185,16 @@ TEST_CASE("Vulkan passes the caller's application and engine to VkApplicationInf
     constexpr std::uint32_t kEngineVersion = 7;
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv expected("BFR_EXPECT_APPLICATION", "Test App,3,Test Engine,7");
-    const InstanceDesc named{.backend = Backend::Vulkan,
-                             .logger = bfr::core::Logger::none(),
-                             .applicationName = "Test App",
-                             .applicationVersion = kApplicationVersion,
-                             .engineName = "Test Engine",
-                             .engineVersion = kEngineVersion};
+    InstanceDesc named = vulkanDesc();
+    named.applicationName = "Test App";
+    named.applicationVersion = kApplicationVersion;
+    named.engineName = "Test Engine";
+    named.engineVersion = kEngineVersion;
 
     const auto rhi = Instance::create(named, {});
     INFO(failureOf(rhi));
     CHECK(rhi.has_value());
-    const auto unnamed = Instance::create(kVulkan, {});
+    const auto unnamed = Instance::create(vulkanDesc(), {});
     REQUIRE_FALSE(unnamed.has_value());
     CHECK(unnamed.error().code == bfr::core::ErrorCode::RhiInstanceFailed);
 }
@@ -211,33 +219,212 @@ TEST_CASE("Vulkan skips an adapter it fails to check, and says which call failed
     }
 }
 
-TEST_CASE("Vulkan fails with RhiNoAdapter when every adapter is below the floor", "[vulkan][gpu]") {
-    const AdapterOverrideLayer adapterOverride;
-    const ScopedEnv version("BFR_ADAPTER_MINOR", "2");
+TEST_CASE("Vulkan fails with RhiUnsupported for a version below BFR's minimum", "[vulkan][unit]") {
+    const auto [major, minor] = GENERATE(std::pair{0U, 0U}, std::pair{1U, 0U}, std::pair{1U, 1U});
 
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanAt(major, minor), {});
+
+    INFO(major << '.' << minor);
+    REQUIRE_FALSE(rhi.has_value());
+    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    CHECK_THAT(rhi.error().message.text(),
+               Catch::Matchers::Equals(std::format("Vulkan {}.{} is below BFR's minimum, 1.2", major, minor)));
+}
+
+TEST_CASE("Vulkan fails with RhiInvalidCall for a version Vulkan can't name", "[vulkan][unit]") {
+    // A major past 7 bits, a minor past 10 (vulkan_core.h:62-63).
+    constexpr std::uint32_t kPastMajor = 128;
+    constexpr std::uint32_t kPastMinor = 1024;
+    const auto [major, minor] = GENERATE_COPY(std::pair{kPastMajor, 0U}, std::pair{1U, kPastMinor});
+
+    const auto rhi = Instance::create(vulkanAt(major, minor), {});
+
+    INFO(major << '.' << minor);
+    REQUIRE_FALSE(rhi.has_value());
+    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiInvalidCall);
+}
+
+TEST_CASE("Vulkan makes the instance at a version past every adapter's, and opens a valid device on each",
+          "[vulkan][gpu]") {
+    // Past any Vulkan there is; the loader takes any version
+    // (initialization.adoc:883-910).
+    constexpr std::uint32_t kPastNewest = 9;
+    std::vector<std::string> errors;
+    InstanceDesc desc = recordingErrorsInto(errors);
+    desc.apiMajor = 1;
+    desc.apiMinor = kPastNewest;
+
+    const auto rhi = Instance::create(desc, kValidation);
+
+    INFO(failureOf(rhi));
+    REQUIRE(rhi.has_value());
+    for (std::size_t adapter = 0; adapter < (*rhi)->adapters().size(); ++adapter) {
+        const auto device = (*rhi)->createDevice(adapter, kNoWindow, kTestDevice);
+        INFO((*rhi)->adapters()[adapter].name << ' ' << failureOf(device));
+        CHECK(device.has_value());
+    }
+    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Vulkan at 1.2 reports nothing for a format 1.3 added that the adapter lists no extension for",
+          "[vulkan][caps][gpu]") {
+    const auto [extension, format] = GENERATE(std::pair{"VK_EXT_4444_formats", Format::Bgra4Unorm},
+                                              std::pair{"VK_EXT_texture_compression_astc_hdr", Format::Astc4x4Float});
+    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
+    const ScopedEnv hidden("BFR_ADAPTER_HIDE", extension);
+    std::vector<std::string> errors;
+    {
+        InstanceDesc desc = recordingErrorsInto(errors);
+        desc.apiMajor = 1;
+        desc.apiMinor = 2;
+        const auto rhi = Instance::create(desc, kValidation);
+        INFO(failureOf(rhi));
+        REQUIRE(rhi.has_value());
+        const auto caps = (*rhi)->formatCaps(0, format);
+
+        INFO(extension);
+        REQUIRE(caps.has_value());
+        CHECK_FALSE((caps->sampled || caps->storage || caps->colorAttachment || caps->copySrc || caps->copyDst));
+    }
+    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Vulkan at 1.2 reports a format through the 32-bit query without VK_KHR_format_feature_flags2",
+          "[vulkan][caps][gpu]") {
+    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
+    const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_KHR_format_feature_flags2");
+    std::vector<std::string> errors;
+    {
+        InstanceDesc desc = recordingErrorsInto(errors);
+        desc.apiMajor = 1;
+        desc.apiMinor = 2;
+        const auto rhi = Instance::create(desc, kValidation);
+        INFO(failureOf(rhi));
+        REQUIRE(rhi.has_value());
+
+        // Every Vulkan device samples, filters, blends and renders to it
+        // (formats.adoc:3509, the required format support table).
+        const auto caps = (*rhi)->formatCaps(0, Format::Rgba8Unorm);
+
+        REQUIRE(caps.has_value());
+        CHECK(caps->sampled);
+        CHECK(caps->filterLinear);
+        CHECK(caps->colorAttachment);
+        CHECK(caps->blend);
+    }
+    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Vulkan fails with RhiNoAdapter when every adapter is below BFR's minimum", "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride;
+    const ScopedEnv version("BFR_ADAPTER_MINOR", "1");
+
+    const auto rhi = Instance::create(vulkanDesc(), {});
 
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
-    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::ContainsSubstring("Vulkan 1.2, needs 1.3"));
+    CHECK_THAT(rhi.error().message.text(),
+               Catch::Matchers::ContainsSubstring("below BFR's minimum, Vulkan 1.1, needs 1.2"));
 }
 
-TEST_CASE("Vulkan fails with RhiNoAdapter when an adapter lacks a floor feature, and names it", "[vulkan][gpu]") {
-    const std::string feature =
-        GENERATE("descriptorIndexing", "runtimeDescriptorArray", "descriptorBindingPartiallyBound",
-                 "descriptorBindingSampledImageUpdateAfterBind", "descriptorBindingStorageImageUpdateAfterBind",
-                 "descriptorBindingStorageBufferUpdateAfterBind", "shaderSampledImageArrayNonUniformIndexing",
-                 "shaderStorageBufferArrayNonUniformIndexing", "shaderStorageImageArrayNonUniformIndexing",
-                 "timelineSemaphore", "dynamicRendering", "synchronization2");
+TEST_CASE("Vulkan fails with RhiNoAdapter when an adapter lacks a feature BFR needs, at 1.2 and later, and names it",
+          "[vulkan][gpu]") {
+    const std::string feature = GENERATE(
+        "descriptorIndexing", "runtimeDescriptorArray", "descriptorBindingPartiallyBound",
+        "descriptorBindingSampledImageUpdateAfterBind", "descriptorBindingStorageImageUpdateAfterBind",
+        "descriptorBindingStorageBufferUpdateAfterBind", "shaderSampledImageArrayNonUniformIndexing",
+        "shaderStorageBufferArrayNonUniformIndexing", "timelineSemaphore", "dynamicRendering", "synchronization2");
+    // At 1.2 the extensions 1.3 made core report dynamicRendering and
+    // synchronization2.
+    const std::uint32_t minor = GENERATE(2U, bfr::test::testApiVersion("vulkan").minor);
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv hidden("BFR_ADAPTER_NO_FEATURE", feature);
 
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanAt(1, minor), {});
 
-    INFO(feature);
+    INFO(feature << " at 1." << minor);
     REQUIRE_FALSE(rhi.has_value());
     CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
-    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::ContainsSubstring("below the floor, lacks " + feature));
+    CHECK_THAT(rhi.error().message.text(), Catch::Matchers::ContainsSubstring("below BFR's minimum, lacks " + feature));
+}
+
+TEST_CASE("Vulkan lists no 1.2 adapter without an extension 1.3 made core that BFR needs", "[vulkan][gpu]") {
+    const auto [extension, feature] = GENERATE(std::pair{"VK_KHR_dynamic_rendering", "dynamicRendering"},
+                                               std::pair{"VK_KHR_synchronization2", "synchronization2"});
+    const AdapterOverrideLayer adapterOverride;
+    const ScopedEnv hidden("BFR_ADAPTER_HIDE", extension);
+
+    const auto rhi = Instance::create(vulkanAt(1, 2), {});
+
+    INFO(extension);
+    REQUIRE_FALSE(rhi.has_value());
+    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
+    CHECK_THAT(rhi.error().message.text(),
+               Catch::Matchers::ContainsSubstring(std::string{"below BFR's minimum, lacks "} + feature));
+}
+
+TEST_CASE("Vulkan lists an adapter without non-uniform storage texture indexing, and reports it", "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride;
+    const ScopedEnv hidden("BFR_ADAPTER_NO_FEATURE", "shaderStorageImageArrayNonUniformIndexing");
+
+    const auto rhi = Instance::create(vulkanDesc(), {});
+
+    INFO(failureOf(rhi));
+    REQUIRE(rhi.has_value());
+    for (const Adapter& adapter : (*rhi)->adapters()) {
+        INFO(adapter.name);
+        CHECK_FALSE(adapter.caps.features.storageTextureNonUniformIndexing);
+    }
+}
+
+TEST_CASE("Vulkan at 1.2 without VK_EXT_extended_dynamic_state reports no dynamic topology and bakes it in",
+          "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
+    const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_EXT_extended_dynamic_state");
+    std::vector<std::string> errors;
+    {
+        InstanceDesc desc = recordingErrorsInto(errors);
+        desc.apiMajor = 1;
+        desc.apiMinor = 2;
+        auto created = Instance::create(desc, kValidation);
+        INFO(failureOf(created));
+        REQUIRE(created.has_value());
+        const std::unique_ptr<Instance> instance = std::move(*created);
+        CHECK_FALSE(instance->adapters()[0].caps.features.dynamicTopology);
+        auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+        INFO(failureOf(made));
+        REQUIRE(made.has_value());
+        Device& device = **made;
+        GraphicsPipelineDesc pipelineDesc{.vertex = {.code = std::as_bytes(std::span{bfr::test::spirv::kBindlessVert}),
+                                                     .entryPoint = "main"},
+                                          .fragment = {.code = std::as_bytes(std::span{bfr::test::spirv::kColorFrag}),
+                                                       .entryPoint = "main"},
+                                          .topology = Topology::TriangleStrip,
+                                          .primitiveRestart = PrimitiveRestart::Off,
+                                          .raster = {.cull = CullMode::None},
+                                          .depthStencil = {},
+                                          .colorTargetCount = 1,
+                                          .samples = 1,
+                                          .sampleMask = BFR_MASK_ALL};
+        pipelineDesc.colorTargets[0] = {.format = Format::Rgba8Unorm, .blend = {.writeMask = BFR_MASK_ALL}};
+        const auto pipeline = device.createGraphicsPipeline(pipelineDesc);
+        INFO(failureOf(pipeline));
+        REQUIRE(pipeline.has_value());
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+
+        CHECK(device.bindPipeline(*list, *pipeline).has_value());
+        const auto set = device.setTopology(*list, Topology::TriangleList);
+        REQUIRE_FALSE(set.has_value());
+        CHECK(set.error().code == bfr::core::ErrorCode::RhiUnsupported);
+
+        CHECK(device.destroyCommandList(*list).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+        CHECK(device.destroyPipeline(*pipeline).has_value());
+    }
+    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
 TEST_CASE("Vulkan lists a 1.3 adapter without an extension that 1.3 made core", "[vulkan][gpu]") {
@@ -246,7 +433,7 @@ TEST_CASE("Vulkan lists a 1.3 adapter without an extension that 1.3 made core", 
     const ScopedEnv version("BFR_ADAPTER_MINOR", "3");
     const ScopedEnv hidden("BFR_ADAPTER_HIDE", extension);
 
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
 
     INFO(extension << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
@@ -323,7 +510,7 @@ TEST_CASE("Vulkan fails with RhiUnsupported for one kind's queues at different l
 TEST_CASE("Vulkan fails with RhiPresentUnsupported when no queue family presents to the window", "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv unsupported("BFR_PRESENT_UNSUPPORTED", "1");
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -337,7 +524,7 @@ TEST_CASE("Vulkan fails with RhiPresentUnsupported when no queue family presents
 TEST_CASE("Vulkan fails with RhiWindowFailed when the API refuses a surface for the device's window", "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv refused("BFR_FAIL", "vkCreateHeadlessSurfaceEXT");
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -376,7 +563,7 @@ TEST_CASE("Vulkan asks NVIDIA's driver about a headless window on a loader that 
     const LoaderVersion loader{"1.4.319"};
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv nvidia("BFR_ADAPTER_DRIVER_ID", std::to_string(VK_DRIVER_ID_NVIDIA_PROPRIETARY));
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -435,26 +622,29 @@ TEST_CASE("Vulkan logs the loader and each adapter it lists", "[vulkan][gpu]") {
 
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
+    const bfr::test::ApiVersion version = bfr::test::testApiVersion("vulkan");
     CHECK_THAT(log.str(), Catch::Matchers::ContainsSubstring("Vulkan loader 1.") &&
-                              Catch::Matchers::ContainsSubstring("Vulkan instance 1.3, validation off"));
+                              Catch::Matchers::ContainsSubstring(
+                                  std::format("Vulkan instance {}.{}, validation off", version.major, version.minor)));
     for (const Adapter& adapter : (*rhi)->adapters()) {
         CHECK_THAT(lineStartingWith(log.str(), "adapter " + adapter.name + ", "),
                    Catch::Matchers::EndsWith(": listed"));
     }
 }
 
-TEST_CASE("Vulkan logs why an adapter is below the floor", "[vulkan][gpu]") {
+TEST_CASE("Vulkan logs why an adapter is below BFR's minimum", "[vulkan][gpu]") {
     if (!bfr::core::kLoggingEnabled) {
         SKIP("logging is compiled out");
     }
     const AdapterOverrideLayer adapterOverride;
-    const ScopedEnv version("BFR_ADAPTER_MINOR", "2");
+    const ScopedEnv version("BFR_ADAPTER_MINOR", "1");
     std::ostringstream log;
 
     const auto rhi = Instance::create(vulkanLoggingInto(log), {});
 
     REQUIRE_FALSE(rhi.has_value());
-    CHECK_THAT(log.str(), Catch::Matchers::ContainsSubstring(", Vulkan 1.2: below the floor, Vulkan 1.2, needs 1.3"));
+    CHECK_THAT(log.str(),
+               Catch::Matchers::ContainsSubstring(", Vulkan 1.1: below BFR's minimum, Vulkan 1.1, needs 1.2"));
 }
 
 TEST_CASE("Vulkan logs the validation layer's version", "[vulkan][gpu]") {
@@ -468,6 +658,36 @@ TEST_CASE("Vulkan logs the validation layer's version", "[vulkan][gpu]") {
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
     CHECK_THAT(log.str(), Catch::Matchers::ContainsSubstring("VK_LAYER_KHRONOS_validation 1."));
+}
+
+TEST_CASE("Vulkan at 1.2 enables each extension 1.3 made core that the adapter lists, and at 1.3 none",
+          "[vulkan][gpu]") {
+    if (!bfr::core::kLoggingEnabled) {
+        SKIP("logging is compiled out");
+    }
+    // One with a features struct, one without.
+    const std::string extension = GENERATE("VK_EXT_shader_demote_to_helper_invocation", "VK_EXT_tooling_info");
+    const std::uint32_t minor = GENERATE(2U, 3U);
+    const AdapterOverrideLayer adapterOverride;
+    const ScopedEnv added("BFR_ADAPTER_ADD", extension);
+    std::ostringstream log;
+    InstanceDesc desc = vulkanLoggingInto(log);
+    desc.apiMinor = minor;
+    const auto rhi = Instance::create(desc, {});
+    INFO(failureOf(rhi));
+    REQUIRE(rhi.has_value());
+
+    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow, kTestDevice);
+
+    INFO(extension << " at 1." << minor << ' ' << failureOf(device));
+    REQUIRE(device.has_value());
+    const std::string line = lineStartingWith(log.str(), "device on ");
+    if (minor == 2) {
+        CHECK_THAT(line, Catch::Matchers::ContainsSubstring(extension));
+    }
+    else {
+        CHECK_THAT(line, !Catch::Matchers::ContainsSubstring(extension));
+    }
 }
 
 TEST_CASE("Vulkan logs the device it creates, its queue families and its extensions", "[vulkan][gpu]") {

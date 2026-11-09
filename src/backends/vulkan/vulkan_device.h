@@ -16,6 +16,7 @@
 #include "vulkan/queue_families.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_buffer.h"
+#include "vulkan/vulkan_caps.h"
 #include "vulkan/vulkan_pipeline.h"
 #include "vulkan/vulkan_pipeline_cache.h"
 #include "vulkan/vulkan_sampler.h"
@@ -48,6 +49,11 @@ class VulkanInstance;
 /// What the instance read of the adapter and enabled on the device, which
 /// the device's calls need.
 struct VulkanDeviceSetup {
+    /// The version the device uses: the lower of the instance's and the
+    /// adapter's.
+    std::uint32_t apiVersion = 0;
+    /// The formats added by 1.3 the device has.
+    Formats13 formats13{};
     bool hasBudget = false;
     bool hasSwapchain = false;
     std::uint32_t pushConstantsSize = 0;
@@ -322,6 +328,7 @@ private:
     bool drawIndirectCount_;
     Features features_;
     ResolveCaps resolve_;
+    Formats13 formats13_;
     DeviceDesc desc_;
     std::vector<std::unique_ptr<VulkanQueue>> queues_;
     core::Pool<VulkanSwapchain, Swapchain> swapchains_;

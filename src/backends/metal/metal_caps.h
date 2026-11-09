@@ -23,9 +23,9 @@ namespace bfr::rhi::metal {
 inline constexpr bool kMultiDrawIndirect = false;
 inline constexpr bool kDrawIndirectCount = false;
 
-/// Why device is below the floor, empty when it meets it: Metal 4, by
+/// Why device is below BFR's minimum, empty when it meets it: Metal 4, by
 /// Metal's own answer.
-[[nodiscard]] std::string belowFloor(MTL::Device* device);
+[[nodiscard]] std::string belowMinimum(MTL::Device* device);
 
 /// Whether device has 64-bit integer atomics, on buffers and on RG32Uint and
 /// RG32Sint textures. Metal has no call for it; Godot and The Forge give it

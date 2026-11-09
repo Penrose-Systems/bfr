@@ -55,9 +55,11 @@ std::vector<std::string> inconsistencies(const Caps& caps) {
     const auto& heaps = caps.memory.heaps;
     const Queues& queues = caps.queues;
     return failing({
-        {caps.compute.minSubgroupSize <= caps.compute.subgroupSize &&
-             caps.compute.subgroupSize <= caps.compute.maxSubgroupSize,
-         "a subgroup size within its range"},
+        // A range of 0, 0 is none reported.
+        {(caps.compute.minSubgroupSize == 0 && caps.compute.maxSubgroupSize == 0) ||
+             (caps.compute.minSubgroupSize <= caps.compute.subgroupSize &&
+              caps.compute.subgroupSize <= caps.compute.maxSubgroupSize),
+         "a subgroup size within its range, where one is reported"},
         {std::ranges::all_of(caps.memory.types, [&heaps](const MemoryType& type) { return type.heap < heaps.size(); }),
          "types in listed heaps"},
         {granularityHolds(queues.graphicsGranularity) && granularityHolds(queues.computeGranularity) &&

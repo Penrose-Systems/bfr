@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -17,8 +18,19 @@ namespace bfr::rhi::vulkan::test {
 
 using namespace bfr::rhi::test; // NOLINT(google-build-using-namespace)
 
-/// A description on the Vulkan backend with no logger.
-inline const InstanceDesc kVulkan{.backend = Backend::Vulkan};
+/// A description on the Vulkan backend at the version the tests ask for, with
+/// no logger.
+inline InstanceDesc vulkanDesc() {
+    return describe(Backend::Vulkan);
+}
+
+/// vulkanDesc at major.minor.
+inline InstanceDesc vulkanAt(std::uint32_t major, std::uint32_t minor) {
+    InstanceDesc desc = vulkanDesc();
+    desc.apiMajor = major;
+    desc.apiMinor = minor;
+    return desc;
+}
 
 /// recordingInto on the Vulkan backend.
 inline InstanceDesc recordingInto(std::vector<std::string>& messages) {

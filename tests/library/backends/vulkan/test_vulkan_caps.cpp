@@ -34,8 +34,8 @@ namespace {
 // Each thing Vulkan promises about an adapter's info that info lacks.
 std::vector<std::string> missingVulkanInfo(const AdapterInfo& info) {
     std::vector<std::string> missing;
-    if (info.apiMajor != 1 || info.apiMinor < 3) {
-        missing.emplace_back("Vulkan 1.3");
+    if (info.apiMajor != 1 || info.apiMinor < 2) {
+        missing.emplace_back("Vulkan 1.2");
     }
     if (info.vendorId == 0) {
         missing.emplace_back("a vendor");
@@ -51,7 +51,7 @@ std::vector<std::string> missingVulkanInfo(const AdapterInfo& info) {
 
 } // namespace
 
-TEST_CASE("Vulkan lists only adapters at 1.3 or newer, each with a vendor, a driver name and a device UUID",
+TEST_CASE("Vulkan lists only adapters at 1.2 or newer, each with a vendor, a driver name and a device UUID",
           "[vulkan][caps][gpu]") {
     std::vector<std::string> messages;
     const auto rhi = Instance::create(recordingInto(messages), kValidation);
@@ -70,7 +70,7 @@ TEST_CASE("Vulkan reports what the driver says about an adapter", "[vulkan][caps
     const ScopedEnv vendor("BFR_ADAPTER_VENDOR_ID", "0x1234");
     const ScopedEnv noFloat16("BFR_ADAPTER_NO_FEATURE", "shaderFloat16");
 
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
 
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
@@ -107,7 +107,7 @@ TEST_CASE("Vulkan reports no sample counts for a format the API says it can't re
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv failing("BFR_FAIL", "vkGetPhysicalDeviceImageFormatProperties2");
     const ScopedEnv unsupported("BFR_FAIL_RESULT", "VK_ERROR_FORMAT_NOT_SUPPORTED");
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -125,7 +125,7 @@ TEST_CASE("Vulkan reports a failed format query as the failure it is", "[vulkan]
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv failing("BFR_FAIL", "vkGetPhysicalDeviceImageFormatProperties2");
     const ScopedEnv result("BFR_FAIL_RESULT", name);
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -143,7 +143,7 @@ TEST_CASE("Vulkan reports a failed surface query as the failure it is", "[vulkan
                                           "vkGetPhysicalDeviceSurfaceFormatsKHR");
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv failing("BFR_FAIL", function);
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
     const std::size_t adapter = cpuAdapter(**rhi);
@@ -165,7 +165,7 @@ TEST_CASE("Vulkan doesn't ask NVIDIA's driver about a headless window's swapchai
     const LoaderVersion loader{"1.4.318"};
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv nvidia("BFR_ADAPTER_DRIVER_ID", std::to_string(VK_DRIVER_ID_NVIDIA_PROPRIETARY));
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
@@ -180,7 +180,7 @@ TEST_CASE("Vulkan doesn't ask NVIDIA's driver about a headless window's swapchai
 TEST_CASE("Vulkan device without VK_EXT_memory_budget fails with RhiUnsupported", "[vulkan][caps][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_EXT_memory_budget");
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
     const auto device = (*rhi)->createDevice(0, kNoWindow, kTestDevice);

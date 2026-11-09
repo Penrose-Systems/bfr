@@ -131,15 +131,17 @@ flowchart TB
 
 ## Starting up
 
-1. **Create an instance**, choosing a backend (Vulkan, D3D12 or Metal),
-   validation settings and a message callback. Several instances, even of
-   different backends, can live in one process.
+1. **Create an instance**, choosing a backend (Vulkan, D3D12 or Metal), the
+   API version you use (Vulkan 1.2 or later), validation settings and a
+   message callback. Several instances, even of different backends, can live
+   in one process.
 2. **List adapters.** Each is a plain description: name, vendor, limits,
-   features. Nothing is opened yet. Every adapter the backend lists is
+   features. Nothing is opened yet. Every adapter that meets BFR's minimum
+   requirements, which each backend value in `api/bfr.yaml` states, is
    listed.
-3. **Create a device** from one adapter, naming the queues and features you
-   want (ray queries, mesh shaders). Caps say what the adapter has; a call
-   that needs what the device lacks fails with RhiUnsupported.
+3. **Create a device** from one adapter, naming the queues you want. It
+   turns on what the adapter has at your version; caps say what that is, and
+   a call that needs what the device lacks fails with RhiUnsupported.
 4. **Create a swapchain** per window from a native window handle and the
    queue that presents. Tools can have as many as they like.
 

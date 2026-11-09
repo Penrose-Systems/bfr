@@ -1075,11 +1075,13 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .draw_indirect_first_instance = toC(features.drawIndirectFirstInstance),
         .triangle_fans = toC(features.triangleFans),
         .list_restart = toC(features.listRestart),
+        .dynamic_topology = toC(features.dynamicTopology),
         .alpha_to_one = toC(features.alphaToOne),
         .sample_mask = toC(features.sampleMask),
         .pipeline_cache = toC(features.pipelineCache),
         .storage_read_without_format = toC(features.storageReadWithoutFormat),
         .storage_write_without_format = toC(features.storageWriteWithoutFormat),
+        .storage_texture_non_uniform_indexing = toC(features.storageTextureNonUniformIndexing),
         .timestamps_on_all_queues = toC(features.timestampsOnAllQueues),
         .pipeline_statistics = toC(features.pipelineStatistics),
         .occlusion_query_precise = toC(features.occlusionQueryPrecise),
@@ -1353,6 +1355,8 @@ bfr_result bfr_create_instance(const bfr_instance_desc* desc, bfr_instance** ins
                         "application_name or engine_name is null but its length is not 0");
         }
         bfr::rhi::InstanceDesc rhiDesc{.backend = *backend,
+                                       .apiMajor = desc->api_major,
+                                       .apiMinor = desc->api_minor,
                                        .applicationName = {desc->application_name.data, desc->application_name.length},
                                        .applicationVersion = desc->application_version,
                                        .engineName = {desc->engine_name.data, desc->engine_name.length},

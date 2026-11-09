@@ -50,8 +50,10 @@ namespace {
 
 constexpr const char* kValidationLayer = "VK_LAYER_KHRONOS_validation";
 
-// The oldest Vulkan an adapter may report and still be listed.
-constexpr std::uint32_t kFloorVersion = VK_API_VERSION_1_3;
+// The largest major and minor VK_MAKE_API_VERSION packs: 7 bits and 10
+// (vulkan_core.h:62-63).
+constexpr std::uint32_t kMaxMajor = 0x7F;
+constexpr std::uint32_t kMaxMinor = 0x3FF;
 
 // "major.minor" of a packed Vulkan version, with ".patch" when it isn't zero.
 std::string versionName(std::uint32_t version) {
@@ -122,7 +124,9 @@ struct QueueCreateInfos {
 core::Result<QueueCreateInfos> queueCreateInfos(const QueueFamilies& families, const DeviceDesc& wanted,
                                                 bool hasLevels) {
     if (!hasLevels) {
-        if (auto checked = checkNormalLevels(wanted, "the device has no VK_KHR_global_priority to set it"); !checked) {
+        if (auto checked = checkNormalLevels(wanted,
+                                             "the device has neither Vulkan 1.4 nor VK_KHR_global_priority to set it");
+            !checked) {
             return std::unexpected(std::move(checked.error()));
         }
     }
@@ -171,13 +175,15 @@ std::string familyList(std::span<const VkDeviceQueueCreateInfo> queues) {
     return core::text::join(families, ", ");
 }
 
-// Why the adapter is below the floor, empty when it meets it.
-std::string belowFloor(const InstanceTable& vk, VkPhysicalDevice adapter,
-                       const VkPhysicalDeviceProperties& properties) {
-    if (properties.apiVersion < kFloorVersion) {
-        return std::format("Vulkan {}, needs {}", versionName(properties.apiVersion), versionName(kFloorVersion));
+// Why the adapter is below BFR's minimum at version, the one a device on it
+// uses; empty when it meets it.
+std::string belowMinimum(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
+                         std::span<const VkExtensionProperties> extensions) {
+    if (version < kMinimumVersion) {
+        return std::format("Vulkan {}, needs {}", versionName(version), versionName(kMinimumVersion));
     }
-    std::vector<std::string> missing = missingFloorFeatures(vk, adapter);
+    const DeviceFeatures features(vk, adapter, version, extensions);
+    std::vector<std::string> missing = missingRequirements(features);
     return missing.empty() ? std::string{} : "lacks " + core::text::join(missing, ", ");
 }
 
@@ -339,6 +345,16 @@ VkDebugUtilsMessengerCreateInfoEXT messengerInfo(VulkanInstance::MessageSink* si
 
 core::Result<std::unique_ptr<VulkanInstance>> VulkanInstance::create(const InstanceDesc& desc,
                                                                      const RhiConfig& config) {
+    if (desc.apiMajor > kMaxMajor || desc.apiMinor > kMaxMinor) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "Vulkan names no version {}.{}: a major takes 7 bits and a minor 10", desc.apiMajor,
+                             desc.apiMinor);
+    }
+    const std::uint32_t version = VK_MAKE_API_VERSION(0, desc.apiMajor, desc.apiMinor, 0);
+    if (version < kMinimumVersion) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "Vulkan {} is below BFR's minimum, {}",
+                             versionName(version), versionName(kMinimumVersion));
+    }
     if (auto opened = openLoader(); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
@@ -350,6 +366,7 @@ core::Result<std::unique_ptr<VulkanInstance>> VulkanInstance::create(const Insta
 
     auto rhi = std::make_unique<VulkanInstance>(config, desc.logger);
     rhi->loaderVersion_ = *loader;
+    rhi->version_ = version;
     if (auto created = rhi->createInstance(desc); !created) {
         return std::unexpected(std::move(created.error()));
     }
@@ -422,11 +439,7 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
         return core::failure(core::ErrorCode::RhiPresentUnsupported,
                              "no queue the device opens on {} presents to the window", listed.name);
     }
-    const auto available = deviceExtensions(vk_, physicalDevice);
-    if (!available) {
-        return core::failure(codeFor(core::ErrorCode::RhiDeviceFailed, available.error().result), "{} on {}: {}",
-                             available.error().call, listed.name, string_VkResult(available.error().result));
-    }
+    const std::vector<VkExtensionProperties>* available = &adapterExtensions_[adapter];
     // Presenting needs it; a device without it computes and renders offscreen.
     const bool swapchains = lists(*available, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     std::vector<const char*> extensions;
@@ -441,12 +454,13 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     // Every feature the adapter reports, read as its caps were, so the caps
     // say what the device has; but robust access, which changes what an
     // out-of-bounds access does and costs speed, stays off.
-    DeviceFeatures features(vk_, physicalDevice, *available);
+    DeviceFeatures features(vk_, physicalDevice, versions_[adapter], *available);
     features.core.features.robustBufferAccess = VK_FALSE;
     features.vulkan13.robustImageAccess = VK_FALSE;
+    features.imageRobustness.robustImageAccess = VK_FALSE;
     extensions.insert(extensions.end(), features.enabledExtensions.begin(), features.enabledExtensions.end());
 
-    const auto queues = queueCreateInfos(families, wanted, lists(*available, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME));
+    const auto queues = queueCreateInfos(families, wanted, hasQueueLevels(versions_[adapter], *available));
     if (!queues) {
         return std::unexpected(queues.error());
     }
@@ -474,7 +488,9 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     VkPhysicalDeviceProperties adapterProperties{};
     vk_.vkGetPhysicalDeviceProperties(physicalDevice, &adapterProperties);
     auto made = VulkanDevice::create(*this, physicalDevice, device, families, wanted,
-                                     {.hasBudget = hasBudget_[adapter],
+                                     {.apiVersion = versions_[adapter],
+                                      .formats13 = formats13Of(versions_[adapter], *available),
+                                      .hasBudget = hasBudget_[adapter],
                                       .hasSwapchain = swapchains,
                                       .pushConstantsSize = listed.caps.limits.maxPushConstantsSize,
                                       .timestampPeriod = adapterProperties.limits.timestampPeriod,
@@ -496,7 +512,7 @@ core::Result<FormatCaps> VulkanInstance::formatCaps(std::size_t adapter, Format 
     if (auto checked = checkFormat(format); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    return readFormatCaps(vk_, physicalDevices_[adapter], format);
+    return readFormatCaps(vk_, physicalDevices_[adapter], versions_[adapter], adapterExtensions_[adapter], format);
 }
 
 core::Result<SwapchainCaps> VulkanInstance::swapchainCaps(std::size_t adapter,
@@ -599,7 +615,7 @@ core::Result<void> VulkanInstance::createInstance(const InstanceDesc& desc) {
     application.applicationVersion = desc.applicationVersion;
     application.pEngineName = engineName.empty() ? nullptr : engineName.c_str();
     application.engineVersion = desc.engineVersion;
-    application.apiVersion = kInstanceVersion;
+    application.apiVersion = version_;
 
     VkInstanceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -654,7 +670,7 @@ core::Result<void> VulkanInstance::createInstance(const InstanceDesc& desc) {
         }
     }
     vk_ = loadInstanceTable(instance_);
-    BFR_LOG_INFO(logger(), "Vulkan instance {}, validation {}", versionName(kInstanceVersion),
+    BFR_LOG_INFO(logger(), "Vulkan instance {}, validation {}", versionName(version_),
                  config().validation ? "on" : "off");
 
     // The chained messenger covers only creation and destruction; this one
@@ -681,8 +697,10 @@ core::Result<void> VulkanInstance::listAdapters() {
         return failure(core::ErrorCode::RhiInstanceFailed, devices.error());
     }
 
-    // Each adapter not listed, and why: below the floor, or a call that failed
-    // while checking. One that fails is skipped, so the others still work.
+    // Each adapter not listed, and why: below BFR's minimum, or a call that
+    // failed while checking. One that fails is skipped, so the others still
+    // work. A device on an adapter uses the lower of the instance's version
+    // and the adapter's (initialization.adoc:883-910).
     std::vector<std::string> rejected;
     for (VkPhysicalDevice device : *devices) {
         VkPhysicalDeviceProperties properties{};
@@ -694,18 +712,21 @@ core::Result<void> VulkanInstance::listAdapters() {
             rejected.push_back(std::format("{}: {}", properties.deviceName, why));
             continue;
         }
-        const std::string reason = belowFloor(vk_, device, properties);
+        const std::uint32_t version = std::min(version_, properties.apiVersion);
+        const std::string reason = belowMinimum(vk_, device, version, *extensions);
         BFR_LOG_INFO(logger(), "adapter {}: {}", describe(vk_, device, properties),
-                     reason.empty() ? std::string{"listed"} : "below the floor, " + reason);
+                     reason.empty() ? std::string{"listed"} : "below BFR's minimum, " + reason);
         if (!reason.empty()) {
-            rejected.push_back(std::format("{}: below the floor, {}", properties.deviceName, reason));
+            rejected.push_back(std::format("{}: below BFR's minimum, {}", properties.deviceName, reason));
             continue;
         }
         adapters_.push_back({.name = properties.deviceName,
                              .type = adapterType(properties.deviceType),
-                             .caps = readCaps(vk_, device, *extensions)});
+                             .caps = readCaps(vk_, device, version, *extensions)});
         physicalDevices_.push_back(device);
+        versions_.push_back(version);
         hasBudget_.push_back(lists(*extensions, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME));
+        adapterExtensions_.push_back(*extensions);
     }
     if (adapters_.empty()) {
         return core::failure(core::ErrorCode::RhiNoAdapter, core::error::withReasons("no usable adapter", rejected));

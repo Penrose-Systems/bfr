@@ -7,6 +7,7 @@
 
 #include <volk.h>
 
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
@@ -15,14 +16,31 @@
 namespace bfr::rhi::vulkan {
 
 // Each query below goes through vk, the table of the instance adapter belongs to.
+// version is the one a device on adapter uses, the lower of the instance's
+// and adapter's (initialization.adoc:883-910), and is 1.2 or later; extensions
+// are the device extensions adapter lists.
+
+/// The oldest Vulkan BFR runs on.
+inline constexpr std::uint32_t kMinimumVersion = VK_API_VERSION_1_2;
+
+/// Whether a device at version has what Vulkan 1.3 made core.
+[[nodiscard]] constexpr bool hasCore13(std::uint32_t version) {
+    return version >= VK_API_VERSION_1_3;
+}
+
+/// Whether a device at version sets its queues' levels: core from 1.4, else
+/// VK_KHR_global_priority where the adapter lists it.
+[[nodiscard]] bool hasQueueLevels(std::uint32_t version, std::span<const VkExtensionProperties> extensions);
 
 /// The features a device turns on, as adapter reports them: every one in the
-/// core structs, and every one of each extension below that it lists, which
-/// the device then enables. The caps read the same structs, so they say what
-/// the device has. core heads the chain a create info's pNext takes; the chain
-/// points into itself, so it stays where it is made.
+/// structs of each core version up to version, and every one of each extension
+/// below that it lists, which the device then enables. Below 1.3, the
+/// extensions 1.3 made core stand in for its struct. The caps read the same
+/// structs, so they say what the device has. core heads the chain a create
+/// info's pNext takes; the chain points into itself, so it stays where it is
+/// made.
 struct DeviceFeatures {
-    DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter,
+    DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
                    std::span<const VkExtensionProperties> extensions);
     ~DeviceFeatures() = default;
     DeviceFeatures(const DeviceFeatures&) = delete;
@@ -34,6 +52,28 @@ struct DeviceFeatures {
     VkPhysicalDeviceVulkan11Features vulkan11{};
     VkPhysicalDeviceVulkan12Features vulkan12{};
     VkPhysicalDeviceVulkan13Features vulkan13{};
+    VkPhysicalDeviceVulkan14Features vulkan14{};
+    /// Below 1.3, what 1.3 made core, where adapter lists the extension.
+    VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRendering{};
+    VkPhysicalDeviceSynchronization2FeaturesKHR synchronization2{};
+    VkPhysicalDeviceExtendedDynamicStateFeaturesEXT extendedDynamicState{};
+    VkPhysicalDeviceTextureCompressionASTCHDRFeaturesEXT astcHdr{};
+    VkPhysicalDevice4444FormatsFeaturesEXT formats4444{};
+    /// Its limits are maxBufferSize and the subgroup size range in the caps.
+    VkPhysicalDeviceMaintenance4FeaturesKHR maintenance4{};
+    VkPhysicalDeviceSubgroupSizeControlFeaturesEXT subgroupSizeControl{};
+    VkPhysicalDeviceShaderIntegerDotProductFeaturesKHR integerDotProduct{};
+    VkPhysicalDeviceShaderTerminateInvocationFeaturesKHR terminateInvocation{};
+    VkPhysicalDeviceZeroInitializeWorkgroupMemoryFeaturesKHR zeroInitializeWorkgroupMemory{};
+    VkPhysicalDeviceExtendedDynamicState2FeaturesEXT extendedDynamicState2{};
+    /// The device turns its robustImageAccess off, as it does vulkan13's.
+    VkPhysicalDeviceImageRobustnessFeaturesEXT imageRobustness{};
+    VkPhysicalDeviceInlineUniformBlockFeaturesEXT inlineUniformBlock{};
+    VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT pipelineCreationCacheControl{};
+    VkPhysicalDevicePrivateDataFeaturesEXT privateData{};
+    VkPhysicalDeviceShaderDemoteToHelperInvocationFeaturesEXT demoteToHelperInvocation{};
+    VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT texelBufferAlignment{};
+    VkPhysicalDeviceYcbcr2Plane444FormatsFeaturesEXT ycbcr2Plane444Formats{};
     VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFloat{};
     VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT imageAtomicInt64{};
     VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR barycentric{};
@@ -41,7 +81,9 @@ struct DeviceFeatures {
     /// A portability driver, such as MoltenVK, lists the extension, and a
     /// device on that adapter must enable it.
     VkPhysicalDevicePortabilitySubsetFeaturesKHR portability{};
-    /// Queue levels: the extension lets a device's queues take one.
+    /// Queue levels: the extension lets a device's queues take one. From 1.4
+    /// vulkan14 holds its feature, and this is not chained
+    /// (VUID-VkDeviceCreateInfo-pNext-10360).
     VkPhysicalDeviceGlobalPriorityQueryFeaturesKHR globalPriority{};
     /// A device with no queues needs its maintenance9.
     VkPhysicalDeviceMaintenance9FeaturesKHR maintenance9{};
@@ -49,19 +91,48 @@ struct DeviceFeatures {
     VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT listRestart{};
     /// The extensions whose structs are chained, which the device enables.
     std::vector<const char*> enabledExtensions;
+    std::uint32_t version = 0;
+
+    /// What the device has of what 1.3 made core: its struct from 1.3, else
+    /// the extension's.
+    [[nodiscard]] bool hasDynamicRendering() const;
+    [[nodiscard]] bool hasSynchronization2() const;
+    /// vkCmdSetPrimitiveTopology: core from 1.3, else the extendedDynamicState
+    /// feature (VUID-VkGraphicsPipelineCreateInfo-pDynamicStates-03378).
+    [[nodiscard]] bool hasDynamicTopology() const;
+    [[nodiscard]] bool hasAstcHdr() const;
 };
 
-/// The floor's features adapter lacks, by their Vulkan names.
-[[nodiscard]] std::vector<std::string> missingFloorFeatures(const InstanceTable& vk, VkPhysicalDevice adapter);
+/// What BFR needs that features lack, by their Vulkan names: bindless takes
+/// descriptor indexing with update-after-bind and partially bound tables;
+/// queue progress takes timelines; barriers take synchronization2; rendering
+/// takes dynamic rendering.
+[[nodiscard]] std::vector<std::string> missingRequirements(const DeviceFeatures& features);
 
-/// Everything about adapter that stays the same while it runs. extensions are
-/// the device extensions it lists. These queries can't fail.
-[[nodiscard]] Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter,
+/// Everything about adapter that stays the same while it runs. These queries
+/// can't fail.
+[[nodiscard]] Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
                             std::span<const VkExtensionProperties> extensions);
 
-/// What adapter does with format. Fails with RhiQueryFailed, or as codeFor
-/// says, when the API fails other than to say the format is unsupported.
-[[nodiscard]] core::Result<FormatCaps> readFormatCaps(const InstanceTable& vk, VkPhysicalDevice adapter, Format format);
+/// Which formats added by 1.3 a device on adapter has: all of them from 1.3,
+/// else those of the extensions adapter lists, which the device enables.
+struct Formats13 {
+    bool a4r4g4b4 = false;
+    bool astcHdr = false;
+};
+[[nodiscard]] Formats13 formats13Of(std::uint32_t version, std::span<const VkExtensionProperties> extensions);
+
+/// Whether a device may take format: one of a core version up to the one
+/// it uses, or of an extension it enables (fundamentals.adoc:947-952). The
+/// caps ask about no format the device can't take.
+[[nodiscard]] bool hasFormat(Format format, const Formats13& formats);
+
+/// What adapter does with format, none for one it may not be asked about
+/// (hasFormat). Fails with RhiQueryFailed, or as codeFor says, when the API
+/// fails other than to say the format is unsupported.
+[[nodiscard]] core::Result<FormatCaps> readFormatCaps(const InstanceTable& vk, VkPhysicalDevice adapter,
+                                                      std::uint32_t version,
+                                                      std::span<const VkExtensionProperties> extensions, Format format);
 
 /// What a swapchain for surface may be on adapter. Fails with
 /// RhiWindowFailed, or as codeFor says, when the query fails.

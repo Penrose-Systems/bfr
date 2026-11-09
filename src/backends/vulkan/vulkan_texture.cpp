@@ -638,6 +638,10 @@ core::Result<SparseFormat> VulkanDevice::sparseFormat(const SparseFormatDesc& de
     if (desc.tileBytes != 0) {
         return core::failure(core::ErrorCode::RhiUnsupported, "Vulkan sets tile sizes itself; tileBytes is 0");
     }
+    // A format the device may not be asked about is none it makes sparse.
+    if (!hasFormat(desc.format, formats13_)) {
+        return SparseFormat{};
+    }
     VkPhysicalDeviceSparseImageFormatInfo2 info{};
     info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SPARSE_IMAGE_FORMAT_INFO_2;
     info.format = vulkanFormat(desc.format);

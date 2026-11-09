@@ -53,9 +53,9 @@ struct SamplerFeatures {
 /// resources or won't say.
 [[nodiscard]] Sparse sparseOf(ID3D12Device* device);
 
-/// Why device is below the floor, empty when it meets it. The floor is
+/// Why device is below BFR's minimum, empty when it meets it. BFR needs
 /// bindless resource binding, shader model 6.6 and enhanced barriers.
-[[nodiscard]] std::string belowFloor(ID3D12Device* device);
+[[nodiscard]] std::string belowMinimum(ID3D12Device* device);
 
 /// What kind of adapter desc describes, device being the D3D12 device on it.
 [[nodiscard]] AdapterType typeOf(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device);

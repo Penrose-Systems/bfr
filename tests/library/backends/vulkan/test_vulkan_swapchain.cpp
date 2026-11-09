@@ -60,7 +60,7 @@ struct HeadlessDevice {
 TEST_CASE("Vulkan device fails with RhiWindowFailed when the API refuses a swapchain's surface", "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv refused("BFR_FAIL", "vkCreateHeadlessSurfaceEXT");
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
     const auto device = (*rhi)->createDevice(0, kNoWindow, kTestDevice);
@@ -80,7 +80,7 @@ TEST_CASE("Vulkan device fails with RhiPresentUnsupported when it can't present 
           "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv unsupported("BFR_PRESENT_UNSUPPORTED", "1");
-    const auto rhi = Instance::create(kVulkan, {});
+    const auto rhi = Instance::create(vulkanDesc(), {});
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
     const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow, kTestDevice);
@@ -151,7 +151,7 @@ TEST_CASE("Vulkan device keeps running out of memory, a lost device and a lost s
                                          std::pair{"VK_ERROR_SURFACE_LOST_KHR", ErrorCode::RhiWindowLost});
     INFO(result);
     const AdapterOverrideLayer adapterOverride;
-    const HeadlessDevice headless{kVulkan, {}};
+    const HeadlessDevice headless{vulkanDesc(), {}};
     const auto swapchain = headless.device->createSwapchain(kHeadless, swapchainDesc(*headless.instance));
     INFO(failureOf(swapchain));
     REQUIRE(swapchain.has_value());

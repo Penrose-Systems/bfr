@@ -21,16 +21,19 @@ image, and by resolveTexture), compute and copy queues in use (what each
 kind of queue runs, the layouts each kind moves a texture between, work
 handed across queues by waits), pipeline cache blobs (caches made from bytes
 and read back as bytes, which pipelines are looked for in and added to).
+Vulkan only so far: the caller's API version, uncapped, with BFR's minimum
+requirements (Vulkan 1.2 with dynamic rendering and synchronization2).
 
-12. No floor: every adapter the backend lists is listed; the instance and
-    device are made at the version the caller asks for; every feature BFR
-    now assumes (Vulkan 1.3 core, descriptor indexing, enhanced barriers,
-    Metal 4) is reported through caps, and calls that need a missing one
-    fail with RhiUnsupported.
+D3D12 and Metal are paused while Vulkan takes shape (owner, 2026-11-08); they
+still type-check.
+
+12. The caller's API version and BFR's minimum requirements on D3D12 and
+    Metal: the instance and devices are made at the version the caller asks
+    for, below the minimum fails, above it nothing is capped.
 13. Mesh shaders and ray tracing, exposed where the backend has them.
 14. Queries (occlusion, statistics), debug labels, memory heaps and placed
     resources, formatted buffer views, variable rate shading, programmable
     sample positions, HDR and present timing, and whatever each backend's
     caps turn up as we go.
 
-Next: 12.
+Next: 13 on Vulkan; 12 on D3D12 and Metal when they resume.

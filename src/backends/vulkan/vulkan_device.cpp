@@ -45,6 +45,9 @@ namespace bfr::rhi::vulkan {
 
 namespace {
 
+// The newest Vulkan VMA takes.
+constexpr std::uint32_t kNewestForVma = VK_API_VERSION_1_4;
+
 VkAttachmentLoadOp loadOpFor(LoadOp op) {
     switch (op) {
         case LoadOp::Load:
@@ -143,7 +146,9 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
     if (auto opened = made->openQueues(families, desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
-    auto allocator = createAllocator(rhi.handle(), adapter, device, VulkanInstance::kInstanceVersion);
+    // VMA takes Vulkan 1.0 to 1.4 (vk_mem_alloc.h:1142); a later device
+    // still runs at its own version.
+    auto allocator = createAllocator(rhi.handle(), adapter, device, std::min(setup.apiVersion, kNewestForVma));
     if (!allocator) {
         return std::unexpected(std::move(allocator.error()));
     }
@@ -170,6 +175,7 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       drawIndirectCount_(setup.drawIndirectCount),
       features_(setup.features),
       resolve_(setup.resolve),
+      formats13_(setup.formats13),
       desc_(heldPart(desc)),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
       commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
@@ -188,6 +194,19 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       bindless_(desc),
       pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
+    // A core command above the version the device uses must not be called
+    // (initialization.adoc:146-148), so below 1.3 the core entries take the
+    // functions of the extensions 1.3 made core, which the device enabled.
+    // vkCmdSetPrimitiveTopologyEXT is null without extendedDynamicState, and
+    // then never called.
+    if (!hasCore13(setup.apiVersion)) {
+        table_.vkCmdBeginRendering = table_.vkCmdBeginRenderingKHR;
+        table_.vkCmdEndRendering = table_.vkCmdEndRenderingKHR;
+        table_.vkCmdPipelineBarrier2 = table_.vkCmdPipelineBarrier2KHR;
+        table_.vkQueueSubmit2 = table_.vkQueueSubmit2KHR;
+        table_.vkCmdWriteTimestamp2 = table_.vkCmdWriteTimestamp2KHR;
+        table_.vkCmdSetPrimitiveTopology = table_.vkCmdSetPrimitiveTopologyEXT;
+    }
 }
 
 core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const DeviceDesc& desc) {

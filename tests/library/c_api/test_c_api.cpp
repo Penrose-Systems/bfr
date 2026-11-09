@@ -2,6 +2,7 @@
 #include "bfr/bfr.h"
 #include "bfr/core/log.h"
 #include "shaders/spirv.h"
+#include "test_backends.h"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -72,6 +73,20 @@ std::vector<bfr_backend> backendsInBuild() {
     return backends;
 }
 
+// The version the tests ask backend for (testApiVersion).
+bfr::test::ApiVersion versionFor(bfr_backend backend) {
+    switch (backend) {
+        case BFR_BACKEND_VULKAN:
+            return bfr::test::testApiVersion("vulkan");
+        case BFR_BACKEND_D3D12:
+            return bfr::test::testApiVersion("d3d12");
+        case BFR_BACKEND_METAL:
+            return bfr::test::testApiVersion("metal");
+        default:
+            return {};
+    }
+}
+
 // Each backend this build has, for a case that runs on each:
 // `const bfr_backend backend = GENERATE(eachBackend());`.
 auto eachBackend() {
@@ -88,6 +103,8 @@ struct Instance {
              bfr_bool callTimings = BFR_FALSE) {
         const bfr_instance_desc desc{.next = nullptr,
                                      .backend = backend,
+                                     .api_major = versionFor(backend).major,
+                                     .api_minor = versionFor(backend).minor,
                                      .validation = validation,
                                      .message_callback = record,
                                      .min_severity = BFR_MESSAGE_SEVERITY_WARNING,
@@ -176,6 +193,8 @@ TEST_CASE("C API rejects null arguments and says which", "[c_api][unit]") {
 TEST_CASE("C API rejects a backend value BFR does not have", "[c_api][unit]") {
     const bfr_instance_desc desc{.next = nullptr,
                                  .backend = static_cast<bfr_backend>(kNotAValue),
+                                 .api_major = 0,
+                                 .api_minor = 0,
                                  .validation = BFR_FALSE,
                                  .message_callback = nullptr,
                                  .min_severity = BFR_MESSAGE_SEVERITY_WARNING,
@@ -220,6 +239,8 @@ TEST_CASE("C API takes the application's and engine's names, and refuses a null 
     const bfr_backend backend = GENERATE(eachBackend());
     bfr_instance_desc desc{.next = nullptr,
                            .backend = backend,
+                           .api_major = versionFor(backend).major,
+                           .api_minor = versionFor(backend).minor,
                            .validation = BFR_FALSE,
                            .message_callback = nullptr,
                            .min_severity = BFR_MESSAGE_SEVERITY_WARNING,
@@ -247,6 +268,8 @@ TEST_CASE("C API reports a backend this build lacks", "[c_api][unit]") {
         }
         const bfr_instance_desc desc{.next = nullptr,
                                      .backend = backend,
+                                     .api_major = versionFor(backend).major,
+                                     .api_minor = versionFor(backend).minor,
                                      .validation = BFR_FALSE,
                                      .message_callback = nullptr,
                                      .min_severity = BFR_MESSAGE_SEVERITY_WARNING,
@@ -268,6 +291,8 @@ TEST_CASE("C API reports a backend this build lacks", "[c_api][unit]") {
 TEST_CASE("C API rejects a struct chained where it does not belong", "[c_api][unit]") {
     const bfr_instance_desc desc{.next = &kStray,
                                  .backend = BFR_BACKEND_VULKAN,
+                                 .api_major = versionFor(BFR_BACKEND_VULKAN).major,
+                                 .api_minor = versionFor(BFR_BACKEND_VULKAN).minor,
                                  .validation = BFR_FALSE,
                                  .message_callback = nullptr,
                                  .min_severity = BFR_MESSAGE_SEVERITY_WARNING,
@@ -1244,6 +1269,8 @@ TEST_CASE("C API rejects a min_severity that is not a severity, 0 included", "[c
     // The severity filters the callback's messages, so it is read with one.
     const bfr_instance_desc desc{.next = nullptr,
                                  .backend = BFR_BACKEND_VULKAN,
+                                 .api_major = versionFor(BFR_BACKEND_VULKAN).major,
+                                 .api_minor = versionFor(BFR_BACKEND_VULKAN).minor,
                                  .validation = BFR_FALSE,
                                  .message_callback = [](bfr_message_severity, bfr_string, void*) {},
                                  .min_severity = severity,
@@ -1270,6 +1297,8 @@ TEST_CASE("C API sends BFR's messages from min_severity up", "[c_api][gpu]") {
         std::vector<std::string> messages;
         const bfr_instance_desc desc{.next = nullptr,
                                      .backend = backend,
+                                     .api_major = versionFor(backend).major,
+                                     .api_minor = versionFor(backend).minor,
                                      .validation = BFR_FALSE,
                                      .message_callback = record,
                                      .min_severity = least,

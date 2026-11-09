@@ -183,11 +183,11 @@ core::Result<void> D3D12Instance::listAdapter(IDXGIAdapter1* found, std::vector<
         rejected.push_back(std::format("{}: {}", name, reason));
         return {};
     }
-    const std::string reason = belowFloor(native.device.Get());
+    const std::string reason = belowMinimum(native.device.Get());
     BFR_LOG_INFO(logger_, "adapter {}: {}", name,
-                 reason.empty() ? std::string{"listed"} : "below the floor, " + reason);
+                 reason.empty() ? std::string{"listed"} : "below BFR's minimum, " + reason);
     if (!reason.empty()) {
-        rejected.push_back(std::format("{}: below the floor, {}", name, reason));
+        rejected.push_back(std::format("{}: below BFR's minimum, {}", name, reason));
         return {};
     }
     if (config().validation) {

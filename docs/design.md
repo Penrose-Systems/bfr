@@ -8,14 +8,17 @@ else. [`research.md`](research.md) has what other engines and RHIs do.
 ## Requirements
 
 - Standalone library first. Any C++ renderer is a first-class consumer.
-- No floor. BFR lists every adapter the backend lists, and creates the
-  instance and device at the version the caller asks for: Vulkan's API
-  version, D3D12's feature level, Metal's. Caps say what each adapter has; a
-  call that needs what the device lacks fails with RhiUnsupported. Where a
-  backend has a feature both in core and as an extension, BFR uses the form
-  the device has.
-- Binding is bindless only, with no non-bindless path. Where a device lacks
-  what bindless needs, caps say so and the calls that need it fail.
+- Minimum requirements, which each `backend` value in `api/bfr.yaml`
+  states. An adapter below them is not listed. Reason: bindless binding, dynamic rendering and explicit barriers are what
+  every BFR call is built on; everything past them is reported through caps.
+- The caller names the API version the instance is made at, and BFR passes
+  it to the backend as it is. Below the minimum, creating the instance fails
+  with RhiUnsupported; above it, nothing is capped: each device runs at the
+  lower of the caller's version and its adapter's, and turns on what that
+  version has. Where a backend has a feature both in core and as an
+  extension, BFR uses the form the device has. D3D12 and Metal don't read the
+  version yet; they are paused while Vulkan takes shape (owner, 2026-11-08).
+- Binding is bindless only, with no non-bindless path.
 - Platforms: Windows, Linux, macOS, Android (Vulkan), iOS (Metal).
 - Backends: Vulkan, D3D12, Metal. No WebGPU: it has no explicit barriers, no
   bindless, no push constants and one queue.
@@ -107,9 +110,11 @@ encoder switching needs lookahead.
 
 ### Device and queues
 
-- The device is created from an adapter with the queues and features the
-  caller asks for. No feature is required to list an adapter or open a
-  device; caps report each one.
+- The device is created from an adapter with the queues the caller asks
+  for, and turns on what the adapter reports in the core structs of the
+  version it uses and in the extensions BFR enables, but robust access,
+  which changes what an out-of-bounds access does and costs speed. Caps
+  report each feature beyond BFR's minimum requirements.
 - Caps are per adapter and readable before any device exists. Reason:
   features are asked for when the device is created, and choosing
   a GPU shouldn't mean opening each one. One call returns everything fixed
@@ -142,13 +147,11 @@ encoder switching needs lookahead.
   a full barrier. The caller names the layout a texture is in and the one it
   moves to; BFR keeps no record of it. Metal has no layouts, so there it is
   the full barrier alone.
-- D3D12 barriers are enhanced barriers. Reason: a legacy-barrier path
-  doubles the sync code. They are a driver feature, so caps report them,
-  and on an adapter without them barrier calls fail with RhiUnsupported.
-- The Metal backend is written against Metal 4 (macOS/iOS 26+). Reason:
-  Metal 4 has explicit barriers, residency sets and command allocators,
-  which match this core directly. Where the OS or GPU lacks Metal 4, caps
-  say so and the calls that need it fail.
+- D3D12 barriers are enhanced barriers, in BFR's minimum requirements.
+  Reason: a legacy-barrier path doubles the sync code.
+- The Metal backend targets Metal 4 (macOS/iOS 26+), in BFR's minimum
+  requirements. Reason: Metal 4 has explicit barriers, residency sets and
+  command allocators, which match this core directly.
 
 ### Lifetime and residency
 

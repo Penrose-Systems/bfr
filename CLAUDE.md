@@ -13,6 +13,6 @@ BFR unifies graphics APIs behind one API. That is the whole job.
 - Report what the backend says. Do not invent, hallucinate, substitute, or make a fall back.
 - Public API (api/bfr.yaml, bfr.h, bfr.hpp, include/bfr) changes: visually notify the exact signatures first.
 - Every reason given to the owner cites a file:line read this session; a claim with no source is checked or cut.
-- Before the owner sees a proposal, a fresh agent with no context checks its claims against the code and the reference engines, and flags any minimum, refusal, default or hidden adapter; fix what it finds first.
+- Before the owner sees a proposal, a fresh agent with no context checks its claims against the code and the reference engines, and flags any minimum, refusal, default or hidden adapter beyond BFR's stated minimum requirements; fix what it finds first.
 - Never defer what the current roadmap step needs, unless a missing dependency can be cited.
 - Say what changed in a precise and concise manner, then stop.

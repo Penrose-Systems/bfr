@@ -6,6 +6,7 @@
 // api/bfr.yaml states under bfr_pipeline.
 #pragma once
 
+#include "api_version.hpp"
 #include "bfr.hpp"
 #include "shaders/spirv.h"
 
@@ -169,8 +170,11 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     // One graphics queue, at rank 0 and level normal.
     constexpr std::array<bfr::QueueDesc, 1> kOneQueue{};
     detail::row("Backend", {std::string{bfr::name(backend)}});
+    const ApiVersion version = apiVersionFor(backend);
     auto instance = bfr::Instance::create(
         {.backend = backend,
+         .apiMajor = version.major,
+         .apiMinor = version.minor,
          .validation = true,
          .messageCallback = [](bfr::MessageSeverity /*severity*/,
                                std::string_view message) { std::cerr << message << "\n"; },

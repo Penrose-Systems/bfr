@@ -160,7 +160,7 @@ public:
     /// requires. It lasts until the next bindPipeline. Fails with
     /// RhiInvalidCall for a value BFR doesn't have, RhiInvalidHandle when the
     /// list is gone, and RhiUnsupported for a topology the backend has no
-    /// form for (Metal's fan).
+    /// form for (Metal's fan), or where Features::dynamicTopology is false.
     [[nodiscard]] virtual core::Result<void> setTopology(CommandListHandle commandList, Topology topology) = 0;
 
     /// Sets the first data.size() bytes of the push constants every shader

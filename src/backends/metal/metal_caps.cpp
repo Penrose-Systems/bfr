@@ -121,7 +121,7 @@ void addCompressionFeatures(MTL::Device* device, Features& features) {
 
 // Render state Metal has no call for: a triangle fill mode and depth clip
 // mode on every render encoder, and blending set per color attachment, on the
-// Metal 4 devices belowFloor lets through. Godot sets the first two from its
+// Metal 4 devices belowMinimum lets through. Godot sets the first two from its
 // pipeline with no device check (rendering_device_driver_metal.cpp:2094-2095),
 // and The Forge all three (MetalRenderer.mm:1369-1396, 3497).
 void addRenderFeatures(Features& features) {
@@ -134,8 +134,12 @@ void addRenderFeatures(Features& features) {
 // (kMultiDrawIndirect, kDrawIndirectCount); their argument structs carry
 // baseInstance (MTLRenderCommandEncoder.hpp:118, 127). MTLPrimitiveType has
 // no fan (MTLRenderCommandEncoder.hpp:52-57), and the headers have no
-// primitive restart setting, so none is known to apply to lists.
+// primitive restart setting, so none is known to apply to lists. Each draw
+// takes its topology (MTL4RenderCommandEncoder.hpp:76). No Metal source read
+// says whether an argument buffer's storage textures take an index that
+// varies within a SIMD group, so storageTextureNonUniformIndexing stays false.
 void addDrawFeatures(Features& features) {
+    features.dynamicTopology = true;
     features.multiDrawIndirect = kMultiDrawIndirect;
     features.drawIndirectCount = kDrawIndirectCount;
     features.drawIndirectFirstInstance = true;
@@ -260,7 +264,7 @@ ResolveCaps resolveCapsOf(MTL::Device* device) {
     return resolve;
 }
 
-std::string belowFloor(MTL::Device* device) {
+std::string belowMinimum(MTL::Device* device) {
     std::string reasons;
     const auto add = [&reasons](const char* reason) {
         if (!reasons.empty()) {

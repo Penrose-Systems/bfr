@@ -2,6 +2,7 @@
 # library, as an application would.
 add_executable(bfr_caps caps/main.cpp)
 bfr_apply_compiler_flags(bfr_caps)
+target_include_directories(bfr_caps PRIVATE common)
 target_link_libraries(bfr_caps PRIVATE bfr_cpp bfr_shared)
 
 # Programs that open a window with a windowing library and give BFR its handles.

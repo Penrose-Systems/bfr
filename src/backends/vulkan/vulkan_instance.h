@@ -58,9 +58,6 @@ public:
     /// Where the Instance and its devices send their messages.
     [[nodiscard]] const core::Logger& logger() const { return messages_.logger; }
 
-    /// The Vulkan version the instance is created at.
-    static constexpr std::uint32_t kInstanceVersion = VK_API_VERSION_1_3;
-
     /// The VkInstance, which lives as long as this.
     [[nodiscard]] VkInstance handle() const { return instance_; }
 
@@ -105,8 +102,14 @@ private:
     VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;
     // What the instance enabled; each name has static storage.
     std::vector<const char*> extensions_;
+    // The version the caller asked for, which the instance is created at.
+    std::uint32_t version_ = 0;
     std::vector<Adapter> adapters_;
-    std::vector<VkPhysicalDevice> physicalDevices_; // index-aligned with adapters_
+    // Index-aligned with adapters_: each adapter, the version a device on it
+    // uses, and the device extensions it lists.
+    std::vector<VkPhysicalDevice> physicalDevices_;
+    std::vector<std::uint32_t> versions_;
+    std::vector<std::vector<VkExtensionProperties>> adapterExtensions_;
     // Whether each adapter has VK_EXT_memory_budget; index-aligned with adapters_.
     std::vector<bool> hasBudget_;
     std::uint32_t loaderVersion_ = 0;
