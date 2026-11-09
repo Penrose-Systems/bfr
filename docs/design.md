@@ -377,8 +377,9 @@ hand-written wrappers would each drift from the header.
   may break.
 - Enums are C enums with a `_FORCE32 = 0x7FFFFFFF` member, so they are 32
   bits on every compiler and generators keep their type. Flags are
-  `uint64_t`. `bfr_bool` is `uint32_t`. Reason: P/Invoke marshals `bool` as
-  4 bytes by default.
+  `uint64_t`. `bfr_bool` is `uint8_t`, as C++'s `bool` is, so structs of
+  numbers and bools pass between C and the C++ wrapper without a copy. C#
+  binds it as `byte`, or as `bool` with `[MarshalAs(UnmanagedType.U1)]`.
 - Strings are `{data, length}`; arrays are a pointer and a count.
 - The caller owns what it passes; BFR copies what it keeps. Lists BFR
   returns use two calls: one for the count, one to fill the caller's array.

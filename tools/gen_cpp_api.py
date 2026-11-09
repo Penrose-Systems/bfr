@@ -50,8 +50,9 @@ BUILTINS = {
     "opaque": "void*",
     "string": "std::string_view",
 }
-# The types whose C++ and C forms are the same bits. bool is not: C's is 32 bits.
-MIRRORED = {"u8", "u32", "u64", "i32", "f32", "size"}
+# The types whose C++ and C forms are the same bits. bool is: C's is 8 bits,
+# as each struct's layout assert checks, and C++ writes it as 0 or 1.
+MIRRORED = {"bool", "u8", "u32", "u64", "i32", "f32", "size"}
 
 
 def pascal(name: str) -> str:
@@ -325,7 +326,7 @@ def member_from_c(api: Api, member: dict[str, Any], value: str) -> str:
 def to_c(api: Api, kind: str, value: str) -> str:
     """value, of the C++ type for kind, as its C type."""
     if kind == "bool":
-        return f"{value} ? BFR_TRUE : BFR_FALSE"
+        return f"static_cast<bfr_bool>({value})"
     if kind == "string":
         return f"detail::toC({value})"
     if kind in api.enums:

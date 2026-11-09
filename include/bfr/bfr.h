@@ -28,8 +28,8 @@
 extern "C" {
 #endif
 
-// 32 bits on every compiler and in every binding.
-typedef uint32_t bfr_bool;
+// 8 bits on every compiler and in every binding, as C++'s bool is.
+typedef uint8_t bfr_bool;
 #define BFR_FALSE 0u
 #define BFR_TRUE 1u
 

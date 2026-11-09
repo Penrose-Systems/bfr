@@ -862,7 +862,7 @@ bfr_string toC(const std::string& text) {
 }
 
 bfr_bool toC(bool value) {
-    return value ? BFR_TRUE : BFR_FALSE;
+    return static_cast<bfr_bool>(value);
 }
 
 // The C and C++ enums below are the same numbers.
@@ -2087,7 +2087,7 @@ bfr_result bfr_poll(bfr_device* device, const bfr_token* token, bfr_bool* comple
         if (!polled) {
             return fail(polled.error());
         }
-        *complete = *polled ? BFR_TRUE : BFR_FALSE;
+        *complete = toC(*polled);
         return BFR_RESULT_SUCCESS;
     });
 }

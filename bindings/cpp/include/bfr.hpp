@@ -2868,7 +2868,7 @@ inline bfr_instance_desc toC(const InstanceDesc& value, const bfr_chain* next, M
         .backend = static_cast<bfr_backend>(value.backend),
         .api_major = value.apiMajor,
         .api_minor = value.apiMinor,
-        .validation = value.validation ? BFR_TRUE : BFR_FALSE,
+        .validation = static_cast<bfr_bool>(value.validation),
         .message_callback = messageCallback != nullptr ? &messageCallbackTrampoline : nullptr,
         .min_severity = static_cast<bfr_message_severity>(value.minSeverity),
         .message_user_data = messageCallback,
@@ -2876,7 +2876,7 @@ inline bfr_instance_desc toC(const InstanceDesc& value, const bfr_chain* next, M
         .application_version = value.applicationVersion,
         .engine_name = detail::toC(value.engineName),
         .engine_version = value.engineVersion,
-        .call_timings = value.callTimings ? BFR_TRUE : BFR_FALSE,
+        .call_timings = static_cast<bfr_bool>(value.callTimings),
     };
 }
 
@@ -2957,12 +2957,12 @@ inline bfr_command_pool_desc toC(const CommandPoolDesc& value, const bfr_chain* 
 
 inline bfr_buffer_usage toC(const BufferUsage& value) {
     return {
-        .copy_src = value.copySrc ? BFR_TRUE : BFR_FALSE,
-        .copy_dst = value.copyDst ? BFR_TRUE : BFR_FALSE,
-        .uniform = value.uniform ? BFR_TRUE : BFR_FALSE,
-        .storage = value.storage ? BFR_TRUE : BFR_FALSE,
-        .index = value.index ? BFR_TRUE : BFR_FALSE,
-        .indirect = value.indirect ? BFR_TRUE : BFR_FALSE,
+        .copy_src = static_cast<bfr_bool>(value.copySrc),
+        .copy_dst = static_cast<bfr_bool>(value.copyDst),
+        .uniform = static_cast<bfr_bool>(value.uniform),
+        .storage = static_cast<bfr_bool>(value.storage),
+        .index = static_cast<bfr_bool>(value.index),
+        .indirect = static_cast<bfr_bool>(value.indirect),
     };
 }
 
@@ -2972,8 +2972,8 @@ inline bfr_buffer_desc toC(const BufferDesc& value, const bfr_chain* next) {
         .size = value.size,
         .memory = static_cast<bfr_buffer_memory>(value.memory),
         .usage = toC(value.usage),
-        .sparse = value.sparse ? BFR_TRUE : BFR_FALSE,
-        .sparse_aliased = value.sparseAliased ? BFR_TRUE : BFR_FALSE,
+        .sparse = static_cast<bfr_bool>(value.sparse),
+        .sparse_aliased = static_cast<bfr_bool>(value.sparseAliased),
         .tile_bytes = value.tileBytes,
     };
 }
@@ -2984,12 +2984,12 @@ inline bfr_buffer_copy toC(const BufferCopy& value) {
 
 inline bfr_texture_usage toC(const TextureUsage& value) {
     return {
-        .copy_src = value.copySrc ? BFR_TRUE : BFR_FALSE,
-        .copy_dst = value.copyDst ? BFR_TRUE : BFR_FALSE,
-        .sampled = value.sampled ? BFR_TRUE : BFR_FALSE,
-        .storage = value.storage ? BFR_TRUE : BFR_FALSE,
-        .color_attachment = value.colorAttachment ? BFR_TRUE : BFR_FALSE,
-        .depth_stencil = value.depthStencil ? BFR_TRUE : BFR_FALSE,
+        .copy_src = static_cast<bfr_bool>(value.copySrc),
+        .copy_dst = static_cast<bfr_bool>(value.copyDst),
+        .sampled = static_cast<bfr_bool>(value.sampled),
+        .storage = static_cast<bfr_bool>(value.storage),
+        .color_attachment = static_cast<bfr_bool>(value.colorAttachment),
+        .depth_stencil = static_cast<bfr_bool>(value.depthStencil),
     };
 }
 
@@ -3005,8 +3005,8 @@ inline bfr_texture_desc toC(const TextureDesc& value, const bfr_chain* next) {
         .mip_levels = value.mipLevels,
         .samples = value.samples,
         .usage = toC(value.usage),
-        .sparse = value.sparse ? BFR_TRUE : BFR_FALSE,
-        .sparse_aliased = value.sparseAliased ? BFR_TRUE : BFR_FALSE,
+        .sparse = static_cast<bfr_bool>(value.sparse),
+        .sparse_aliased = static_cast<bfr_bool>(value.sparseAliased),
         .tile_bytes = value.tileBytes,
     };
 }
@@ -3066,10 +3066,10 @@ inline bfr_sampler_desc toC(const SamplerDesc& value, const bfr_chain* next) {
         .reduction = static_cast<bfr_sampler_reduction>(value.reduction),
         .compare_op = static_cast<bfr_compare_op>(value.compareOp),
         .border_color = {value.borderColor[0], value.borderColor[1], value.borderColor[2], value.borderColor[3]},
-        .border_integer = value.borderInteger ? BFR_TRUE : BFR_FALSE,
+        .border_integer = static_cast<bfr_bool>(value.borderInteger),
         .border_color_integer = {value.borderColorInteger[0], value.borderColorInteger[1], value.borderColorInteger[2], value.borderColorInteger[3]},
-        .unnormalized_coordinates = value.unnormalizedCoordinates ? BFR_TRUE : BFR_FALSE,
-        .lod_average = value.lodAverage ? BFR_TRUE : BFR_FALSE,
+        .unnormalized_coordinates = static_cast<bfr_bool>(value.unnormalizedCoordinates),
+        .lod_average = static_cast<bfr_bool>(value.lodAverage),
     };
 }
 
@@ -3086,7 +3086,7 @@ inline bfr_raster_state toC(const RasterState& value) {
         .cull = static_cast<bfr_cull_mode>(value.cull),
         .front_face = static_cast<bfr_front_face>(value.frontFace),
         .fill = static_cast<bfr_fill_mode>(value.fill),
-        .depth_clamp = value.depthClamp ? BFR_TRUE : BFR_FALSE,
+        .depth_clamp = static_cast<bfr_bool>(value.depthClamp),
         .depth_bias = value.depthBias,
         .depth_bias_slope = value.depthBiasSlope,
         .depth_bias_clamp = value.depthBiasClamp,
@@ -3106,10 +3106,10 @@ inline bfr_stencil_face toC(const StencilFace& value) {
 
 inline bfr_depth_stencil_state toC(const DepthStencilState& value) {
     return {
-        .depth_test = value.depthTest ? BFR_TRUE : BFR_FALSE,
-        .depth_write = value.depthWrite ? BFR_TRUE : BFR_FALSE,
+        .depth_test = static_cast<bfr_bool>(value.depthTest),
+        .depth_write = static_cast<bfr_bool>(value.depthWrite),
         .depth_compare = static_cast<bfr_compare_op>(value.depthCompare),
-        .stencil_test = value.stencilTest ? BFR_TRUE : BFR_FALSE,
+        .stencil_test = static_cast<bfr_bool>(value.stencilTest),
         .front = toC(value.front),
         .back = toC(value.back),
     };
@@ -3117,7 +3117,7 @@ inline bfr_depth_stencil_state toC(const DepthStencilState& value) {
 
 inline bfr_blend_state toC(const BlendState& value) {
     return {
-        .enable = value.enable ? BFR_TRUE : BFR_FALSE,
+        .enable = static_cast<bfr_bool>(value.enable),
         .src_color = static_cast<bfr_blend_factor>(value.srcColor),
         .dst_color = static_cast<bfr_blend_factor>(value.dstColor),
         .color_op = static_cast<bfr_blend_op>(value.colorOp),
@@ -4493,7 +4493,7 @@ inline bfr_color_attachment toC(const ColorAttachment& value) {
         .load_op = static_cast<bfr_load_op>(value.loadOp),
         .store_op = static_cast<bfr_store_op>(value.storeOp),
         .clear_color = {value.clearColor[0], value.clearColor[1], value.clearColor[2], value.clearColor[3]},
-        .clear_integer = value.clearInteger ? BFR_TRUE : BFR_FALSE,
+        .clear_integer = static_cast<bfr_bool>(value.clearInteger),
         .clear_color_integer = {value.clearColorInteger[0], value.clearColorInteger[1], value.clearColorInteger[2], value.clearColorInteger[3]},
         .resolve_texture = value.resolveTexture != nullptr ? value.resolveTexture->get() : bfr_texture{},
     };
@@ -4508,7 +4508,7 @@ inline bfr_depth_stencil_attachment toC(const DepthStencilAttachment& value) {
         .stencil_store_op = static_cast<bfr_store_op>(value.stencilStoreOp),
         .clear_depth = value.clearDepth,
         .clear_stencil = value.clearStencil,
-        .read_only = value.readOnly ? BFR_TRUE : BFR_FALSE,
+        .read_only = static_cast<bfr_bool>(value.readOnly),
         .resolve_texture = value.resolveTexture != nullptr ? value.resolveTexture->get() : bfr_texture{},
         .depth_resolve = static_cast<bfr_resolve_mode>(value.depthResolve),
         .stencil_resolve = static_cast<bfr_resolve_mode>(value.stencilResolve),
@@ -4550,9 +4550,9 @@ inline bfr_graphics_pipeline_desc toC(const GraphicsPipelineDesc& value, const b
         .color_targets = {toC(value.colorTargets[0]), toC(value.colorTargets[1]), toC(value.colorTargets[2]), toC(value.colorTargets[3]), toC(value.colorTargets[4]), toC(value.colorTargets[5]), toC(value.colorTargets[6]), toC(value.colorTargets[7])},
         .depth_stencil_format = static_cast<bfr_format>(value.depthStencilFormat),
         .samples = value.samples,
-        .alpha_to_coverage = value.alphaToCoverage ? BFR_TRUE : BFR_FALSE,
+        .alpha_to_coverage = static_cast<bfr_bool>(value.alphaToCoverage),
         .sample_mask = value.sampleMask,
-        .alpha_to_one = value.alphaToOne ? BFR_TRUE : BFR_FALSE,
+        .alpha_to_one = static_cast<bfr_bool>(value.alphaToOne),
         .min_sample_shading = value.minSampleShading,
         .cache = value.cache != nullptr ? value.cache->get() : bfr_pipeline_cache{},
     };
