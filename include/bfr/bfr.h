@@ -1917,6 +1917,7 @@ typedef struct bfr_caps_mesh {
     uint32_t max_mesh_payload_and_output_memory;
     uint32_t max_mesh_output_components;
     uint32_t max_mesh_output_layers;
+    uint32_t max_mesh_multiview_views;
 } bfr_caps_mesh;
 
 // The adapter's ray tracing limits. The structure limits are 0 without acceleration structures, the
@@ -2010,6 +2011,10 @@ typedef struct bfr_caps_features {
     bfr_bool list_restart;
     // bfr_set_topology, which fails with error_unsupported where this is false.
     bfr_bool dynamic_topology;
+    // Mesh pipelines in multiview renderings, where multiview.
+    bfr_bool mesh_multiview;
+    // Pipeline statistics and primitive queries count task and mesh work.
+    bfr_bool mesh_statistics;
     // bfr_graphics_pipeline_desc.alpha_to_one.
     bfr_bool alpha_to_one;
     // A bfr_graphics_pipeline_desc.sample_mask that leaves samples out.
@@ -2142,10 +2147,14 @@ typedef struct bfr_caps_timestamps {
     bfr_bool compute;
     // Copy queues write timestamps.
     bfr_bool copy;
-    // The stages a write outside rendering takes.
+    // The stages a write on a graphics queue outside rendering takes.
     bfr_timestamp_stages outside_rendering;
     // The stages a write between bfr_begin_rendering and bfr_end_rendering takes.
     bfr_timestamp_stages inside_rendering;
+    // The stages a write on a compute queue takes.
+    bfr_timestamp_stages compute_stages;
+    // The stages a write on a copy queue takes.
+    bfr_timestamp_stages copy_stages;
     // The backend takes a bfr_timestamp_granularity; where false the value is unused.
     bfr_bool granularity;
     // What one timestamp takes in a buffer bfr_resolve_timestamps writes.

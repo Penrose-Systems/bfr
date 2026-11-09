@@ -20,6 +20,7 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -28,6 +29,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -272,6 +274,81 @@ TEST_CASE("Device counts the CPU time of each call when the InstanceDesc asks fo
         std::array<CallTiming, kCallCount> timings{};
         CHECK(untimed.device->callTimings(timings).error().code == ErrorCode::RhiInvalidCall);
         CHECK(untimed.instance->callTimings(timings).error().code == ErrorCode::RhiInvalidCall);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device writes a timestamp at each stage a compute or copy queue's caps list, and no other",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        auto instance = createInstance(recordingInto(backend, messages), kValidation);
+        INFO(failureOf(instance));
+        REQUIRE(instance.has_value());
+        const Caps& caps = (*instance)->adapters()[0].caps;
+        // Queue 0 is graphics, 1 compute and 2 copy, as DeviceDesc numbers them.
+        constexpr std::uint32_t kGraphics = 0;
+        constexpr std::uint32_t kCompute = 1;
+        constexpr std::uint32_t kCopy = 2;
+        auto opened = (*instance)->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& desc) {
+                                                    desc.compute = std::span{kTestQueues}.first(1);
+                                                    desc.copy = std::span{kTestQueues}.first(1);
+                                                }));
+        if (!opened && opened.error().code == ErrorCode::RhiUnsupported) {
+            SKIP(failureOf(opened));
+        }
+        INFO(failureOf(opened));
+        REQUIRE(opened.has_value());
+        Device& device = **opened;
+        const auto [queue, writes,
+                    stages] = GENERATE_COPY(std::tuple{kCompute, caps.timestamps.compute,
+                                                       caps.timestamps.computeStages},
+                                            std::tuple{kCopy, caps.timestamps.copy, caps.timestamps.copyStages});
+        INFO("queue " << queue);
+        if (!writes) {
+            SKIP("this kind of queue writes no timestamps");
+        }
+        const std::vector<TimestampStage> listedStages = listed(stages);
+        constexpr std::array kEveryStage{TimestampStage::End,      TimestampStage::Start,   TimestampStage::Vertex,
+                                         TimestampStage::Fragment, TimestampStage::Compute, TimestampStage::Copy,
+                                         TimestampStage::Task,     TimestampStage::Mesh};
+        constexpr auto kStages = static_cast<std::uint32_t>(kEveryStage.size());
+        const auto pool = device.createTimestampPool({.queue = queue, .count = kStages});
+        REQUIRE(pool.has_value());
+        // Vulkan resets queries only on graphics and compute queues
+        // (vkCmdResetQueryPool's command pool), so the graphics queue resets
+        // them first.
+        const auto resets = device.createCommandPool({.queue = kGraphics, .listCount = kPoolLists});
+        REQUIRE(resets.has_value());
+        const auto reset = device.beginCommands(*resets);
+        REQUIRE(reset.has_value());
+        CHECK(device.resetTimestamps(*reset, *pool, 0, kStages).has_value());
+        const auto sent = device.submit({.queue = kGraphics, .commandLists = std::span{&*reset, 1}, .waits = {}});
+        INFO(failureOf(sent));
+        REQUIRE(sent.has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
+        const auto commands = device.createCommandPool({.queue = queue, .listCount = kPoolLists});
+        REQUIRE(commands.has_value());
+        const auto list = device.beginCommands(*commands);
+        REQUIRE(list.has_value());
+
+        for (std::uint32_t index = 0; index < kStages; ++index) {
+            const TimestampStage stage = kEveryStage.at(index);
+            INFO("stage " << static_cast<int>(stage));
+            const auto written = device.writeTimestamp(*list, *pool, index, stage, TimestampGranularity::Relaxed);
+            if (std::ranges::contains(listedStages, stage)) {
+                CHECK(written.has_value());
+            }
+            else {
+                REQUIRE_FALSE(written.has_value());
+                CHECK(written.error().code == ErrorCode::RhiUnsupported);
+            }
+        }
+        CHECK(device.destroyCommandList(*list).has_value());
+        CHECK(device.destroyCommandPool(*commands).has_value());
+        CHECK(device.destroyCommandPool(*resets).has_value());
+        CHECK(device.destroyTimestampPool(*pool).has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

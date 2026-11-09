@@ -476,6 +476,8 @@ Timestamps timestampsOf(ID3D12Device* device) {
             .copy = copy,
             .outsideRendering = kEnd,
             .insideRendering = kEnd,
+            .computeStages = kEnd,
+            .copyStages = copy ? kEnd : TimestampStages{},
             .granularity = false,
             .entryBytes = sizeof(UINT64),
             .hostClocks = {.performanceCounter = true}};

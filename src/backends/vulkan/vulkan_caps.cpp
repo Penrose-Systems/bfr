@@ -313,6 +313,8 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
         // VUID-VkPipelineInputAssemblyStateCreateInfo-topology-06252.
         .listRestart = on(features.listRestart.primitiveTopologyListRestart),
         .dynamicTopology = features.hasDynamicTopology(),
+        .meshMultiview = on(features.mesh.multiviewMeshShader),
+        .meshStatistics = on(features.mesh.meshShaderQueries),
         .alphaToOne = on(core.alphaToOne),
         // pSampleMask is core 1.0, with no feature.
         .sampleMask = true,
@@ -424,8 +426,36 @@ QueueLevels levelsFrom(const VkQueueFamilyGlobalPriorityPropertiesKHR& listed) {
 // it on, none for a kind the device can't open. The levels are each family's
 // list where the adapter has VK_KHR_global_priority, none without it; ranks
 // is the adapter's discreteQueuePriorities.
+// The flags of the family each kind of queue opens on; 0 for a kind with none.
+struct KindFlags {
+    VkQueueFlags graphics = 0;
+    VkQueueFlags compute = 0;
+    VkQueueFlags copy = 0;
+};
+
+// The stages a timestamp takes on a queue of a family with flags: graphics
+// stages only on a graphics queue (synchronization.adoc:838-841), compute on
+// a compute queue, copies on a graphics, compute or transfer one, and the
+// start and end of the work before it on any; none where flags is 0. The
+// task and mesh stages need their features (VUID-vkCmdWriteTimestamp2-stage-03934,
+// -03935).
+TimestampStages stagesFor(VkQueueFlags flags, const Features& features) {
+    const bool graphics = (flags & VK_QUEUE_GRAPHICS_BIT) != 0;
+    const bool compute = (flags & VK_QUEUE_COMPUTE_BIT) != 0;
+    const bool any = flags != 0;
+    return {.end = any,
+            .start = any,
+            .vertex = graphics,
+            .fragment = graphics,
+            .compute = compute,
+            .copy = graphics || compute || (flags & VK_QUEUE_TRANSFER_BIT) != 0,
+            .task = graphics && features.taskShader,
+            .mesh = graphics && features.meshShader};
+}
+
 Queues queuesFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
-                  std::span<const VkExtensionProperties> extensions, const VkPhysicalDeviceLimits& limits) {
+                  std::span<const VkExtensionProperties> extensions, KindFlags& kinds,
+                  const VkPhysicalDeviceLimits& limits) {
     std::uint32_t count = 0;
     vk.vkGetPhysicalDeviceQueueFamilyProperties2(adapter, &count, nullptr);
     const bool listsLevels = hasQueueLevels(version, extensions);
@@ -445,6 +475,12 @@ Queues queuesFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32
     // levels; bfr_caps_queues says so.
     const QueueFamilies chosen = chooseQueueFamilies(families, {});
     const QueueCounts counts = countQueues(chosen, families);
+    const auto flags = [&families](std::uint32_t queues, std::optional<std::uint32_t> family) -> VkQueueFlags {
+        return queues == 0 ? 0 : families[*family].queueFlags;
+    };
+    kinds = {.graphics = flags(counts.graphics, chosen.graphics),
+             .compute = flags(counts.compute, chosen.compute),
+             .copy = flags(counts.copy, chosen.transfer)};
     const auto bits = [&families](std::uint32_t queues, std::optional<std::uint32_t> family) {
         return queues == 0 ? 0 : families[*family].timestampValidBits;
     };
@@ -851,6 +887,7 @@ MeshLimits meshFrom(const PropertyQuery& properties, const Features& reported) {
         .maxMeshPayloadAndOutputMemory = mesh.maxMeshPayloadAndOutputMemorySize,
         .maxMeshOutputComponents = mesh.maxMeshOutputComponents,
         .maxMeshOutputLayers = mesh.maxMeshOutputLayers,
+        .maxMeshMultiviewViews = mesh.maxMeshMultiviewViewCount,
     };
 }
 
@@ -902,26 +939,21 @@ HostClocks hostClocksFrom(const InstanceTable& vk, VkPhysicalDevice adapter,
     return clocks;
 }
 
-// Vulkan writes a timestamp at every stage, in rendering and out of it, on a
-// queue whose family has valid timestamp bits; it takes no granularity. The
-// task and mesh stages need their features (VUID-vkCmdWriteTimestamp2-stage-03934, -03935).
-// A VK_QUERY_RESULT_64_BIT copy writes each as a uint64_t.
+// Vulkan writes a timestamp at each stage its family's queues run
+// (stagesFor), in rendering and out of it, on a queue whose family has valid
+// timestamp bits; it takes no granularity. A VK_QUERY_RESULT_64_BIT copy
+// writes each as a uint64_t.
 Timestamps timestampsFrom(const InstanceTable& vk, VkPhysicalDevice adapter,
                           std::span<const VkExtensionProperties> extensions, const Queues& queues,
-                          const Features& features) {
-    const TimestampStages every{.end = true,
-                                .start = true,
-                                .vertex = true,
-                                .fragment = true,
-                                .compute = true,
-                                .copy = true,
-                                .task = features.taskShader,
-                                .mesh = features.meshShader};
+                          const KindFlags& kinds, const Features& features) {
+    const TimestampStages graphics = stagesFor(kinds.graphics, features);
     return {.graphics = queues.graphicsTimestampBits != 0,
             .compute = queues.computeTimestampBits != 0,
             .copy = queues.copyTimestampBits != 0,
-            .outsideRendering = every,
-            .insideRendering = every,
+            .outsideRendering = graphics,
+            .insideRendering = graphics,
+            .computeStages = stagesFor(kinds.compute, features),
+            .copyStages = stagesFor(kinds.copy, features),
             .granularity = false,
             .entryBytes = sizeof(std::uint64_t),
             .hostClocks = hostClocksFrom(vk, adapter, extensions)};
@@ -957,6 +989,7 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t v
     const DeviceFeatures features(vk, adapter, version, extensions);
     const PropertyQuery properties(vk, adapter, version, extensions);
     const Features reported = featuresFrom(features, properties, extensions);
+    KindFlags kinds;
     Caps caps{
         .info = infoFrom(properties),
         .limits = limitsFrom(properties, features),
@@ -966,12 +999,12 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t v
         .rayTracing = rayTracingFrom(properties, reported),
         .features = reported,
         .memory = memoryFrom(vk, adapter, properties.core.properties.deviceType),
-        .queues = queuesFrom(vk, adapter, version, extensions, properties.core.properties.limits),
+        .queues = queuesFrom(vk, adapter, version, extensions, kinds, properties.core.properties.limits),
         .timestamps = {},
         .sparse = sparseFrom(features, properties),
         .resolve = resolveFrom(properties),
     };
-    caps.timestamps = timestampsFrom(vk, adapter, extensions, caps.queues, reported);
+    caps.timestamps = timestampsFrom(vk, adapter, extensions, caps.queues, kinds, reported);
     if (reported.shadingRateTexture) {
         const VkExtent2D& smallest = properties.shadingRate.minFragmentShadingRateAttachmentTexelSize;
         const VkExtent2D& largest = properties.shadingRate.maxFragmentShadingRateAttachmentTexelSize;

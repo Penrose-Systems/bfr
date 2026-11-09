@@ -495,7 +495,7 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
                                       .hasSwapchain = swapchains,
                                       .pushConstantsSize = listed.caps.limits.maxPushConstantsSize,
                                       .timestampPeriod = adapterProperties.limits.timestampPeriod,
-                                      .hostClocks = listed.caps.timestamps.hostClocks,
+                                      .timestamps = listed.caps.timestamps,
                                       .multiDrawIndirect = listed.caps.features.multiDrawIndirect,
                                       .drawIndirectCount = listed.caps.features.drawIndirectCount,
                                       .features = listed.caps.features,

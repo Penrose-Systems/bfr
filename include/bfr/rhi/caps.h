@@ -125,6 +125,7 @@ struct MeshLimits {
     std::uint32_t maxMeshPayloadAndOutputMemory = 0;
     std::uint32_t maxMeshOutputComponents = 0;
     std::uint32_t maxMeshOutputLayers = 0;
+    std::uint32_t maxMeshMultiviewViews = 0;
 };
 
 struct RayTracingLimits {
@@ -190,6 +191,10 @@ struct Features {
     bool listRestart = false;
     /// Device::setTopology, which fails with RhiUnsupported where this is false.
     bool dynamicTopology = false;
+    /// Mesh pipelines in multiview renderings, where multiview.
+    bool meshMultiview = false;
+    /// Pipeline statistics and primitive queries count task and mesh work.
+    bool meshStatistics = false;
     /// GraphicsPipelineDesc::alphaToOne.
     bool alphaToOne = false;
     /// A GraphicsPipelineDesc::sampleMask that leaves samples out.
@@ -295,9 +300,10 @@ struct HostClocks {
 };
 
 /// What the adapter's GPU timestamps are. graphics, compute and copy say
-/// which kinds of queue write them. A write outside rendering takes the
-/// stages in outsideRendering, and one between beginRendering and
-/// endRendering those in insideRendering. granularity says the backend
+/// which kinds of queue write them. A write on a graphics queue takes the
+/// stages in outsideRendering, or between beginRendering and endRendering
+/// those in insideRendering; one on a compute or copy queue those in
+/// computeStages or copyStages. granularity says the backend
 /// takes a TimestampGranularity; where it is false the value is unused.
 /// entryBytes is what one timestamp takes in a buffer resolveTimestamps
 /// writes, and hostClocks the clocks calibrateTimestamps reads.
@@ -307,6 +313,8 @@ struct Timestamps {
     bool copy = false;
     TimestampStages outsideRendering;
     TimestampStages insideRendering;
+    TimestampStages computeStages;
+    TimestampStages copyStages;
     bool granularity = false;
     std::uint32_t entryBytes = 0;
     HostClocks hostClocks;

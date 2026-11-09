@@ -59,9 +59,10 @@ struct VulkanDeviceSetup {
     std::uint32_t pushConstantsSize = 0;
     /// VkPhysicalDeviceLimits::timestampPeriod.
     float timestampPeriod = 0;
-    /// What vkGetCalibratedTimestampsKHR reads, none when the device has no
+    /// The stages each kind of queue's timestamps take, and what
+    /// vkGetCalibratedTimestampsKHR reads, none when the device has no
     /// calibrated timestamps extension enabled.
-    HostClocks hostClocks;
+    Timestamps timestamps;
     /// Features::multiDrawIndirect and drawIndirectCount.
     bool multiDrawIndirect = false;
     bool drawIndirectCount = false;
@@ -332,7 +333,7 @@ private:
     bool hasSwapchain_;
     std::uint32_t pushConstantsSize_;
     float timestampPeriod_;
-    HostClocks hostClocks_;
+    Timestamps timestamps_;
     bool multiDrawIndirect_;
     bool drawIndirectCount_;
     Features features_;

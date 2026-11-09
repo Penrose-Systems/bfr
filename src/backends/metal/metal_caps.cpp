@@ -301,6 +301,8 @@ Timestamps timestampsOf(MTL::Device* device) {
             .copy = true,
             .outsideRendering = {.end = true},
             .insideRendering = {.vertex = true, .fragment = true},
+            .computeStages = {.end = true},
+            .copyStages = {.end = true},
             .granularity = true,
             .entryBytes = clampTo32(device->sizeOfCounterHeapEntry(MTL4::CounterHeapTypeTimestamp)),
             .hostClocks = {}};

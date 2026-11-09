@@ -2,6 +2,7 @@
 
 #include "bfr/core/error.h"
 #include "bfr/rhi/timestamp.h"
+#include "rhi/command_check.h"
 #include "rhi/enum_check.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_result.h"
@@ -131,16 +132,22 @@ core::Result<void> VulkanDevice::writeTimestamp(CommandListHandle commandList, T
     if (auto checked = checkKnown(granularity, "timestamp granularity"); !checked) {
         return checked;
     }
-    // Task and mesh stages need their features
-    // (VUID-vkCmdWriteTimestamp2-stage-03934, -03935), as the caps say.
-    if ((stage == TimestampStage::Task && !features_.taskShader) ||
-        (stage == TimestampStage::Mesh && !features_.meshShader)) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "the device has no {} shaders",
-                             stage == TimestampStage::Task ? "task" : "mesh");
-    }
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
+    }
+    // Each kind of queue takes the stages its caps list (Caps::timestamps).
+    const VulkanCommandPool* commands = commandPools_.find((*list)->pool);
+    if (commands == nullptr) {
+        return core::failure(core::ErrorCode::RhiInvalidHandle, "the list's pool is gone");
+    }
+    const QueueType type = queues_[commands->queue]->type;
+    const TimestampStages& stages = type == QueueType::Graphics  ? timestamps_.outsideRendering
+                                    : type == QueueType::Compute ? timestamps_.computeStages
+                                                                 : timestamps_.copyStages;
+    if (!takes(stages, stage)) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "this kind of queue takes no timestamp at stage {}",
+                             static_cast<std::uint32_t>(stage));
     }
     const VulkanTimestampPool* found = timestampPools_.find(pool);
     if (found == nullptr) {
@@ -188,7 +195,7 @@ core::Result<CalibratedTimestamps> VulkanDevice::calibrateTimestamps(std::uint32
     if (auto checked = checkKnown(clock, "host clock"); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    const auto [domain, read] = domainFor(clock, hostClocks_);
+    const auto [domain, read] = domainFor(clock, timestamps_.hostClocks);
     if (!read) {
         return core::failure(core::ErrorCode::RhiUnsupported, "the device doesn't read that host clock beside its own");
     }

@@ -5,6 +5,7 @@
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/pipeline.h"
+#include "bfr/rhi/timestamp.h"
 #include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
 
@@ -163,6 +164,29 @@ struct RecordState {
                              "the device reads no draw count from a buffer (Features::drawIndirectCount)");
     }
     return {};
+}
+
+/// Whether stages lists stage.
+[[nodiscard]] constexpr bool takes(const TimestampStages& stages, TimestampStage stage) {
+    switch (stage) {
+        case TimestampStage::End:
+            return stages.end;
+        case TimestampStage::Start:
+            return stages.start;
+        case TimestampStage::Vertex:
+            return stages.vertex;
+        case TimestampStage::Fragment:
+            return stages.fragment;
+        case TimestampStage::Compute:
+            return stages.compute;
+        case TimestampStage::Copy:
+            return stages.copy;
+        case TimestampStage::Task:
+            return stages.task;
+        case TimestampStage::Mesh:
+            return stages.mesh;
+    }
+    return false;
 }
 
 /// Fails with RhiUnsupported where the device's Features::meshShader is

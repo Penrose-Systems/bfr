@@ -1025,6 +1025,7 @@ bfr_caps_mesh toC(const bfr::rhi::MeshLimits& mesh) {
         .max_mesh_payload_and_output_memory = mesh.maxMeshPayloadAndOutputMemory,
         .max_mesh_output_components = mesh.maxMeshOutputComponents,
         .max_mesh_output_layers = mesh.maxMeshOutputLayers,
+        .max_mesh_multiview_views = mesh.maxMeshMultiviewViews,
     };
     std::ranges::copy(mesh.maxMeshWorkgroupSize, std::begin(out.max_mesh_workgroup_size));
     std::ranges::copy(mesh.maxTaskWorkgroupSize, std::begin(out.max_task_workgroup_size));
@@ -1096,6 +1097,8 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .triangle_fans = toC(features.triangleFans),
         .list_restart = toC(features.listRestart),
         .dynamic_topology = toC(features.dynamicTopology),
+        .mesh_multiview = toC(features.meshMultiview),
+        .mesh_statistics = toC(features.meshStatistics),
         .alpha_to_one = toC(features.alphaToOne),
         .sample_mask = toC(features.sampleMask),
         .pipeline_cache = toC(features.pipelineCache),
@@ -1158,6 +1161,8 @@ bfr_caps_timestamps toC(const bfr::rhi::Timestamps& timestamps) {
             .copy = toC(timestamps.copy),
             .outside_rendering = toC(timestamps.outsideRendering),
             .inside_rendering = toC(timestamps.insideRendering),
+            .compute_stages = toC(timestamps.computeStages),
+            .copy_stages = toC(timestamps.copyStages),
             .granularity = toC(timestamps.granularity),
             .entry_bytes = timestamps.entryBytes,
             .host_clocks = {.monotonic = toC(clocks.monotonic),

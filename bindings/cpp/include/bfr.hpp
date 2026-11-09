@@ -2439,6 +2439,7 @@ struct CapsMesh {
     std::uint32_t maxMeshPayloadAndOutputMemory{};
     std::uint32_t maxMeshOutputComponents{};
     std::uint32_t maxMeshOutputLayers{};
+    std::uint32_t maxMeshMultiviewViews{};
 };
 
 /// The adapter's ray tracing limits. The structure limits are 0 without acceleration structures,
@@ -2532,6 +2533,10 @@ struct CapsFeatures {
     bool listRestart{};
     /// bfr_set_topology, which fails with error_unsupported where this is false.
     bool dynamicTopology{};
+    /// Mesh pipelines in multiview renderings, where multiview.
+    bool meshMultiview{};
+    /// Pipeline statistics and primitive queries count task and mesh work.
+    bool meshStatistics{};
     /// bfr_graphics_pipeline_desc.alpha_to_one.
     bool alphaToOne{};
     /// A bfr_graphics_pipeline_desc.sample_mask that leaves samples out.
@@ -2664,10 +2669,14 @@ struct CapsTimestamps {
     bool compute{};
     /// Copy queues write timestamps.
     bool copy{};
-    /// The stages a write outside rendering takes.
+    /// The stages a write on a graphics queue outside rendering takes.
     TimestampStages outsideRendering{};
     /// The stages a write between bfr_begin_rendering and bfr_end_rendering takes.
     TimestampStages insideRendering{};
+    /// The stages a write on a compute queue takes.
+    TimestampStages computeStages{};
+    /// The stages a write on a copy queue takes.
+    TimestampStages copyStages{};
     /// The backend takes a bfr_timestamp_granularity; where false the value is unused.
     bool granularity{};
     /// What one timestamp takes in a buffer bfr_resolve_timestamps writes.
@@ -3354,6 +3363,7 @@ inline CapsMesh fromC(const bfr_caps_mesh& value) {
         .maxMeshPayloadAndOutputMemory = value.max_mesh_payload_and_output_memory,
         .maxMeshOutputComponents = value.max_mesh_output_components,
         .maxMeshOutputLayers = value.max_mesh_output_layers,
+        .maxMeshMultiviewViews = value.max_mesh_multiview_views,
     };
 }
 
@@ -3420,6 +3430,8 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .triangleFans = value.triangle_fans != BFR_FALSE,
         .listRestart = value.list_restart != BFR_FALSE,
         .dynamicTopology = value.dynamic_topology != BFR_FALSE,
+        .meshMultiview = value.mesh_multiview != BFR_FALSE,
+        .meshStatistics = value.mesh_statistics != BFR_FALSE,
         .alphaToOne = value.alpha_to_one != BFR_FALSE,
         .sampleMask = value.sample_mask != BFR_FALSE,
         .pipelineCache = value.pipeline_cache != BFR_FALSE,
@@ -3528,6 +3540,8 @@ inline CapsTimestamps fromC(const bfr_caps_timestamps& value) {
         .copy = value.copy != BFR_FALSE,
         .outsideRendering = fromC(value.outside_rendering),
         .insideRendering = fromC(value.inside_rendering),
+        .computeStages = fromC(value.compute_stages),
+        .copyStages = fromC(value.copy_stages),
         .granularity = value.granularity != BFR_FALSE,
         .entryBytes = value.entry_bytes,
         .hostClocks = fromC(value.host_clocks),

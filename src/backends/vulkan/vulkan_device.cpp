@@ -170,7 +170,7 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       hasSwapchain_(setup.hasSwapchain),
       pushConstantsSize_(setup.pushConstantsSize),
       timestampPeriod_(setup.timestampPeriod),
-      hostClocks_(setup.hostClocks),
+      timestamps_(setup.timestamps),
       multiDrawIndirect_(setup.multiDrawIndirect),
       drawIndirectCount_(setup.drawIndirectCount),
       features_(setup.features),
