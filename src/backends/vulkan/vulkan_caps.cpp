@@ -258,8 +258,8 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
         .rayQuery = false,
         .rayTracingPipeline = false,
         .accelerationStructure = false,
-        .meshShader = false,
-        .taskShader = false,
+        .meshShader = on(features.mesh.meshShader),
+        .taskShader = on(features.mesh.taskShader),
         .shadingRate = false,
         .shadingRateTexture = false,
         .shaderFloat16 = on(features.vulkan12.shaderFloat16),
@@ -716,6 +716,7 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     globalPriority.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GLOBAL_PRIORITY_QUERY_FEATURES_KHR;
     maintenance9.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_9_FEATURES_KHR;
     listRestart.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVE_TOPOLOGY_LIST_RESTART_FEATURES_EXT;
+    mesh.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
 
     void** tail = &core.pNext;
     link(tail, vulkan11);
@@ -778,6 +779,7 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     linkIfListed(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, customBorderColor);
     linkIfListed(VK_KHR_MAINTENANCE_9_EXTENSION_NAME, maintenance9);
     linkIfListed(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME, listRestart);
+    linkIfListed(VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh);
     vk.vkGetPhysicalDeviceFeatures2(adapter, &core);
 }
 
@@ -818,23 +820,37 @@ std::vector<std::string> missingRequirements(const DeviceFeatures& features) {
 }
 
 // The limits of what reported says the device has: none while a feature
-// reports false, as mesh shaders, ray tracing and shading rate textures do
-// until BFR has a call for them (roadmap steps 13 and 14).
+// reports false, as ray tracing and shading rate textures do until BFR has a
+// call for them (roadmap steps 13 and 14).
 MeshLimits meshFrom(const PropertyQuery& properties, const Features& reported) {
     if (!reported.meshShader) {
         return {};
     }
     const VkPhysicalDeviceMeshShaderPropertiesEXT& mesh = properties.mesh;
+    const bool task = reported.taskShader;
+    constexpr std::array<std::uint32_t, kWorkgroupDimensions> none{};
     return {
         .maxMeshWorkgroupSize = std::to_array(mesh.maxMeshWorkGroupSize),
         .maxMeshInvocations = mesh.maxMeshWorkGroupInvocations,
         .maxMeshOutputVertices = mesh.maxMeshOutputVertices,
         .maxMeshOutputPrimitives = mesh.maxMeshOutputPrimitives,
         .maxMeshSharedMemory = mesh.maxMeshSharedMemorySize,
-        .maxTaskWorkgroupSize = reported.taskShader ? std::to_array(mesh.maxTaskWorkGroupSize)
-                                                    : std::array<std::uint32_t, kWorkgroupDimensions>{},
-        .maxTaskInvocations = reported.taskShader ? mesh.maxTaskWorkGroupInvocations : 0,
-        .maxTaskPayloadSize = reported.taskShader ? mesh.maxTaskPayloadSize : 0,
+        .maxTaskWorkgroupSize = task ? std::to_array(mesh.maxTaskWorkGroupSize) : none,
+        .maxTaskInvocations = task ? mesh.maxTaskWorkGroupInvocations : 0,
+        .maxTaskPayloadSize = task ? mesh.maxTaskPayloadSize : 0,
+        .maxTaskWorkgroupCount = task ? std::to_array(mesh.maxTaskWorkGroupCount) : none,
+        .maxTaskWorkgroupTotalCount = task ? mesh.maxTaskWorkGroupTotalCount : 0,
+        .maxTaskSharedMemory = task ? mesh.maxTaskSharedMemorySize : 0,
+        .maxTaskPayloadAndSharedMemory = task ? mesh.maxTaskPayloadAndSharedMemorySize : 0,
+        .maxMeshWorkgroupCount = std::to_array(mesh.maxMeshWorkGroupCount),
+        .maxMeshWorkgroupTotalCount = mesh.maxMeshWorkGroupTotalCount,
+        .maxMeshOutputMemory = mesh.maxMeshOutputMemorySize,
+        .meshOutputPerVertexGranularity = mesh.meshOutputPerVertexGranularity,
+        .meshOutputPerPrimitiveGranularity = mesh.meshOutputPerPrimitiveGranularity,
+        .maxMeshPayloadAndSharedMemory = mesh.maxMeshPayloadAndSharedMemorySize,
+        .maxMeshPayloadAndOutputMemory = mesh.maxMeshPayloadAndOutputMemorySize,
+        .maxMeshOutputComponents = mesh.maxMeshOutputComponents,
+        .maxMeshOutputLayers = mesh.maxMeshOutputLayers,
     };
 }
 
@@ -887,17 +903,25 @@ HostClocks hostClocksFrom(const InstanceTable& vk, VkPhysicalDevice adapter,
 }
 
 // Vulkan writes a timestamp at every stage, in rendering and out of it, on a
-// queue whose family has valid timestamp bits; it takes no granularity. A
-// VK_QUERY_RESULT_64_BIT copy writes each as a uint64_t.
+// queue whose family has valid timestamp bits; it takes no granularity. The
+// task and mesh stages need their features (VUID-vkCmdWriteTimestamp2-stage-03934, -03935).
+// A VK_QUERY_RESULT_64_BIT copy writes each as a uint64_t.
 Timestamps timestampsFrom(const InstanceTable& vk, VkPhysicalDevice adapter,
-                          std::span<const VkExtensionProperties> extensions, const Queues& queues) {
-    constexpr TimestampStages kEvery{
-        .end = true, .start = true, .vertex = true, .fragment = true, .compute = true, .copy = true};
+                          std::span<const VkExtensionProperties> extensions, const Queues& queues,
+                          const Features& features) {
+    const TimestampStages every{.end = true,
+                                .start = true,
+                                .vertex = true,
+                                .fragment = true,
+                                .compute = true,
+                                .copy = true,
+                                .task = features.taskShader,
+                                .mesh = features.meshShader};
     return {.graphics = queues.graphicsTimestampBits != 0,
             .compute = queues.computeTimestampBits != 0,
             .copy = queues.copyTimestampBits != 0,
-            .outsideRendering = kEvery,
-            .insideRendering = kEvery,
+            .outsideRendering = every,
+            .insideRendering = every,
             .granularity = false,
             .entryBytes = sizeof(std::uint64_t),
             .hostClocks = hostClocksFrom(vk, adapter, extensions)};
@@ -947,7 +971,7 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t v
         .sparse = sparseFrom(features, properties),
         .resolve = resolveFrom(properties),
     };
-    caps.timestamps = timestampsFrom(vk, adapter, extensions, caps.queues);
+    caps.timestamps = timestampsFrom(vk, adapter, extensions, caps.queues, reported);
     if (reported.shadingRateTexture) {
         const VkExtent2D& smallest = properties.shadingRate.minFragmentShadingRateAttachmentTexelSize;
         const VkExtent2D& largest = properties.shadingRate.maxFragmentShadingRateAttachmentTexelSize;

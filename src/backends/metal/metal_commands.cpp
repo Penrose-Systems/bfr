@@ -72,6 +72,12 @@ MTL::Size threadsOf(const MetalPipeline& pipeline) {
     return MTL::Size::Make(workgroup[0], workgroup[1], workgroup[2]);
 }
 
+// BFR has no Metal mesh draws yet, and Features::meshShader is false until it
+// does (owner, 2026-11-08), so checkMeshDraws refuses every one.
+core::Result<void> noMeshDraws(const Features& features) {
+    return checkMeshDraws(features.meshShader);
+}
+
 } // namespace
 
 // The device's recording commands between beginRendering and a submit: the
@@ -416,6 +422,24 @@ core::Result<void> MetalDevice::dispatchIndirect(CommandListHandle commandList, 
     (*encoder)->dispatchThreadgroups((*found)->buffer->gpuAddress() + offset, threadsOf(**pipeline));
     (*encoder)->endEncoding();
     return {};
+}
+
+core::Result<void> MetalDevice::drawMesh(CommandListHandle /*commandList*/, std::uint32_t /*x*/, std::uint32_t /*y*/,
+                                         std::uint32_t /*z*/) {
+    return noMeshDraws(features_);
+}
+
+core::Result<void> MetalDevice::drawMeshIndirect(CommandListHandle /*commandList*/, BufferHandle /*buffer*/,
+                                                 std::uint64_t /*offset*/, std::uint32_t /*drawCount*/,
+                                                 std::uint32_t /*stride*/) {
+    return noMeshDraws(features_);
+}
+
+core::Result<void> MetalDevice::drawMeshIndirectCount(CommandListHandle /*commandList*/, BufferHandle /*buffer*/,
+                                                      std::uint64_t /*offset*/, BufferHandle /*countBuffer*/,
+                                                      std::uint64_t /*countOffset*/, std::uint32_t /*maxDrawCount*/,
+                                                      std::uint32_t /*stride*/) {
+    return noMeshDraws(features_);
 }
 
 } // namespace bfr::rhi::metal

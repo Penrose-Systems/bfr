@@ -389,6 +389,9 @@ enums:
       pipeline_cache_size: {value: 71}
       pipeline_cache_data: {value: 72}
       destroy_pipeline_cache: {value: 73}
+      draw_mesh: {value: 74}
+      draw_mesh_indirect: {value: 75}
+      draw_mesh_indirect_count: {value: 76}
 
   timestamp_stage:
     doc: >-
@@ -401,6 +404,8 @@ enums:
       fragment: {value: 3, doc: Once the fragment shading recorded before it is done.}
       compute: {value: 4, doc: Once the compute shading recorded before it is done.}
       copy: {value: 5, doc: Once the copies recorded before it are done.}
+      task: {value: 6, doc: Once the task shading recorded before it is done.}
+      mesh: {value: 7, doc: Once the mesh shading recorded before it is done.}
 
   timestamp_granularity:
     doc: How exactly a timestamp marks its stage, where bfr_caps_timestamps.granularity says the backend takes it.
@@ -1339,6 +1344,18 @@ structs:
     members:
       - {name: vertex, type: shader_code}
       - {name: fragment, type: shader_code, doc: A code_size of 0 is no fragment shader; the pipeline writes depth alone.}
+      - name: task
+        type: shader_code
+        doc: >-
+          Task and mesh shaders in place of vertices: with a mesh shader, the
+          pipeline draws by bfr_draw_mesh, vertex has a code_size of 0, and
+          topology and primitive_restart are unused. It needs
+          bfr_caps_features.mesh_shader, and a task shader
+          bfr_caps_features.task_shader; a code_size of 0 is none. With a task
+          shader, the mesh shader reads no draw index.
+      - {name: task_workgroup_size, type: u32, fixed: 3, doc: "Threads in each task workgroup, as the shader declares them."}
+      - {name: mesh, type: shader_code}
+      - {name: mesh_workgroup_size, type: u32, fixed: 3, doc: "Threads in each mesh workgroup, as the shader declares them."}
       - {name: topology, type: topology, doc: What its draws assemble until bfr_set_topology.}
       - {name: primitive_restart, type: primitive_restart}
       - {name: raster, type: raster_state}
@@ -1595,6 +1612,28 @@ structs:
       - {name: max_task_workgroup_size, type: u32, fixed: 3}
       - {name: max_task_invocations, type: u32}
       - {name: max_task_payload_size, type: u32}
+      - name: max_task_workgroup_count
+        type: u32
+        fixed: 3
+        doc: >-
+          What a bfr_draw_mesh's counts stay within: of the task shader's
+          workgroups where the pipeline has one, else of the mesh shader's.
+      - {name: max_task_workgroup_total_count, type: u32}
+      - {name: max_task_shared_memory, type: u32}
+      - {name: max_task_payload_and_shared_memory, type: u32}
+      - {name: max_mesh_workgroup_count, type: u32, fixed: 3}
+      - {name: max_mesh_workgroup_total_count, type: u32}
+      - name: max_mesh_output_memory
+        type: u32
+        doc: >-
+          The bytes a mesh shader outputs, its vertices' and primitives' sizes
+          each rounded up to their granularity.
+      - {name: mesh_output_per_vertex_granularity, type: u32}
+      - {name: mesh_output_per_primitive_granularity, type: u32}
+      - {name: max_mesh_payload_and_shared_memory, type: u32}
+      - {name: max_mesh_payload_and_output_memory, type: u32}
+      - {name: max_mesh_output_components, type: u32}
+      - {name: max_mesh_output_layers, type: u32}
 
   caps_ray_tracing:
     doc: >-
@@ -1759,6 +1798,8 @@ structs:
       - {name: fragment, type: bool}
       - {name: compute, type: bool}
       - {name: copy, type: bool}
+      - {name: task, type: bool}
+      - {name: mesh, type: bool}
 
   host_clocks:
     doc: The bfr_host_clock values bfr_calibrate_timestamps reads beside a GPU timestamp.
@@ -2370,6 +2411,51 @@ functions:
       - {name: command_list, type: command_list}
       - {name: buffer, type: buffer}
       - {name: offset, type: u64, doc: Bytes into the buffer.}
+
+  draw_mesh:
+    doc: >-
+      Records a draw of x by y by z workgroups of the bound mesh pipeline's
+      task shader, or of its mesh shader where it has none, within
+      bfr_caps_mesh. A mesh pipeline is bound, and bfr_draw and
+      bfr_draw_indexed take none. Fails with error_unsupported where
+      bfr_caps_features.mesh_shader is false, and as bfr_draw does.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: x, type: u32}
+      - {name: y, type: u32}
+      - {name: z, type: u32}
+
+  draw_mesh_indirect:
+    doc: >-
+      Records draw_count mesh draws, each with the bfr_dispatch_indirect_args
+      buffer holds from offset, stride bytes apart. Fails as bfr_draw_mesh and
+      bfr_draw_indirect do.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: buffer, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into the buffer.}
+      - {name: draw_count, type: u32}
+      - {name: stride, type: u32, doc: Bytes between two draws' arguments.}
+
+  draw_mesh_indirect_count:
+    doc: >-
+      Records bfr_draw_mesh_indirect's draws, as many as count_buffer holds,
+      as bfr_draw_indirect_count does. Fails as bfr_draw_mesh and
+      bfr_draw_indirect_count do.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: buffer, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into the buffer.}
+      - {name: count_buffer, type: buffer}
+      - {name: count_offset, type: u64, doc: Bytes into count_buffer.}
+      - {name: max_draw_count, type: u32}
+      - {name: stride, type: u32, doc: Bytes between two draws' arguments.}
 
   copy_buffer:
     doc: >-

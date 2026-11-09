@@ -86,8 +86,10 @@ core::Result<void> VulkanDevice::bindPipeline(CommandListHandle commandList, Pip
         return std::unexpected(std::move(found.error()));
     }
     table_.vkCmdBindPipeline((*list)->buffer, (*found)->bindPoint(), (*found)->pipeline());
-    if ((*found)->bindPoint() == VK_PIPELINE_BIND_POINT_GRAPHICS && features_.dynamicTopology) {
-        // Topology is dynamic, so a pipeline's own is set as it is bound.
+    if ((*found)->bindPoint() == VK_PIPELINE_BIND_POINT_GRAPHICS && features_.dynamicTopology &&
+        (*found)->topology() != VK_PRIMITIVE_TOPOLOGY_MAX_ENUM) {
+        // Topology is dynamic, so a pipeline's own is set as it is bound; a
+        // mesh pipeline has none.
         table_.vkCmdSetPrimitiveTopology((*list)->buffer, (*found)->topology());
     }
     return {};
@@ -273,6 +275,66 @@ core::Result<void> VulkanDevice::dispatchIndirect(CommandListHandle commandList,
         return std::unexpected(std::move(found.error()));
     }
     table_.vkCmdDispatchIndirect((*list)->buffer, (*found)->buffer(), offset);
+    return {};
+}
+
+core::Result<void> VulkanDevice::drawMesh(CommandListHandle commandList, std::uint32_t x, std::uint32_t y,
+                                          std::uint32_t z) {
+    if (auto checked = checkMeshDraws(features_.meshShader); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    table_.vkCmdDrawMeshTasksEXT((*list)->buffer, x, y, z);
+    return {};
+}
+
+core::Result<void> VulkanDevice::drawMeshIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                  std::uint64_t offset, std::uint32_t drawCount, std::uint32_t stride) {
+    if (auto checked = checkMeshDraws(features_.meshShader); !checked) {
+        return checked;
+    }
+    if (auto checked = checkDrawCount(drawCount, multiDrawIndirect_); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    table_.vkCmdDrawMeshTasksIndirectEXT((*list)->buffer, (*found)->buffer(), offset, drawCount, stride);
+    return {};
+}
+
+core::Result<void> VulkanDevice::drawMeshIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                       std::uint64_t offset, BufferHandle countBuffer,
+                                                       std::uint64_t countOffset, std::uint32_t maxDrawCount,
+                                                       std::uint32_t stride) {
+    if (auto checked = checkMeshDraws(features_.meshShader); !checked) {
+        return checked;
+    }
+    if (auto checked = checkCountDraws(drawIndirectCount_); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    auto found = bufferFor(buffer);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    auto count = bufferFor(countBuffer);
+    if (!count) {
+        return std::unexpected(std::move(count.error()));
+    }
+    table_.vkCmdDrawMeshTasksIndirectCountEXT((*list)->buffer, (*found)->buffer(), offset, (*count)->buffer(),
+                                              countOffset, maxDrawCount, stride);
     return {};
 }
 

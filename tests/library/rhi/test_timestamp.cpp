@@ -65,7 +65,8 @@ std::vector<TimestampStage> listed(const TimestampStages& stages) {
     for (const auto& [has, stage] :
          {std::pair{stages.end, TimestampStage::End}, std::pair{stages.start, TimestampStage::Start},
           std::pair{stages.vertex, TimestampStage::Vertex}, std::pair{stages.fragment, TimestampStage::Fragment},
-          std::pair{stages.compute, TimestampStage::Compute}, std::pair{stages.copy, TimestampStage::Copy}}) {
+          std::pair{stages.compute, TimestampStage::Compute}, std::pair{stages.copy, TimestampStage::Copy},
+          std::pair{stages.task, TimestampStage::Task}, std::pair{stages.mesh, TimestampStage::Mesh}}) {
         if (has) {
             out.push_back(stage);
         }

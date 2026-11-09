@@ -7,6 +7,7 @@
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/swapchain.h"
+#include "bfr/rhi/timestamp.h"
 #include "log_capture.h"
 #include "rhi/rhi_test_support.h"
 #include "scoped_env.h"
@@ -375,6 +376,119 @@ TEST_CASE("Vulkan lists an adapter without non-uniform storage texture indexing,
         INFO(adapter.name);
         CHECK_FALSE(adapter.caps.features.storageTextureNonUniformIndexing);
     }
+}
+
+TEST_CASE("Vulkan without VK_EXT_mesh_shader reports no mesh shaders, and refuses mesh pipelines and draws",
+          "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
+    const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_EXT_mesh_shader");
+    std::vector<std::string> errors;
+    {
+        auto created = Instance::create(recordingErrorsInto(errors), kValidation);
+        INFO(failureOf(created));
+        REQUIRE(created.has_value());
+        const std::unique_ptr<Instance> instance = std::move(*created);
+        const Caps& caps = instance->adapters()[0].caps;
+        CHECK_FALSE(caps.features.meshShader);
+        CHECK_FALSE(caps.features.taskShader);
+        CHECK(caps.mesh.maxMeshOutputVertices == 0);
+        CHECK_FALSE(caps.timestamps.insideRendering.mesh);
+        auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+        INFO(failureOf(made));
+        REQUIRE(made.has_value());
+        Device& device = **made;
+        GraphicsPipelineDesc meshDesc{.vertex = {},
+                                      .fragment = {.code = std::as_bytes(std::span{bfr::test::spirv::kColorFrag}),
+                                                   .entryPoint = "main"},
+                                      .mesh = {.code = std::as_bytes(std::span{bfr::test::spirv::kTriangleMesh}),
+                                               .entryPoint = "main"},
+                                      .meshWorkgroupSize = {1, 1, 1},
+                                      .topology = Topology::TriangleList,
+                                      .primitiveRestart = PrimitiveRestart::Off,
+                                      .raster = {.cull = CullMode::None},
+                                      .depthStencil = {},
+                                      .colorTargetCount = 1,
+                                      .samples = 1,
+                                      .sampleMask = BFR_MASK_ALL};
+        meshDesc.colorTargets[0] = {.format = Format::Rgba8Unorm, .blend = {.writeMask = BFR_MASK_ALL}};
+        const auto pipeline = device.createGraphicsPipeline(meshDesc);
+        REQUIRE_FALSE(pipeline.has_value());
+        CHECK(pipeline.error().code == bfr::core::ErrorCode::RhiUnsupported);
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+
+        const auto drawn = device.drawMesh(*list, 1, 1, 1);
+        const auto indirect = device.drawMeshIndirect(*list, BufferHandle{}, 0, 1, 0);
+        const auto counted = device.drawMeshIndirectCount(*list, BufferHandle{}, 0, BufferHandle{}, 0, 1, 0);
+        const auto timestamps = device.createTimestampPool({.queue = 0, .count = 1});
+        REQUIRE(timestamps.has_value());
+        const auto timed = device.writeTimestamp(*list, *timestamps, 0, TimestampStage::Mesh,
+                                                 TimestampGranularity::Relaxed);
+
+        for (const auto* result : {&drawn, &indirect, &counted, &timed}) {
+            REQUIRE_FALSE(result->has_value());
+            CHECK(result->error().code == bfr::core::ErrorCode::RhiUnsupported);
+        }
+        CHECK(device.destroyTimestampPool(*timestamps).has_value());
+        CHECK(device.destroyCommandList(*list).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Vulkan with mesh shaders but no task shaders refuses a task pipeline and a task timestamp",
+          "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride;
+    const ScopedEnv hidden("BFR_ADAPTER_NO_FEATURE", "taskShader");
+    auto created = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(created));
+    REQUIRE(created.has_value());
+    const std::unique_ptr<Instance> instance = std::move(*created);
+    const Caps& caps = instance->adapters()[0].caps;
+    if (!caps.features.meshShader) {
+        SKIP("the adapter has no mesh shaders");
+    }
+    CHECK_FALSE(caps.features.taskShader);
+    CHECK(caps.mesh.maxTaskWorkgroupTotalCount == 0);
+    auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+    INFO(failureOf(made));
+    REQUIRE(made.has_value());
+    Device& device = **made;
+    GraphicsPipelineDesc taskDesc{
+        .vertex = {},
+        .fragment = {.code = std::as_bytes(std::span{bfr::test::spirv::kColorFrag}), .entryPoint = "main"},
+        .task = {.code = std::as_bytes(std::span{bfr::test::spirv::kTriangleTask}), .entryPoint = "main"},
+        .taskWorkgroupSize = {1, 1, 1},
+        .mesh = {.code = std::as_bytes(std::span{bfr::test::spirv::kTriangleMesh}), .entryPoint = "main"},
+        .meshWorkgroupSize = {1, 1, 1},
+        .topology = Topology::TriangleList,
+        .primitiveRestart = PrimitiveRestart::Off,
+        .raster = {.cull = CullMode::None},
+        .depthStencil = {},
+        .colorTargetCount = 1,
+        .samples = 1,
+        .sampleMask = BFR_MASK_ALL};
+    taskDesc.colorTargets[0] = {.format = Format::Rgba8Unorm, .blend = {.writeMask = BFR_MASK_ALL}};
+
+    const auto pipeline = device.createGraphicsPipeline(taskDesc);
+
+    REQUIRE_FALSE(pipeline.has_value());
+    CHECK(pipeline.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+    REQUIRE(pool.has_value());
+    const auto list = device.beginCommands(*pool);
+    REQUIRE(list.has_value());
+    const auto timestamps = device.createTimestampPool({.queue = 0, .count = 1});
+    REQUIRE(timestamps.has_value());
+    const auto timed = device.writeTimestamp(*list, *timestamps, 0, TimestampStage::Task,
+                                             TimestampGranularity::Relaxed);
+    REQUIRE_FALSE(timed.has_value());
+    CHECK(timed.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    CHECK(device.destroyTimestampPool(*timestamps).has_value());
+    CHECK(device.destroyCommandList(*list).has_value());
+    CHECK(device.destroyCommandPool(*pool).has_value());
 }
 
 TEST_CASE("Vulkan at 1.2 without VK_EXT_extended_dynamic_state reports no dynamic topology and bakes it in",

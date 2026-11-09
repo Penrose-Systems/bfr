@@ -498,12 +498,27 @@ void printAllShaders(const bfr::Caps& caps) {
                       field("maxSharedMemory", c.maxSharedMemory), field("subgroupSize", c.subgroupSize),
                       field("minSubgroupSize", c.minSubgroupSize), field("maxSubgroupSize", c.maxSubgroupSize)});
     const bfr::CapsMesh& m = caps.mesh;
-    group("mesh",
-          {field("maxMeshWorkgroupSize", m.maxMeshWorkgroupSize), field("maxMeshInvocations", m.maxMeshInvocations),
-           field("maxMeshOutputVertices", m.maxMeshOutputVertices),
-           field("maxMeshOutputPrimitives", m.maxMeshOutputPrimitives),
-           field("maxMeshSharedMemory", m.maxMeshSharedMemory), field("maxTaskWorkgroupSize", m.maxTaskWorkgroupSize),
-           field("maxTaskInvocations", m.maxTaskInvocations), field("maxTaskPayloadSize", m.maxTaskPayloadSize)});
+    group("mesh", {field("maxMeshWorkgroupSize", m.maxMeshWorkgroupSize),
+                   field("maxMeshInvocations", m.maxMeshInvocations),
+                   field("maxMeshOutputVertices", m.maxMeshOutputVertices),
+                   field("maxMeshOutputPrimitives", m.maxMeshOutputPrimitives),
+                   field("maxMeshSharedMemory", m.maxMeshSharedMemory),
+                   field("maxTaskWorkgroupSize", m.maxTaskWorkgroupSize),
+                   field("maxTaskInvocations", m.maxTaskInvocations),
+                   field("maxTaskPayloadSize", m.maxTaskPayloadSize),
+                   field("maxTaskWorkgroupCount", m.maxTaskWorkgroupCount),
+                   field("maxTaskWorkgroupTotalCount", m.maxTaskWorkgroupTotalCount),
+                   field("maxTaskSharedMemory", m.maxTaskSharedMemory),
+                   field("maxTaskPayloadAndSharedMemory", m.maxTaskPayloadAndSharedMemory),
+                   field("maxMeshWorkgroupCount", m.maxMeshWorkgroupCount),
+                   field("maxMeshWorkgroupTotalCount", m.maxMeshWorkgroupTotalCount),
+                   field("maxMeshOutputMemory", m.maxMeshOutputMemory),
+                   field("meshOutputPerVertexGranularity", m.meshOutputPerVertexGranularity),
+                   field("meshOutputPerPrimitiveGranularity", m.meshOutputPerPrimitiveGranularity),
+                   field("maxMeshPayloadAndSharedMemory", m.maxMeshPayloadAndSharedMemory),
+                   field("maxMeshPayloadAndOutputMemory", m.maxMeshPayloadAndOutputMemory),
+                   field("maxMeshOutputComponents", m.maxMeshOutputComponents),
+                   field("maxMeshOutputLayers", m.maxMeshOutputLayers)});
     const bfr::CapsRayTracing& r = caps.rayTracing;
     group("rayTracing", {field("maxGeometries", r.maxGeometries), field("maxInstances", r.maxInstances),
                          field("maxPrimitives", r.maxPrimitives), field("scratchAlignment", r.scratchAlignment),

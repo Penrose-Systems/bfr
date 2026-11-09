@@ -119,6 +119,49 @@ VkPipelineShaderStageCreateInfo stageFor(VkShaderStageFlagBits stage, VkShaderMo
     return info;
 }
 
+// The shader modules of a pipeline's stages and the stage infos pointing at
+// them, destroyed once the pipeline is made from them.
+class StageModules {
+public:
+    StageModules(const VolkDeviceTable& table, VkDevice device) : table_(&table), device_(device) {}
+    ~StageModules() {
+        for (VkShaderModule module : std::span{modules_}.first(count_)) {
+            table_->vkDestroyShaderModule(device_, module, nullptr);
+        }
+    }
+    StageModules(const StageModules&) = delete;
+    StageModules& operator=(const StageModules&) = delete;
+    StageModules(StageModules&&) = delete;
+    StageModules& operator=(StageModules&&) = delete;
+
+    // Adds stage, run from shader's code. Fails as createModule does.
+    core::Result<void> add(VkShaderStageFlagBits stage, const ShaderCode& shader) {
+        auto module = createModule(*table_, device_, shader.code);
+        if (!module) {
+            return std::unexpected(std::move(module.error()));
+        }
+        entryPoints_.at(count_) = shader.entryPoint;
+        modules_.at(count_) = *module;
+        stages_.at(count_) = stageFor(stage, *module, entryPoints_.at(count_).c_str());
+        ++count_;
+        return {};
+    }
+
+    [[nodiscard]] std::span<const VkPipelineShaderStageCreateInfo> stages() const {
+        return std::span{stages_}.first(count_);
+    }
+
+private:
+    // Task, mesh and fragment, the most a pipeline has.
+    static constexpr std::size_t kMaxStages = 3;
+    const VolkDeviceTable* table_;
+    VkDevice device_;
+    std::size_t count_ = 0;
+    std::array<std::string, kMaxStages> entryPoints_{};
+    std::array<VkShaderModule, kMaxStages> modules_{};
+    std::array<VkPipelineShaderStageCreateInfo, kMaxStages> stages_{};
+};
+
 VkCullModeFlags cullFor(CullMode cull) {
     switch (cull) {
         case CullMode::Front:
@@ -460,18 +503,16 @@ VulkanPipeline::~VulkanPipeline() {
 core::Result<VulkanPipeline> createVulkanComputePipeline(const VolkDeviceTable& table, VkDevice device,
                                                          VkPipelineLayout layout, VkPipelineCache cache,
                                                          const ComputePipelineDesc& desc) {
-    auto module = createModule(table, device, desc.compute.code);
-    if (!module) {
-        return std::unexpected(std::move(module.error()));
+    StageModules modules{table, device};
+    if (auto added = modules.add(VK_SHADER_STAGE_COMPUTE_BIT, desc.compute); !added) {
+        return std::unexpected(std::move(added.error()));
     }
-    const std::string entryPoint{desc.compute.entryPoint};
     VkComputePipelineCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    info.stage = stageFor(VK_SHADER_STAGE_COMPUTE_BIT, *module, entryPoint.c_str());
+    info.stage = modules.stages().front();
     info.layout = layout;
     VkPipeline pipeline = VK_NULL_HANDLE;
     const VkResult result = table.vkCreateComputePipelines(device, cache, 1, &info, nullptr, &pipeline);
-    table.vkDestroyShaderModule(device, *module, nullptr);
     if (result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateComputePipelines", .result = result});
     }
@@ -489,28 +530,31 @@ core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable&
         blends.at(i) = blendFor(targets[i].blend);
     }
 
-    auto vertex = createModule(table, device, desc.vertex.code);
-    if (!vertex) {
-        return std::unexpected(std::move(vertex.error()));
-    }
-    VkShaderModule fragment = VK_NULL_HANDLE;
-    if (!desc.fragment.code.empty()) {
-        auto made = createModule(table, device, desc.fragment.code);
-        if (!made) {
-            table.vkDestroyShaderModule(device, *vertex, nullptr);
-            return std::unexpected(std::move(made.error()));
+    // Vertices, or task and mesh shaders in their place, then fragments.
+    const bool meshes = !desc.mesh.code.empty();
+    StageModules modules{table, device};
+    const auto added = [&]() -> core::Result<void> {
+        if (!meshes) {
+            return modules.add(VK_SHADER_STAGE_VERTEX_BIT, desc.vertex);
         }
-        fragment = *made;
+        if (!desc.task.code.empty()) {
+            if (auto task = modules.add(VK_SHADER_STAGE_TASK_BIT_EXT, desc.task); !task) {
+                return task;
+            }
+        }
+        return modules.add(VK_SHADER_STAGE_MESH_BIT_EXT, desc.mesh);
+    }();
+    if (!added) {
+        return std::unexpected(added.error());
     }
-    const std::string vertexEntry{desc.vertex.entryPoint};
-    const std::string fragmentEntry{desc.fragment.entryPoint};
-    std::array<VkPipelineShaderStageCreateInfo, 2> stages{stageFor(VK_SHADER_STAGE_VERTEX_BIT, *vertex,
-                                                                   vertexEntry.c_str()),
-                                                          stageFor(VK_SHADER_STAGE_FRAGMENT_BIT, fragment,
-                                                                   fragmentEntry.c_str())};
-    const std::uint32_t stageCount = fragment != VK_NULL_HANDLE ? 2 : 1;
+    if (!desc.fragment.code.empty()) {
+        if (auto fragment = modules.add(VK_SHADER_STAGE_FRAGMENT_BIT, desc.fragment); !fragment) {
+            return std::unexpected(std::move(fragment.error()));
+        }
+    }
 
-    // Vertices are pulled, so there is no vertex input.
+    // Vertices are pulled, so there is no vertex input. With a mesh shader,
+    // vertex input and input assembly are ignored (pipelines.adoc:2132, :2152).
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
@@ -556,13 +600,15 @@ core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable&
     blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     blend.attachmentCount = desc.colorTargetCount;
     blend.pAttachments = blends.data();
-    // Topology, last, is dynamic only where the device sets it.
+    // Topology, last, is dynamic only where the device sets it, and never with
+    // a mesh shader (VUID-VkGraphicsPipelineCreateInfo-pDynamicStates-07065).
     constexpr std::array kDynamic{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS,
                                   VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY};
     VkPipelineDynamicStateCreateInfo dynamic{};
     dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
     constexpr std::size_t kWithoutTopology = kDynamic.size() - 1;
-    dynamic.dynamicStateCount = static_cast<std::uint32_t>(dynamicTopology ? kDynamic.size() : kWithoutTopology);
+    dynamic.dynamicStateCount = static_cast<std::uint32_t>(dynamicTopology && !meshes ? kDynamic.size()
+                                                                                      : kWithoutTopology);
     dynamic.pDynamicStates = kDynamic.data();
 
     // Dynamic rendering: the formats stand in for a render pass. A depth
@@ -581,8 +627,8 @@ core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable&
     VkGraphicsPipelineCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     info.pNext = &rendering;
-    info.stageCount = stageCount;
-    info.pStages = stages.data();
+    info.stageCount = static_cast<std::uint32_t>(modules.stages().size());
+    info.pStages = modules.stages().data();
     info.pVertexInputState = &vertexInput;
     info.pInputAssemblyState = &inputAssembly;
     info.pViewportState = &viewport;
@@ -594,14 +640,12 @@ core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable&
     info.layout = layout;
     VkPipeline pipeline = VK_NULL_HANDLE;
     const VkResult result = table.vkCreateGraphicsPipelines(device, cache, 1, &info, nullptr, &pipeline);
-    table.vkDestroyShaderModule(device, *vertex, nullptr);
-    if (fragment != VK_NULL_HANDLE) {
-        table.vkDestroyShaderModule(device, fragment, nullptr);
-    }
     if (result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateGraphicsPipelines", .result = result});
     }
-    return VulkanPipeline{table, device, pipeline, VK_PIPELINE_BIND_POINT_GRAPHICS, topologyFor(desc.topology)};
+    // A mesh pipeline has no topology to set as it is bound.
+    return VulkanPipeline{table, device, pipeline, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          meshes ? VK_PRIMITIVE_TOPOLOGY_MAX_ENUM : topologyFor(desc.topology)};
 }
 
 // The device's pipeline calls, beside the pipelines they make.
@@ -638,6 +682,9 @@ core::Result<PipelineHandle> VulkanDevice::createGraphicsPipeline(const Graphics
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkMultisample(desc, features_); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkMeshStages(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     collectBuffers();

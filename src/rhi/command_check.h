@@ -165,4 +165,13 @@ struct RecordState {
     return {};
 }
 
+/// Fails with RhiUnsupported where the device's Features::meshShader is
+/// false. Each backend's mesh draws call it first.
+[[nodiscard]] inline core::Result<void> checkMeshDraws(bool meshShader) {
+    if (!meshShader) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "the device has no mesh shaders (Features::meshShader)");
+    }
+    return {};
+}
+
 } // namespace bfr::rhi

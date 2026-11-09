@@ -111,6 +111,15 @@ public:
                                                               std::uint32_t stride) override;
     [[nodiscard]] core::Result<void> dispatchIndirect(CommandListHandle commandList, BufferHandle buffer,
                                                       std::uint64_t offset) override;
+    [[nodiscard]] core::Result<void> drawMesh(CommandListHandle commandList, std::uint32_t x, std::uint32_t y,
+                                              std::uint32_t z) override;
+    [[nodiscard]] core::Result<void> drawMeshIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                      std::uint64_t offset, std::uint32_t drawCount,
+                                                      std::uint32_t stride) override;
+    [[nodiscard]] core::Result<void> drawMeshIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                           std::uint64_t offset, BufferHandle countBuffer,
+                                                           std::uint64_t countOffset, std::uint32_t maxDrawCount,
+                                                           std::uint32_t stride) override;
     [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
                                                 std::span<const BufferCopy> regions) override;
     [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;

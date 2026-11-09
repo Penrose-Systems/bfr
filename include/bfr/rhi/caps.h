@@ -86,9 +86,12 @@ struct BindlessLimits {
     std::uint32_t maxPerStage = 0;
 };
 
+/// Dimensions of a workgroup.
+inline constexpr std::size_t kWorkgroupDimensions = 3;
+
 struct ComputeLimits {
-    std::array<std::uint32_t, 3> maxWorkgroupCount{};
-    std::array<std::uint32_t, 3> maxWorkgroupSize{};
+    std::array<std::uint32_t, kWorkgroupDimensions> maxWorkgroupCount{};
+    std::array<std::uint32_t, kWorkgroupDimensions> maxWorkgroupSize{};
     std::uint32_t maxWorkgroupInvocations = 0;
     std::uint32_t maxSharedMemory = 0;
     std::uint32_t subgroupSize = 0;
@@ -97,14 +100,31 @@ struct ComputeLimits {
 };
 
 struct MeshLimits {
-    std::array<std::uint32_t, 3> maxMeshWorkgroupSize{};
+    std::array<std::uint32_t, kWorkgroupDimensions> maxMeshWorkgroupSize{};
     std::uint32_t maxMeshInvocations = 0;
     std::uint32_t maxMeshOutputVertices = 0;
     std::uint32_t maxMeshOutputPrimitives = 0;
     std::uint32_t maxMeshSharedMemory = 0;
-    std::array<std::uint32_t, 3> maxTaskWorkgroupSize{};
+    std::array<std::uint32_t, kWorkgroupDimensions> maxTaskWorkgroupSize{};
     std::uint32_t maxTaskInvocations = 0;
     std::uint32_t maxTaskPayloadSize = 0;
+    /// What a drawMesh's counts stay within: of the task shader's workgroups
+    /// where the pipeline has one, else of the mesh shader's.
+    std::array<std::uint32_t, kWorkgroupDimensions> maxTaskWorkgroupCount{};
+    std::uint32_t maxTaskWorkgroupTotalCount = 0;
+    std::uint32_t maxTaskSharedMemory = 0;
+    std::uint32_t maxTaskPayloadAndSharedMemory = 0;
+    std::array<std::uint32_t, kWorkgroupDimensions> maxMeshWorkgroupCount{};
+    std::uint32_t maxMeshWorkgroupTotalCount = 0;
+    /// The bytes a mesh shader outputs, its vertices' and primitives' sizes
+    /// each rounded up to their granularity.
+    std::uint32_t maxMeshOutputMemory = 0;
+    std::uint32_t meshOutputPerVertexGranularity = 0;
+    std::uint32_t meshOutputPerPrimitiveGranularity = 0;
+    std::uint32_t maxMeshPayloadAndSharedMemory = 0;
+    std::uint32_t maxMeshPayloadAndOutputMemory = 0;
+    std::uint32_t maxMeshOutputComponents = 0;
+    std::uint32_t maxMeshOutputLayers = 0;
 };
 
 struct RayTracingLimits {
@@ -263,6 +283,8 @@ struct TimestampStages {
     bool fragment = false;
     bool compute = false;
     bool copy = false;
+    bool task = false;
+    bool mesh = false;
 };
 
 /// The HostClock values calibrateTimestamps reads beside a GPU timestamp.

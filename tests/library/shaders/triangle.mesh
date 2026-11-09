@@ -1,0 +1,29 @@
+// A mesh shader that outputs one triangle per workgroup, workgroup n's three
+// vertices read from 3n on through BFR's storage buffer table (api/bfr.yaml,
+// bfr_pipeline). For the mesh draw tests; spirv.h holds it compiled, see
+// compile.sh.
+#version 460
+#extension GL_EXT_mesh_shader : require
+#extension GL_EXT_nonuniform_qualifier : require
+
+layout(local_size_x = 1) in;
+layout(triangles, max_vertices = 3, max_primitives = 1) out;
+
+layout(set = 0, binding = 2) readonly buffer Positions {
+    vec4 positions[];
+} buffers[];
+
+layout(push_constant) uniform Push {
+    uint positions;
+    uint textureIndex;
+    uint samplerIndex;
+} push;
+
+void main() {
+    SetMeshOutputsEXT(3, 1);
+    const uint first = gl_WorkGroupID.x * 3;
+    for (uint i = 0; i < 3; ++i) {
+        gl_MeshVerticesEXT[i].gl_Position = buffers[nonuniformEXT(push.positions)].positions[first + i];
+    }
+    gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0, 1, 2);
+}

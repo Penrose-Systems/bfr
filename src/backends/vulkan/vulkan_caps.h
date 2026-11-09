@@ -89,6 +89,10 @@ struct DeviceFeatures {
     VkPhysicalDeviceMaintenance9FeaturesKHR maintenance9{};
     /// Primitive restart on list topologies.
     VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT listRestart{};
+    /// Mesh and task shaders. The device clears its
+    /// primitiveFragmentShadingRateMeshShader, which needs fragment shading
+    /// rate turned on (VUID-VkPhysicalDeviceMeshShaderFeaturesEXT-primitiveFragmentShadingRateMeshShader-07033).
+    VkPhysicalDeviceMeshShaderFeaturesEXT mesh{};
     /// The extensions whose structs are chained, which the device enables.
     std::vector<const char*> enabledExtensions;
     std::uint32_t version = 0;

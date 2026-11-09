@@ -33,6 +33,10 @@ enum class TimestampStage : std::uint32_t {
     Compute = 4,
     /// Once the copies recorded before it are done.
     Copy = 5,
+    /// Once the task shading recorded before it is done.
+    Task = 6,
+    /// Once the mesh shading recorded before it is done.
+    Mesh = 7,
 };
 
 /// How exactly a timestamp marks its stage, where the backend takes it, as

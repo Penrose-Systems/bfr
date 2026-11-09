@@ -163,8 +163,8 @@ void addMultisampleFeatures(Features& features) {
 // cache it loads from bytes, and pipelineCache stays false.
 Features featuresOf(MTL::Device* device) {
     Features features;
-    features.rayQuery = device->supportsRaytracing();
-    features.accelerationStructure = device->supportsRaytracing();
+    // Ray tracing (supportsRaytracing) and mesh shaders stay false until BFR
+    // has Metal calls for them (owner, 2026-11-08).
     features.barycentrics = device->supportsShaderBarycentricCoordinates();
     features.atomicInt64 = has64BitAtomics(device);
     features.atomicInt64Texture = has64BitAtomics(device);

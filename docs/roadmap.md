@@ -22,7 +22,9 @@ kind of queue runs, the layouts each kind moves a texture between, work
 handed across queues by waits), pipeline cache blobs (caches made from bytes
 and read back as bytes, which pipelines are looked for in and added to).
 Vulkan only so far: the caller's API version, uncapped, with BFR's minimum
-requirements (Vulkan 1.2 with dynamic rendering and synchronization2).
+requirements (Vulkan 1.2 with dynamic rendering and synchronization2); mesh
+and task shaders (mesh pipelines, direct, indirect and counted mesh draws,
+mesh limits, task and mesh timestamps).
 
 D3D12 and Metal are paused while Vulkan takes shape (owner, 2026-11-08); they
 still type-check.
@@ -30,7 +32,8 @@ still type-check.
 12. The caller's API version and BFR's minimum requirements on D3D12 and
     Metal: the instance and devices are made at the version the caller asks
     for, below the minimum fails, above it nothing is capped.
-13. Mesh shaders and ray tracing, exposed where the backend has them.
+13. Ray tracing, exposed where the backend has it; mesh shaders on D3D12 and
+    Metal, which report none until then.
 14. Queries (occlusion, statistics), debug labels, memory heaps and placed
     resources, formatted buffer views, variable rate shading, programmable
     sample positions, HDR and present timing, and whatever each backend's

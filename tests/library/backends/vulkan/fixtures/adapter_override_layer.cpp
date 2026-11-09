@@ -5,7 +5,8 @@
 // - BFR_ADAPTER_VENDOR_ID: the adapter reports this vendor ID.
 // - BFR_ADAPTER_NO_FEATURE: the adapter reports this Vulkan 1.2 or 1.3
 //   feature, by its member name, as missing, in the core struct and in the
-//   struct of the extension 1.3 made core.
+//   struct of the extension 1.3 made core; or VK_EXT_mesh_shader's
+//   taskShader.
 // - BFR_ADAPTER_HIDE: the adapter leaves this device extension out.
 // - BFR_ADAPTER_ADD: the adapter lists this device extension too, and
 //   vkCreateDevice drops it, since the driver underneath lacks it.
@@ -304,6 +305,9 @@ constexpr std::array kDynamicRenderingFeatures{
     NamedFeature<DynamicRendering>{.name = "dynamicRendering", .member = &DynamicRendering::dynamicRendering}};
 constexpr std::array kSynchronization2Features{
     NamedFeature<Synchronization2>{.name = "synchronization2", .member = &Synchronization2::synchronization2}};
+using MeshShader = VkPhysicalDeviceMeshShaderFeaturesEXT;
+constexpr std::array kMeshShaderFeatures{
+    NamedFeature<MeshShader>{.name = "taskShader", .member = &MeshShader::taskShader}};
 constexpr std::array kExtendedDynamicStateFeatures{
     NamedFeature<ExtendedDynamicState>{.name = "extendedDynamicState",
                                        .member = &ExtendedDynamicState::extendedDynamicState}};
@@ -333,6 +337,9 @@ VKAPI_ATTR void VKAPI_CALL getPhysicalDeviceFeatures2(VkPhysicalDevice device, V
         }
         else if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES) {
             clearNamed(*std::bit_cast<Synchronization2*>(next), kSynchronization2Features);
+        }
+        else if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT) {
+            clearNamed(*std::bit_cast<MeshShader*>(next), kMeshShaderFeatures);
         }
         else if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT) {
             clearNamed(*std::bit_cast<ExtendedDynamicState*>(next), kExtendedDynamicStateFeatures);

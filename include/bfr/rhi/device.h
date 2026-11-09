@@ -243,6 +243,29 @@ public:
     [[nodiscard]] virtual core::Result<void> dispatchIndirect(CommandListHandle commandList, BufferHandle buffer,
                                                               std::uint64_t offset) = 0;
 
+    /// Records a draw of x by y by z workgroups of the bound mesh pipeline's
+    /// task shader, or of its mesh shader where it has none, within
+    /// MeshLimits. A mesh pipeline is bound, and draw and drawIndexed take
+    /// none. Fails with RhiUnsupported where Features::meshShader is false,
+    /// and as draw does.
+    [[nodiscard]] virtual core::Result<void> drawMesh(CommandListHandle commandList, std::uint32_t x, std::uint32_t y,
+                                                      std::uint32_t z) = 0;
+
+    /// Records drawCount mesh draws, each with the DispatchIndirectArgs
+    /// buffer holds from offset, stride bytes apart. Fails as drawMesh and
+    /// drawIndirect do.
+    [[nodiscard]] virtual core::Result<void> drawMeshIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                              std::uint64_t offset, std::uint32_t drawCount,
+                                                              std::uint32_t stride) = 0;
+
+    /// Records drawMeshIndirect's draws, as many as countBuffer holds, as
+    /// drawIndirectCount does. Fails as drawMesh and drawIndirectCount do.
+    [[nodiscard]] virtual core::Result<void> drawMeshIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                                   std::uint64_t offset, BufferHandle countBuffer,
+                                                                   std::uint64_t countOffset,
+                                                                   std::uint32_t maxDrawCount,
+                                                                   std::uint32_t stride) = 0;
+
     /// Records copies of regions from src to dst, outside rendering. src has
     /// copySrc usage and is device or upload memory; dst has copyDst usage and
     /// is device or readback memory. Commands after a barrier in the list, or

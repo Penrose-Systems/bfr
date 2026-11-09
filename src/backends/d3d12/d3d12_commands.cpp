@@ -47,6 +47,12 @@ D3D_PRIMITIVE_TOPOLOGY topologyFor(Topology topology) {
 // (rendering_device_driver_d3d12.cpp:5685).
 constexpr UINT kOneDispatch = 1;
 
+// BFR has no D3D12 mesh draws yet, and Features::meshShader is false until it
+// does (owner, 2026-11-08), so checkMeshDraws refuses every one.
+core::Result<void> noMeshDraws(const Features& features) {
+    return checkMeshDraws(features.meshShader);
+}
+
 } // namespace
 
 // The device's recording commands between beginRendering and a submit: the
@@ -305,6 +311,24 @@ core::Result<void> D3D12Device::drawIndexedIndirectCount(CommandListHandle comma
 core::Result<void> D3D12Device::dispatchIndirect(CommandListHandle commandList, BufferHandle buffer,
                                                  std::uint64_t offset) {
     return executeIndirect(commandList, IndirectKind::Dispatch, 0, kOneDispatch, buffer, offset, std::nullopt, 0);
+}
+
+core::Result<void> D3D12Device::drawMesh(CommandListHandle /*commandList*/, std::uint32_t /*x*/, std::uint32_t /*y*/,
+                                         std::uint32_t /*z*/) {
+    return noMeshDraws(features_);
+}
+
+core::Result<void> D3D12Device::drawMeshIndirect(CommandListHandle /*commandList*/, BufferHandle /*buffer*/,
+                                                 std::uint64_t /*offset*/, std::uint32_t /*drawCount*/,
+                                                 std::uint32_t /*stride*/) {
+    return noMeshDraws(features_);
+}
+
+core::Result<void> D3D12Device::drawMeshIndirectCount(CommandListHandle /*commandList*/, BufferHandle /*buffer*/,
+                                                      std::uint64_t /*offset*/, BufferHandle /*countBuffer*/,
+                                                      std::uint64_t /*countOffset*/, std::uint32_t /*maxDrawCount*/,
+                                                      std::uint32_t /*stride*/) {
+    return noMeshDraws(features_);
 }
 
 } // namespace bfr::rhi::d3d12

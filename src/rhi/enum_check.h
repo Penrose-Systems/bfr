@@ -96,7 +96,7 @@ constexpr std::pair<QueueLevel, QueueLevel> rangeOf(QueueLevel /*unused*/) {
     return {QueueLevel::Normal, QueueLevel::Realtime};
 }
 constexpr std::pair<TimestampStage, TimestampStage> rangeOf(TimestampStage /*unused*/) {
-    return {TimestampStage::End, TimestampStage::Copy};
+    return {TimestampStage::End, TimestampStage::Mesh};
 }
 constexpr std::pair<TimestampGranularity, TimestampGranularity> rangeOf(TimestampGranularity /*unused*/) {
     return {TimestampGranularity::Relaxed, TimestampGranularity::Precise};

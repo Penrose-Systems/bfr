@@ -729,6 +729,9 @@ enum class Call : std::int32_t {
     PipelineCacheSize = BFR_CALL_PIPELINE_CACHE_SIZE,
     PipelineCacheData = BFR_CALL_PIPELINE_CACHE_DATA,
     DestroyPipelineCache = BFR_CALL_DESTROY_PIPELINE_CACHE,
+    DrawMesh = BFR_CALL_DRAW_MESH,
+    DrawMeshIndirect = BFR_CALL_DRAW_MESH_INDIRECT,
+    DrawMeshIndirectCount = BFR_CALL_DRAW_MESH_INDIRECT_COUNT,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -808,6 +811,9 @@ enum class Call : std::int32_t {
     case Call::PipelineCacheSize: return "pipeline_cache_size";
     case Call::PipelineCacheData: return "pipeline_cache_data";
     case Call::DestroyPipelineCache: return "destroy_pipeline_cache";
+    case Call::DrawMesh: return "draw_mesh";
+    case Call::DrawMeshIndirect: return "draw_mesh_indirect";
+    case Call::DrawMeshIndirectCount: return "draw_mesh_indirect_count";
     }
     return {};
 }
@@ -827,6 +833,10 @@ enum class TimestampStage : std::int32_t {
     Compute = BFR_TIMESTAMP_STAGE_COMPUTE,
     /// Once the copies recorded before it are done.
     Copy = BFR_TIMESTAMP_STAGE_COPY,
+    /// Once the task shading recorded before it is done.
+    Task = BFR_TIMESTAMP_STAGE_TASK,
+    /// Once the mesh shading recorded before it is done.
+    Mesh = BFR_TIMESTAMP_STAGE_MESH,
 };
 
 /// value's name in bfr.yaml; empty for a value TimestampStage doesn't have.
@@ -838,6 +848,8 @@ enum class TimestampStage : std::int32_t {
     case TimestampStage::Fragment: return "fragment";
     case TimestampStage::Compute: return "compute";
     case TimestampStage::Copy: return "copy";
+    case TimestampStage::Task: return "task";
+    case TimestampStage::Mesh: return "mesh";
     }
     return {};
 }
@@ -2056,6 +2068,16 @@ struct GraphicsPipelineDesc {
     ShaderCode vertex{};
     /// A code_size of 0 is no fragment shader; the pipeline writes depth alone.
     ShaderCode fragment{};
+    /// Task and mesh shaders in place of vertices: with a mesh shader, the pipeline draws by
+    /// bfr_draw_mesh, vertex has a code_size of 0, and topology and primitive_restart are unused.
+    /// It needs bfr_caps_features.mesh_shader, and a task shader bfr_caps_features.task_shader; a
+    /// code_size of 0 is none. With a task shader, the mesh shader reads no draw index.
+    ShaderCode task{};
+    /// Threads in each task workgroup, as the shader declares them.
+    std::array<std::uint32_t, 3> taskWorkgroupSize{};
+    ShaderCode mesh{};
+    /// Threads in each mesh workgroup, as the shader declares them.
+    std::array<std::uint32_t, 3> meshWorkgroupSize{};
     /// What its draws assemble until bfr_set_topology.
     Topology topology{};
     PrimitiveRestart primitiveRestart{};
@@ -2400,6 +2422,23 @@ struct CapsMesh {
     std::array<std::uint32_t, 3> maxTaskWorkgroupSize{};
     std::uint32_t maxTaskInvocations{};
     std::uint32_t maxTaskPayloadSize{};
+    /// What a bfr_draw_mesh's counts stay within: of the task shader's workgroups where the
+    /// pipeline has one, else of the mesh shader's.
+    std::array<std::uint32_t, 3> maxTaskWorkgroupCount{};
+    std::uint32_t maxTaskWorkgroupTotalCount{};
+    std::uint32_t maxTaskSharedMemory{};
+    std::uint32_t maxTaskPayloadAndSharedMemory{};
+    std::array<std::uint32_t, 3> maxMeshWorkgroupCount{};
+    std::uint32_t maxMeshWorkgroupTotalCount{};
+    /// The bytes a mesh shader outputs, its vertices' and primitives' sizes each rounded up to
+    /// their granularity.
+    std::uint32_t maxMeshOutputMemory{};
+    std::uint32_t meshOutputPerVertexGranularity{};
+    std::uint32_t meshOutputPerPrimitiveGranularity{};
+    std::uint32_t maxMeshPayloadAndSharedMemory{};
+    std::uint32_t maxMeshPayloadAndOutputMemory{};
+    std::uint32_t maxMeshOutputComponents{};
+    std::uint32_t maxMeshOutputLayers{};
 };
 
 /// The adapter's ray tracing limits. The structure limits are 0 without acceleration structures,
@@ -2606,6 +2645,8 @@ struct TimestampStages {
     bool fragment{};
     bool compute{};
     bool copy{};
+    bool task{};
+    bool mesh{};
 };
 
 /// The bfr_host_clock values bfr_calibrate_timestamps reads beside a GPU timestamp.
@@ -3300,6 +3341,19 @@ inline CapsMesh fromC(const bfr_caps_mesh& value) {
         .maxTaskWorkgroupSize = std::to_array(value.max_task_workgroup_size),
         .maxTaskInvocations = value.max_task_invocations,
         .maxTaskPayloadSize = value.max_task_payload_size,
+        .maxTaskWorkgroupCount = std::to_array(value.max_task_workgroup_count),
+        .maxTaskWorkgroupTotalCount = value.max_task_workgroup_total_count,
+        .maxTaskSharedMemory = value.max_task_shared_memory,
+        .maxTaskPayloadAndSharedMemory = value.max_task_payload_and_shared_memory,
+        .maxMeshWorkgroupCount = std::to_array(value.max_mesh_workgroup_count),
+        .maxMeshWorkgroupTotalCount = value.max_mesh_workgroup_total_count,
+        .maxMeshOutputMemory = value.max_mesh_output_memory,
+        .meshOutputPerVertexGranularity = value.mesh_output_per_vertex_granularity,
+        .meshOutputPerPrimitiveGranularity = value.mesh_output_per_primitive_granularity,
+        .maxMeshPayloadAndSharedMemory = value.max_mesh_payload_and_shared_memory,
+        .maxMeshPayloadAndOutputMemory = value.max_mesh_payload_and_output_memory,
+        .maxMeshOutputComponents = value.max_mesh_output_components,
+        .maxMeshOutputLayers = value.max_mesh_output_layers,
     };
 }
 
@@ -3454,6 +3508,8 @@ inline TimestampStages fromC(const bfr_timestamp_stages& value) {
         .fragment = value.fragment != BFR_FALSE,
         .compute = value.compute != BFR_FALSE,
         .copy = value.copy != BFR_FALSE,
+        .task = value.task != BFR_FALSE,
+        .mesh = value.mesh != BFR_FALSE,
     };
 }
 
@@ -3797,6 +3853,20 @@ public:
     /// Records a dispatch as bfr_dispatch does, of the bfr_dispatch_indirect_args buffer holds at
     /// offset. buffer has indirect usage. Fails as bfr_dispatch does.
     [[nodiscard]] Expected<void> dispatchIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset) const;
+
+    /// Records a draw of x by y by z workgroups of the bound mesh pipeline's task shader, or of its
+    /// mesh shader where it has none, within bfr_caps_mesh. A mesh pipeline is bound, and bfr_draw
+    /// and bfr_draw_indexed take none. Fails with error_unsupported where
+    /// bfr_caps_features.mesh_shader is false, and as bfr_draw does.
+    [[nodiscard]] Expected<void> drawMesh(CommandList commandList, std::uint32_t x, std::uint32_t y, std::uint32_t z) const;
+
+    /// Records draw_count mesh draws, each with the bfr_dispatch_indirect_args buffer holds from
+    /// offset, stride bytes apart. Fails as bfr_draw_mesh and bfr_draw_indirect do.
+    [[nodiscard]] Expected<void> drawMeshIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset, std::uint32_t drawCount, std::uint32_t stride) const;
+
+    /// Records bfr_draw_mesh_indirect's draws, as many as count_buffer holds, as
+    /// bfr_draw_indirect_count does. Fails as bfr_draw_mesh and bfr_draw_indirect_count do.
+    [[nodiscard]] Expected<void> drawMeshIndirectCount(CommandList commandList, const Buffer& buffer, std::uint64_t offset, const Buffer& countBuffer, std::uint64_t countOffset, std::uint32_t maxDrawCount, std::uint32_t stride) const;
 
     /// Records copies of regions from src to dst, outside rendering. src has copy_src usage and is
     /// device or upload memory; dst has copy_dst usage and is device or readback memory. Commands
@@ -4443,6 +4513,10 @@ inline bfr_graphics_pipeline_desc toC(const GraphicsPipelineDesc& value, const b
         .next = next,
         .vertex = toC(value.vertex),
         .fragment = toC(value.fragment),
+        .task = toC(value.task),
+        .task_workgroup_size = {value.taskWorkgroupSize[0], value.taskWorkgroupSize[1], value.taskWorkgroupSize[2]},
+        .mesh = toC(value.mesh),
+        .mesh_workgroup_size = {value.meshWorkgroupSize[0], value.meshWorkgroupSize[1], value.meshWorkgroupSize[2]},
         .topology = static_cast<bfr_topology>(value.topology),
         .primitive_restart = static_cast<bfr_primitive_restart>(value.primitiveRestart),
         .raster = toC(value.raster),
@@ -4819,6 +4893,27 @@ inline Expected<void> Device::drawIndexedIndirectCount(CommandList commandList, 
 
 inline Expected<void> Device::dispatchIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset) const {
     if (const bfr_result result = bfr_dispatch_indirect(device_, commandList.get(), buffer.get(), offset); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::drawMesh(CommandList commandList, std::uint32_t x, std::uint32_t y, std::uint32_t z) const {
+    if (const bfr_result result = bfr_draw_mesh(device_, commandList.get(), x, y, z); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::drawMeshIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset, std::uint32_t drawCount, std::uint32_t stride) const {
+    if (const bfr_result result = bfr_draw_mesh_indirect(device_, commandList.get(), buffer.get(), offset, drawCount, stride); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::drawMeshIndirectCount(CommandList commandList, const Buffer& buffer, std::uint64_t offset, const Buffer& countBuffer, std::uint64_t countOffset, std::uint32_t maxDrawCount, std::uint32_t stride) const {
+    if (const bfr_result result = bfr_draw_mesh_indirect_count(device_, commandList.get(), buffer.get(), offset, countBuffer.get(), countOffset, maxDrawCount, stride); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return {};

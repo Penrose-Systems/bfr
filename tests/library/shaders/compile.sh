@@ -12,7 +12,7 @@ cd "$(dirname "$0")"
     echo "#include <cstdint>"
     echo
     echo "namespace bfr::test::spirv {"
-    for shader in bindless.comp bindless.vert bindless.frag color.frag sample.comp; do
+    for shader in bindless.comp bindless.vert bindless.frag color.frag sample.comp triangle.mesh triangle.task; do
         glslangValidator -V --target-env vulkan1.2 -o "$shader.spv" "$shader" > /dev/null
         name="$(echo "$shader" | sed 's/\.\(.\)/\U\1/g; s/^./\U&/')"
         echo

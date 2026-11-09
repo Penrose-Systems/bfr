@@ -31,6 +31,10 @@ VkPipelineStageFlags2 stageFor(TimestampStage stage) {
             return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
         case TimestampStage::Copy:
             return VK_PIPELINE_STAGE_2_COPY_BIT;
+        case TimestampStage::Task:
+            return VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT;
+        case TimestampStage::Mesh:
+            return VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT;
         case TimestampStage::End:
         default:
             return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -126,6 +130,13 @@ core::Result<void> VulkanDevice::writeTimestamp(CommandListHandle commandList, T
     // Vulkan takes no granularity, as the caps say, so it is only checked.
     if (auto checked = checkKnown(granularity, "timestamp granularity"); !checked) {
         return checked;
+    }
+    // Task and mesh stages need their features
+    // (VUID-vkCmdWriteTimestamp2-stage-03934, -03935), as the caps say.
+    if ((stage == TimestampStage::Task && !features_.taskShader) ||
+        (stage == TimestampStage::Mesh && !features_.meshShader)) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "the device has no {} shaders",
+                             stage == TimestampStage::Task ? "task" : "mesh");
     }
     auto list = commandListFor(commandList);
     if (!list) {

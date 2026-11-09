@@ -1,0 +1,11 @@
+// A task shader that launches two mesh workgroups for each of its own, so a
+// draw of one task workgroup outputs triangle.mesh's first two triangles. For
+// the mesh draw tests; spirv.h holds it compiled, see compile.sh.
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+layout(local_size_x = 1) in;
+
+void main() {
+    EmitMeshTasksEXT(2, 1, 1);
+}

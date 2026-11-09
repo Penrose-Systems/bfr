@@ -2,6 +2,7 @@
 
 #include "bfr/bfr.h"
 #include "bfr/core/handle.h"
+#include "bfr/rhi/caps.h"
 #include "bfr/rhi/format.h"
 
 #include <array>
@@ -42,9 +43,6 @@ struct PipelineCacheWrite {
 
 /// The most color targets a graphics pipeline renders to.
 inline constexpr std::uint32_t kMaxColorTargets = BFR_MAX_COLOR_TARGETS;
-
-/// Dimensions of a workgroup.
-inline constexpr std::size_t kWorkgroupDimensions = 3;
 
 /// One shader stage: bytecode for the backend the device runs on, and the
 /// name of the function in it to run. Both are borrowed for the call.
@@ -234,6 +232,16 @@ struct ColorTarget {
 struct GraphicsPipelineDesc {
     ShaderCode vertex;
     ShaderCode fragment;
+    /// Task and mesh shaders in place of vertices: with mesh.code given, the
+    /// pipeline draws by drawMesh, vertex.code is empty, and topology and
+    /// primitiveRestart are unused. It needs Features::meshShader, and a task
+    /// shader Features::taskShader; an empty task.code is none. With a task
+    /// shader, the mesh shader reads no draw index. The workgroup sizes are
+    /// the threads in each workgroup, as the shaders declare them.
+    ShaderCode task{};
+    std::array<std::uint32_t, kWorkgroupDimensions> taskWorkgroupSize{};
+    ShaderCode mesh{};
+    std::array<std::uint32_t, kWorkgroupDimensions> meshWorkgroupSize{};
     Topology topology = Topology::TriangleList;
     PrimitiveRestart primitiveRestart = PrimitiveRestart::Off;
     RasterState raster;

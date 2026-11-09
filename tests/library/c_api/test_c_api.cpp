@@ -190,6 +190,15 @@ TEST_CASE("C API rejects null arguments and says which", "[c_api][unit]") {
     CHECK(instance == nullptr);
 }
 
+TEST_CASE("C API refuses mesh draws on a null device", "[c_api][unit]") {
+    CHECK(bfr_draw_mesh(nullptr, bfr_command_list{}, 1, 1, 1) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_draw_mesh_indirect(nullptr, bfr_command_list{}, bfr_buffer{}, 0, 1, 0) ==
+          BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_draw_mesh_indirect_count(nullptr, bfr_command_list{}, bfr_buffer{}, 0, bfr_buffer{}, 0, 1, 0) ==
+          BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("must not be null"));
+}
+
 TEST_CASE("C API rejects a backend value BFR does not have", "[c_api][unit]") {
     const bfr_instance_desc desc{.next = nullptr,
                                  .backend = static_cast<bfr_backend>(kNotAValue),
@@ -1135,7 +1144,7 @@ TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call tim
 
     std::uint32_t count = 0;
     REQUIRE(bfr_get_call_timings(device.device, &count, nullptr) == BFR_RESULT_SUCCESS);
-    CHECK(count == BFR_CALL_DESTROY_PIPELINE_CACHE + 1);
+    CHECK(count == BFR_CALL_DRAW_MESH_INDIRECT_COUNT + 1);
     std::vector<bfr_call_timing> timings(count);
     REQUIRE(bfr_get_call_timings(device.device, &count, timings.data()) == BFR_RESULT_SUCCESS);
     CHECK(timings.at(BFR_CALL_CREATE_TIMESTAMP_POOL).count == 2);

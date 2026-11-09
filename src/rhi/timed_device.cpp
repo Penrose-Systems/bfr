@@ -190,6 +190,27 @@ core::Result<void> TimedDevice::dispatchIndirect(CommandListHandle commandList, 
                           [&] { return device_->dispatchIndirect(commandList, buffer, offset); });
 }
 
+core::Result<void> TimedDevice::drawMesh(CommandListHandle commandList, std::uint32_t x, std::uint32_t y,
+                                         std::uint32_t z) {
+    return counters_.time(Call::DrawMesh, [&] { return device_->drawMesh(commandList, x, y, z); });
+}
+
+core::Result<void> TimedDevice::drawMeshIndirect(CommandListHandle commandList, BufferHandle buffer,
+                                                 std::uint64_t offset, std::uint32_t drawCount, std::uint32_t stride) {
+    return counters_.time(Call::DrawMeshIndirect,
+                          [&] { return device_->drawMeshIndirect(commandList, buffer, offset, drawCount, stride); });
+}
+
+core::Result<void> TimedDevice::drawMeshIndirectCount(CommandListHandle commandList, BufferHandle buffer,
+                                                      std::uint64_t offset, BufferHandle countBuffer,
+                                                      std::uint64_t countOffset, std::uint32_t maxDrawCount,
+                                                      std::uint32_t stride) {
+    return counters_.time(Call::DrawMeshIndirectCount, [&] {
+        return device_->drawMeshIndirectCount(commandList, buffer, offset, countBuffer, countOffset, maxDrawCount,
+                                              stride);
+    });
+}
+
 core::Result<void> TimedDevice::copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
                                            std::span<const BufferCopy> regions) {
     return counters_.time(Call::CopyBuffer, [&] { return device_->copyBuffer(commandList, src, dst, regions); });

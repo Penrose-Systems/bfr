@@ -1763,3 +1763,129 @@ TEST_CASE("Device refuses multisampling it can't pass on", "[rhi][agnostic]") {
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
+
+TEST_CASE("Device draws with mesh shaders, directly and indirectly, and with a task shader, where it has them",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const DrawDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const Caps& caps = made.instance->adapters()[0].caps;
+        GraphicsPipelineDesc meshDesc = colorPipeline();
+        meshDesc.vertex = {};
+        meshDesc.mesh = spirv(bfr::test::spirv::kTriangleMesh);
+        meshDesc.meshWorkgroupSize = {1, 1, 1};
+        // A pipeline takes a vertex or a mesh shader, and a task shader only
+        // beside a mesh shader, whatever the device has.
+        GraphicsPipelineDesc both = meshDesc;
+        both.vertex = colorPipeline().vertex;
+        const auto bothMade = device.createGraphicsPipeline(both);
+        REQUIRE_FALSE(bothMade.has_value());
+        CHECK(bothMade.error().code == ErrorCode::RhiInvalidCall);
+        GraphicsPipelineDesc taskAlone = colorPipeline();
+        taskAlone.task = spirv(bfr::test::spirv::kTriangleTask);
+        const auto taskMade = device.createGraphicsPipeline(taskAlone);
+        REQUIRE_FALSE(taskMade.has_value());
+        CHECK(taskMade.error().code == ErrorCode::RhiInvalidCall);
+        if (!caps.features.meshShader) {
+            const auto refused = device.createGraphicsPipeline(meshDesc);
+            REQUIRE_FALSE(refused.has_value());
+            CHECK(refused.error().code == ErrorCode::RhiUnsupported);
+            SKIP("the adapter has no mesh shaders");
+        }
+        if (!takesSpirv(backend)) {
+            SKIP("no " << backend.name << " bytecode is checked in");
+        }
+        // The first three corners of clip space, then the other three: two
+        // triangles covering it, one a workgroup.
+        constexpr std::uint32_t kTriangleCorners = 6;
+        constexpr std::array<float, std::size_t{kTriangleCorners} * kPositionFloats> kHalves{-1, -1, 0,  1, 1, -1,
+                                                                                             0,  1,  -1, 1, 0, 1,
+                                                                                             1,  -1, 0,  1, 1, 1,
+                                                                                             0,  1,  -1, 1, 0, 1};
+        const BufferHandle positions = uploaded(device, kHalves, {.storage = true});
+        const auto slot = device.bufferSlot(positions);
+        REQUIRE(slot.has_value());
+        const PipelineHandle mesh = created(device, meshDesc);
+        // Two workgroups; then, for the count draw, one, and two again, which
+        // only a draw count past 1 reaches.
+        constexpr std::array kGroups{DispatchIndirectArgs{.x = 2, .y = 1, .z = 1},
+                                     DispatchIndirectArgs{.x = 1, .y = 1, .z = 1},
+                                     DispatchIndirectArgs{.x = 2, .y = 1, .z = 1}};
+        constexpr std::array<std::uint32_t, 1> kOneDraw{1};
+        const BufferHandle args = uploaded(device, kGroups, {.indirect = true});
+        const BufferHandle count = uploaded(device, kOneDraw, {.indirect = true});
+        const auto bind = [&](CommandListHandle commands, PipelineHandle pipeline) {
+            CHECK(device.bindPipeline(commands, pipeline).has_value());
+            CHECK(device.pushConstants(commands, bytesOf({.positions = *slot, .color = {1, 0, 0, 1}})).has_value());
+        };
+        constexpr std::uint32_t kLeft = 0;
+        constexpr std::uint32_t kRight = kSide - 1;
+        constexpr std::uint32_t kTop = 0;
+        constexpr std::uint32_t kBottom = kSide - 1;
+
+        SECTION("one workgroup draws the first triangle") {
+            const Rendered image{device, caps.limits, [&](CommandListHandle commands) {
+                                     bind(commands, mesh);
+                                     CHECK(device.drawMesh(commands, 1, 1, 1).has_value());
+                                 }};
+            CHECK(image.at(kLeft, kBottom) == kRed);
+            CHECK(image.at(kRight, kTop) == kBlack);
+        }
+        SECTION("two workgroups draw both, directly and indirectly") {
+            const auto draw = GENERATE(0, 1);
+            const Rendered image{
+                device, caps.limits, [&](CommandListHandle commands) {
+                    bind(commands, mesh);
+                    if (draw == 0) {
+                        CHECK(device.drawMesh(commands, 2, 1, 1).has_value());
+                    }
+                    else {
+                        CHECK(device.drawMeshIndirect(commands, args, 0, 1, sizeof(DispatchIndirectArgs)).has_value());
+                    }
+                }};
+            INFO("draw " << draw);
+            CHECK(image.at(kLeft, kBottom) == kRed);
+            CHECK(image.at(kRight, kTop) == kRed);
+        }
+        SECTION("a count draw draws as many as the count buffer holds, where the device reads a count") {
+            if (!caps.features.drawIndirectCount) {
+                SKIP("the adapter reads no draw count from a buffer");
+            }
+            // From the second record: one workgroup, then two, cut at the
+            // count of 1.
+            constexpr std::uint32_t kMaxDraws = 2;
+            const Rendered image{device, caps.limits, [&](CommandListHandle commands) {
+                                     bind(commands, mesh);
+                                     CHECK(device
+                                               .drawMeshIndirectCount(commands, args, sizeof(DispatchIndirectArgs),
+                                                                      count, 0, kMaxDraws, sizeof(DispatchIndirectArgs))
+                                               .has_value());
+                                 }};
+            CHECK(image.at(kLeft, kBottom) == kRed);
+            CHECK(image.at(kRight, kTop) == kBlack);
+        }
+        SECTION("a task shader's workgroup launches two mesh workgroups, where the device has task shaders") {
+            if (!caps.features.taskShader) {
+                SKIP("the adapter has no task shaders");
+            }
+            GraphicsPipelineDesc taskDesc = meshDesc;
+            taskDesc.task = spirv(bfr::test::spirv::kTriangleTask);
+            taskDesc.taskWorkgroupSize = {1, 1, 1};
+            const PipelineHandle task = created(device, taskDesc);
+            const Rendered image{device, caps.limits, [&](CommandListHandle commands) {
+                                     bind(commands, task);
+                                     CHECK(device.drawMesh(commands, 1, 1, 1).has_value());
+                                 }};
+            CHECK(image.at(kLeft, kBottom) == kRed);
+            CHECK(image.at(kRight, kTop) == kRed);
+            CHECK(device.destroyPipeline(task).has_value());
+        }
+        CHECK(device.destroyBuffer(positions).has_value());
+        CHECK(device.destroyBuffer(args).has_value());
+        CHECK(device.destroyBuffer(count).has_value());
+        CHECK(device.destroyPipeline(mesh).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}

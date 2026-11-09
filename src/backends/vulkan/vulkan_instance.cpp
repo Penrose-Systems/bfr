@@ -458,6 +458,7 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     features.core.features.robustBufferAccess = VK_FALSE;
     features.vulkan13.robustImageAccess = VK_FALSE;
     features.imageRobustness.robustImageAccess = VK_FALSE;
+    features.mesh.primitiveFragmentShadingRateMeshShader = VK_FALSE;
     extensions.insert(extensions.end(), features.enabledExtensions.begin(), features.enabledExtensions.end());
 
     const auto queues = queueCreateInfos(families, wanted, hasQueueLevels(versions_[adapter], *available));

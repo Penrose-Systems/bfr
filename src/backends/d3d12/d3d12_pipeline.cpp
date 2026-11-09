@@ -456,6 +456,11 @@ core::Result<PipelineHandle> D3D12Device::createGraphicsPipeline(const GraphicsP
     if (auto checked = checkMultisample(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkMeshStages(desc, features_); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    // Features::meshShader and taskShader are false until BFR has D3D12
+    // mesh pipelines, so checkMeshStages refuses every mesh desc.
     collectBuffers();
     auto library = pipelineLibraryFor(desc.cache);
     if (!library) {

@@ -482,6 +482,9 @@ typedef enum bfr_call {
     BFR_CALL_PIPELINE_CACHE_SIZE = 71,
     BFR_CALL_PIPELINE_CACHE_DATA = 72,
     BFR_CALL_DESTROY_PIPELINE_CACHE = 73,
+    BFR_CALL_DRAW_MESH = 74,
+    BFR_CALL_DRAW_MESH_INDIRECT = 75,
+    BFR_CALL_DRAW_MESH_INDIRECT_COUNT = 76,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -500,6 +503,10 @@ typedef enum bfr_timestamp_stage {
     BFR_TIMESTAMP_STAGE_COMPUTE = 4,
     // Once the copies recorded before it are done.
     BFR_TIMESTAMP_STAGE_COPY = 5,
+    // Once the task shading recorded before it is done.
+    BFR_TIMESTAMP_STAGE_TASK = 6,
+    // Once the mesh shading recorded before it is done.
+    BFR_TIMESTAMP_STAGE_MESH = 7,
     BFR_TIMESTAMP_STAGE_FORCE32 = 0x7FFFFFFF
 } bfr_timestamp_stage;
 
@@ -1548,6 +1555,16 @@ typedef struct bfr_graphics_pipeline_desc {
     bfr_shader_code vertex;
     // A code_size of 0 is no fragment shader; the pipeline writes depth alone.
     bfr_shader_code fragment;
+    // Task and mesh shaders in place of vertices: with a mesh shader, the pipeline draws by
+    // bfr_draw_mesh, vertex has a code_size of 0, and topology and primitive_restart are unused. It
+    // needs bfr_caps_features.mesh_shader, and a task shader bfr_caps_features.task_shader; a
+    // code_size of 0 is none. With a task shader, the mesh shader reads no draw index.
+    bfr_shader_code task;
+    // Threads in each task workgroup, as the shader declares them.
+    uint32_t task_workgroup_size[3];
+    bfr_shader_code mesh;
+    // Threads in each mesh workgroup, as the shader declares them.
+    uint32_t mesh_workgroup_size[3];
     // What its draws assemble until bfr_set_topology.
     bfr_topology topology;
     bfr_primitive_restart primitive_restart;
@@ -1883,6 +1900,23 @@ typedef struct bfr_caps_mesh {
     uint32_t max_task_workgroup_size[3];
     uint32_t max_task_invocations;
     uint32_t max_task_payload_size;
+    // What a bfr_draw_mesh's counts stay within: of the task shader's workgroups where the pipeline
+    // has one, else of the mesh shader's.
+    uint32_t max_task_workgroup_count[3];
+    uint32_t max_task_workgroup_total_count;
+    uint32_t max_task_shared_memory;
+    uint32_t max_task_payload_and_shared_memory;
+    uint32_t max_mesh_workgroup_count[3];
+    uint32_t max_mesh_workgroup_total_count;
+    // The bytes a mesh shader outputs, its vertices' and primitives' sizes each rounded up to their
+    // granularity.
+    uint32_t max_mesh_output_memory;
+    uint32_t mesh_output_per_vertex_granularity;
+    uint32_t mesh_output_per_primitive_granularity;
+    uint32_t max_mesh_payload_and_shared_memory;
+    uint32_t max_mesh_payload_and_output_memory;
+    uint32_t max_mesh_output_components;
+    uint32_t max_mesh_output_layers;
 } bfr_caps_mesh;
 
 // The adapter's ray tracing limits. The structure limits are 0 without acceleration structures, the
@@ -2089,6 +2123,8 @@ typedef struct bfr_timestamp_stages {
     bfr_bool fragment;
     bfr_bool compute;
     bfr_bool copy;
+    bfr_bool task;
+    bfr_bool mesh;
 } bfr_timestamp_stages;
 
 // The bfr_host_clock values bfr_calibrate_timestamps reads beside a GPU timestamp.
@@ -2609,6 +2645,44 @@ BFR_API bfr_result bfr_dispatch_indirect(
     bfr_command_list command_list,
     bfr_buffer buffer,
     uint64_t offset);
+
+// Records a draw of x by y by z workgroups of the bound mesh pipeline's task shader, or of its mesh
+// shader where it has none, within bfr_caps_mesh. A mesh pipeline is bound, and bfr_draw and
+// bfr_draw_indexed take none. Fails with error_unsupported where bfr_caps_features.mesh_shader is
+// false, and as bfr_draw does.
+BFR_API bfr_result bfr_draw_mesh(
+    bfr_device* device,
+    bfr_command_list command_list,
+    uint32_t x,
+    uint32_t y,
+    uint32_t z);
+
+// Records draw_count mesh draws, each with the bfr_dispatch_indirect_args buffer holds from offset,
+// stride bytes apart. Fails as bfr_draw_mesh and bfr_draw_indirect do.
+// offset: Bytes into the buffer.
+// stride: Bytes between two draws' arguments.
+BFR_API bfr_result bfr_draw_mesh_indirect(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_buffer buffer,
+    uint64_t offset,
+    uint32_t draw_count,
+    uint32_t stride);
+
+// Records bfr_draw_mesh_indirect's draws, as many as count_buffer holds, as bfr_draw_indirect_count
+// does. Fails as bfr_draw_mesh and bfr_draw_indirect_count do.
+// offset: Bytes into the buffer.
+// count_offset: Bytes into count_buffer.
+// stride: Bytes between two draws' arguments.
+BFR_API bfr_result bfr_draw_mesh_indirect_count(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_buffer buffer,
+    uint64_t offset,
+    bfr_buffer count_buffer,
+    uint64_t count_offset,
+    uint32_t max_draw_count,
+    uint32_t stride);
 
 // Records copies of regions from src to dst, outside rendering. src has copy_src usage and is
 // device or upload memory; dst has copy_dst usage and is device or readback memory. Commands after

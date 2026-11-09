@@ -467,13 +467,14 @@ static_assert(sizeof(bfr_buffer_tile_region) == sizeof(bfr::rhi::BufferTileRegio
               offsetof(bfr_buffer_tile_region, memory_tile) == offsetof(bfr::rhi::BufferTileRegion, memoryTile));
 
 static_assert(static_cast<int>(bfr::rhi::TimestampStage::Copy) == BFR_TIMESTAMP_STAGE_COPY);
+static_assert(static_cast<int>(bfr::rhi::TimestampStage::Mesh) == BFR_TIMESTAMP_STAGE_MESH);
 static_assert(static_cast<int>(bfr::rhi::TimestampGranularity::Precise) == BFR_TIMESTAMP_GRANULARITY_PRECISE);
 static_assert(static_cast<int>(bfr::rhi::HostClock::PerformanceCounter) == BFR_HOST_CLOCK_PERFORMANCE_COUNTER);
 static_assert(static_cast<int>(bfr::rhi::Call::InstanceSwapchainFormats) == BFR_CALL_INSTANCE_SWAPCHAIN_FORMATS);
 static_assert(static_cast<int>(bfr::rhi::Call::SetTopology) == BFR_CALL_SET_TOPOLOGY);
 static_assert(static_cast<int>(bfr::rhi::Call::ResolveTexture) == BFR_CALL_RESOLVE_TEXTURE);
-static_assert(static_cast<int>(bfr::rhi::Call::DestroyPipelineCache) == BFR_CALL_DESTROY_PIPELINE_CACHE);
-static_assert(bfr::rhi::kCallCount == BFR_CALL_DESTROY_PIPELINE_CACHE + 1);
+static_assert(static_cast<int>(bfr::rhi::Call::DrawMeshIndirectCount) == BFR_CALL_DRAW_MESH_INDIRECT_COUNT);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_DRAW_MESH_INDIRECT_COUNT + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
@@ -595,6 +596,10 @@ std::optional<bfr::rhi::GraphicsPipelineDesc> graphicsPipelineIn(const bfr_graph
     GraphicsPipelineDesc pipeline{
         .vertex = shaderIn(desc.vertex),
         .fragment = shaderIn(desc.fragment),
+        .task = shaderIn(desc.task),
+        .taskWorkgroupSize = std::to_array(desc.task_workgroup_size),
+        .mesh = shaderIn(desc.mesh),
+        .meshWorkgroupSize = std::to_array(desc.mesh_workgroup_size),
         .topology = *topology,
         .primitiveRestart = *restart,
         .raster = {.cull = *cull,
@@ -1007,9 +1012,24 @@ bfr_caps_mesh toC(const bfr::rhi::MeshLimits& mesh) {
         .max_task_workgroup_size = {},
         .max_task_invocations = mesh.maxTaskInvocations,
         .max_task_payload_size = mesh.maxTaskPayloadSize,
+        .max_task_workgroup_count = {},
+        .max_task_workgroup_total_count = mesh.maxTaskWorkgroupTotalCount,
+        .max_task_shared_memory = mesh.maxTaskSharedMemory,
+        .max_task_payload_and_shared_memory = mesh.maxTaskPayloadAndSharedMemory,
+        .max_mesh_workgroup_count = {},
+        .max_mesh_workgroup_total_count = mesh.maxMeshWorkgroupTotalCount,
+        .max_mesh_output_memory = mesh.maxMeshOutputMemory,
+        .mesh_output_per_vertex_granularity = mesh.meshOutputPerVertexGranularity,
+        .mesh_output_per_primitive_granularity = mesh.meshOutputPerPrimitiveGranularity,
+        .max_mesh_payload_and_shared_memory = mesh.maxMeshPayloadAndSharedMemory,
+        .max_mesh_payload_and_output_memory = mesh.maxMeshPayloadAndOutputMemory,
+        .max_mesh_output_components = mesh.maxMeshOutputComponents,
+        .max_mesh_output_layers = mesh.maxMeshOutputLayers,
     };
     std::ranges::copy(mesh.maxMeshWorkgroupSize, std::begin(out.max_mesh_workgroup_size));
     std::ranges::copy(mesh.maxTaskWorkgroupSize, std::begin(out.max_task_workgroup_size));
+    std::ranges::copy(mesh.maxTaskWorkgroupCount, std::begin(out.max_task_workgroup_count));
+    std::ranges::copy(mesh.maxMeshWorkgroupCount, std::begin(out.max_mesh_workgroup_count));
     return out;
 }
 
@@ -1126,7 +1146,9 @@ bfr_timestamp_stages toC(const bfr::rhi::TimestampStages& stages) {
             .vertex = toC(stages.vertex),
             .fragment = toC(stages.fragment),
             .compute = toC(stages.compute),
-            .copy = toC(stages.copy)};
+            .copy = toC(stages.copy),
+            .task = toC(stages.task),
+            .mesh = toC(stages.mesh)};
 }
 
 bfr_caps_timestamps toC(const bfr::rhi::Timestamps& timestamps) {
@@ -1851,6 +1873,42 @@ bfr_result bfr_dispatch_indirect(bfr_device* device, bfr_command_list command_li
     });
 }
 
+bfr_result bfr_draw_mesh(bfr_device* device, bfr_command_list command_list, uint32_t x, uint32_t y, uint32_t z) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto drawn = device->device->drawMesh(fromC(command_list), x, y, z);
+        return drawn ? BFR_RESULT_SUCCESS : fail(drawn.error());
+    });
+}
+
+bfr_result bfr_draw_mesh_indirect(bfr_device* device, bfr_command_list command_list, bfr_buffer buffer, uint64_t offset,
+                                  uint32_t draw_count, uint32_t stride) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto drawn = device->device->drawMeshIndirect(fromC(command_list), fromC(buffer), offset, draw_count,
+                                                            stride);
+        return drawn ? BFR_RESULT_SUCCESS : fail(drawn.error());
+    });
+}
+
+bfr_result bfr_draw_mesh_indirect_count(bfr_device* device, bfr_command_list command_list, bfr_buffer buffer,
+                                        uint64_t offset, bfr_buffer count_buffer, uint64_t count_offset,
+                                        uint32_t max_draw_count, uint32_t stride) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto drawn = device->device->drawMeshIndirectCount(fromC(command_list), fromC(buffer), offset,
+                                                                 fromC(count_buffer), count_offset, max_draw_count,
+                                                                 stride);
+        return drawn ? BFR_RESULT_SUCCESS : fail(drawn.error());
+    });
+}
+
 bfr_result bfr_copy_buffer(bfr_device* device, bfr_command_list command_list, bfr_buffer src, bfr_buffer dst,
                            const bfr_buffer_copy* regions, uint32_t region_count) {
     return guarded([&] {
@@ -2490,7 +2548,7 @@ bfr_result bfr_write_timestamp(bfr_device* device, bfr_command_list command_list
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
         }
         bfr::core::Message error;
-        const auto at = enumIn(stage, bfr::rhi::TimestampStage::Copy, "timestamp stage", error);
+        const auto at = enumIn(stage, bfr::rhi::TimestampStage::Mesh, "timestamp stage", error);
         if (!at) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }

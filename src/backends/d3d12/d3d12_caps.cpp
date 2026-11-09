@@ -167,22 +167,13 @@ void addBasicFeatures(ID3D12Device* device, Features& features) {
 // What the options for ray tracing, shading rate, mesh shaders and 64-bit
 // atomics answer.
 void addAdvancedFeatures(ID3D12Device* device, Features& features) {
-    D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5{};
-    if (query(device, D3D12_FEATURE_D3D12_OPTIONS5, options5)) {
-        features.rayTracingPipeline = options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0;
-        features.accelerationStructure = options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0;
-        features.rayQuery = options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1;
-    }
+    // Ray tracing (RaytracingTier in OPTIONS5) and mesh shaders
+    // (MeshShaderTier in OPTIONS7) stay false until BFR has D3D12 calls for
+    // them (owner, 2026-11-08).
     D3D12_FEATURE_DATA_D3D12_OPTIONS6 options6{};
     if (query(device, D3D12_FEATURE_D3D12_OPTIONS6, options6)) {
         features.shadingRate = options6.VariableShadingRateTier >= D3D12_VARIABLE_SHADING_RATE_TIER_1;
         features.shadingRateTexture = options6.VariableShadingRateTier >= D3D12_VARIABLE_SHADING_RATE_TIER_2;
-    }
-    D3D12_FEATURE_DATA_D3D12_OPTIONS7 options7{};
-    if (query(device, D3D12_FEATURE_D3D12_OPTIONS7, options7)) {
-        // A task shader is an amplification shader.
-        features.meshShader = options7.MeshShaderTier >= D3D12_MESH_SHADER_TIER_1;
-        features.taskShader = options7.MeshShaderTier >= D3D12_MESH_SHADER_TIER_1;
     }
     D3D12_FEATURE_DATA_D3D12_OPTIONS9 options9{};
     if (query(device, D3D12_FEATURE_D3D12_OPTIONS9, options9)) {

@@ -448,6 +448,11 @@ core::Result<PipelineHandle> MetalDevice::createGraphicsPipeline(const GraphicsP
     if (auto checked = checkMultisample(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkMeshStages(desc, features_); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    // Features::meshShader and taskShader are false until BFR has Metal
+    // mesh pipelines, so checkMeshStages refuses every mesh desc.
     if (!desc.cache.isNull()) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline cache handle is stale");
     }
