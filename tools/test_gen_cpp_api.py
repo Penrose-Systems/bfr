@@ -304,25 +304,55 @@ class PlacementTests(unittest.TestCase):
 
     def test_an_array_param_that_would_need_a_copy_is_rejected(self) -> None:
         def change(spec: dict) -> None:
+            spec["structs"]["label"] = {"doc": "A label.", "members": [{"name": "text", "type": "string"}]}
             spec["functions"]["device_send"] = {
                 "doc": "Sends.",
                 "returns": "result",
                 "params": [
                     {"name": "device", "type": "device"},
-                    {"name": "buffers", "type": "buffer", "array": "buffer_count", "pointer": "in"},
-                    {"name": "buffer_count", "type": "u32"},
+                    {"name": "labels", "type": "label", "array": "label_count", "pointer": "in"},
+                    {"name": "label_count", "type": "u32"},
                 ],
             }
 
         self.assert_rejected(change, "without a copy")
 
+    def test_an_array_of_handles_bools_and_fixed_numbers_passes_as_it_is(self) -> None:
+        spec = with_more(MINIMAL)
+        spec["structs"]["item"] = {
+            "doc": "An item.",
+            "members": [
+                {"name": "buffer", "type": "buffer"},
+                {"name": "enable", "type": "bool"},
+                {"name": "weights", "type": "u32", "fixed": 3},
+            ],
+        }
+        spec["functions"]["device_send"] = {
+            "doc": "Sends.",
+            "returns": "result",
+            "params": [
+                {"name": "device", "type": "device"},
+                {"name": "items", "type": "item", "array": "item_count", "pointer": "in"},
+                {"name": "item_count", "type": "u32"},
+                {"name": "buffers", "type": "buffer", "array": "buffer_count", "pointer": "in"},
+                {"name": "buffer_count", "type": "u32"},
+            ],
+        }
+        rendered = render(Api(spec))
+        self.assertIn("std::span<const Item> items, std::span<const BufferRef> buffers", rendered)
+        self.assertIn("reinterpret_cast<const bfr_item*>(items.data())", rendered)
+        self.assertIn("reinterpret_cast<const bfr_buffer*>(buffers.data())", rendered)
+        self.assertIn("static_assert(sizeof(Item) == sizeof(bfr_item)", rendered)
+        self.assertIn("static_assert(offsetof(Item, weights) == offsetof(bfr_item, weights));", rendered)
+
     def test_an_array_member_that_would_need_a_copy_is_rejected(self) -> None:
         def change(spec: dict) -> None:
+            spec["structs"]["label"] = {"doc": "A label.", "members": [{"name": "text", "type": "string"}]}
             spec["structs"]["batch"] = {
-                "doc": "Buffers to send.",
+                "doc": "Labels to send.",
                 "members": [
-                    {"name": "buffers", "type": "buffer", "array": "buffer_count", "pointer": "in"},
-                    {"name": "buffer_count", "type": "u32"},
+                    {"name": "labels", "type": "label", "array": "label_count", "pointer": "in"},
+                    {"name": "label_count", "type": "u32"},
                 ],
             }
             spec["functions"]["device_send"] = {
@@ -343,7 +373,7 @@ class PlacementTests(unittest.TestCase):
         self.assertIn("    void destroyBuffer(Buffer buffer) const;", rendered)
         self.assertIn("    bfr_destroy_buffer(device_, buffer.get());", rendered)
 
-    def test_a_handle_member_passed_in_is_a_borrowed_pointer(self) -> None:
+    def test_a_handle_member_passed_in_is_a_borrowed_ref(self) -> None:
         spec = with_more(MINIMAL)
         spec["structs"]["attachment"] = {
             "doc": "A target.",
@@ -359,8 +389,9 @@ class PlacementTests(unittest.TestCase):
             "params": [{"name": "device", "type": "device"}, {"name": "desc", "type": "pass_desc", "pointer": "in"}],
         }
         rendered = render(Api(spec))
-        self.assertIn("    const Buffer* buffer{};", rendered)
-        self.assertIn(".buffer = value.buffer != nullptr ? value.buffer->get() : bfr_buffer{}", rendered)
+        self.assertIn("    BufferRef buffer{};", rendered)
+        self.assertIn(".buffer = value.buffer.get()", rendered)
+        self.assertIn("inline BufferRef::BufferRef(const Buffer& buffer) : buffer_(buffer.get()) {}", rendered)
         # Converted after the handle classes, which the conversion calls.
         self.assertLess(rendered.index("class Buffer {"), rendered.index("inline bfr_attachment toC("))
         self.assertLess(rendered.index("inline bfr_attachment toC("), rendered.index("inline bfr_pass_desc toC("))

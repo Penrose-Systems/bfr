@@ -20,6 +20,9 @@ Where each function goes follows from api/bfr.yaml:
   until the list stops growing and returns a std::vector.
 - An object a method creates keeps alive what its creator keeps, such as
   the state of a callback the creator's desc named.
+- A struct names a handle by its Ref, a borrowed value laid out as the C
+  handle, so a struct of numbers, bools, enums, handles and fixed arrays of
+  numbers is laid out as its C struct, and an array of it passes to C as it is.
 - Methods on objects are const: several threads may call them at once.
   Methods on handles are not, since calls on one handle must not overlap,
   and const would say they may.
@@ -275,17 +278,21 @@ class Plan:
     def is_mirror(self, kind: str) -> bool:
         """Whether kind's C++ type is laid out exactly as its C type, so an
         array of it passes to C as it is: a number, a plain handle, or a struct
-        of only numbers. The header asserts the layout."""
+        of numbers, bools, enums, handles and fixed arrays of numbers. The header
+        asserts the layout."""
         api = self.api
         if kind in MIRRORED:
             return True
         if kind in api.handles:
-            return api.is_plain(kind)
+            return True
         struct = api.structs.get(kind)
-        # An enum is laid out as its C type: both are 32-bit.
+        # An enum is laid out as its C type: both are 32-bit. A handle is its
+        # Ref or plain class, and a fixed array of numbers a std::array, each
+        # laid out as the C member.
         return struct is not None and not struct.get("extensible") and not struct.get("extends") and all(
-            (m["type"] in MIRRORED or m["type"] in api.enums) and not m.get("fixed") and not m.get("array")
-            and not m.get("pointer") for m in struct["members"])
+            (m["type"] in MIRRORED or m["type"] in api.enums or m["type"] in api.handles)
+            and (not m.get("fixed") or m["type"] in MIRRORED) and not m.get("array") and not m.get("pointer")
+            for m in struct["members"])
 
     def counts_of(self, struct: str) -> set[str]:
         """The members that only count an array member."""
@@ -303,12 +310,18 @@ def cpp_type(api: Api, kind: str, out: bool = False) -> str:
     return pascal(kind)
 
 
+def value_type(api: Api, kind: str) -> str:
+    """The C++ type a struct member or an array element of kind is: a handle the
+    caller owns is its Ref, a borrowed value laid out as the C handle."""
+    if kind in api.handles and not api.is_plain(kind):
+        return f"{pascal(kind)}Ref"
+    return cpp_type(api, kind)
+
+
 def member_type(api: Api, member: dict[str, Any], out: bool) -> str:
-    """A struct member's C++ type: a std::array for a fixed one, and a borrowed
-    pointer, null for none, for a handle the caller owns."""
-    kind = cpp_type(api, member["type"], out)
-    if member["type"] in api.handles and not api.is_plain(member["type"]):
-        kind = f"const {kind}*"
+    """A struct member's C++ type: a std::array for a fixed one, and a Ref,
+    null for none, for a handle the caller owns."""
+    kind = value_type(api, member["type"]) if member["type"] in api.handles else cpp_type(api, member["type"], out)
     return f"std::array<{kind}, {api.fixed_text(member)}>" if member.get("fixed") else kind
 
 
@@ -334,7 +347,7 @@ def to_c(api: Api, kind: str, value: str) -> str:
     if kind in api.structs:
         return f"toC({value})"
     if kind in api.handles:
-        return f"{value}.get()" if api.is_plain(kind) else f"{value} != nullptr ? {value}->get() : {c_name(kind)}{{}}"
+        return f"{value}.get()"
     return value
 
 
@@ -462,6 +475,9 @@ class Renderer:
         for name in [*api.objects, *api.handles]:
             self.emit("")
             self.emit(f"class {pascal(name)};")
+        for name in api.handles:
+            if not api.is_plain(name):
+                self.ref_class(name)
         for name, struct in api.structs.items():
             if name in self.plan.in_structs or name in self.plan.out_structs:
                 self.struct(name, struct)
@@ -470,6 +486,10 @@ class Renderer:
             self.object_class(name)
         for name in api.handles:
             self.handle_class(name)
+        for name in api.handles:
+            if not api.is_plain(name):
+                cls, member = pascal(name), f"{camel(name)}_"
+                self.emit("", f"inline {cls}Ref::{cls}Ref(const {cls}& {camel(name)}) : {member}({camel(name)}.get()) {{}}")
         late = [name for name in sorted(self.plan.in_structs, key=list(api.structs).index)
                 if self.plan.holds_handles(name)]
         if late:
@@ -517,7 +537,7 @@ class Renderer:
             if member_doc:
                 self.emit(*doc(member_doc, "    "))
             if member.get("array"):
-                self.emit(f"    std::span<const {cpp_type(api, member['type'])}> {camel(member['name'])}{{}};")
+                self.emit(f"    std::span<const {value_type(api, member['type'])}> {camel(member['name'])}{{}};")
                 continue
             if member.get("default"):
                 self.emit(f"    {member_type(api, member, out)} {camel(member['name'])} = {macro(member['default'])};")
@@ -703,6 +723,20 @@ class Renderer:
         self.emit("", f"    {c_name(name)} {member}{{}};", "};")
         self.mirror_asserts(cls, c_name(name), [(member, "bits")])
 
+    def ref_class(self, name: str) -> None:
+        """A borrowed handle, laid out as the C handle: what a struct names a
+        handle the caller owns by, null by default."""
+        cls, member = pascal(name), f"{camel(name)}_"
+        self.emit("", f"/// A borrowed {cls}, laid out as {c_name(name)}: what a struct names one by. It owns nothing;",
+                  f"/// the {cls} outlives the call it is passed to. Null by default.",
+                  f"class {cls}Ref {{", "public:", f"    {cls}Ref() = default;",
+                  f"    {cls}Ref(const {cls}& {camel(name)}); // NOLINT(google-explicit-constructor): a {cls} is passed as one",
+                  "",
+                  f"    [[nodiscard]] {c_name(name)} get() const {{ return {member}; }}",
+                  f"    [[nodiscard]] explicit operator bool() const {{ return {member}.bits != 0; }}",
+                  "", "private:", f"    {c_name(name)} {member}{{}};", "};")
+        self.mirror_asserts(f"{cls}Ref", c_name(name), [(member, "bits")])
+
     def mirror_asserts(self, cls: str, c_type_name: str, members: list[tuple[str, str]]) -> None:
         """Asserts cls is laid out exactly as c_type_name, so an array of one
         is read as an array of the other."""
@@ -743,7 +777,7 @@ class Renderer:
         for param in method.inputs:
             kind = param["type"]
             if param.get("array"):
-                params.append(f"std::span<const {cpp_type(api, kind)}> {camel(param['name'])}")
+                params.append(f"std::span<const {value_type(api, kind)}> {camel(param['name'])}")
             elif param.get("pointer") == "in":
                 params.append(f"const {pascal(kind)}& {camel(param['name'])}")
                 if self.plan.is_extensible(kind):

@@ -1467,6 +1467,150 @@ class SparseMemory;
 
 class PipelineCache;
 
+/// A borrowed Swapchain, laid out as bfr_swapchain: what a struct names one by. It owns nothing;
+/// the Swapchain outlives the call it is passed to. Null by default.
+class SwapchainRef {
+public:
+    SwapchainRef() = default;
+    SwapchainRef(const Swapchain& swapchain); // NOLINT(google-explicit-constructor): a Swapchain is passed as one
+
+    [[nodiscard]] bfr_swapchain get() const { return swapchain_; }
+    [[nodiscard]] explicit operator bool() const { return swapchain_.bits != 0; }
+
+private:
+    bfr_swapchain swapchain_{};
+};
+static_assert(sizeof(SwapchainRef) == sizeof(bfr_swapchain) && alignof(SwapchainRef) == alignof(bfr_swapchain) &&
+              std::is_standard_layout_v<SwapchainRef> && std::is_trivially_copyable_v<SwapchainRef>);
+
+/// A borrowed CommandPool, laid out as bfr_command_pool: what a struct names one by. It owns nothing;
+/// the CommandPool outlives the call it is passed to. Null by default.
+class CommandPoolRef {
+public:
+    CommandPoolRef() = default;
+    CommandPoolRef(const CommandPool& commandPool); // NOLINT(google-explicit-constructor): a CommandPool is passed as one
+
+    [[nodiscard]] bfr_command_pool get() const { return commandPool_; }
+    [[nodiscard]] explicit operator bool() const { return commandPool_.bits != 0; }
+
+private:
+    bfr_command_pool commandPool_{};
+};
+static_assert(sizeof(CommandPoolRef) == sizeof(bfr_command_pool) && alignof(CommandPoolRef) == alignof(bfr_command_pool) &&
+              std::is_standard_layout_v<CommandPoolRef> && std::is_trivially_copyable_v<CommandPoolRef>);
+
+/// A borrowed Buffer, laid out as bfr_buffer: what a struct names one by. It owns nothing;
+/// the Buffer outlives the call it is passed to. Null by default.
+class BufferRef {
+public:
+    BufferRef() = default;
+    BufferRef(const Buffer& buffer); // NOLINT(google-explicit-constructor): a Buffer is passed as one
+
+    [[nodiscard]] bfr_buffer get() const { return buffer_; }
+    [[nodiscard]] explicit operator bool() const { return buffer_.bits != 0; }
+
+private:
+    bfr_buffer buffer_{};
+};
+static_assert(sizeof(BufferRef) == sizeof(bfr_buffer) && alignof(BufferRef) == alignof(bfr_buffer) &&
+              std::is_standard_layout_v<BufferRef> && std::is_trivially_copyable_v<BufferRef>);
+
+/// A borrowed Texture, laid out as bfr_texture: what a struct names one by. It owns nothing;
+/// the Texture outlives the call it is passed to. Null by default.
+class TextureRef {
+public:
+    TextureRef() = default;
+    TextureRef(const Texture& texture); // NOLINT(google-explicit-constructor): a Texture is passed as one
+
+    [[nodiscard]] bfr_texture get() const { return texture_; }
+    [[nodiscard]] explicit operator bool() const { return texture_.bits != 0; }
+
+private:
+    bfr_texture texture_{};
+};
+static_assert(sizeof(TextureRef) == sizeof(bfr_texture) && alignof(TextureRef) == alignof(bfr_texture) &&
+              std::is_standard_layout_v<TextureRef> && std::is_trivially_copyable_v<TextureRef>);
+
+/// A borrowed Pipeline, laid out as bfr_pipeline: what a struct names one by. It owns nothing;
+/// the Pipeline outlives the call it is passed to. Null by default.
+class PipelineRef {
+public:
+    PipelineRef() = default;
+    PipelineRef(const Pipeline& pipeline); // NOLINT(google-explicit-constructor): a Pipeline is passed as one
+
+    [[nodiscard]] bfr_pipeline get() const { return pipeline_; }
+    [[nodiscard]] explicit operator bool() const { return pipeline_.bits != 0; }
+
+private:
+    bfr_pipeline pipeline_{};
+};
+static_assert(sizeof(PipelineRef) == sizeof(bfr_pipeline) && alignof(PipelineRef) == alignof(bfr_pipeline) &&
+              std::is_standard_layout_v<PipelineRef> && std::is_trivially_copyable_v<PipelineRef>);
+
+/// A borrowed Sampler, laid out as bfr_sampler: what a struct names one by. It owns nothing;
+/// the Sampler outlives the call it is passed to. Null by default.
+class SamplerRef {
+public:
+    SamplerRef() = default;
+    SamplerRef(const Sampler& sampler); // NOLINT(google-explicit-constructor): a Sampler is passed as one
+
+    [[nodiscard]] bfr_sampler get() const { return sampler_; }
+    [[nodiscard]] explicit operator bool() const { return sampler_.bits != 0; }
+
+private:
+    bfr_sampler sampler_{};
+};
+static_assert(sizeof(SamplerRef) == sizeof(bfr_sampler) && alignof(SamplerRef) == alignof(bfr_sampler) &&
+              std::is_standard_layout_v<SamplerRef> && std::is_trivially_copyable_v<SamplerRef>);
+
+/// A borrowed TimestampPool, laid out as bfr_timestamp_pool: what a struct names one by. It owns nothing;
+/// the TimestampPool outlives the call it is passed to. Null by default.
+class TimestampPoolRef {
+public:
+    TimestampPoolRef() = default;
+    TimestampPoolRef(const TimestampPool& timestampPool); // NOLINT(google-explicit-constructor): a TimestampPool is passed as one
+
+    [[nodiscard]] bfr_timestamp_pool get() const { return timestampPool_; }
+    [[nodiscard]] explicit operator bool() const { return timestampPool_.bits != 0; }
+
+private:
+    bfr_timestamp_pool timestampPool_{};
+};
+static_assert(sizeof(TimestampPoolRef) == sizeof(bfr_timestamp_pool) && alignof(TimestampPoolRef) == alignof(bfr_timestamp_pool) &&
+              std::is_standard_layout_v<TimestampPoolRef> && std::is_trivially_copyable_v<TimestampPoolRef>);
+
+/// A borrowed SparseMemory, laid out as bfr_sparse_memory: what a struct names one by. It owns nothing;
+/// the SparseMemory outlives the call it is passed to. Null by default.
+class SparseMemoryRef {
+public:
+    SparseMemoryRef() = default;
+    SparseMemoryRef(const SparseMemory& sparseMemory); // NOLINT(google-explicit-constructor): a SparseMemory is passed as one
+
+    [[nodiscard]] bfr_sparse_memory get() const { return sparseMemory_; }
+    [[nodiscard]] explicit operator bool() const { return sparseMemory_.bits != 0; }
+
+private:
+    bfr_sparse_memory sparseMemory_{};
+};
+static_assert(sizeof(SparseMemoryRef) == sizeof(bfr_sparse_memory) && alignof(SparseMemoryRef) == alignof(bfr_sparse_memory) &&
+              std::is_standard_layout_v<SparseMemoryRef> && std::is_trivially_copyable_v<SparseMemoryRef>);
+
+/// A borrowed PipelineCache, laid out as bfr_pipeline_cache: what a struct names one by. It owns nothing;
+/// the PipelineCache outlives the call it is passed to. Null by default.
+class PipelineCacheRef {
+public:
+    PipelineCacheRef() = default;
+    PipelineCacheRef(const PipelineCache& pipelineCache); // NOLINT(google-explicit-constructor): a PipelineCache is passed as one
+
+    [[nodiscard]] bfr_pipeline_cache get() const { return pipelineCache_; }
+    [[nodiscard]] explicit operator bool() const { return pipelineCache_.bits != 0; }
+
+private:
+    bfr_pipeline_cache pipelineCache_{};
+};
+static_assert(sizeof(PipelineCacheRef) == sizeof(bfr_pipeline_cache) && alignof(PipelineCacheRef) == alignof(bfr_pipeline_cache) &&
+              std::is_standard_layout_v<PipelineCacheRef> && std::is_trivially_copyable_v<PipelineCacheRef>);
+
 /// How to create an instance.
 struct InstanceDesc {
     Backend backend{};
@@ -1637,7 +1781,7 @@ struct SwapchainImages {
 /// swapchain's format, which is then resolved into the acquired image.
 struct ColorAttachment {
     /// Null for the swapchain's image.
-    const Texture* texture{};
+    TextureRef texture{};
     /// What it holds at the start; 0 is load.
     LoadOp loadOp{};
     /// What becomes of it at the end; 0 is store.
@@ -1655,7 +1799,7 @@ struct ColorAttachment {
     /// null for the attachment the swapchain's image is resolved into. Non-integer formats average
     /// and integer ones take sample zero, as the backend resolves; bfr_format_caps.resolve says
     /// which formats resolve.
-    const Texture* resolveTexture{};
+    TextureRef resolveTexture{};
 };
 
 /// The depth-stencil target of a rendering: a texture with depth_stencil usage, in layout
@@ -1663,7 +1807,7 @@ struct ColorAttachment {
 /// store as their ops say; an op of an aspect the format lacks is ignored.
 struct DepthStencilAttachment {
     /// Null for no depth-stencil target.
-    const Texture* texture{};
+    TextureRef texture{};
     /// 0 is load.
     LoadOp depthLoadOp{};
     /// 0 is store.
@@ -1683,7 +1827,7 @@ struct DepthStencilAttachment {
     /// A single-sample texture of texture's format and size, with depth_stencil usage, in layout
     /// depth_stencil_target, that the samples are resolved into as rendering ends, by depth_resolve
     /// and stencil_resolve; null for none.
-    const Texture* resolveTexture{};
+    TextureRef resolveTexture{};
     /// 0 is none.
     ResolveMode depthResolve{};
     /// 0 is none.
@@ -2059,7 +2203,7 @@ struct ComputePipelineDesc {
     /// Threads in each workgroup, as the shader declares them; a dispatch counts workgroups.
     std::array<std::uint32_t, 3> workgroupSize{};
     /// Where the pipeline is looked for, and added on a miss; null is none.
-    const PipelineCache* cache{};
+    PipelineCacheRef cache{};
 };
 
 /// How to create a graphics pipeline. Vertices are pulled: the vertex shader reads them by index
@@ -2103,7 +2247,7 @@ struct GraphicsPipelineDesc {
     /// bfr_caps_features.sample_rate_shading.
     float minSampleShading{};
     /// Where the pipeline is looked for, and added on a miss; null is none.
-    const PipelineCache* cache{};
+    PipelineCacheRef cache{};
 };
 
 /// How to create a pipeline cache.
@@ -2143,8 +2287,8 @@ struct SparseMemoryDesc {
     std::uint64_t size{};
     /// One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty.
     std::uint32_t tileBytes{};
-    const Texture* texture{};
-    const Buffer* buffer{};
+    TextureRef texture{};
+    BufferRef buffer{};
 };
 
 /// A tile's size, in texels.
@@ -2256,12 +2400,12 @@ struct TileMappingDesc {
     /// Tokens the GPU passes before it maps.
     std::span<const Token> waits{};
     /// Null when every region unmaps.
-    const SparseMemory* memory{};
+    SparseMemoryRef memory{};
     /// Null for none.
-    const Texture* texture{};
+    TextureRef texture{};
     std::span<const TextureTileRegion> textureRegions{};
     /// Null for none.
-    const Buffer* buffer{};
+    BufferRef buffer{};
     std::span<const BufferTileRegion> bufferRegions{};
 };
 
@@ -4485,23 +4629,41 @@ private:
     detail::KeepAlive keepAlive_;
 };
 
+inline SwapchainRef::SwapchainRef(const Swapchain& swapchain) : swapchain_(swapchain.get()) {}
+
+inline CommandPoolRef::CommandPoolRef(const CommandPool& commandPool) : commandPool_(commandPool.get()) {}
+
+inline BufferRef::BufferRef(const Buffer& buffer) : buffer_(buffer.get()) {}
+
+inline TextureRef::TextureRef(const Texture& texture) : texture_(texture.get()) {}
+
+inline PipelineRef::PipelineRef(const Pipeline& pipeline) : pipeline_(pipeline.get()) {}
+
+inline SamplerRef::SamplerRef(const Sampler& sampler) : sampler_(sampler.get()) {}
+
+inline TimestampPoolRef::TimestampPoolRef(const TimestampPool& timestampPool) : timestampPool_(timestampPool.get()) {}
+
+inline SparseMemoryRef::SparseMemoryRef(const SparseMemory& sparseMemory) : sparseMemory_(sparseMemory.get()) {}
+
+inline PipelineCacheRef::PipelineCacheRef(const PipelineCache& pipelineCache) : pipelineCache_(pipelineCache.get()) {}
+
 namespace detail {
 
 inline bfr_color_attachment toC(const ColorAttachment& value) {
     return {
-        .texture = value.texture != nullptr ? value.texture->get() : bfr_texture{},
+        .texture = value.texture.get(),
         .load_op = static_cast<bfr_load_op>(value.loadOp),
         .store_op = static_cast<bfr_store_op>(value.storeOp),
         .clear_color = {value.clearColor[0], value.clearColor[1], value.clearColor[2], value.clearColor[3]},
         .clear_integer = static_cast<bfr_bool>(value.clearInteger),
         .clear_color_integer = {value.clearColorInteger[0], value.clearColorInteger[1], value.clearColorInteger[2], value.clearColorInteger[3]},
-        .resolve_texture = value.resolveTexture != nullptr ? value.resolveTexture->get() : bfr_texture{},
+        .resolve_texture = value.resolveTexture.get(),
     };
 }
 
 inline bfr_depth_stencil_attachment toC(const DepthStencilAttachment& value) {
     return {
-        .texture = value.texture != nullptr ? value.texture->get() : bfr_texture{},
+        .texture = value.texture.get(),
         .depth_load_op = static_cast<bfr_load_op>(value.depthLoadOp),
         .depth_store_op = static_cast<bfr_store_op>(value.depthStoreOp),
         .stencil_load_op = static_cast<bfr_load_op>(value.stencilLoadOp),
@@ -4509,7 +4671,7 @@ inline bfr_depth_stencil_attachment toC(const DepthStencilAttachment& value) {
         .clear_depth = value.clearDepth,
         .clear_stencil = value.clearStencil,
         .read_only = static_cast<bfr_bool>(value.readOnly),
-        .resolve_texture = value.resolveTexture != nullptr ? value.resolveTexture->get() : bfr_texture{},
+        .resolve_texture = value.resolveTexture.get(),
         .depth_resolve = static_cast<bfr_resolve_mode>(value.depthResolve),
         .stencil_resolve = static_cast<bfr_resolve_mode>(value.stencilResolve),
     };
@@ -4529,7 +4691,7 @@ inline bfr_compute_pipeline_desc toC(const ComputePipelineDesc& value, const bfr
         .next = next,
         .compute = toC(value.compute),
         .workgroup_size = {value.workgroupSize[0], value.workgroupSize[1], value.workgroupSize[2]},
-        .cache = value.cache != nullptr ? value.cache->get() : bfr_pipeline_cache{},
+        .cache = value.cache.get(),
     };
 }
 
@@ -4554,7 +4716,7 @@ inline bfr_graphics_pipeline_desc toC(const GraphicsPipelineDesc& value, const b
         .sample_mask = value.sampleMask,
         .alpha_to_one = static_cast<bfr_bool>(value.alphaToOne),
         .min_sample_shading = value.minSampleShading,
-        .cache = value.cache != nullptr ? value.cache->get() : bfr_pipeline_cache{},
+        .cache = value.cache.get(),
     };
 }
 
@@ -4573,8 +4735,8 @@ inline bfr_sparse_memory_desc toC(const SparseMemoryDesc& value) {
     return {
         .size = value.size,
         .tile_bytes = value.tileBytes,
-        .texture = value.texture != nullptr ? value.texture->get() : bfr_texture{},
-        .buffer = value.buffer != nullptr ? value.buffer->get() : bfr_buffer{},
+        .texture = value.texture.get(),
+        .buffer = value.buffer.get(),
     };
 }
 
@@ -4584,11 +4746,11 @@ inline bfr_tile_mapping_desc toC(const TileMappingDesc& value, const bfr_chain* 
         .queue = value.queue,
         .waits = reinterpret_cast<const bfr_token*>(value.waits.data()),
         .wait_count = static_cast<uint32_t>(value.waits.size()),
-        .memory = value.memory != nullptr ? value.memory->get() : bfr_sparse_memory{},
-        .texture = value.texture != nullptr ? value.texture->get() : bfr_texture{},
+        .memory = value.memory.get(),
+        .texture = value.texture.get(),
         .texture_regions = reinterpret_cast<const bfr_texture_tile_region*>(value.textureRegions.data()),
         .texture_region_count = static_cast<uint32_t>(value.textureRegions.size()),
-        .buffer = value.buffer != nullptr ? value.buffer->get() : bfr_buffer{},
+        .buffer = value.buffer.get(),
         .buffer_regions = reinterpret_cast<const bfr_buffer_tile_region*>(value.bufferRegions.data()),
         .buffer_region_count = static_cast<uint32_t>(value.bufferRegions.size()),
     };

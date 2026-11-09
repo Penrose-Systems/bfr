@@ -513,7 +513,7 @@ TEST_CASE("C++ API creates and destroys pipelines", "[cpp_api][gpu]") {
         auto cache = device.createPipelineCache({});
         INFO(failureOf(cache));
         REQUIRE(cache.has_value());
-        desc.cache = &*cache;
+        desc.cache = *cache;
         auto cached = device.createGraphicsPipeline(desc);
         INFO(failureOf(cached));
         REQUIRE(cached.has_value());
@@ -628,7 +628,7 @@ TEST_CASE("C++ API renders to a texture it names by a borrowed pointer", "[cpp_a
             device.textureBarrier(*commands, *target, bfr::TextureLayout::Undefined, bfr::TextureLayout::ColorTarget)
                 .has_value());
         bfr::RenderingDesc rendering{.colorAttachmentCount = 1};
-        rendering.colorAttachments[0] = {.texture = &*target, .loadOp = bfr::LoadOp::Clear, .clearColor = {0, 0, 0, 1}};
+        rendering.colorAttachments[0] = {.texture = *target, .loadOp = bfr::LoadOp::Clear, .clearColor = {0, 0, 0, 1}};
         const auto begun = device.beginRendering(*commands, bfr::Swapchain{}, rendering);
         INFO(failureOf(begun));
         REQUIRE(begun.has_value());

@@ -416,7 +416,9 @@ hand-written wrappers would each drift from the header.
   throws, so it works with exceptions off. Windows and other extension
   structs go after the desc as extra arguments; one the desc doesn't take
   won't compile. A handle borrows its device, so the device must outlive
-  it. Object methods are `const` because many threads can call them;
+  it. A struct names a handle by its `Ref` (`BufferRef`), a borrowed value
+  laid out as the C handle, so structs and arrays pass to C without a copy.
+  Object methods are `const` because many threads can call them;
   handle methods aren't, because calls on one handle can't overlap.
   Reason: lots of engines turn exceptions off, the C API already returns
   results, and the library needs C++23 anyway.
