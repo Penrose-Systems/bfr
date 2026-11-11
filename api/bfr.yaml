@@ -40,6 +40,7 @@ constants:
   box_floats: {value: 6, doc: "The floats of a box: min xyz, then max xyz."}
   cluster_geometry_flags_shift: {value: 29, doc: "The bit a cluster geometry word's bfr_cluster_geometry_flag bits start at; the geometry index is its low 24 bits."}
   cluster_vertex_count_shift: {value: 9, doc: "The bit a cluster record's counts word's vertices (9 bits) start at; its triangles are the low 9 bits."}
+  acceleration_structure_capture_words: {value: 3, doc: The words of a bfr_acceleration_structure_capture.}
   cluster_truncate_shift: {value: 18, doc: "The bit a cluster record's counts word's truncated position bits (6 bits) start at."}
   cluster_index_format_shift: {value: 24, doc: "The bit a cluster record's counts word's index bfr_cluster_index_format (4 bits) starts at."}
   cluster_micromap_index_format_shift: {value: 28, doc: "The bit a cluster record's counts word's micromap index bfr_cluster_index_format (4 bits) starts at."}
@@ -433,6 +434,7 @@ enums:
       write_motion_instances: {value: 104}
       cluster_sizes: {value: 105}
       build_clusters: {value: 106}
+      capture_acceleration_structure: {value: 107}
 
   timestamp_stage:
     doc: >-
@@ -2335,6 +2337,14 @@ structs:
       - {name: update_scratch, type: u64}
       - {name: discardable, type: bool}
 
+  acceleration_structure_capture:
+    doc: >-
+      What a backend needs to make an acceleration structure again at the
+      reference it had, as bfr_capture_acceleration_structure gives it:
+      opaque, the same on every backend. All zero is none.
+    members:
+      - {name: words, type: u64, fixed: acceleration_structure_capture_words}
+
   acceleration_structure_desc:
     doc: >-
       How to create an acceleration structure of size bytes, in memory the
@@ -2343,13 +2353,22 @@ structs:
       bfr_caps_features.ray_tracing_motion, its builds have motion: a bottom
       one's triangles move between keyframes, a top one holds motion
       instances, at most motion_instances of them, passed to backends that
-      take it. 0 is none.
+      take it. 0 is none. With capture_replay, where
+      bfr_caps_features.acceleration_structure_capture_replay, its reference
+      may be captured, by bfr_capture_acceleration_structure, and replayed:
+      with replay, what that gave for a structure made with this desc but
+      replay, on a device of the same adapter opened with the same queues, it
+      is made at the reference that one had, or fails where the backend
+      cannot give it. An opacity micromap has none where the backend gives it
+      no reference (Vulkan).
     extensible: true
     members:
       - {name: type, type: acceleration_structure_type, doc: 0 is bottom.}
       - {name: size, type: u64, doc: "Bytes, as bfr_get_acceleration_structure_sizes gives them."}
       - {name: motion_keyframes, type: u32}
       - {name: motion_instances, type: u32}
+      - {name: capture_replay, type: bool}
+      - {name: replay, type: acceleration_structure_capture, doc: All zero is none.}
 
   acceleration_structure_build_range:
     doc: >-
@@ -2636,6 +2655,7 @@ structs:
       - {name: ray_tracing_motion_indirect, type: bool, doc: bfr_trace_rays_indirect with a pipeline made with allow_motion.}
       - {name: partitioned_top, type: bool, doc: "Partitioned top structures, and their table (bfr_device_desc.max_bindless_partitioned_tops)."}
       - {name: cluster_acceleration_structure, type: bool, doc: "bfr_build_clusters, and traces of the cluster bottom structures it builds by pipelines made with allow_clusters."}
+      - {name: acceleration_structure_capture_replay, type: bool, doc: bfr_acceleration_structure_desc.capture_replay.}
       - {name: mesh_shader, type: bool}
       - {name: task_shader, type: bool}
       - {name: shading_rate, type: bool, doc: A shading rate per draw.}
@@ -3992,11 +4012,20 @@ functions:
       partitioned top structure where bfr_caps_features.partitioned_top is,
       error_invalid_argument for motion_keyframes other than the backend
       takes (Vulkan, two) or on an opacity micromap or partitioned top
-      structure where the backend's has none (Vulkan), error_limit_reached at
+      structure where the backend's has none (Vulkan), error_unsupported for
+      capture_replay where
+      bfr_caps_features.acceleration_structure_capture_replay is false,
+      error_invalid_argument for a replay without capture_replay or
+      capture_replay on an opacity micromap where the backend gives it no
+      reference (Vulkan), error_limit_reached at
       the device's maximum or, for a top or partitioned top structure on a
       device with slots in its table, when they are all held,
       error_out_of_memory when the backend
-      says memory ran out, and error_device_failed when it refuses.
+      says memory ran out, and error_device_failed when it refuses or, with
+      capture_replay, places a partitioned top structure at an address its
+      builds cannot take (Vulkan, a multiple of 256); a replay at a reference
+      the backend cannot give fails with error_out_of_memory or
+      error_device_failed, as its API says.
     returns: result
     params:
       - {name: device, type: device}
@@ -4050,6 +4079,20 @@ functions:
       - {name: device, type: device}
       - {name: structure, type: acceleration_structure}
       - {name: reference, type: u64, pointer: out}
+
+  capture_acceleration_structure:
+    doc: >-
+      Writes what bfr_acceleration_structure_desc.replay takes to make a
+      structure again at this one's reference, of one made with
+      capture_replay. Fails with error_unsupported where
+      bfr_caps_features.acceleration_structure_capture_replay is false,
+      error_invalid_argument for one made without capture_replay, and
+      error_invalid_handle when it is destroyed.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: structure, type: acceleration_structure}
+      - {name: capture, type: acceleration_structure_capture, pointer: out}
 
   destroy_acceleration_structure:
     doc: >-

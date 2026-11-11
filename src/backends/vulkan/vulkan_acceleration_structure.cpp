@@ -31,7 +31,8 @@ namespace bfr::rhi::vulkan {
 VulkanAccelerationStructure::VulkanAccelerationStructure(const VolkDeviceTable& table, VkDevice device,
                                                          VulkanBuffer storage, VkAccelerationStructureKHR structure,
                                                          VkMicromapEXT micromap, const AccelerationStructureDesc& desc,
-                                                         std::uint32_t slot, VkDeviceAddress reference)
+                                                         std::uint32_t slot, VkDeviceAddress reference,
+                                                         const AccelerationStructureCapture& captured)
     : table_(&table),
       device_(device),
       storage_(std::move(storage)),
@@ -41,7 +42,8 @@ VulkanAccelerationStructure::VulkanAccelerationStructure(const VolkDeviceTable& 
       motion_(desc.motionKeyframes != 0),
       size_(desc.size),
       slot_(slot),
-      reference_(reference) {}
+      reference_(reference),
+      captured_(captured) {}
 
 VulkanAccelerationStructure::VulkanAccelerationStructure(VulkanAccelerationStructure&& other) noexcept
     : table_(other.table_),
@@ -53,7 +55,8 @@ VulkanAccelerationStructure::VulkanAccelerationStructure(VulkanAccelerationStruc
       motion_(other.motion_),
       size_(other.size_),
       slot_(other.slot_),
-      reference_(other.reference_) {}
+      reference_(other.reference_),
+      captured_(other.captured_) {}
 
 VulkanAccelerationStructure::~VulkanAccelerationStructure() {
     if (structure_ != VK_NULL_HANDLE) {
@@ -65,6 +68,19 @@ VulkanAccelerationStructure::~VulkanAccelerationStructure() {
 }
 
 namespace {
+
+// A capture's words: the structure's reference, then the opaque addresses
+// its buffer (VUID-VkAccelerationStructureCreateInfoKHR-deviceAddress-09490)
+// and that buffer's memory were made at, which a replay makes both at again.
+constexpr std::size_t kReferenceWord = 0;
+constexpr std::size_t kBufferWord = 1;
+constexpr std::size_t kMemoryWord = 2;
+static_assert(kMemoryWord + 1 == kAccelerationStructureCaptureWords);
+
+// Vulkan gives a micromap no reference (VK_EXT_opacity_micromap).
+std::unexpected<core::Error> micromapHasNoReference() {
+    return core::failure(core::ErrorCode::RhiInvalidCall, "an opacity micromap has no reference");
+}
 
 // What the size query is given for a buffer that is named: it reads only
 // whether a transform is null (resources.adoc:8821-8826), and no address.
@@ -718,6 +734,12 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     if (auto checked = checkVulkanMotion(features_.rayTracingMotion, desc.type, desc.motionKeyframes); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkStructureCaptureReplay(features_.accelerationStructureCaptureReplay, desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (desc.captureReplay && desc.type == AccelerationStructureType::OpacityMicromap) {
+        return micromapHasNoReference();
+    }
     if (desc.size == 0) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "the acceleration structure has no bytes");
     }
@@ -730,23 +752,43 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     const auto giveBack = [this, &slot, &desc] {
         bindless_.giveAccelerationStructure(desc.type, *slot);
     };
+    // One that may be captured is in memory of its own, made at the opaque
+    // addresses replay names, or anywhere when it names none.
+    AccelerationStructureCapture captured{};
+    const auto place = [&](VkBufferUsageFlags usage, VkDeviceSize alignment) -> core::Result<VulkanBuffer> {
+        if (!desc.captureReplay) {
+            return placeVulkanBuffer(table_, device_, allocator_, desc.size, usage, BufferMemory::Device, families_,
+                                     alignment, core::SlotChains::kEnd);
+        }
+        auto replayable = placeReplayableVulkanBuffer(table_, device_, replayAllocator_, desc.size, usage, families_,
+                                                      alignment,
+                                                      {.buffer = desc.replay.words[kBufferWord],
+                                                       .memory = desc.replay.words[kMemoryWord]});
+        if (!replayable) {
+            return std::unexpected(std::move(replayable.error()));
+        }
+        captured.words[kBufferWord] = replayable->made.buffer;
+        captured.words[kMemoryWord] = replayable->made.memory;
+        return std::move(replayable->buffer);
+    };
     if (desc.type == AccelerationStructureType::PartitionedTop) {
         // A partitioned top structure is the memory at an address, a multiple
         // of 256 (VUID-vkCmdBuildPartitionedAccelerationStructuresNV-pBuildInfo-10544, -10545,
         // -10552), with no object of its own.
-        auto storage = placeVulkanBuffer(table_, device_, allocator_, desc.size,
-                                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                         BufferMemory::Device, families_, kPartitionedAlignment,
-                                         core::SlotChains::kEnd);
+        auto storage = place(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                             kPartitionedAlignment);
         if (!storage) {
             giveBack();
             return std::unexpected(std::move(storage.error()));
         }
         const VkDeviceAddress address = storage->address();
+        if (desc.captureReplay) {
+            captured.words[kReferenceWord] = address;
+        }
         const AccelerationStructureHandle made = accelerationStructures_.emplace(
             VulkanAccelerationStructure{table_, device_, std::move(*storage), VK_NULL_HANDLE, VK_NULL_HANDLE, desc,
-                                        *slot, address});
+                                        *slot, address, captured});
         if (made.isNull()) {
             giveBack();
             return core::failure(core::ErrorCode::RhiLimitReached,
@@ -760,12 +802,10 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     // The structure is at offset 0 of a buffer of its own, which a multiple
     // of 256 is (resources.adoc:8756), as a micromap's must be too.
     const bool micromap = desc.type == AccelerationStructureType::OpacityMicromap;
-    auto storage = placeVulkanBuffer(table_, device_, allocator_, desc.size,
-                                     micromap
-                                         ? VkBufferUsageFlags{VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT}
-                                         : VkBufferUsageFlags{VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                                                              VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT},
-                                     BufferMemory::Device, families_, 0, core::SlotChains::kEnd);
+    auto storage = place(micromap ? VkBufferUsageFlags{VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT}
+                                  : VkBufferUsageFlags{VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                                       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT},
+                         0);
     if (!storage) {
         giveBack();
         return std::unexpected(std::move(storage.error()));
@@ -781,8 +821,8 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
             giveBack();
             return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateMicromapEXT", .result = result});
         }
-        const AccelerationStructureHandle named = accelerationStructures_.emplace(
-            VulkanAccelerationStructure{table_, device_, std::move(*storage), VK_NULL_HANDLE, made, desc, *slot, 0});
+        const AccelerationStructureHandle named = accelerationStructures_.emplace(VulkanAccelerationStructure{
+            table_, device_, std::move(*storage), VK_NULL_HANDLE, made, desc, *slot, 0, {}});
         if (named.isNull()) {
             giveBack();
             return core::failure(core::ErrorCode::RhiLimitReached,
@@ -803,6 +843,10 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
         info.createFlags |= VK_ACCELERATION_STRUCTURE_CREATE_MOTION_BIT_NV;
         info.pNext = &motion;
     }
+    if (desc.captureReplay) {
+        info.createFlags |= VK_ACCELERATION_STRUCTURE_CREATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT_KHR;
+        info.deviceAddress = desc.replay.words[kReferenceWord];
+    }
     VkAccelerationStructureKHR structure = VK_NULL_HANDLE;
     if (const VkResult result = table_.vkCreateAccelerationStructureKHR(device_, &info, nullptr, &structure);
         result != VK_SUCCESS) {
@@ -814,9 +858,12 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     named.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
     named.accelerationStructure = structure;
     const VkDeviceAddress reference = table_.vkGetAccelerationStructureDeviceAddressKHR(device_, &named);
+    if (desc.captureReplay) {
+        captured.words[kReferenceWord] = reference;
+    }
     const AccelerationStructureHandle made = accelerationStructures_.emplace(
         VulkanAccelerationStructure{table_, device_, std::move(*storage), structure, VK_NULL_HANDLE, desc, *slot,
-                                    reference});
+                                    reference, captured});
     if (made.isNull()) {
         giveBack();
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} acceleration structures",
@@ -841,11 +888,26 @@ core::Result<std::uint64_t> VulkanDevice::accelerationStructureReference(Acceler
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    // Vulkan gives a micromap no address (VK_EXT_opacity_micromap).
     if ((*found)->isMicromap()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "an opacity micromap has no reference");
+        return micromapHasNoReference();
     }
     return (*found)->reference();
+}
+
+core::Result<AccelerationStructureCapture> VulkanDevice::captureAccelerationStructure(
+    AccelerationStructureHandle structure) {
+    if (auto checked = checkStructureCaptureReplay(features_.accelerationStructureCaptureReplay); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    auto found = accelerationStructureFor(structure);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    if ((*found)->captured().words == AccelerationStructureCapture{}.words) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "the acceleration structure was made without captureReplay");
+    }
+    return (*found)->captured();
 }
 
 core::Result<void> VulkanDevice::destroyAccelerationStructure(AccelerationStructureHandle structure) {

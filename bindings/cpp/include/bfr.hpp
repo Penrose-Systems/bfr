@@ -762,6 +762,7 @@ enum class Call : std::int32_t {
     WriteMotionInstances = BFR_CALL_WRITE_MOTION_INSTANCES,
     ClusterSizes = BFR_CALL_CLUSTER_SIZES,
     BuildClusters = BFR_CALL_BUILD_CLUSTERS,
+    CaptureAccelerationStructure = BFR_CALL_CAPTURE_ACCELERATION_STRUCTURE,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -874,6 +875,7 @@ enum class Call : std::int32_t {
     case Call::WriteMotionInstances: return "write_motion_instances";
     case Call::ClusterSizes: return "cluster_sizes";
     case Call::BuildClusters: return "build_clusters";
+    case Call::CaptureAccelerationStructure: return "capture_acceleration_structure";
     }
     return {};
 }
@@ -3318,11 +3320,23 @@ struct AccelerationStructureSizes {
     bool discardable{};
 };
 
+/// What a backend needs to make an acceleration structure again at the reference it had, as
+/// bfr_capture_acceleration_structure gives it: opaque, the same on every backend. All zero is
+/// none.
+struct AccelerationStructureCapture {
+    std::array<std::uint64_t, BFR_ACCELERATION_STRUCTURE_CAPTURE_WORDS> words{};
+};
+
 /// How to create an acceleration structure of size bytes, in memory the device allocates. With
 /// motion_keyframes, at most bfr_caps_ray_tracing.max_motion_keyframes, where
 /// bfr_caps_features.ray_tracing_motion, its builds have motion: a bottom one's triangles move
 /// between keyframes, a top one holds motion instances, at most motion_instances of them, passed to
-/// backends that take it. 0 is none.
+/// backends that take it. 0 is none. With capture_replay, where
+/// bfr_caps_features.acceleration_structure_capture_replay, its reference may be captured, by
+/// bfr_capture_acceleration_structure, and replayed: with replay, what that gave for a structure
+/// made with this desc but replay, on a device of the same adapter opened with the same queues, it
+/// is made at the reference that one had, or fails where the backend cannot give it. An opacity
+/// micromap has none where the backend gives it no reference (Vulkan).
 struct AccelerationStructureDesc {
     /// 0 is bottom.
     AccelerationStructureType type{};
@@ -3330,6 +3344,9 @@ struct AccelerationStructureDesc {
     std::uint64_t size{};
     std::uint32_t motionKeyframes{};
     std::uint32_t motionInstances{};
+    bool captureReplay{};
+    /// All zero is none.
+    AccelerationStructureCapture replay{};
 };
 
 /// A build of dst, of inputs' type, from inputs; or, with update, an update of src into dst (they
@@ -3728,6 +3745,8 @@ struct CapsFeatures {
     /// bfr_build_clusters, and traces of the cluster bottom structures it builds by pipelines made
     /// with allow_clusters.
     bool clusterAccelerationStructure{};
+    /// bfr_acceleration_structure_desc.capture_replay.
+    bool accelerationStructureCaptureReplay{};
     bool meshShader{};
     bool taskShader{};
     /// A shading rate per draw.
@@ -4534,6 +4553,10 @@ inline bfr_cluster_indirection toC(const ClusterIndirection& value) {
     };
 }
 
+inline bfr_acceleration_structure_capture toC(const AccelerationStructureCapture& value) {
+    return {.words = {value.words[0], value.words[1], value.words[2]}};
+}
+
 inline bfr_acceleration_structure_desc toC(const AccelerationStructureDesc& value, const bfr_chain* next) {
     return {
         .next = next,
@@ -4541,6 +4564,8 @@ inline bfr_acceleration_structure_desc toC(const AccelerationStructureDesc& valu
         .size = value.size,
         .motion_keyframes = value.motionKeyframes,
         .motion_instances = value.motionInstances,
+        .capture_replay = static_cast<bfr_bool>(value.captureReplay),
+        .replay = toC(value.replay),
     };
 }
 
@@ -4653,6 +4678,10 @@ inline AccelerationStructureSizes fromC(const bfr_acceleration_structure_sizes& 
         .updateScratch = value.update_scratch,
         .discardable = value.discardable != BFR_FALSE,
     };
+}
+
+inline AccelerationStructureCapture fromC(const bfr_acceleration_structure_capture& value) {
+    return {.words = std::to_array(value.words)};
 }
 
 inline CapsInfo fromC(const bfr_caps_info& value) {
@@ -4831,6 +4860,7 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .rayTracingMotionIndirect = value.ray_tracing_motion_indirect != BFR_FALSE,
         .partitionedTop = value.partitioned_top != BFR_FALSE,
         .clusterAccelerationStructure = value.cluster_acceleration_structure != BFR_FALSE,
+        .accelerationStructureCaptureReplay = value.acceleration_structure_capture_replay != BFR_FALSE,
         .meshShader = value.mesh_shader != BFR_FALSE,
         .taskShader = value.task_shader != BFR_FALSE,
         .shadingRate = value.shading_rate != BFR_FALSE,
@@ -5512,10 +5542,15 @@ public:
     /// bfr_caps_features.opacity_micromap is, or for a partitioned top structure where
     /// bfr_caps_features.partitioned_top is, error_invalid_argument for motion_keyframes other than
     /// the backend takes (Vulkan, two) or on an opacity micromap or partitioned top structure where
-    /// the backend's has none (Vulkan), error_limit_reached at the device's maximum or, for a top
-    /// or partitioned top structure on a device with slots in its table, when they are all held,
+    /// the backend's has none (Vulkan), error_unsupported for capture_replay where
+    /// bfr_caps_features.acceleration_structure_capture_replay is false, error_invalid_argument for
+    /// a replay without capture_replay or capture_replay on an opacity micromap where the backend
+    /// gives it no reference (Vulkan), error_limit_reached at the device's maximum or, for a top or
+    /// partitioned top structure on a device with slots in its table, when they are all held,
     /// error_out_of_memory when the backend says memory ran out, and error_device_failed when it
-    /// refuses.
+    /// refuses or, with capture_replay, places a partitioned top structure at an address its builds
+    /// cannot take (Vulkan, a multiple of 256); a replay at a reference the backend cannot give
+    /// fails with error_out_of_memory or error_device_failed, as its API says.
     [[nodiscard]] Expected<AccelerationStructure> createAccelerationStructure(const AccelerationStructureDesc& desc) const;
 
     /// Writes instances to data as the records a top acceleration structure with motion is built
@@ -6150,6 +6185,12 @@ public:
     /// backend names it by (Vulkan, its address). Fails with error_invalid_argument for an opacity
     /// micromap where the backend gives it none (Vulkan).
     [[nodiscard]] Expected<std::uint64_t> accelerationStructureReference();
+
+    /// Writes what bfr_acceleration_structure_desc.replay takes to make a structure again at this
+    /// one's reference, of one made with capture_replay. Fails with error_unsupported where
+    /// bfr_caps_features.acceleration_structure_capture_replay is false, error_invalid_argument for
+    /// one made without capture_replay, and error_invalid_handle when it is destroyed.
+    [[nodiscard]] Expected<AccelerationStructureCapture> capture();
 
 private:
     AccelerationStructure(bfr_device* device, bfr_acceleration_structure accelerationStructure, detail::KeepAlive keepAlive) : device_(device), accelerationStructure_(accelerationStructure), keepAlive_(std::move(keepAlive)) {}
@@ -7536,6 +7577,14 @@ inline Expected<std::uint64_t> AccelerationStructure::accelerationStructureRefer
         return std::unexpected(detail::failure(result));
     }
     return reference;
+}
+
+inline Expected<AccelerationStructureCapture> AccelerationStructure::capture() {
+    bfr_acceleration_structure_capture capture{};
+    if (const bfr_result result = bfr_capture_acceleration_structure(device_, accelerationStructure_, &capture); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(capture);
 }
 
 inline Expected<std::vector<std::uint8_t>> PipelineCache::pipelineCacheData() {

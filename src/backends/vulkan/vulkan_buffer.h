@@ -96,6 +96,32 @@ private:
                                                            std::span<const std::uint32_t> families,
                                                            VkDeviceSize alignment, std::uint32_t slot);
 
+/// The opaque addresses a replayable buffer and its memory are made at
+/// (Vulkan's buffer device address capture and replay); 0 is anywhere.
+struct VulkanBufferReplay {
+    std::uint64_t buffer = 0;
+    std::uint64_t memory = 0;
+};
+
+/// A replayable buffer, and the opaque addresses it and its memory were
+/// made at, which make it again at the same device address.
+struct VulkanReplayableBuffer {
+    VulkanBuffer buffer;
+    VulkanBufferReplay made;
+};
+
+/// A buffer of size bytes, of usage, which has an address, in device memory
+/// of its own, shared by families as createVulkanBuffer's are, made at
+/// replay's opaque addresses, and so at the device address the buffer they
+/// were read from had. allocator adds no VkMemoryAllocateFlagsInfo of its
+/// own, so the memory takes the capture-replay flag. Fails with
+/// RhiDeviceFailed when VMA or the API refuses, as for addresses it cannot
+/// give or an address that is not a multiple of alignment, and
+/// RhiOutOfMemory, as codeFor says, when memory runs out.
+[[nodiscard]] core::Result<VulkanReplayableBuffer> placeReplayableVulkanBuffer(
+    const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator, VkDeviceSize size, VkBufferUsageFlags usage,
+    std::span<const std::uint32_t> families, VkDeviceSize alignment, const VulkanBufferReplay& replay);
+
 /// A buffer as desc says, addressed and aligned as its usage takes, with
 /// no memory when it is sparse, shared by the
 /// queue families in families when there is more than one, so any of the

@@ -583,11 +583,18 @@ public:
     /// partitioned top structure where Features::partitionedTop is,
     /// RhiInvalidCall for motionKeyframes other than the backend takes
     /// (Vulkan, two) or on an opacity micromap or partitioned top structure
-    /// where the backend's has none (Vulkan), RhiLimitReached at the device's
+    /// where the backend's has none (Vulkan), RhiUnsupported for
+    /// captureReplay where Features::accelerationStructureCaptureReplay is
+    /// false, RhiInvalidCall for a replay without captureReplay or
+    /// captureReplay on an opacity micromap where the backend gives it no
+    /// reference (Vulkan), RhiLimitReached at the device's
     /// maximum or, for a top or partitioned top structure on a device with
     /// slots in its table, when they are all held,
     /// RhiOutOfMemory when the API says memory ran out, and RhiDeviceFailed
-    /// when it refuses.
+    /// when it refuses or, with captureReplay, places a partitioned top
+    /// structure at an address its builds cannot take (Vulkan, a multiple of
+    /// 256); a replay at a reference the backend cannot give fails with
+    /// RhiOutOfMemory or RhiDeviceFailed, as its API says.
     [[nodiscard]] virtual core::Result<AccelerationStructureHandle> createAccelerationStructure(
         const AccelerationStructureDesc& desc) = 0;
 
@@ -605,6 +612,14 @@ public:
     /// RhiInvalidHandle when it is destroyed, and RhiInvalidCall for an
     /// opacity micromap where the backend gives it none (Vulkan).
     [[nodiscard]] virtual core::Result<std::uint64_t> accelerationStructureReference(
+        AccelerationStructureHandle structure) = 0;
+
+    /// What AccelerationStructureDesc::replay takes to make a structure again
+    /// at this one's reference, of one made with captureReplay. Fails with
+    /// RhiUnsupported where Features::accelerationStructureCaptureReplay is
+    /// false, RhiInvalidCall for one made without captureReplay, and
+    /// RhiInvalidHandle when it is destroyed.
+    [[nodiscard]] virtual core::Result<AccelerationStructureCapture> captureAccelerationStructure(
         AccelerationStructureHandle structure) = 0;
 
     /// Destroys the structure once the GPU has passed every submit made

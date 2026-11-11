@@ -36,7 +36,8 @@ partitioned top structures (instances written, updated and moved by partition
 from records the GPU reads, their own table); cluster acceleration structures
 (clusters, templates and cluster bottom structures built, instantiated and
 moved from records the GPU reads, instances naming bottom structures by
-reference).
+reference); acceleration structure capture and replay (structures made again
+at the references another device gave them).
 
 D3D12 and Metal are paused while Vulkan takes shape (owner, 2026-11-08); they
 still type-check.

@@ -297,6 +297,8 @@ public:
     [[nodiscard]] core::Result<std::uint32_t> accelerationStructureSlot(AccelerationStructureHandle structure) override;
     [[nodiscard]] core::Result<std::uint64_t> accelerationStructureReference(
         AccelerationStructureHandle structure) override;
+    [[nodiscard]] core::Result<AccelerationStructureCapture> captureAccelerationStructure(
+        AccelerationStructureHandle structure) override;
     [[nodiscard]] core::Result<void> destroyAccelerationStructure(AccelerationStructureHandle structure) override;
     [[nodiscard]] core::Result<void> writeInstances(std::span<const AccelerationStructureInstance> instances,
                                                     std::span<std::byte> out) override;

@@ -466,6 +466,11 @@ core::Result<std::uint64_t> MetalDevice::accelerationStructureReference(Accelera
     return std::unexpected(checkAccelerationStructures(features_.accelerationStructure).error());
 }
 
+core::Result<AccelerationStructureCapture> MetalDevice::captureAccelerationStructure(
+    AccelerationStructureHandle /*structure*/) {
+    return std::unexpected(checkAccelerationStructures(features_.accelerationStructure).error());
+}
+
 core::Result<void> MetalDevice::destroyAccelerationStructure(AccelerationStructureHandle structure) {
     if (structure.isNull()) {
         return {};

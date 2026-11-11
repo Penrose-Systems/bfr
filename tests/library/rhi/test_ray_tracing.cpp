@@ -37,6 +37,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -832,6 +833,96 @@ TEST_CASE("Device traces rays through a pipeline replaying identifiers another d
             CHECK(device.traceRays(list, replayed.desc()).has_value());
         };
         CHECK(traced(device, scene.top.structure, built, trace) == kPlaced);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device makes structures again at the references another device captured, and rays traced inline hit "
+          "them, where it has them",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        // A bottom and a top structure of a scene, and a partitioned top one
+        // where the device has them, made where they may be captured, and
+        // what replays them, as a capture tool keeps them.
+        struct Captured {
+            AccelerationStructureDesc desc;
+            AccelerationStructureCapture capture;
+            std::uint64_t reference = 0;
+        };
+        std::vector<Captured> captured;
+        {
+            const RayDevice capturing{recordingInto(backend, messages)};
+            Device& device = *capturing.device;
+            if (!capturing.caps.features.accelerationStructureCaptureReplay || !capturing.caps.features.rayQuery) {
+                SKIP("the adapter captures no acceleration structure references, or has no ray queries");
+            }
+            if (!takesSpirv(backend)) {
+                SKIP("no " << backend.name << " bytecode is checked in");
+            }
+            Scene scene{device};
+            scene.place(capturing.caps, 2 * kSpacing);
+            std::vector<AccelerationStructureDesc> descs;
+            for (const AccelerationStructureInputs& inputs : {scene.triangleInputs(), scene.topInputs()}) {
+                const auto sizes = device.accelerationStructureSizes(inputs);
+                REQUIRE(sizes.has_value());
+                descs.push_back({.type = inputs.type, .size = sizes->size, .captureReplay = true});
+            }
+            if (capturing.caps.features.partitionedTop) {
+                descs.push_back(
+                    {.type = AccelerationStructureType::PartitionedTop, .size = kSmall, .captureReplay = true});
+            }
+            // All held at once, as a captured run holds them.
+            std::vector<AccelerationStructureHandle> held;
+            for (const AccelerationStructureDesc& desc : descs) {
+                held.push_back(created(device, desc));
+                const auto capture = device.captureAccelerationStructure(held.back());
+                INFO(failureOf(capture));
+                REQUIRE(capture.has_value());
+                const auto reference = device.accelerationStructureReference(held.back());
+                REQUIRE(reference.has_value());
+                captured.push_back({.desc = desc, .capture = *capture, .reference = *reference});
+            }
+            for (const AccelerationStructureHandle structure : held) {
+                CHECK(device.destroyAccelerationStructure(structure).has_value());
+            }
+        }
+        // A new device, which makes the structures again before any other,
+        // as a replay would, last first, so none is where it was only by
+        // being made in the same order.
+        const RayDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        std::vector<AccelerationStructureHandle> replayed(captured.size());
+        for (std::size_t i = captured.size(); i-- > 0;) {
+            AccelerationStructureDesc desc = captured.at(i).desc;
+            desc.replay = captured.at(i).capture;
+            replayed.at(i) = created(device, desc);
+            const auto reference = device.accelerationStructureReference(replayed.at(i));
+            REQUIRE(reference.has_value());
+            CHECK(*reference == captured.at(i).reference);
+        }
+        const RayQuery query{device};
+        Scene scene{device};
+        scene.place(made.caps, 2 * kSpacing, replayed[0]);
+        const auto built = [&](CommandListHandle list) {
+            for (const auto& [structure, inputs, scratch] :
+                 {std::tuple{replayed[0], scene.triangleInputs(), scene.triangles.scratch},
+                  std::tuple{scene.box.structure, scene.boxInputs(), scene.box.scratch}}) {
+                CHECK(device.buildAccelerationStructure(list, {.dst = structure, .inputs = inputs, .scratch = scratch})
+                          .has_value());
+            }
+            CHECK(device.barrier(list).has_value());
+            CHECK(device
+                      .buildAccelerationStructure(
+                          list, {.dst = replayed[1], .inputs = scene.topInputs(), .scratch = scene.top.scratch})
+                      .has_value());
+            CHECK(device.barrier(list).has_value());
+        };
+        CHECK(traced(device, replayed[1], built, query) == kPlaced);
+        for (const AccelerationStructureHandle structure : replayed) {
+            CHECK(device.destroyAccelerationStructure(structure).has_value());
+        }
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -1885,7 +1976,15 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
             CHECK(code(device.buildClusters(*list, {.inputs = {.mode = static_cast<ClusterMode>(kNoSuchValue)}})) ==
                   ErrorCode::RhiInvalidCall);
         }
+        if (made.caps.features.accelerationStructure && !made.caps.features.accelerationStructureCaptureReplay) {
+            CHECK(code(device.createAccelerationStructure({.size = kSmall, .captureReplay = true})) ==
+                  ErrorCode::RhiUnsupported);
+            CHECK(code(device.captureAccelerationStructure({})) == ErrorCode::RhiUnsupported);
+        }
         if (made.caps.features.accelerationStructure) {
+            // A replay is of a structure that may be captured.
+            CHECK(code(device.createAccelerationStructure({.size = kSmall, .replay = {.words = {1, 0, 0}}})) ==
+                  ErrorCode::RhiInvalidCall);
             // An instance names its bottom structure one way.
             const AccelerationStructureHandle bottom = created(device, {.type = AccelerationStructureType::Bottom,
                                                                         .size = kSmall});
@@ -1958,10 +2057,17 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
             ofTop.bottomStructure = top;
             CHECK(code(device.writeInstances(std::span{&ofTop, 1}, out)) == ErrorCode::RhiInvalidCall);
 
+            if (made.caps.features.accelerationStructureCaptureReplay) {
+                // Only a structure made to be captured is.
+                CHECK(code(device.captureAccelerationStructure(bottom)) == ErrorCode::RhiInvalidCall);
+            }
             for (const AccelerationStructureHandle structure : {bottom, top}) {
                 CHECK(device.destroyAccelerationStructure(structure).has_value());
             }
             CHECK(code(device.accelerationStructureReference(top)) == ErrorCode::RhiInvalidHandle);
+            if (made.caps.features.accelerationStructureCaptureReplay) {
+                CHECK(code(device.captureAccelerationStructure(top)) == ErrorCode::RhiInvalidHandle);
+            }
             // A property the device writes, and no more structures than its
             // pool holds.
             const auto pool = device.createAccelerationStructurePropertyPool(

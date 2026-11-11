@@ -112,6 +112,13 @@ VkBufferCreateInfo bufferInfo(VkDeviceSize size, VkBufferUsageFlags usage, std::
     return info;
 }
 
+VkDeviceAddress deviceAddressOf(const VolkDeviceTable& table, VkDevice device, VkBuffer buffer) {
+    VkBufferDeviceAddressInfo named{};
+    named.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+    named.buffer = buffer;
+    return table.vkGetBufferDeviceAddress(device, &named);
+}
+
 } // namespace
 
 core::Result<VmaAllocator> createAllocator(VkInstance instance, VkPhysicalDevice adapter, VkDevice device,
@@ -201,14 +208,82 @@ core::Result<VulkanBuffer> placeVulkanBuffer(const VolkDeviceTable& table, VkDev
     if (placed.pMappedData != nullptr) {
         mapped = {static_cast<std::byte*>(placed.pMappedData), static_cast<std::size_t>(size)};
     }
-    VkDeviceAddress address = 0;
-    if ((usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0) {
-        VkBufferDeviceAddressInfo named{};
-        named.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
-        named.buffer = buffer;
-        address = table.vkGetBufferDeviceAddress(device, &named);
-    }
+    const VkDeviceAddress address = (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0
+                                        ? deviceAddressOf(table, device, buffer)
+                                        : 0;
     return VulkanBuffer{allocator, buffer, made, memory, mapped, slot, address, size};
+}
+
+core::Result<VulkanReplayableBuffer> placeReplayableVulkanBuffer(
+    const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator, VkDeviceSize size, VkBufferUsageFlags usage,
+    std::span<const std::uint32_t> families, VkDeviceSize alignment, const VulkanBufferReplay& replay) {
+    VkBufferOpaqueCaptureAddressCreateInfo bufferAt{};
+    bufferAt.sType = VK_STRUCTURE_TYPE_BUFFER_OPAQUE_CAPTURE_ADDRESS_CREATE_INFO;
+    bufferAt.opaqueCaptureAddress = replay.buffer;
+    VkBufferCreateInfo info = bufferInfo(size, usage, families);
+    info.flags = VK_BUFFER_CREATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT;
+    info.pNext = &bufferAt;
+    VkBuffer buffer = VK_NULL_HANDLE;
+    if (const VkResult result = table.vkCreateBuffer(device, &info, nullptr, &buffer); result != VK_SUCCESS) {
+        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateBuffer", .result = result});
+    }
+    // The buffer's memory is its own, at its own opaque address, with the
+    // capture-replay flag (VUID-vkBindBufferMemory-bufferDeviceAddressCaptureReplay-09200).
+    // VMA makes no buffer with an address on an allocator that adds no flags
+    // of its own, so it places memory for the buffer made here.
+    VkMemoryDedicatedAllocateInfo dedicated{};
+    dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+    dedicated.buffer = buffer;
+    VkMemoryOpaqueCaptureAddressAllocateInfo memoryAt{};
+    memoryAt.sType = VK_STRUCTURE_TYPE_MEMORY_OPAQUE_CAPTURE_ADDRESS_ALLOCATE_INFO;
+    memoryAt.pNext = &dedicated;
+    memoryAt.opaqueCaptureAddress = replay.memory;
+    VkMemoryAllocateFlagsInfo flags{};
+    flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+    flags.pNext = &memoryAt;
+    flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT | VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT;
+    VkMemoryRequirements requirements{};
+    table.vkGetBufferMemoryRequirements(device, buffer, &requirements);
+    VmaAllocationCreateInfo allocation{};
+    allocation.requiredFlags = propertiesFor(BufferMemory::Device).required;
+    // One memory type, the same each time, so a replay allocates as the
+    // capture did, and VMA reports that type's result rather than trying another.
+    std::uint32_t type = 0;
+    if (const VkResult result = vmaFindMemoryTypeIndex(allocator, requirements.memoryTypeBits, &allocation, &type);
+        result != VK_SUCCESS) {
+        table.vkDestroyBuffer(device, buffer, nullptr);
+        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vmaFindMemoryTypeIndex", .result = result});
+    }
+    allocation.memoryTypeBits = 1U << type;
+    VmaAllocation made = VK_NULL_HANDLE;
+    VmaAllocationInfo placed{};
+    if (const VkResult result = vmaAllocateDedicatedMemory(allocator, &requirements, &allocation, &flags, &made,
+                                                           &placed);
+        result != VK_SUCCESS) {
+        table.vkDestroyBuffer(device, buffer, nullptr);
+        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vmaAllocateDedicatedMemory", .result = result});
+    }
+    if (const VkResult result = vmaBindBufferMemory(allocator, made, buffer); result != VK_SUCCESS) {
+        vmaDestroyBuffer(allocator, buffer, made);
+        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vmaBindBufferMemory", .result = result});
+    }
+    const VkDeviceAddress address = deviceAddressOf(table, device, buffer);
+    VkBufferDeviceAddressInfo named{};
+    named.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+    named.buffer = buffer;
+    VkDeviceMemoryOpaqueCaptureAddressInfo memory{};
+    memory.sType = VK_STRUCTURE_TYPE_DEVICE_MEMORY_OPAQUE_CAPTURE_ADDRESS_INFO;
+    memory.memory = placed.deviceMemory;
+    VulkanReplayableBuffer replayable{
+        .buffer =
+            VulkanBuffer{allocator, buffer, made, BufferMemory::Device, {}, core::SlotChains::kEnd, address, size},
+        .made = {.buffer = table.vkGetBufferOpaqueCaptureAddress(device, &named),
+                 .memory = table.vkGetDeviceMemoryOpaqueCaptureAddress(device, &memory)}};
+    if (alignment != 0 && address % alignment != 0) {
+        return core::failure(core::ErrorCode::RhiDeviceFailed,
+                             "Vulkan placed a replayable buffer at {:#x}, not a multiple of {}", address, alignment);
+    }
+    return replayable;
 }
 
 core::Result<VulkanBuffer> createVulkanBuffer(const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator,

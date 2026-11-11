@@ -1206,7 +1206,7 @@ TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call tim
 
     std::uint32_t count = 0;
     REQUIRE(bfr_get_call_timings(device.device, &count, nullptr) == BFR_RESULT_SUCCESS);
-    CHECK(count == BFR_CALL_BUILD_CLUSTERS + 1);
+    CHECK(count == BFR_CALL_CAPTURE_ACCELERATION_STRUCTURE + 1);
     std::vector<bfr_call_timing> timings(count);
     REQUIRE(bfr_get_call_timings(device.device, &count, timings.data()) == BFR_RESULT_SUCCESS);
     CHECK(timings.at(BFR_CALL_CREATE_TIMESTAMP_POOL).count == 2);
@@ -1737,6 +1737,8 @@ TEST_CASE("C API refuses acceleration structure calls on a null device", "[c_api
     CHECK(bfr_get_cluster_sizes(nullptr, &clusterInputs, &sizes) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     const bfr_cluster_build clusterBuild{};
     CHECK(bfr_build_clusters(nullptr, bfr_command_list{}, &clusterBuild) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    bfr_acceleration_structure_capture capture{};
+    CHECK(bfr_capture_acceleration_structure(nullptr, {}, &capture) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
 }
 
 TEST_CASE("C API passes cluster inputs through, where the adapter has them", "[c_api][gpu]") {
@@ -1802,6 +1804,81 @@ TEST_CASE("C API passes cluster inputs through, where the adapter has them", "[c
         constexpr int kNoSuchOperation = BFR_CLUSTER_OPERATION_TEMPLATE_INDICES + 1;
         inputs.operation = static_cast<bfr_cluster_operation>(kNoSuchOperation);
         CHECK(bfr_get_cluster_sizes(device, &inputs, &sizes) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+        bfr_destroy_device(device);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C API passes a structure's capture to a replay on another device, where the adapter has them",
+          "[c_api][gpu]") {
+    const bfr_backend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const Instance instance{backend, messages};
+        bfr_caps caps{};
+        REQUIRE(bfr_get_caps(instance.instance, 0, &caps) == BFR_RESULT_SUCCESS);
+        const bfr_device_desc desc{.next = nullptr,
+                                   .adapter = 0,
+                                   .window = {},
+                                   .graphics_queues = &kOneQueue,
+                                   .graphics_queue_count = 1,
+                                   .compute_queues = nullptr,
+                                   .compute_queue_count = 0,
+                                   .copy_queues = nullptr,
+                                   .copy_queue_count = 0,
+                                   .max_command_lists = kDeviceLists,
+                                   .max_command_pools = kDevicePools,
+                                   .max_swapchains = 0,
+                                   .max_bindless_textures = 0,
+                                   .max_bindless_storage_textures = 0,
+                                   .max_bindless_storage_buffers = 0,
+                                   .max_bindless_samplers = 0,
+                                   .max_timestamp_pools = 0,
+                                   .max_sparse_memories = 0,
+                                   .max_tile_mappings = 0,
+                                   .max_bindless_acceleration_structures = 0,
+                                   .max_bindless_partitioned_tops = 0,
+                                   .max_build_geometries = 0,
+                                   .max_acceleration_structure_property_pools = 0,
+                                   .indirect_strides = nullptr,
+                                   .indirect_stride_count = 0};
+        // A size any backend takes for a structure no build fills.
+        constexpr std::uint64_t kSmall = 256;
+        bfr_acceleration_structure_desc structureDesc{.next = nullptr,
+                                                      .type = BFR_ACCELERATION_STRUCTURE_TYPE_BOTTOM,
+                                                      .size = kSmall,
+                                                      .motion_keyframes = 0,
+                                                      .motion_instances = 0,
+                                                      .capture_replay = BFR_TRUE,
+                                                      .replay = {}};
+        bfr_acceleration_structure_capture capture{};
+        std::uint64_t reference = 0;
+        {
+            bfr_device* device = nullptr;
+            REQUIRE(bfr_create_device(instance.instance, &desc, &device) == BFR_RESULT_SUCCESS);
+            bfr_acceleration_structure structure{};
+            if (caps.features.acceleration_structure_capture_replay == BFR_FALSE) {
+                CHECK(bfr_create_acceleration_structure(device, &structureDesc, &structure) ==
+                      BFR_RESULT_ERROR_UNSUPPORTED);
+                CHECK(bfr_capture_acceleration_structure(device, structure, &capture) == BFR_RESULT_ERROR_UNSUPPORTED);
+                bfr_destroy_device(device);
+                SKIP("the adapter captures no acceleration structure references");
+            }
+            REQUIRE(bfr_create_acceleration_structure(device, &structureDesc, &structure) == BFR_RESULT_SUCCESS);
+            REQUIRE(bfr_capture_acceleration_structure(device, structure, &capture) == BFR_RESULT_SUCCESS);
+            REQUIRE(bfr_get_acceleration_structure_reference(device, structure, &reference) == BFR_RESULT_SUCCESS);
+            bfr_destroy_acceleration_structure(device, structure);
+            bfr_destroy_device(device);
+        }
+        bfr_device* device = nullptr;
+        REQUIRE(bfr_create_device(instance.instance, &desc, &device) == BFR_RESULT_SUCCESS);
+        structureDesc.replay = capture;
+        bfr_acceleration_structure structure{};
+        REQUIRE(bfr_create_acceleration_structure(device, &structureDesc, &structure) == BFR_RESULT_SUCCESS);
+        std::uint64_t again = 0;
+        REQUIRE(bfr_get_acceleration_structure_reference(device, structure, &again) == BFR_RESULT_SUCCESS);
+        CHECK(again == reference);
+        bfr_destroy_acceleration_structure(device, structure);
         bfr_destroy_device(device);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
@@ -1903,7 +1980,9 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
                                                             .type = BFR_ACCELERATION_STRUCTURE_TYPE_BOTTOM,
                                                             .size = sizes.size,
                                                             .motion_keyframes = 0,
-                                                            .motion_instances = 0};
+                                                            .motion_instances = 0,
+                                                            .capture_replay = BFR_FALSE,
+                                                            .replay = {}};
         bfr_acceleration_structure bottom{};
         REQUIRE(bfr_create_acceleration_structure(device, &structureDesc, &bottom) == BFR_RESULT_SUCCESS);
 

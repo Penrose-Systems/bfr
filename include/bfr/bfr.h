@@ -63,6 +63,9 @@ typedef uint8_t bfr_bool;
 // bits.
 #define BFR_CLUSTER_VERTEX_COUNT_SHIFT 9u
 
+// The words of a bfr_acceleration_structure_capture.
+#define BFR_ACCELERATION_STRUCTURE_CAPTURE_WORDS 3u
+
 // The bit a cluster record's counts word's truncated position bits (6 bits) start at.
 #define BFR_CLUSTER_TRUNCATE_SHIFT 18u
 
@@ -554,6 +557,7 @@ typedef enum bfr_call {
     BFR_CALL_WRITE_MOTION_INSTANCES = 104,
     BFR_CALL_CLUSTER_SIZES = 105,
     BFR_CALL_BUILD_CLUSTERS = 106,
+    BFR_CALL_CAPTURE_ACCELERATION_STRUCTURE = 107,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -2568,11 +2572,22 @@ typedef struct bfr_acceleration_structure_sizes {
     bfr_bool discardable;
 } bfr_acceleration_structure_sizes;
 
+// What a backend needs to make an acceleration structure again at the reference it had, as
+// bfr_capture_acceleration_structure gives it: opaque, the same on every backend. All zero is none.
+typedef struct bfr_acceleration_structure_capture {
+    uint64_t words[BFR_ACCELERATION_STRUCTURE_CAPTURE_WORDS];
+} bfr_acceleration_structure_capture;
+
 // How to create an acceleration structure of size bytes, in memory the device allocates. With
 // motion_keyframes, at most bfr_caps_ray_tracing.max_motion_keyframes, where
 // bfr_caps_features.ray_tracing_motion, its builds have motion: a bottom one's triangles move
 // between keyframes, a top one holds motion instances, at most motion_instances of them, passed to
-// backends that take it. 0 is none.
+// backends that take it. 0 is none. With capture_replay, where
+// bfr_caps_features.acceleration_structure_capture_replay, its reference may be captured, by
+// bfr_capture_acceleration_structure, and replayed: with replay, what that gave for a structure
+// made with this desc but replay, on a device of the same adapter opened with the same queues, it
+// is made at the reference that one had, or fails where the backend cannot give it. An opacity
+// micromap has none where the backend gives it no reference (Vulkan).
 typedef struct bfr_acceleration_structure_desc {
     const bfr_chain* next;
     // 0 is bottom.
@@ -2581,6 +2596,9 @@ typedef struct bfr_acceleration_structure_desc {
     uint64_t size;
     uint32_t motion_keyframes;
     uint32_t motion_instances;
+    bfr_bool capture_replay;
+    // All zero is none.
+    bfr_acceleration_structure_capture replay;
 } bfr_acceleration_structure_desc;
 
 // One geometry's counts, as a buffer holds them for bfr_build_acceleration_structure_indirect:
@@ -2972,6 +2990,8 @@ typedef struct bfr_caps_features {
     // bfr_build_clusters, and traces of the cluster bottom structures it builds by pipelines made
     // with allow_clusters.
     bfr_bool cluster_acceleration_structure;
+    // bfr_acceleration_structure_desc.capture_replay.
+    bfr_bool acceleration_structure_capture_replay;
     bfr_bool mesh_shader;
     bfr_bool task_shader;
     // A shading rate per draw.
@@ -4083,10 +4103,15 @@ BFR_API bfr_result bfr_get_acceleration_structure_sizes(
 // bfr_caps_features.opacity_micromap is, or for a partitioned top structure where
 // bfr_caps_features.partitioned_top is, error_invalid_argument for motion_keyframes other than the
 // backend takes (Vulkan, two) or on an opacity micromap or partitioned top structure where the
-// backend's has none (Vulkan), error_limit_reached at the device's maximum or, for a top or
-// partitioned top structure on a device with slots in its table, when they are all held,
-// error_out_of_memory when the backend says memory ran out, and error_device_failed when it
-// refuses.
+// backend's has none (Vulkan), error_unsupported for capture_replay where
+// bfr_caps_features.acceleration_structure_capture_replay is false, error_invalid_argument for a
+// replay without capture_replay or capture_replay on an opacity micromap where the backend gives it
+// no reference (Vulkan), error_limit_reached at the device's maximum or, for a top or partitioned
+// top structure on a device with slots in its table, when they are all held, error_out_of_memory
+// when the backend says memory ran out, and error_device_failed when it refuses or, with
+// capture_replay, places a partitioned top structure at an address its builds cannot take (Vulkan,
+// a multiple of 256); a replay at a reference the backend cannot give fails with
+// error_out_of_memory or error_device_failed, as its API says.
 BFR_API bfr_result bfr_create_acceleration_structure(
     bfr_device* device,
     const bfr_acceleration_structure_desc* desc,
@@ -4129,6 +4154,15 @@ BFR_API bfr_result bfr_get_acceleration_structure_reference(
     bfr_device* device,
     bfr_acceleration_structure structure,
     uint64_t* reference);
+
+// Writes what bfr_acceleration_structure_desc.replay takes to make a structure again at this one's
+// reference, of one made with capture_replay. Fails with error_unsupported where
+// bfr_caps_features.acceleration_structure_capture_replay is false, error_invalid_argument for one
+// made without capture_replay, and error_invalid_handle when it is destroyed.
+BFR_API bfr_result bfr_capture_acceleration_structure(
+    bfr_device* device,
+    bfr_acceleration_structure structure,
+    bfr_acceleration_structure_capture* capture);
 
 // Destroys an acceleration structure once the GPU has passed every submit made before the call; the
 // handle is invalid at once. A top structure reads the bottom ones built into it while rays are

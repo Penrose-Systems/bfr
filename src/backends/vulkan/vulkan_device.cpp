@@ -167,6 +167,14 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
         return std::unexpected(std::move(allocator.error()));
     }
     made->allocator_ = *allocator;
+    if (setup.features.accelerationStructureCaptureReplay) {
+        auto replaying = createAllocator(rhi.handle(), adapter, device, std::min(setup.apiVersion, kNewestForVma),
+                                         false);
+        if (!replaying) {
+            return std::unexpected(std::move(replaying.error()));
+        }
+        made->replayAllocator_ = *replaying;
+    }
     auto layout = VulkanBindlessLayout::create(made->table_, device, desc, setup.pushConstantsSize,
                                                setup.accelerationStructureTable, setup.features.partitionedTop);
     if (!layout) {
@@ -1135,6 +1143,9 @@ VulkanDevice::~VulkanDevice() {
     pipelineCaches_.clear();
     layout_ = {};
     vmaDestroyAllocator(allocator_);
+    if (replayAllocator_ != VK_NULL_HANDLE) {
+        vmaDestroyAllocator(replayAllocator_);
+    }
     for (const auto& queue : queues_) {
         for (const VulkanRetiredPool& retired : queue->retired) {
             table_.vkDestroyCommandPool(device_, retired.pool, nullptr);

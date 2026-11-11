@@ -233,6 +233,8 @@ struct Features {
     /// Device::buildClusters, and traces of the cluster bottom structures it
     /// builds by pipelines made with allowClusters.
     bool clusterAccelerationStructure = false;
+    /// AccelerationStructureDesc::captureReplay.
+    bool accelerationStructureCaptureReplay = false;
     bool meshShader = false;
     bool taskShader = false;
     bool shadingRate = false;

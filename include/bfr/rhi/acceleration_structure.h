@@ -307,16 +307,35 @@ struct AccelerationStructureSizes {
     bool discardable = false;
 };
 
+/// The words of an AccelerationStructureCapture.
+inline constexpr std::size_t kAccelerationStructureCaptureWords = 3;
+
+/// What a backend needs to make a structure again at the reference it had,
+/// as Device::captureAccelerationStructure gives it: opaque, the same on
+/// every backend. All zero is none.
+struct AccelerationStructureCapture {
+    std::array<std::uint64_t, kAccelerationStructureCaptureWords> words{};
+};
+
 /// A structure of size bytes, in memory the device allocates. With
 /// motionKeyframes, at most RayTracingLimits::maxMotionKeyframes,
 /// where Features::rayTracingMotion, its builds have motion: a bottom one's
 /// triangles move between keyframes, a top one holds motion instances, at
 /// most motionInstances of them, passed to backends that take it. 0 is none.
+/// With captureReplay, where Features::accelerationStructureCaptureReplay,
+/// its reference may be captured, by Device::captureAccelerationStructure,
+/// and replayed: with replay, what that gave for a structure made with this
+/// desc but replay, on a device of the same adapter opened with the same
+/// queues, it is made at the reference that one had, or fails where the
+/// backend cannot give it. An opacity micromap has none where the backend
+/// gives it no reference (Vulkan).
 struct AccelerationStructureDesc {
     AccelerationStructureType type = AccelerationStructureType::Bottom;
     std::uint64_t size = 0;
     std::uint32_t motionKeyframes = 0;
     std::uint32_t motionInstances = 0;
+    bool captureReplay = false;
+    AccelerationStructureCapture replay{};
 };
 
 /// A build of dst, of inputs.type, from inputs; or, with update, an update

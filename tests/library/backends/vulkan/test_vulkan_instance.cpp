@@ -914,6 +914,11 @@ TEST_CASE("Vulkan refuses opacity micromap work it has no call for", "[vulkan][g
     // Vulkan gives a micromap no address, writes only its compacted and
     // serialized sizes, and builds it whole.
     CHECK(code(device.accelerationStructureReference(*micromap)) == bfr::core::ErrorCode::RhiInvalidCall);
+    if (instance->adapters()[0].caps.features.accelerationStructureCaptureReplay) {
+        CHECK(code(device.createAccelerationStructure(
+                  {.type = AccelerationStructureType::OpacityMicromap, .size = kSmall, .captureReplay = true})) ==
+              bfr::core::ErrorCode::RhiInvalidCall);
+    }
     if (instance->adapters()[0].caps.features.accelerationStructureCurrentSize) {
         CHECK(code(device.createAccelerationStructurePropertyPool(
                   {.property = AccelerationStructureProperty::CurrentSize, .count = 1, .opacityMicromaps = true})) ==

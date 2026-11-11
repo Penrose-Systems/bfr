@@ -308,6 +308,8 @@ public:
     [[nodiscard]] core::Result<std::uint32_t> accelerationStructureSlot(AccelerationStructureHandle structure) override;
     [[nodiscard]] core::Result<std::uint64_t> accelerationStructureReference(
         AccelerationStructureHandle structure) override;
+    [[nodiscard]] core::Result<AccelerationStructureCapture> captureAccelerationStructure(
+        AccelerationStructureHandle structure) override;
     [[nodiscard]] core::Result<void> destroyAccelerationStructure(AccelerationStructureHandle structure) override;
     [[nodiscard]] core::Result<void> writeInstances(std::span<const AccelerationStructureInstance> instances,
                                                     std::span<std::byte> out) override;
@@ -484,6 +486,11 @@ private:
     std::vector<std::uint32_t> families_;
     core::Submissions submissions_;
     VmaAllocator allocator_ = VK_NULL_HANDLE;
+    // Where Features::accelerationStructureCaptureReplay: one that adds no
+    // VkMemoryAllocateFlagsInfo of its own (vk_mem_alloc.h:14118-14135), so
+    // a replayable structure's memory takes BFR's, with the capture-replay
+    // flag and its opaque address.
+    VmaAllocator replayAllocator_ = VK_NULL_HANDLE;
     static constexpr std::uint32_t kBufferCapacity = 256;
     static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<VulkanBuffer, Buffer> buffers_;

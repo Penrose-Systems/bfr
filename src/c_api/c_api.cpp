@@ -547,7 +547,9 @@ static_assert(static_cast<int>(bfr::rhi::Call::CopyAccelerationStructure) == BFR
 static_assert(static_cast<int>(bfr::rhi::Call::RayTracingStackSize) == BFR_CALL_RAY_TRACING_STACK_SIZE);
 static_assert(static_cast<int>(bfr::rhi::Call::WriteMotionInstances) == BFR_CALL_WRITE_MOTION_INSTANCES);
 static_assert(static_cast<int>(bfr::rhi::Call::BuildClusters) == BFR_CALL_BUILD_CLUSTERS);
-static_assert(bfr::rhi::kCallCount == BFR_CALL_BUILD_CLUSTERS + 1);
+static_assert(static_cast<int>(bfr::rhi::Call::CaptureAccelerationStructure) ==
+              BFR_CALL_CAPTURE_ACCELERATION_STRUCTURE);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_CAPTURE_ACCELERATION_STRUCTURE + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
@@ -583,6 +585,7 @@ static_assert(static_cast<int>(bfr::rhi::BuildPreference::FastBuild) == BFR_BUIL
 static_assert(static_cast<int>(bfr::rhi::InstanceOpacity::ForceNonOpaque) == BFR_INSTANCE_OPACITY_FORCE_NON_OPAQUE);
 static_assert(bfr::rhi::kInstanceIndexLimit == BFR_INSTANCE_INDEX_LIMIT);
 static_assert(bfr::rhi::kTransformFloats == BFR_TRANSFORM_FLOATS);
+static_assert(bfr::rhi::kAccelerationStructureCaptureWords == BFR_ACCELERATION_STRUCTURE_CAPTURE_WORDS);
 static_assert(bfr::rhi::kBoxFloats == BFR_BOX_FLOATS);
 static_assert(bfr::rhi::kGlobalPartition == BFR_GLOBAL_PARTITION);
 static_assert(static_cast<int>(bfr::rhi::PartitionedTopOpType::WriteInstance) ==
@@ -1467,6 +1470,7 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .ray_tracing_motion_indirect = toC(features.rayTracingMotionIndirect),
         .partitioned_top = toC(features.partitionedTop),
         .cluster_acceleration_structure = toC(features.clusterAccelerationStructure),
+        .acceleration_structure_capture_replay = toC(features.accelerationStructureCaptureReplay),
         .mesh_shader = toC(features.meshShader),
         .task_shader = toC(features.taskShader),
         .shading_rate = toC(features.shadingRate),
@@ -3248,10 +3252,13 @@ bfr_result bfr_create_acceleration_structure(bfr_device* device, const bfr_accel
         if (!type) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
-        const auto made = device->device->createAccelerationStructure({.type = *type,
-                                                                       .size = desc->size,
-                                                                       .motionKeyframes = desc->motion_keyframes,
-                                                                       .motionInstances = desc->motion_instances});
+        const auto made = device->device->createAccelerationStructure(
+            {.type = *type,
+             .size = desc->size,
+             .motionKeyframes = desc->motion_keyframes,
+             .motionInstances = desc->motion_instances,
+             .captureReplay = desc->capture_replay != BFR_FALSE,
+             .replay = {.words = std::to_array(desc->replay.words)}});
         if (!made) {
             return fail(made.error());
         }
@@ -3288,6 +3295,22 @@ bfr_result bfr_get_acceleration_structure_reference(bfr_device* device, bfr_acce
             return fail(found.error());
         }
         *reference = *found;
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_capture_acceleration_structure(bfr_device* device, bfr_acceleration_structure structure,
+                                              bfr_acceleration_structure_capture* capture) {
+    return guarded([&] {
+        if (device == nullptr || capture == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and capture must not be null");
+        }
+        *capture = {};
+        const auto found = device->device->captureAccelerationStructure(fromC(structure));
+        if (!found) {
+            return fail(found.error());
+        }
+        std::ranges::copy(found->words, capture->words);
         return BFR_RESULT_SUCCESS;
     });
 }

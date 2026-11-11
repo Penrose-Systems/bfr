@@ -421,6 +421,12 @@ core::Result<std::uint64_t> TimedDevice::accelerationStructureReference(Accelera
                           [&] { return device_->accelerationStructureReference(structure); });
 }
 
+core::Result<AccelerationStructureCapture> TimedDevice::captureAccelerationStructure(
+    AccelerationStructureHandle structure) {
+    return counters_.time(Call::CaptureAccelerationStructure,
+                          [&] { return device_->captureAccelerationStructure(structure); });
+}
+
 core::Result<void> TimedDevice::destroyAccelerationStructure(AccelerationStructureHandle structure) {
     return counters_.time(Call::DestroyAccelerationStructure,
                           [&] { return device_->destroyAccelerationStructure(structure); });

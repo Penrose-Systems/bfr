@@ -26,7 +26,8 @@ class VulkanAccelerationStructure {
 public:
     VulkanAccelerationStructure(const VolkDeviceTable& table, VkDevice device, VulkanBuffer storage,
                                 VkAccelerationStructureKHR structure, VkMicromapEXT micromap,
-                                const AccelerationStructureDesc& desc, std::uint32_t slot, VkDeviceAddress reference);
+                                const AccelerationStructureDesc& desc, std::uint32_t slot, VkDeviceAddress reference,
+                                const AccelerationStructureCapture& captured);
     ~VulkanAccelerationStructure();
     VulkanAccelerationStructure(const VulkanAccelerationStructure&) = delete;
     VulkanAccelerationStructure& operator=(const VulkanAccelerationStructure&) = delete;
@@ -42,6 +43,9 @@ public:
     [[nodiscard]] std::uint64_t size() const { return size_; }
     [[nodiscard]] std::uint32_t slot() const { return slot_; }
     [[nodiscard]] VkDeviceAddress reference() const { return reference_; }
+    /// What makes it again at its reference; all zero for one made without
+    /// captureReplay.
+    [[nodiscard]] const AccelerationStructureCapture& captured() const { return captured_; }
 
 private:
     const VolkDeviceTable* table_;
@@ -54,6 +58,7 @@ private:
     std::uint64_t size_;
     std::uint32_t slot_;
     VkDeviceAddress reference_;
+    AccelerationStructureCapture captured_;
 };
 
 /// A VkQueryPool of one acceleration structure property, of opacity

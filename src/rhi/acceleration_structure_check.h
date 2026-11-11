@@ -94,6 +94,31 @@ namespace bfr::rhi {
     return {};
 }
 
+/// Fails with RhiUnsupported where
+/// Features::accelerationStructureCaptureReplay is false.
+[[nodiscard]] inline core::Result<void> checkStructureCaptureReplay(bool accelerationStructureCaptureReplay) {
+    if (!accelerationStructureCaptureReplay) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device captures and replays no acceleration structure references "
+                             "(Features::accelerationStructureCaptureReplay)");
+    }
+    return {};
+}
+
+/// Fails as checkStructureCaptureReplay for captureReplay, and with RhiInvalidCall
+/// for a replay without captureReplay.
+[[nodiscard]] inline core::Result<void> checkStructureCaptureReplay(bool accelerationStructureCaptureReplay,
+                                                                    const AccelerationStructureDesc& desc) {
+    if (desc.captureReplay) {
+        return checkStructureCaptureReplay(accelerationStructureCaptureReplay);
+    }
+    if (desc.replay.words != AccelerationStructureCapture{}.words) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "an acceleration structure with a replay is made with captureReplay");
+    }
+    return {};
+}
+
 /// Fails with RhiUnsupported where Features::clusterAccelerationStructure is
 /// false.
 [[nodiscard]] inline core::Result<void> checkClusters(bool clusterAccelerationStructure) {

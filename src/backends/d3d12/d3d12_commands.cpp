@@ -355,6 +355,11 @@ core::Result<std::uint64_t> D3D12Device::accelerationStructureReference(Accelera
     return std::unexpected(checkAccelerationStructures(features_.accelerationStructure).error());
 }
 
+core::Result<AccelerationStructureCapture> D3D12Device::captureAccelerationStructure(
+    AccelerationStructureHandle /*structure*/) {
+    return std::unexpected(checkAccelerationStructures(features_.accelerationStructure).error());
+}
+
 core::Result<void> D3D12Device::destroyAccelerationStructure(AccelerationStructureHandle structure) {
     if (structure.isNull()) {
         return {};

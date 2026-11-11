@@ -326,6 +326,12 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
                           on(features.partitioned.partitionedAccelerationStructure),
         .clusterAccelerationStructure = hasAccelerationStructures(features) &&
                                         on(features.clusters.clusterAccelerationStructure),
+        // A replayed structure's buffer and memory are replayed too
+        // (VUID-VkAccelerationStructureCreateInfoKHR-deviceAddress-09490,
+        // VUID-VkBufferCreateInfo-flags-03338).
+        .accelerationStructureCaptureReplay = hasAccelerationStructures(features) &&
+                                              on(features.accelerationStructure.accelerationStructureCaptureReplay) &&
+                                              on(features.vulkan12.bufferDeviceAddressCaptureReplay),
         .meshShader = on(features.mesh.meshShader),
         .taskShader = on(features.mesh.taskShader),
         // BFR has no call for shading rates or conservative raster yet (roadmap step
