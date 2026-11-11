@@ -20,6 +20,8 @@ inline constexpr std::uint32_t kStorageBufferBinding = 2;
 inline constexpr std::uint32_t kSamplerBinding = 3;
 /// Only on a device with an acceleration structure table.
 inline constexpr std::uint32_t kAccelerationStructureBinding = 4;
+/// Only on a device with partitioned top structures.
+inline constexpr std::uint32_t kPartitionedTopBinding = 5;
 
 /// The viewports, and scissors, a pipeline has and setViewport and setScissor
 /// set: one each, so the caps report that many.
@@ -33,8 +35,8 @@ inline constexpr std::uint32_t kViewports = 1;
 [[nodiscard]] VkPrimitiveTopology topologyFor(Topology topology);
 
 /// The one resource layout every pipeline shares: the descriptor set layout
-/// of the four tables, and the acceleration structure table where the device
-/// has one, sized as the DeviceDesc asked, the set holding them,
+/// of the four tables, and the acceleration structure and partitioned top
+/// structure tables where the device has them, sized as the DeviceDesc asked, the set holding them,
 /// allocated from a pool of its own, and the pipeline layout over the set and
 /// the push constants. Made with the device and destroyed with it, after
 /// every pipeline.
@@ -43,12 +45,13 @@ public:
     /// Fails with RhiLimitReached when the API says it cannot hold a set of
     /// desc's sizes, and RhiDeviceFailed when it refuses otherwise. The
     /// acceleration structure table is a binding only with
-    /// accelerationStructures. table is device's and outlives this. The push constant range
-    /// is pushConstantsSize bytes over every stage.
+    /// accelerationStructures, and the partitioned top one only with
+    /// partitionedTops. table is device's and outlives this. The push
+    /// constant range is pushConstantsSize bytes over every stage.
     [[nodiscard]] static core::Result<VulkanBindlessLayout> create(const VolkDeviceTable& table, VkDevice device,
                                                                    const DeviceDesc& desc,
                                                                    std::uint32_t pushConstantsSize,
-                                                                   bool accelerationStructures);
+                                                                   bool accelerationStructures, bool partitionedTops);
 
     VulkanBindlessLayout() = default;
     ~VulkanBindlessLayout();
@@ -70,6 +73,9 @@ public:
     void writeSampler(std::uint32_t slot, VkSampler sampler) const;
     /// Points slot of the acceleration structure table at structure.
     void writeAccelerationStructure(std::uint32_t slot, VkAccelerationStructureKHR structure) const;
+    /// Points slot of the partitioned top table at the structure at address
+    /// structure.
+    void writePartitionedTop(std::uint32_t slot, VkDeviceAddress structure) const;
 
 private:
     void destroy();

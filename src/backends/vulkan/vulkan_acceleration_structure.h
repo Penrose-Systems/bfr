@@ -10,12 +10,18 @@
 
 namespace bfr::rhi::vulkan {
 
+/// The alignment of a partitioned top structure's address and its build's
+/// scratch (VUID-vkCmdBuildPartitionedAccelerationStructuresNV-pBuildInfo-10542, -10545).
+inline constexpr VkDeviceSize kPartitionedAlignment = 256;
+
 /// A VkAccelerationStructureKHR, or for an opacity micromap a VkMicromapEXT,
 /// at the start of a buffer of its own, which it destroys when it goes,
 /// before the buffer. slot is its place in the acceleration structure table,
-/// kEnd for any but a top one; the device gives it back when the structure
+/// or a partitioned top one's in its own, kEnd for others; the device gives
+/// it back when the structure
 /// is collected. reference is a structure's device address, which instance
-/// records name it by; a micromap has none.
+/// records name it by; a micromap has none. A partitioned top structure is
+/// only its buffer, named by reference, with neither object.
 class VulkanAccelerationStructure {
 public:
     VulkanAccelerationStructure(const VolkDeviceTable& table, VkDevice device, VulkanBuffer storage,

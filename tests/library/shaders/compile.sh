@@ -12,16 +12,23 @@ cd "$(dirname "$0")"
     echo "#include <cstdint>"
     echo
     echo "namespace bfr::test::spirv {"
-    for shader in bindless.comp bindless.vert bindless.frag color.frag sample.comp triangle.mesh triangle.task ray_query.comp ray_query_any.comp ray_positions.comp trace.rgen trace_motion.rgen trace.rmiss trace.rchit box.rint; do
-        glslangValidator -V --target-env vulkan1.2 -o "$shader.spv" "$shader" > /dev/null
-        name="$(echo "$shader" | sed 's/[._]\(.\)/\U\1/g; s/^./\U&/')"
+    # emit NAME SHADER [FLAGS...]: SHADER compiled with FLAGS as array kNAME.
+    emit() {
+        name="$1"
+        shader="$2"
+        shift 2
+        glslangValidator -V --target-env vulkan1.2 "$@" -o "$name.spv" "$shader" > /dev/null
         echo
-        echo "/// $shader, as SPIR-V bytes."
-        printf "inline constexpr std::array<std::uint8_t, %s> k%s{\n" "$(stat -c %s "$shader.spv")" "$name"
-        od -An -v -t u1 -w24 "$shader.spv" | sed 's/^ *//; s/  */, /g; s/^/    /; s/$/,/'
+        echo "/// $shader${1:+ ($*)}, as SPIR-V bytes."
+        printf "inline constexpr std::array<std::uint8_t, %s> k%s{\n" "$(stat -c %s "$name.spv")" "$name"
+        od -An -v -t u1 -w24 "$name.spv" | sed 's/^ *//; s/  */, /g; s/^/    /; s/$/,/'
         echo "};"
-        rm "$shader.spv"
+        rm "$name.spv"
+    }
+    for shader in bindless.comp bindless.vert bindless.frag color.frag sample.comp triangle.mesh triangle.task ray_query.comp ray_query_any.comp ray_positions.comp trace.rgen trace_motion.rgen trace.rmiss trace.rchit box.rint; do
+        emit "$(echo "$shader" | sed 's/[._]\(.\)/\U\1/g; s/^./\U&/')" "$shader"
     done
+    emit RayQueryPartitionedComp ray_query.comp -DPARTITIONED
     echo
     echo "} // namespace bfr::test::spirv"
 } > spirv.h

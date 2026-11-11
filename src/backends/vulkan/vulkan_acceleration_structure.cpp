@@ -22,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <utility>
 
 namespace bfr::rhi::vulkan {
@@ -136,12 +137,101 @@ core::Result<void> checkVulkanMotion(bool rayTracingMotion, AccelerationStructur
     if (motionKeyframes != 0 && type == AccelerationStructureType::OpacityMicromap) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "Vulkan's opacity micromaps have no motion");
     }
+    // VkPartitionedAccelerationStructureInstancesInputNV has no motion.
+    if (motionKeyframes != 0 && type == AccelerationStructureType::PartitionedTop) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "Vulkan's partitioned top structures have no motion");
+    }
     if (motionKeyframes != 0 && motionKeyframes != kVulkanMotionKeyframes) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "Vulkan's structures with motion have {} keyframes, not {}", kVulkanMotionKeyframes,
                              motionKeyframes);
     }
     return {};
+}
+
+// Fails with RhiInvalidCall for a partitioned top structure, which Vulkan
+// holds as memory with no VkAccelerationStructureKHR, so it has no copy,
+// compaction, serialization or property write of one
+// (VK_NV_partitioned_acceleration_structure).
+core::Result<void> checkNotPartitioned(AccelerationStructureType type, std::string_view call) {
+    if (type == AccelerationStructureType::PartitionedTop) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "Vulkan {} no partitioned top structure", call);
+    }
+    return {};
+}
+
+// The records a partitioned top structure's build reads in place: BFR's
+// layouts are Vulkan's.
+static_assert(sizeof(PartitionedTopOp) == sizeof(VkBuildPartitionedAccelerationStructureIndirectCommandNV) &&
+              offsetof(PartitionedTopOp, count) ==
+                  offsetof(VkBuildPartitionedAccelerationStructureIndirectCommandNV, argCount) &&
+              offsetof(PartitionedTopOp, address) ==
+                  offsetof(VkBuildPartitionedAccelerationStructureIndirectCommandNV, argData.startAddress) &&
+              offsetof(PartitionedTopOp, stride) ==
+                  offsetof(VkBuildPartitionedAccelerationStructureIndirectCommandNV, argData.strideInBytes));
+static_assert(std::to_underlying(PartitionedTopOpType::WriteInstance) ==
+                  VK_PARTITIONED_ACCELERATION_STRUCTURE_OP_TYPE_WRITE_INSTANCE_NV &&
+              std::to_underlying(PartitionedTopOpType::UpdateInstance) ==
+                  VK_PARTITIONED_ACCELERATION_STRUCTURE_OP_TYPE_UPDATE_INSTANCE_NV &&
+              std::to_underlying(PartitionedTopOpType::WritePartitionTranslation) ==
+                  VK_PARTITIONED_ACCELERATION_STRUCTURE_OP_TYPE_WRITE_PARTITION_TRANSLATION_NV);
+static_assert(sizeof(PartitionedInstanceRecord) == sizeof(VkPartitionedAccelerationStructureWriteInstanceDataNV) &&
+              offsetof(PartitionedInstanceRecord, bounds) ==
+                  offsetof(VkPartitionedAccelerationStructureWriteInstanceDataNV, explicitAABB) &&
+              offsetof(PartitionedInstanceRecord, customIndex) ==
+                  offsetof(VkPartitionedAccelerationStructureWriteInstanceDataNV, instanceID) &&
+              offsetof(PartitionedInstanceRecord, mask) ==
+                  offsetof(VkPartitionedAccelerationStructureWriteInstanceDataNV, instanceMask) &&
+              offsetof(PartitionedInstanceRecord, hitGroupOffset) ==
+                  offsetof(VkPartitionedAccelerationStructureWriteInstanceDataNV,
+                           instanceContributionToHitGroupIndex) &&
+              offsetof(PartitionedInstanceRecord, flags) ==
+                  offsetof(VkPartitionedAccelerationStructureWriteInstanceDataNV, instanceFlags) &&
+              offsetof(PartitionedInstanceRecord, instanceIndex) ==
+                  offsetof(VkPartitionedAccelerationStructureWriteInstanceDataNV, instanceIndex) &&
+              offsetof(PartitionedInstanceRecord, partitionIndex) ==
+                  offsetof(VkPartitionedAccelerationStructureWriteInstanceDataNV, partitionIndex) &&
+              offsetof(PartitionedInstanceRecord, bottomReference) ==
+                  offsetof(VkPartitionedAccelerationStructureWriteInstanceDataNV, accelerationStructure));
+static_assert(sizeof(PartitionedInstanceUpdateRecord) ==
+                  sizeof(VkPartitionedAccelerationStructureUpdateInstanceDataNV) &&
+              offsetof(PartitionedInstanceUpdateRecord, hitGroupOffset) ==
+                  offsetof(VkPartitionedAccelerationStructureUpdateInstanceDataNV,
+                           instanceContributionToHitGroupIndex) &&
+              offsetof(PartitionedInstanceUpdateRecord, bottomReference) ==
+                  offsetof(VkPartitionedAccelerationStructureUpdateInstanceDataNV, accelerationStructure));
+static_assert(sizeof(PartitionTranslationRecord) ==
+                  sizeof(VkPartitionedAccelerationStructureWritePartitionTranslationDataNV) &&
+              offsetof(PartitionTranslationRecord, translation) ==
+                  offsetof(VkPartitionedAccelerationStructureWritePartitionTranslationDataNV, partitionTranslation));
+static_assert(kGlobalPartition == VK_PARTITIONED_ACCELERATION_STRUCTURE_PARTITION_INDEX_GLOBAL_NV);
+static_assert(std::to_underlying(PartitionedInstanceFlag::CullDisable) ==
+                  VK_PARTITIONED_ACCELERATION_STRUCTURE_INSTANCE_FLAG_TRIANGLE_FACING_CULL_DISABLE_BIT_NV &&
+              std::to_underlying(PartitionedInstanceFlag::FrontCounterClockwise) ==
+                  VK_PARTITIONED_ACCELERATION_STRUCTURE_INSTANCE_FLAG_TRIANGLE_FLIP_FACING_BIT_NV &&
+              std::to_underlying(PartitionedInstanceFlag::ForceOpaque) ==
+                  VK_PARTITIONED_ACCELERATION_STRUCTURE_INSTANCE_FLAG_FORCE_OPAQUE_BIT_NV &&
+              std::to_underlying(PartitionedInstanceFlag::ForceNonOpaque) ==
+                  VK_PARTITIONED_ACCELERATION_STRUCTURE_INSTANCE_FLAG_FORCE_NO_OPAQUE_BIT_NV &&
+              std::to_underlying(PartitionedInstanceFlag::ExplicitBounds) ==
+                  VK_PARTITIONED_ACCELERATION_STRUCTURE_INSTANCE_FLAG_ENABLE_EXPLICIT_BOUNDING_BOX_NV);
+
+// A partitioned top structure's counts and flags as Vulkan takes them,
+// chaining translation, which the caller keeps while the input is read.
+VkPartitionedAccelerationStructureInstancesInputNV partitionedInputOf(
+    const AccelerationStructureInputs& inputs, VkPartitionedAccelerationStructureFlagsNV& translation) {
+    translation = {};
+    translation.sType = VK_STRUCTURE_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_FLAGS_NV;
+    translation.enablePartitionTranslation = inputs.partitioned.partitionTranslation ? VK_TRUE : VK_FALSE;
+    VkPartitionedAccelerationStructureInstancesInputNV input{};
+    input.sType = VK_STRUCTURE_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_INSTANCES_INPUT_NV;
+    input.pNext = &translation;
+    input.flags = flagsFor(inputs.flags);
+    input.instanceCount = inputs.partitioned.instanceCount;
+    input.maxInstancePerPartitionCount = inputs.partitioned.maxPartitionInstances;
+    input.partitionCount = inputs.partitioned.partitionCount;
+    input.maxInstanceInGlobalPartitionCount = inputs.partitioned.maxGlobalInstances;
+    return input;
 }
 
 // usages as Vulkan reads them, in place: the layouts and format values are
@@ -394,7 +484,7 @@ core::Result<AccelerationStructureSizes> VulkanDevice::accelerationStructureSize
     if (auto checked = checkAccelerationStructures(features_.accelerationStructure); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    if (auto checked = checkInputs(inputs, features_.opacityMicromap); !checked) {
+    if (auto checked = checkInputs(inputs, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkVulkanMotion(features_.rayTracingMotion, inputs.type, inputs.motionKeyframes); !checked) {
@@ -402,6 +492,16 @@ core::Result<AccelerationStructureSizes> VulkanDevice::accelerationStructureSize
     }
     if (auto counted = countGeometries(inputs, desc_.maxBuildGeometries); !counted) {
         return std::unexpected(std::move(counted.error()));
+    }
+    if (inputs.type == AccelerationStructureType::PartitionedTop) {
+        VkPartitionedAccelerationStructureFlagsNV translation{};
+        const VkPartitionedAccelerationStructureInstancesInputNV input = partitionedInputOf(inputs, translation);
+        VkAccelerationStructureBuildSizesInfoKHR sizes{};
+        sizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+        table_.vkGetPartitionedAccelerationStructuresBuildSizesNV(device_, &input, &sizes);
+        return AccelerationStructureSizes{.size = sizes.accelerationStructureSize,
+                                          .buildScratch = sizes.buildScratchSize,
+                                          .updateScratch = sizes.updateScratchSize};
     }
     if (inputs.type == AccelerationStructureType::OpacityMicromap) {
         const VkMicromapBuildInfoEXT info = micromapBuildOf(inputs);
@@ -446,6 +546,9 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
         !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkPartitionedTops(features_.partitionedTop, desc.type); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     if (auto checked = checkVulkanMotion(features_.rayTracingMotion, desc.type, desc.motionKeyframes); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -458,9 +561,36 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
     }
-    const auto giveBack = [this, &slot] {
-        bindless_.giveAccelerationStructure(*slot);
+    const auto giveBack = [this, &slot, &desc] {
+        bindless_.giveAccelerationStructure(desc.type, *slot);
     };
+    if (desc.type == AccelerationStructureType::PartitionedTop) {
+        // A partitioned top structure is the memory at an address, a multiple
+        // of 256 (VUID-vkCmdBuildPartitionedAccelerationStructuresNV-pBuildInfo-10544, -10545,
+        // -10552), with no object of its own.
+        auto storage = placeVulkanBuffer(table_, device_, allocator_, desc.size,
+                                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                         BufferMemory::Device, families_, kPartitionedAlignment,
+                                         core::SlotChains::kEnd);
+        if (!storage) {
+            giveBack();
+            return std::unexpected(std::move(storage.error()));
+        }
+        const VkDeviceAddress address = storage->address();
+        const AccelerationStructureHandle made = accelerationStructures_.emplace(
+            VulkanAccelerationStructure{table_, device_, std::move(*storage), VK_NULL_HANDLE, VK_NULL_HANDLE, desc,
+                                        *slot, address});
+        if (made.isNull()) {
+            giveBack();
+            return core::failure(core::ErrorCode::RhiLimitReached,
+                                 "the device holds at most {} acceleration structures", kBufferLimit);
+        }
+        if (*slot != core::SlotChains::kEnd) {
+            layout_.writePartitionedTop(*slot, address);
+        }
+        return made;
+    }
     // The structure is at offset 0 of a buffer of its own, which a multiple
     // of 256 is (resources.adoc:8756), as a micromap's must be too.
     const bool micromap = desc.type == AccelerationStructureType::OpacityMicromap;
@@ -740,7 +870,7 @@ core::Result<void> VulkanDevice::recordBuild(CommandListHandle commandList, cons
                       offsetof(VkAccelerationStructureBuildRangeInfoKHR, firstVertex) &&
                   offsetof(AccelerationStructureBuildRange, transformOffset) ==
                       offsetof(VkAccelerationStructureBuildRangeInfoKHR, transformOffset));
-    if (auto checked = checkInputs(build.inputs, features_.opacityMicromap); !checked) {
+    if (auto checked = checkInputs(build.inputs, features_); !checked) {
         return checked;
     }
     if (auto checked = checkVulkanMotion(features_.rayTracingMotion, build.inputs.type, build.inputs.motionKeyframes);
@@ -777,18 +907,30 @@ core::Result<void> VulkanDevice::recordBuild(CommandListHandle commandList, cons
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "a build's inputs have motion unlike the structure it builds");
     }
-    VkAccelerationStructureKHR src = VK_NULL_HANDLE;
+    const VulkanAccelerationStructure* from = nullptr;
     if (build.update) {
-        auto from = accelerationStructureFor(build.src);
-        if (!from) {
-            return std::unexpected(std::move(from.error()));
+        auto found = accelerationStructureFor(build.src);
+        if (!found) {
+            return std::unexpected(std::move(found.error()));
         }
-        src = (*from)->structure();
+        from = *found;
+        // An update starts from a structure Vulkan names as dst's kind is
+        // named: a partitioned top one by address, the others by object.
+        if ((from->type() == AccelerationStructureType::PartitionedTop) !=
+            (build.inputs.type == AccelerationStructureType::PartitionedTop)) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 "a partitioned top structure updates only from a partitioned top one, and only it "
+                                 "from one");
+        }
     }
     const auto scratch = addressOf(build.scratch, build.scratchOffset);
     if (!scratch) {
         return std::unexpected(scratch.error());
     }
+    if (build.inputs.type == AccelerationStructureType::PartitionedTop) {
+        return recordPartitionedBuild((*list)->buffer, build, **dst, from, *scratch, ranges != nullptr);
+    }
+    const VkAccelerationStructureKHR src = from != nullptr ? from->structure() : VK_NULL_HANDLE;
     if (build.inputs.type == AccelerationStructureType::OpacityMicromap) {
         const auto data = addressOf(build.inputs.micromapData, build.inputs.micromapDataOffset);
         const auto records = addressOf(build.inputs.micromapRecords, build.inputs.micromapRecordOffset);
@@ -829,6 +971,39 @@ core::Result<void> VulkanDevice::recordBuild(CommandListHandle commandList, cons
     return {};
 }
 
+core::Result<void> VulkanDevice::recordPartitionedBuild(VkCommandBuffer buffer, const AccelerationStructureBuild& build,
+                                                        const VulkanAccelerationStructure& dst,
+                                                        const VulkanAccelerationStructure* src, VkDeviceAddress scratch,
+                                                        bool indirect) {
+    // Every build reads its counts on the GPU; there is no other indirect
+    // form (vkCmdBuildPartitionedAccelerationStructuresNV).
+    if (indirect) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "a partitioned top structure's build reads its counts on the GPU already; it has no "
+                             "indirect build");
+    }
+    const PartitionedTopInputs& partitioned = build.inputs.partitioned;
+    const auto ops = addressOf(partitioned.ops, partitioned.opOffset);
+    if (!ops) {
+        return std::unexpected(ops.error());
+    }
+    const auto opCount = addressOf(partitioned.opCount, partitioned.opCountOffset);
+    if (!opCount) {
+        return std::unexpected(opCount.error());
+    }
+    VkPartitionedAccelerationStructureFlagsNV translation{};
+    VkBuildPartitionedAccelerationStructureInfoNV info{};
+    info.sType = VK_STRUCTURE_TYPE_BUILD_PARTITIONED_ACCELERATION_STRUCTURE_INFO_NV;
+    info.input = partitionedInputOf(build.inputs, translation);
+    info.srcAccelerationStructureData = src != nullptr ? src->reference() : 0;
+    info.dstAccelerationStructureData = dst.reference();
+    info.scratchData = scratch;
+    info.srcInfos = *ops;
+    info.srcInfosCount = *opCount;
+    table_.vkCmdBuildPartitionedAccelerationStructuresNV(buffer, &info);
+    return {};
+}
+
 core::Result<void> VulkanDevice::copyStructure(CommandListHandle commandList, AccelerationStructureHandle dst,
                                                AccelerationStructureHandle src,
                                                VkCopyAccelerationStructureModeKHR mode) {
@@ -849,6 +1024,11 @@ core::Result<void> VulkanDevice::copyStructure(CommandListHandle commandList, Ac
     auto from = accelerationStructureFor(src);
     if (!from) {
         return std::unexpected(std::move(from.error()));
+    }
+    for (const VulkanAccelerationStructure* named : {*from, *to}) {
+        if (auto checked = checkNotPartitioned(named->type(), "copies"); !checked) {
+            return checked;
+        }
     }
     if ((*from)->isMicromap() || (*to)->isMicromap()) {
         // Vulkan copies micromaps only into micromaps (VkCopyMicromapInfoEXT).
@@ -1047,6 +1227,9 @@ core::Result<void> VulkanDevice::writeAccelerationStructureProperties(
         if (!named) {
             return std::unexpected(std::move(named.error()));
         }
+        if (auto checked = checkNotPartitioned((*named)->type(), "writes properties of"); !checked) {
+            return checked;
+        }
         // A query pool is of one query type, a micromap's or a structure's.
         if ((*named)->isMicromap() != found.micromaps()) {
             return core::failure(core::ErrorCode::RhiInvalidCall,
@@ -1109,6 +1292,9 @@ core::Result<void> VulkanDevice::serializeAccelerationStructure(CommandListHandl
     if (!from) {
         return std::unexpected(std::move(from.error()));
     }
+    if (auto checked = checkNotPartitioned((*from)->type(), "serializes"); !checked) {
+        return checked;
+    }
     const auto address = addressOf(buffer, offset);
     if (!address) {
         return std::unexpected(address.error());
@@ -1148,6 +1334,9 @@ core::Result<void> VulkanDevice::deserializeAccelerationStructure(CommandListHan
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
+    if (auto checked = checkNotPartitioned((*to)->type(), "deserializes"); !checked) {
+        return checked;
+    }
     const auto address = addressOf(buffer, offset);
     if (!address) {
         return std::unexpected(address.error());
@@ -1176,6 +1365,9 @@ core::Result<bool> VulkanDevice::serializedCompatible(
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkKnown(type, "acceleration structure type"); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkNotPartitioned(type, "serializes"); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     // Two VK_UUID_SIZE identifiers (accelstructures.adoc:3393), a micromap's

@@ -562,12 +562,13 @@ public:
     /// its build and update take, as the backend says. Fails with
     /// RhiUnsupported where Features::accelerationStructure is false, or for
     /// opacity micromaps, their flags or triangles that take their opacity
-    /// from one where Features::opacityMicromap is, or motion where
-    /// Features::rayTracingMotion is, RhiInvalidCall for a bottom structure of
-    /// both triangles and boxes, an enum value BFR doesn't have, triangles
-    /// naming a structure other than an opacity micromap as theirs or usages
-    /// past micromapUsages, or motion keyframes other than the backend takes
-    /// (Vulkan, two) or on an opacity micromap where the backend's has none
+    /// from one where Features::opacityMicromap is, partitioned top ones where
+    /// Features::partitionedTop is, or motion where Features::rayTracingMotion
+    /// is, RhiInvalidCall for a bottom structure of both triangles and boxes,
+    /// an enum value BFR doesn't have, triangles naming a structure other than
+    /// an opacity micromap as theirs or usages past micromapUsages, or motion
+    /// keyframes other than the backend takes (Vulkan, two) or on an opacity
+    /// micromap or partitioned top structure where the backend's has none
     /// (Vulkan), RhiInvalidHandle for a micromap that is gone, and
     /// RhiLimitReached past DeviceDesc::maxBuildGeometries.
     [[nodiscard]] virtual core::Result<AccelerationStructureSizes> accelerationStructureSizes(
@@ -577,26 +578,30 @@ public:
     /// frees structures the GPU is done with. Fails with RhiUnsupported where
     /// Features::accelerationStructure is false, RhiInvalidCall for a size of
     /// 0 or an enum value BFR doesn't have, RhiUnsupported for
-    /// motionKeyframes where Features::rayTracingMotion is false or for an
-    /// opacity micromap where Features::opacityMicromap is, RhiInvalidCall for
-    /// motionKeyframes other than the backend takes (Vulkan, two) or on an
-    /// opacity micromap where the backend's has none (Vulkan),
-    /// RhiLimitReached at the device's maximum or, for a top structure on a
-    /// device with table slots, when they are all held,
+    /// motionKeyframes where Features::rayTracingMotion is false, for an
+    /// opacity micromap where Features::opacityMicromap is, or for a
+    /// partitioned top structure where Features::partitionedTop is,
+    /// RhiInvalidCall for motionKeyframes other than the backend takes
+    /// (Vulkan, two) or on an opacity micromap or partitioned top structure
+    /// where the backend's has none (Vulkan), RhiLimitReached at the device's
+    /// maximum or, for a top or partitioned top structure on a device with
+    /// slots in its table, when they are all held,
     /// RhiOutOfMemory when the API says memory ran out, and RhiDeviceFailed
     /// when it refuses.
     [[nodiscard]] virtual core::Result<AccelerationStructureHandle> createAccelerationStructure(
         const AccelerationStructureDesc& desc) = 0;
 
-    /// A top structure's index in the acceleration structure table, held
-    /// from creation to destruction. Fails with RhiInvalidCall for any but a
-    /// top one or on a device made with no table slots, and RhiInvalidHandle when
-    /// it is destroyed.
+    /// A top structure's index in the acceleration structure table, or a
+    /// partitioned top one's in the partitioned top table, held from creation
+    /// to destruction. Fails with RhiInvalidCall for any other or on a device
+    /// made with no slots in its table, and RhiInvalidHandle when it is
+    /// destroyed.
     [[nodiscard]] virtual core::Result<std::uint32_t> accelerationStructureSlot(
         AccelerationStructureHandle structure) = 0;
 
     /// What an instance record names a bottom structure by (bfr_write_instances
-    /// in api/bfr.yaml), for records the GPU writes. Fails with
+    /// in api/bfr.yaml), for records the GPU writes; of a partitioned top
+    /// structure, what the backend names it by (Vulkan, its address). Fails with
     /// RhiInvalidHandle when it is destroyed, and RhiInvalidCall for an
     /// opacity micromap where the backend gives it none (Vulkan).
     [[nodiscard]] virtual core::Result<std::uint64_t> accelerationStructureReference(
@@ -637,8 +642,10 @@ public:
     /// readers and any reuse of its scratch after. Fails with RhiUnsupported
     /// where Features::accelerationStructure is false or on a copy queue,
     /// RhiInvalidCall for inputs Device::accelerationStructureSizes refuses,
-    /// of a type or motion unlike its structure's, or an opacity micromap updated
-    /// where the backend builds one only whole (Vulkan), RhiLimitReached past
+    /// of a type or motion unlike its structure's, an opacity micromap updated
+    /// where the backend builds one only whole (Vulkan), or a partitioned top
+    /// one updated from a structure of another type or another from a
+    /// partitioned top one, RhiLimitReached past
     /// DeviceDesc::maxBuildGeometries, and RhiInvalidHandle for a list,
     /// structure or buffer that is gone.
     [[nodiscard]] virtual core::Result<void> buildAccelerationStructure(CommandListHandle commandList,
@@ -651,8 +658,9 @@ public:
     /// usage; offset and stride are multiples of 4. build.inputs' counts are
     /// the most a range names. Fails with RhiUnsupported where
     /// Features::accelerationStructureIndirectBuild is false, RhiInvalidCall
-    /// for an opacity micromap where the backend builds none so (Vulkan), and
-    /// as buildAccelerationStructure does.
+    /// for an opacity micromap where the backend builds none so (Vulkan) or a
+    /// partitioned top one, whose counts the GPU reads in every build, and as
+    /// buildAccelerationStructure does.
     [[nodiscard]] virtual core::Result<void> buildAccelerationStructureIndirect(CommandListHandle commandList,
                                                                                 const AccelerationStructureBuild& build,
                                                                                 BufferHandle ranges,
@@ -664,8 +672,9 @@ public:
     /// Features::accelerationStructureCurrentSize; of an opacity micromap, a
     /// micromap made as src was. Fails with RhiUnsupported as
     /// buildAccelerationStructure does, RhiInvalidCall for a micromap and a
-    /// structure of another type, and RhiInvalidHandle for a list or structure
-    /// that is gone.
+    /// structure of another type, or a partitioned top structure where the
+    /// backend copies none (Vulkan), and RhiInvalidHandle for a list or
+    /// structure that is gone.
     [[nodiscard]] virtual core::Result<void> copyAccelerationStructure(CommandListHandle commandList,
                                                                        AccelerationStructureHandle dst,
                                                                        AccelerationStructureHandle src) = 0;
@@ -701,9 +710,10 @@ public:
     /// compute. A barrier orders their builds before it. A CompactedSize is of
     /// structures built with allowCompaction, a SerializedBottomCount of top
     /// ones. Fails with RhiUnsupported on a copy queue, RhiInvalidCall for
-    /// more structures than the pool holds from first, or for opacity
+    /// more structures than the pool holds from first, for opacity
     /// micromaps in a pool of other structures' properties or the reverse,
-    /// and RhiInvalidHandle
+    /// or for a partitioned top structure where the backend writes none of
+    /// its properties (Vulkan), and RhiInvalidHandle
     /// for a list, pool or structure that is gone.
     [[nodiscard]] virtual core::Result<void> writeAccelerationStructureProperties(
         CommandListHandle commandList, AccelerationStructurePropertyPoolHandle pool, std::uint32_t first,
@@ -733,8 +743,9 @@ public:
     /// device. buffer has accelerationStructureData usage. As builds are
     /// recorded. Fails with RhiUnsupported where
     /// Features::accelerationStructureSerialization is false or on a copy
-    /// queue, and RhiInvalidHandle for a list, structure or buffer that is
-    /// gone.
+    /// queue, RhiInvalidCall for a partitioned top structure where the backend
+    /// serializes none (Vulkan), and RhiInvalidHandle for a list, structure or
+    /// buffer that is gone.
     [[nodiscard]] virtual core::Result<void> serializeAccelerationStructure(CommandListHandle commandList,
                                                                             AccelerationStructureHandle src,
                                                                             BufferHandle buffer,
@@ -752,7 +763,8 @@ public:
     /// identifier. Fails with RhiUnsupported where
     /// Features::accelerationStructureSerialization is false, or for an
     /// opacity micromap where Features::opacityMicromap is, and
-    /// RhiInvalidCall for an enum value BFR doesn't have.
+    /// RhiInvalidCall for an enum value BFR doesn't have or a partitioned top
+    /// structure where the backend serializes none (Vulkan).
     [[nodiscard]] virtual core::Result<bool> serializedCompatible(
         AccelerationStructureType type, std::span<const std::byte, kSerializedIdentifierSize> identifier) const = 0;
 

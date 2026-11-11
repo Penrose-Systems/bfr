@@ -85,6 +85,7 @@ struct PropertyQuery {
         rayTracingPipeline.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
         invocationReorder.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_PROPERTIES_EXT;
         opacityMicromap.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_PROPERTIES_EXT;
+        partitioned.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PARTITIONED_ACCELERATION_STRUCTURE_PROPERTIES_NV;
         mesh.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT;
         shadingRate.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR;
         customBorderColor.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_PROPERTIES_EXT;
@@ -108,6 +109,7 @@ struct PropertyQuery {
         linkIfListed(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, rayTracingPipeline);
         linkIfListed(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME, invocationReorder);
         linkIfListed(VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME, opacityMicromap);
+        linkIfListed(VK_NV_PARTITIONED_ACCELERATION_STRUCTURE_EXTENSION_NAME, partitioned);
         linkIfListed(VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh);
         linkIfListed(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, shadingRate);
         linkIfListed(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, customBorderColor);
@@ -142,6 +144,7 @@ struct PropertyQuery {
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR rayTracingPipeline{};
     VkPhysicalDeviceRayTracingInvocationReorderPropertiesEXT invocationReorder{};
     VkPhysicalDeviceOpacityMicromapPropertiesEXT opacityMicromap{};
+    VkPhysicalDevicePartitionedAccelerationStructurePropertiesNV partitioned{};
     VkPhysicalDeviceMeshShaderPropertiesEXT mesh{};
     VkPhysicalDeviceFragmentShadingRatePropertiesKHR shadingRate{};
     VkPhysicalDeviceCustomBorderColorPropertiesEXT customBorderColor{};
@@ -316,6 +319,8 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
                                     on(features.rayTracingPipeline.rayTracingPipeline) &&
                                     on(features.motionBlur.rayTracingMotionBlur) &&
                                     on(features.motionBlur.rayTracingMotionBlurPipelineTraceRaysIndirect),
+        .partitionedTop = hasAccelerationStructures(features) &&
+                          on(features.partitioned.partitionedAccelerationStructure),
         .meshShader = on(features.mesh.meshShader),
         .taskShader = on(features.mesh.taskShader),
         // BFR has no call for shading rates or conservative raster yet (roadmap step
@@ -825,6 +830,7 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     libraryGroupHandles.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_LIBRARY_GROUP_HANDLES_FEATURES_EXT;
     opacityMicromap.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_FEATURES_EXT;
     motionBlur.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_MOTION_BLUR_FEATURES_NV;
+    partitioned.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PARTITIONED_ACCELERATION_STRUCTURE_FEATURES_NV;
 
     void** tail = &core.pNext;
     link(tail, vulkan11);
@@ -907,6 +913,9 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
         if (lists(extensions, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
             linkIfListed(VK_NV_RAY_TRACING_MOTION_BLUR_EXTENSION_NAME, motionBlur);
         }
+        // VK_NV_partitioned_acceleration_structure needs acceleration
+        // structures (vcpkg vk.xml:30757).
+        linkIfListed(VK_NV_PARTITIONED_ACCELERATION_STRUCTURE_EXTENSION_NAME, partitioned);
         // VK_EXT_pipeline_library_group_handles needs VK_KHR_pipeline_library
         // and VK_KHR_ray_tracing_pipeline (vkdocs xml/vk.xml:29884).
         if (lists(extensions, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME)) {
@@ -1020,6 +1029,9 @@ RayTracingLimits rayTracingFrom(const PropertyQuery& properties, const Features&
     if (reported.rayTracingMotion) {
         limits.maxMotionKeyframes = kVulkanMotionKeyframes;
         limits.motionInstanceSize = kVulkanMotionInstanceStride;
+    }
+    if (reported.partitionedTop) {
+        limits.maxPartitions = properties.partitioned.maxPartitionCount;
     }
     if (reported.opacityMicromap) {
         limits.maxOpacity2StateSubdivisionLevel = properties.opacityMicromap.maxOpacity2StateSubdivisionLevel;

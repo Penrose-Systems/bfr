@@ -566,6 +566,8 @@ bfr::rhi::AccelerationStructureHandle fromC(bfr_acceleration_structure handle) {
 static_assert(static_cast<int>(bfr::rhi::AccelerationStructureType::Top) == BFR_ACCELERATION_STRUCTURE_TYPE_TOP);
 static_assert(static_cast<int>(bfr::rhi::AccelerationStructureType::OpacityMicromap) ==
               BFR_ACCELERATION_STRUCTURE_TYPE_OPACITY_MICROMAP);
+static_assert(static_cast<int>(bfr::rhi::AccelerationStructureType::PartitionedTop) ==
+              BFR_ACCELERATION_STRUCTURE_TYPE_PARTITIONED_TOP);
 static_assert(static_cast<int>(bfr::rhi::OpacityMicromapFormat::FourState) == BFR_OPACITY_MICROMAP_FORMAT_FOUR_STATE);
 static_assert(static_cast<int>(bfr::rhi::OpacityMicromapSpecialIndex::FullyUnknownOpaque) ==
               BFR_OPACITY_MICROMAP_SPECIAL_INDEX_FULLY_UNKNOWN_OPAQUE);
@@ -579,6 +581,53 @@ static_assert(static_cast<int>(bfr::rhi::BuildPreference::FastBuild) == BFR_BUIL
 static_assert(static_cast<int>(bfr::rhi::InstanceOpacity::ForceNonOpaque) == BFR_INSTANCE_OPACITY_FORCE_NON_OPAQUE);
 static_assert(bfr::rhi::kInstanceIndexLimit == BFR_INSTANCE_INDEX_LIMIT);
 static_assert(bfr::rhi::kTransformFloats == BFR_TRANSFORM_FLOATS);
+static_assert(bfr::rhi::kBoxFloats == BFR_BOX_FLOATS);
+static_assert(bfr::rhi::kGlobalPartition == BFR_GLOBAL_PARTITION);
+static_assert(static_cast<int>(bfr::rhi::PartitionedTopOpType::WriteInstance) ==
+                  BFR_PARTITIONED_TOP_OP_TYPE_WRITE_INSTANCE &&
+              static_cast<int>(bfr::rhi::PartitionedTopOpType::UpdateInstance) ==
+                  BFR_PARTITIONED_TOP_OP_TYPE_UPDATE_INSTANCE &&
+              static_cast<int>(bfr::rhi::PartitionedTopOpType::WritePartitionTranslation) ==
+                  BFR_PARTITIONED_TOP_OP_TYPE_WRITE_PARTITION_TRANSLATION);
+static_assert(static_cast<int>(bfr::rhi::PartitionedInstanceFlag::CullDisable) ==
+                  BFR_PARTITIONED_INSTANCE_FLAG_CULL_DISABLE &&
+              static_cast<int>(bfr::rhi::PartitionedInstanceFlag::FrontCounterClockwise) ==
+                  BFR_PARTITIONED_INSTANCE_FLAG_FRONT_COUNTER_CLOCKWISE &&
+              static_cast<int>(bfr::rhi::PartitionedInstanceFlag::ForceOpaque) ==
+                  BFR_PARTITIONED_INSTANCE_FLAG_FORCE_OPAQUE &&
+              static_cast<int>(bfr::rhi::PartitionedInstanceFlag::ForceNonOpaque) ==
+                  BFR_PARTITIONED_INSTANCE_FLAG_FORCE_NON_OPAQUE &&
+              static_cast<int>(bfr::rhi::PartitionedInstanceFlag::ExplicitBounds) ==
+                  BFR_PARTITIONED_INSTANCE_FLAG_EXPLICIT_BOUNDS);
+// Partitioned top records are read in place on the GPU too.
+static_assert(sizeof(bfr_partitioned_top_op) == sizeof(bfr::rhi::PartitionedTopOp) &&
+              offsetof(bfr_partitioned_top_op, count) == offsetof(bfr::rhi::PartitionedTopOp, count) &&
+              offsetof(bfr_partitioned_top_op, address) == offsetof(bfr::rhi::PartitionedTopOp, address) &&
+              offsetof(bfr_partitioned_top_op, stride) == offsetof(bfr::rhi::PartitionedTopOp, stride));
+static_assert(sizeof(bfr_partitioned_instance_record) == sizeof(bfr::rhi::PartitionedInstanceRecord) &&
+              offsetof(bfr_partitioned_instance_record, bounds) ==
+                  offsetof(bfr::rhi::PartitionedInstanceRecord, bounds) &&
+              offsetof(bfr_partitioned_instance_record, custom_index) ==
+                  offsetof(bfr::rhi::PartitionedInstanceRecord, customIndex) &&
+              offsetof(bfr_partitioned_instance_record, mask) == offsetof(bfr::rhi::PartitionedInstanceRecord, mask) &&
+              offsetof(bfr_partitioned_instance_record, hit_group_offset) ==
+                  offsetof(bfr::rhi::PartitionedInstanceRecord, hitGroupOffset) &&
+              offsetof(bfr_partitioned_instance_record, flags) ==
+                  offsetof(bfr::rhi::PartitionedInstanceRecord, flags) &&
+              offsetof(bfr_partitioned_instance_record, instance_index) ==
+                  offsetof(bfr::rhi::PartitionedInstanceRecord, instanceIndex) &&
+              offsetof(bfr_partitioned_instance_record, partition_index) ==
+                  offsetof(bfr::rhi::PartitionedInstanceRecord, partitionIndex) &&
+              offsetof(bfr_partitioned_instance_record, bottom_reference) ==
+                  offsetof(bfr::rhi::PartitionedInstanceRecord, bottomReference));
+static_assert(sizeof(bfr_partitioned_instance_update_record) == sizeof(bfr::rhi::PartitionedInstanceUpdateRecord) &&
+              offsetof(bfr_partitioned_instance_update_record, hit_group_offset) ==
+                  offsetof(bfr::rhi::PartitionedInstanceUpdateRecord, hitGroupOffset) &&
+              offsetof(bfr_partitioned_instance_update_record, bottom_reference) ==
+                  offsetof(bfr::rhi::PartitionedInstanceUpdateRecord, bottomReference));
+static_assert(sizeof(bfr_partition_translation_record) == sizeof(bfr::rhi::PartitionTranslationRecord) &&
+              offsetof(bfr_partition_translation_record, translation) ==
+                  offsetof(bfr::rhi::PartitionTranslationRecord, translation));
 
 // The rhi form of a structure's inputs, its triangles and boxes written to
 // device's arrays from triangles and boxes on, which those advance past; a
@@ -591,7 +640,7 @@ std::optional<bfr::rhi::AccelerationStructureInputs> inputsIn(const bfr_accelera
                                                               bfr::core::Message& error) {
     using namespace bfr::rhi;
     limit = false;
-    const auto type = enumIn(inputs.type, AccelerationStructureType::OpacityMicromap, "acceleration structure type",
+    const auto type = enumIn(inputs.type, AccelerationStructureType::PartitionedTop, "acceleration structure type",
                              error);
     const auto preference = enumIn(inputs.flags.preference, BuildPreference::FastBuild, "build preference", error);
     if (!type || !preference) {
@@ -618,7 +667,16 @@ std::optional<bfr::rhi::AccelerationStructureInputs> inputsIn(const bfr_accelera
         .micromapRecords = fromC(inputs.micromap_records),
         .micromapRecordOffset = inputs.micromap_record_offset,
         .micromapRecordStride = inputs.micromap_record_stride,
-        .motionKeyframes = inputs.motion_keyframes};
+        .motionKeyframes = inputs.motion_keyframes,
+        .partitioned = {.instanceCount = inputs.partitioned.instance_count,
+                        .maxPartitionInstances = inputs.partitioned.max_partition_instances,
+                        .partitionCount = inputs.partitioned.partition_count,
+                        .maxGlobalInstances = inputs.partitioned.max_global_instances,
+                        .partitionTranslation = inputs.partitioned.partition_translation != BFR_FALSE,
+                        .ops = fromC(inputs.partitioned.ops),
+                        .opOffset = inputs.partitioned.op_offset,
+                        .opCount = fromC(inputs.partitioned.op_count),
+                        .opCountOffset = inputs.partitioned.op_count_offset}};
     if (inputs.micromap_usages == nullptr && inputs.micromap_usage_count != 0) {
         error.format("micromap_usages is null with a count");
         return std::nullopt;
@@ -1270,6 +1328,7 @@ bfr_caps_ray_tracing toC(const bfr::rhi::RayTracingLimits& rayTracing) {
         .max_opacity_4_state_subdivision_level = rayTracing.maxOpacity4StateSubdivisionLevel,
         .max_motion_keyframes = rayTracing.maxMotionKeyframes,
         .motion_instance_size = rayTracing.motionInstanceSize,
+        .max_partitions = rayTracing.maxPartitions,
     };
 }
 
@@ -1295,6 +1354,7 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .opacity_micromap = toC(features.opacityMicromap),
         .ray_tracing_motion = toC(features.rayTracingMotion),
         .ray_tracing_motion_indirect = toC(features.rayTracingMotionIndirect),
+        .partitioned_top = toC(features.partitionedTop),
         .mesh_shader = toC(features.meshShader),
         .task_shader = toC(features.taskShader),
         .shading_rate = toC(features.shadingRate),
@@ -1736,6 +1796,7 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
              .maxSparseMemories = desc->max_sparse_memories,
              .maxTileMappings = desc->max_tile_mappings,
              .maxBindlessAccelerationStructures = desc->max_bindless_acceleration_structures,
+             .maxBindlessPartitionedTops = desc->max_bindless_partitioned_tops,
              .maxBuildGeometries = desc->max_build_geometries,
              .maxAccelerationStructurePropertyPools = desc->max_acceleration_structure_property_pools,
              .indirectStrides = {desc->indirect_strides, desc->indirect_stride_count}});
@@ -3070,7 +3131,7 @@ bfr_result bfr_create_acceleration_structure(bfr_device* device, const bfr_accel
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_acceleration_structure_desc takes no chained structs");
         }
         bfr::core::Message error;
-        const auto type = enumIn(desc->type, bfr::rhi::AccelerationStructureType::OpacityMicromap,
+        const auto type = enumIn(desc->type, bfr::rhi::AccelerationStructureType::PartitionedTop,
                                  "acceleration structure type", error);
         if (!type) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
@@ -3627,7 +3688,7 @@ bfr_result bfr_serialized_compatible(bfr_device* device, bfr_acceleration_struct
         }
         *compatible = BFR_FALSE;
         bfr::core::Message error;
-        const auto which = enumIn(type, bfr::rhi::AccelerationStructureType::OpacityMicromap,
+        const auto which = enumIn(type, bfr::rhi::AccelerationStructureType::PartitionedTop,
                                   "acceleration structure type", error);
         if (!which) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);

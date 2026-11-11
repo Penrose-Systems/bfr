@@ -37,6 +37,8 @@ constants:
   no_slot: {value: 4294967295, doc: "A bindless slot a texture doesn't have, in a table its usage doesn't set; no table has a slot this high."}
   instance_index_limit: {value: 16777216, doc: "Instance custom indices and hit group offsets are below this: every backend's record holds them in 24 bits."}
   transform_floats: {value: 12, doc: The floats of a 3x4 row-major transform.}
+  box_floats: {value: 6, doc: "The floats of a box: min xyz, then max xyz."}
+  global_partition: {value: 4294967295, doc: "The partition index that names a partitioned top structure's global partition, which holds instances apart from the others."}
   no_shader: {value: 4294967295, doc: No shader in a bfr_ray_tracing_group's slot.}
   serialized_identifier_size: {value: 32, doc: "The bytes of the identifier a serialized acceleration structure begins with, which bfr_serialized_compatible reads: two 16-byte identifiers, on every backend that serializes."}
   max_message_length: {value: 1024, doc: The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".}
@@ -669,6 +671,7 @@ enums:
       bottom: {value: 0, doc: Triangles or boxes.}
       top: {value: 1, doc: Instances of bottom structures; what shaders trace rays against.}
       opacity_micromap: {value: 2, doc: "Micromaps, which say which parts of a bottom structure's triangles are opaque; where bfr_caps_features.opacity_micromap."}
+      partitioned_top: {value: 3, doc: "Instances in partitions, which builds write, update and move from records the GPU reads, rebuilding only the partitions they touch; traced as a top one is, from its own table; where bfr_caps_features.partitioned_top."}
 
   opacity_micromap_format:
     doc: >-
@@ -695,6 +698,22 @@ enums:
       none: {value: 0}
       matrix: {value: 1}
       srt: {value: 2}
+
+  partitioned_top_op_type:
+    doc: "What a bfr_partitioned_top_op does: writes instances, updates them, or moves partitions. The values are the records'."
+    values:
+      write_instance: {value: 0}
+      update_instance: {value: 1}
+      write_partition_translation: {value: 2}
+
+  partitioned_instance_flag:
+    doc: "The bits of a bfr_partitioned_instance_record's flags. The values are the records'."
+    values:
+      cull_disable: {value: 1}
+      front_counter_clockwise: {value: 2}
+      force_opaque: {value: 4}
+      force_non_opaque: {value: 8}
+      explicit_bounds: {value: 16, doc: "The instance's bounds are read, and later update_instance records may name it."}
 
   build_preference:
     doc: What an acceleration structure build favours; passed to the backend as given.
@@ -831,7 +850,11 @@ handles:
       Where bfr_caps_bindless.max_acceleration_structures is not 0 there is a
       fifth table, of top acceleration structures, by the slot
       bfr_get_acceleration_structure_slot reports: on Vulkan binding 4,
-      acceleration structures, as the others are. D3D12 and Metal have none
+      acceleration structures, as the others are. Where
+      bfr_caps_features.partitioned_top there is a partitioned top table, with
+      or without the fifth, of partitioned top structures by their slots: on
+      Vulkan binding 5, partitioned acceleration structures, which shaders
+      declare as acceleration structures. D3D12 and Metal have neither
       yet.
       Uniform buffers have no table: not every backend's minimum has them. A
       pipeline's shaders are bytecode for the backend the device runs on.
@@ -1061,6 +1084,13 @@ structs:
           is; bfr_caps_bindless.max_acceleration_structures says how many the adapter holds. Where that
           is 0 the device has no such table, and more than 0 fails with error_limit_reached. With 0
           slots, top structures are made with none.
+      - name: max_bindless_partitioned_tops
+        type: u32
+        doc: >-
+          Slots in the partitioned top table bfr_pipeline states, of partitioned top structures; with
+          0, they are made with none. No limit names it: the backend says whether it holds the tables together.
+          Where bfr_caps_features.partitioned_top is false, more than 0 fails with
+          error_limit_reached.
       - name: max_build_geometries
         type: u32
         doc: >-
@@ -1235,7 +1265,9 @@ structs:
         type: bool
         doc: >-
           Acceleration structure builds use it as scratch. It starts at an
-          address that is a multiple of bfr_caps_ray_tracing.scratch_alignment.
+          address that is a multiple of bfr_caps_ray_tracing.scratch_alignment,
+          and of 256 where bfr_caps_features.partitioned_top, as a partitioned
+          top structure's build takes.
       - name: shader_binding_table
         type: bool
         doc: >-
@@ -1912,6 +1944,88 @@ structs:
       - {name: opaque, type: bool}
       - {name: no_duplicate_any_hit, type: bool}
 
+  partitioned_top_op:
+    doc: >-
+      One kind of work in a partitioned top structure's build, as a buffer
+      holds it: count records of type (a bfr_partitioned_top_op_type's value),
+      stride bytes apart from address, a bfr_get_buffer_address plus an
+      offset. No two of a build's ops are of one type, and no instance is named
+      twice in one. The layout the backend reads.
+    members:
+      - {name: type, type: u32}
+      - {name: count, type: u32}
+      - {name: address, type: u64}
+      - {name: stride, type: u64}
+
+  partitioned_instance_record:
+    doc: >-
+      A write_instance record: instance instance_index, below the structure's
+      instance_count, of bottom_reference
+      (bfr_get_acceleration_structure_reference; 0 is an instance no ray hits,
+      which Vulkan may keep so), in partition partition_index, below its
+      partition_count, or global_partition. hit_group_offset is below
+      instance_index_limit and mask is 8 bits. The layout the backend reads.
+    members:
+      - {name: transform, type: f32, fixed: transform_floats, doc: 3x4 row-major object-to-world transform.}
+      - name: bounds
+        type: f32
+        fixed: box_floats
+        doc: >-
+          Read with explicit_bounds: the bottom structures it will name,
+          transformed, before any partition translation.
+      - {name: custom_index, type: u32}
+      - {name: mask, type: u32}
+      - {name: hit_group_offset, type: u32}
+      - {name: flags, type: u32, doc: ORs bfr_partitioned_instance_flag values.}
+      - {name: instance_index, type: u32}
+      - {name: partition_index, type: u32}
+      - {name: bottom_reference, type: u64}
+
+  partitioned_instance_update_record:
+    doc: >-
+      An update_instance record: instance instance_index, written with
+      explicit_bounds or with a bottom_reference of 0, takes bottom_reference,
+      within its bounds, or 0, which disables it, and hit_group_offset, below
+      instance_index_limit. One written with 0 may stay disabled, as Vulkan
+      says. The layout the backend reads.
+    members:
+      - {name: instance_index, type: u32}
+      - {name: hit_group_offset, type: u32}
+      - {name: bottom_reference, type: u64}
+
+  partition_translation_record:
+    doc: >-
+      A write_partition_translation record: partition partition_index, below
+      its partition_count, or global_partition, of a structure built with
+      partition_translation, is traced as if translation were added to its
+      instances' transforms. The layout the backend reads.
+    members:
+      - {name: partition_index, type: u32}
+      - {name: translation, type: f32, fixed: 3}
+
+  partitioned_top_inputs:
+    doc: >-
+      A partitioned top structure's counts and work: instance_count instances,
+      in partition_count partitions of at most max_partition_instances each
+      and the global partition of at most max_global_instances,
+      partition_count plus max_global_instances at most
+      bfr_caps_ray_tracing.max_partitions; with partition_translation,
+      partitions may be moved. A build runs the bfr_partitioned_top_op records
+      from op_offset in ops, as many as the GPU reads from the u32 at
+      op_count_offset, a multiple of 4, in op_count; both buffers are given,
+      with acceleration_structure_input usage. bfr_get_acceleration_structure_sizes
+      reads the flags, the counts and partition_translation.
+    members:
+      - {name: instance_count, type: u32}
+      - {name: max_partition_instances, type: u32}
+      - {name: partition_count, type: u32}
+      - {name: max_global_instances, type: u32}
+      - {name: partition_translation, type: bool}
+      - {name: ops, type: buffer}
+      - {name: op_offset, type: u64, doc: Bytes into ops.}
+      - {name: op_count, type: buffer}
+      - {name: op_count_offset, type: u64, doc: Bytes into op_count.}
+
   acceleration_structure_inputs:
     doc: >-
       What an acceleration structure is built from. A bottom one holds
@@ -1925,7 +2039,8 @@ structs:
       micromap_record_stride bytes apart from micromap_record_offset in
       micromap_records, whose states micromap_data
       holds from micromap_data_offset; both buffers have
-      acceleration_structure_input usage, both offsets multiples of 256.
+      acceleration_structure_input usage, both offsets multiples of 256. A
+      partitioned top one is built from partitioned.
       bfr_get_acceleration_structure_sizes reads the counts, formats, flags,
       usages and whether a transform is given.
     members:
@@ -1951,6 +2066,7 @@ structs:
           The structure's bfr_acceleration_structure_desc.motion_keyframes: its
           triangles' motion vertices are read, or its instance records are
           bfr_write_motion_instances'.
+      - {name: partitioned, type: partitioned_top_inputs}
 
   acceleration_structure_sizes:
     doc: >-
@@ -1998,11 +2114,14 @@ structs:
     doc: >-
       A build of dst, of inputs' type, from inputs; or, with update, an update
       of src into dst (they may be the same), src built with allow_update and
-      inputs as its last build gave them but for the data the buffers hold.
-      Scratch is scratch_offset bytes into scratch, which has
+      inputs as its last build gave them but for the data the buffers hold. A
+      partitioned top one's update starts from src, a partitioned top one
+      built before, with no allow_update; its build starts from none. Scratch
+      is scratch_offset bytes into scratch, which has
       acceleration_structure_scratch usage, a multiple of
-      bfr_caps_ray_tracing.scratch_alignment, at least the build's or
-      update's scratch bytes, and overlaps neither structure.
+      bfr_caps_ray_tracing.scratch_alignment, and of 256 for a partitioned
+      top one, at least the build's or update's scratch bytes, the build's for
+      both of a partitioned top one, and overlaps neither structure.
     members:
       - {name: dst, type: acceleration_structure}
       - {name: src, type: acceleration_structure}
@@ -2220,6 +2339,7 @@ structs:
       - {name: max_opacity_4_state_subdivision_level, type: u32, doc: The highest subdivision level of a four-state opacity micromap.}
       - {name: max_motion_keyframes, type: u32, doc: "The most keyframes a structure with motion, or a motion instance, has."}
       - {name: motion_instance_size, type: u32, doc: The bytes from one record bfr_write_motion_instances writes to the next.}
+      - {name: max_partitions, type: u32, doc: "The most partitions, the global partition's instances counted as partitions, a partitioned top structure holds."}
 
   caps_features:
     doc: Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and not listed.
@@ -2244,6 +2364,7 @@ structs:
       - {name: opacity_micromap, type: bool, doc: "Opacity micromap structures, which bottom structures' triangles take their opacity from."}
       - {name: ray_tracing_motion, type: bool, doc: "Structures with motion, traced at a time by pipelines made with allow_motion."}
       - {name: ray_tracing_motion_indirect, type: bool, doc: bfr_trace_rays_indirect with a pipeline made with allow_motion.}
+      - {name: partitioned_top, type: bool, doc: "Partitioned top structures, and their table (bfr_device_desc.max_bindless_partitioned_tops)."}
       - {name: mesh_shader, type: bool}
       - {name: task_shader, type: bool}
       - {name: shading_rate, type: bool, doc: A shading rate per draw.}
@@ -3571,14 +3692,15 @@ functions:
       the scratch bytes its build and update take, as the backend says. Fails
       with error_unsupported where bfr_caps_features.acceleration_structure is
       false, or for opacity micromaps, their flags or triangles that take
-      their opacity from one where bfr_caps_features.opacity_micromap is, or
+      their opacity from one where bfr_caps_features.opacity_micromap is,
+      partitioned top ones where bfr_caps_features.partitioned_top is, or
       motion where bfr_caps_features.ray_tracing_motion is,
       error_invalid_argument for a bottom structure of both triangles and
       boxes, an enum value BFR doesn't have, triangles naming a structure
       other than an opacity micromap as theirs or usages past
       micromap_usages, or motion keyframes other than the backend takes
-      (Vulkan, two) or on an opacity micromap where the backend's has none
-      (Vulkan), error_invalid_handle for a micromap that is gone, and
+      (Vulkan, two) or on an opacity micromap or partitioned top structure
+      where the backend's has none (Vulkan), error_invalid_handle for a micromap that is gone, and
       error_limit_reached past the device's max_build_geometries.
     returns: result
     params:
@@ -3594,13 +3716,14 @@ functions:
       bfr_caps_features.acceleration_structure is false,
       error_invalid_argument for a size of 0 or an enum value BFR doesn't
       have, error_unsupported for motion_keyframes where
-      bfr_caps_features.ray_tracing_motion is false or for an opacity
-      micromap where bfr_caps_features.opacity_micromap is,
+      bfr_caps_features.ray_tracing_motion is false, for an opacity
+      micromap where bfr_caps_features.opacity_micromap is, or for a
+      partitioned top structure where bfr_caps_features.partitioned_top is,
       error_invalid_argument for motion_keyframes other than the backend
-      takes (Vulkan, two) or on an opacity micromap where the backend's has
-      none (Vulkan), error_limit_reached at the device's maximum or,
-      for a top structure on a device with table slots, when they are all
-      held,
+      takes (Vulkan, two) or on an opacity micromap or partitioned top
+      structure where the backend's has none (Vulkan), error_limit_reached at
+      the device's maximum or, for a top or partitioned top structure on a
+      device with slots in its table, when they are all held,
       error_out_of_memory when the backend
       says memory ran out, and error_device_failed when it refuses.
     returns: result
@@ -3612,9 +3735,10 @@ functions:
   get_acceleration_structure_slot:
     doc: >-
       Writes a top acceleration structure's index in the acceleration
-      structure table bfr_pipeline states, held from creation to destruction.
-      Fails with error_invalid_argument for any but a top one, or on a device
-      made with no max_bindless_acceleration_structures.
+      structure table bfr_pipeline states, or a partitioned top one's in the
+      partitioned top table, held from creation to destruction. Fails with
+      error_invalid_argument for any other, or on a device made with no slots
+      in its table.
     returns: result
     params:
       - {name: device, type: device}
@@ -3646,9 +3770,10 @@ functions:
   get_acceleration_structure_reference:
     doc: >-
       Writes what an instance record names a bottom acceleration structure by,
-      for records the GPU writes, as bfr_write_instances lays them out. Fails
-      with error_invalid_argument for an opacity micromap where the backend
-      gives it none (Vulkan).
+      for records the GPU writes, as bfr_write_instances lays them out; of a
+      partitioned top structure, what the backend names it by (Vulkan, its
+      address). Fails with error_invalid_argument for an opacity micromap
+      where the backend gives it none (Vulkan).
     returns: result
     params:
       - {name: device, type: device}
@@ -3699,8 +3824,10 @@ functions:
       and any reuse of its scratch after. Fails with error_unsupported where
       bfr_caps_features.acceleration_structure is false or on a copy queue,
       error_invalid_argument for inputs bfr_get_acceleration_structure_sizes
-      refuses, of a type or motion unlike its structure's, or an opacity micromap
-      updated where the backend builds one only whole (Vulkan),
+      refuses, of a type or motion unlike its structure's, an opacity micromap
+      updated where the backend builds one only whole (Vulkan), or a
+      partitioned top one updated from a structure of another type or another
+      from a partitioned top one,
       error_limit_reached past
       the device's max_build_geometries, and error_invalid_handle for a
       structure or buffer that is gone.
@@ -3720,7 +3847,8 @@ functions:
       most a range names. Fails with error_unsupported where
       bfr_caps_features.acceleration_structure_indirect_build is false,
       error_invalid_argument for an opacity micromap where the backend builds
-      none so (Vulkan), and as bfr_build_acceleration_structure does.
+      none so (Vulkan) or a partitioned top one, whose counts the GPU reads in
+      every build, and as bfr_build_acceleration_structure does.
     returns: result
     params:
       - {name: device, type: device}
@@ -3737,7 +3865,8 @@ functions:
       bfr_caps_features.acceleration_structure_current_size; of an opacity
       micromap, a micromap made as src was. Fails with error_unsupported as
       bfr_build_acceleration_structure does, error_invalid_argument for a
-      micromap and a structure of another type, and error_invalid_handle for a
+      micromap and a structure of another type, or a partitioned top structure
+      where the backend copies none (Vulkan), and error_invalid_handle for a
       structure that is gone.
     returns: result
     params:
@@ -3916,9 +4045,10 @@ functions:
       structures built with allow_compaction, a serialized_bottom_count of top
       ones. Fails with error_unsupported on a copy queue,
       error_invalid_argument for more structures than the pool holds from
-      first, or for opacity micromaps in a pool of other structures'
-      properties or the reverse, and error_invalid_handle for a structure that
-      is gone.
+      first, for opacity micromaps in a pool of other structures' properties
+      or the reverse, or for a partitioned top structure where the backend
+      writes none of its properties (Vulkan), and error_invalid_handle for a
+      structure that is gone.
     returns: result
     params:
       - {name: device, type: device}
@@ -3967,7 +4097,8 @@ functions:
       on another device. buffer has acceleration_structure_data usage. As
       builds are recorded. Fails with error_unsupported where
       bfr_caps_features.acceleration_structure_serialization is false or on a
-      copy queue.
+      copy queue, and error_invalid_argument for a partitioned top structure
+      where the backend serializes none (Vulkan).
     returns: result
     params:
       - {name: device, type: device}
@@ -3997,7 +4128,8 @@ functions:
       error_unsupported where
       bfr_caps_features.acceleration_structure_serialization is false, or for
       an opacity micromap where bfr_caps_features.opacity_micromap is, and
-      error_invalid_argument for an enum value BFR doesn't have.
+      error_invalid_argument for an enum value BFR doesn't have or a
+      partitioned top structure where the backend serializes none (Vulkan).
     returns: result
     params:
       - {name: device, type: device}

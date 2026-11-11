@@ -113,6 +113,7 @@ struct DeviceFeatures {
     VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT libraryGroupHandles{};
     VkPhysicalDeviceOpacityMicromapFeaturesEXT opacityMicromap{};
     VkPhysicalDeviceRayTracingMotionBlurFeaturesNV motionBlur{};
+    VkPhysicalDevicePartitionedAccelerationStructureFeaturesNV partitioned{};
     /// VK_KHR_pipeline_library, which has no features struct, is enabled.
     bool pipelineLibrary = false;
     /// The extensions whose structs are chained, which the device enables.

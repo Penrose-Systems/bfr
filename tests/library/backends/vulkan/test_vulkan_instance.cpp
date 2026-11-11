@@ -662,6 +662,100 @@ TEST_CASE("Vulkan refuses motion of other than the two keyframes it takes", "[vu
     CHECK(written.error().code == bfr::core::ErrorCode::RhiInvalidCall);
 }
 
+TEST_CASE("Vulkan without VK_NV_partitioned_acceleration_structure reports no partitioned top structures, and "
+          "refuses them",
+          "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride;
+    const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_NV_partitioned_acceleration_structure");
+    auto created = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(created));
+    REQUIRE(created.has_value());
+    const std::unique_ptr<Instance> instance = std::move(*created);
+    const Caps& caps = instance->adapters()[0].caps;
+    CHECK_FALSE(caps.features.partitionedTop);
+    CHECK(caps.rayTracing.maxPartitions == 0);
+    const auto refused = instance->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& device) {
+                                                    device.maxBindlessPartitionedTops = 1;
+                                                }));
+    REQUIRE_FALSE(refused.has_value());
+    CHECK(refused.error().code == bfr::core::ErrorCode::RhiLimitReached);
+}
+
+TEST_CASE("Vulkan refuses partitioned top structure work it has no call for", "[vulkan][gpu]") {
+    auto created = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(created));
+    REQUIRE(created.has_value());
+    const std::unique_ptr<Instance> instance = std::move(*created);
+    const Caps& caps = instance->adapters()[0].caps;
+    if (!caps.features.partitionedTop) {
+        SKIP("the adapter has no partitioned top structures");
+    }
+    auto made = instance->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& device) {
+                                           device.maxAccelerationStructurePropertyPools = 1;
+                                       }));
+    INFO(failureOf(made));
+    REQUIRE(made.has_value());
+    Device& device = **made;
+    using bfr::core::ErrorCode;
+    constexpr std::uint64_t kSmall = 256;
+    const auto code = [](const auto& result) {
+        return result.has_value() ? ErrorCode{} : result.error().code;
+    };
+    // VkPartitionedAccelerationStructureInstancesInputNV has no motion.
+    if (caps.features.rayTracingMotion) {
+        CHECK(code(device.createAccelerationStructure(
+                  {.type = AccelerationStructureType::PartitionedTop, .size = kSmall, .motionKeyframes = 2})) ==
+              ErrorCode::RhiInvalidCall);
+        CHECK(code(device.accelerationStructureSizes({.type = AccelerationStructureType::PartitionedTop,
+                                                      .motionKeyframes = 2})) == ErrorCode::RhiInvalidCall);
+    }
+    // Vulkan holds one as memory, with no VkAccelerationStructureKHR for the
+    // other calls to name.
+    const auto partitioned = device.createAccelerationStructure(
+        {.type = AccelerationStructureType::PartitionedTop, .size = kSmall});
+    INFO(failureOf(partitioned));
+    REQUIRE(partitioned.has_value());
+    const auto other = device.createAccelerationStructure(
+        {.type = AccelerationStructureType::PartitionedTop, .size = kSmall});
+    REQUIRE(other.has_value());
+    const auto commandPool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+    REQUIRE(commandPool.has_value());
+    const auto list = device.beginCommands(*commandPool);
+    REQUIRE(list.has_value());
+    CHECK(code(device.copyAccelerationStructure(*list, *other, *partitioned)) == ErrorCode::RhiInvalidCall);
+    CHECK(code(device.compactAccelerationStructure(*list, *other, *partitioned)) == ErrorCode::RhiInvalidCall);
+    const auto propertyPool = device.createAccelerationStructurePropertyPool(
+        {.property = AccelerationStructureProperty::CompactedSize, .count = 1});
+    REQUIRE(propertyPool.has_value());
+    CHECK(code(device.writeAccelerationStructureProperties(*list, *propertyPool, 0, std::span{&*partitioned, 1})) ==
+          ErrorCode::RhiInvalidCall);
+    if (caps.features.accelerationStructureSerialization) {
+        const auto data = device.createBuffer({.size = kSmall, .usage = {.accelerationStructureData = true}});
+        REQUIRE(data.has_value());
+        CHECK(code(device.serializeAccelerationStructure(*list, *partitioned, *data, 0)) == ErrorCode::RhiInvalidCall);
+        CHECK(code(device.deserializeAccelerationStructure(*list, *data, 0, *partitioned)) ==
+              ErrorCode::RhiInvalidCall);
+        const std::array<std::byte, kSerializedIdentifierSize> identifier{};
+        CHECK(code(device.serializedCompatible(AccelerationStructureType::PartitionedTop, identifier)) ==
+              ErrorCode::RhiInvalidCall);
+        CHECK(device.destroyBuffer(*data).has_value());
+    }
+    if (caps.features.accelerationStructureIndirectBuild) {
+        const auto ranges = device.createBuffer({.size = kSmall, .usage = {.indirect = true}});
+        REQUIRE(ranges.has_value());
+        CHECK(code(device.buildAccelerationStructureIndirect(
+                  *list, {.dst = *partitioned, .inputs = {.type = AccelerationStructureType::PartitionedTop}}, *ranges,
+                  0, 0)) == ErrorCode::RhiInvalidCall);
+        CHECK(device.destroyBuffer(*ranges).has_value());
+    }
+    CHECK(device.destroyAccelerationStructurePropertyPool(*propertyPool).has_value());
+    CHECK(device.destroyCommandList(*list).has_value());
+    CHECK(device.destroyCommandPool(*commandPool).has_value());
+    for (const AccelerationStructureHandle structure : {*partitioned, *other}) {
+        CHECK(device.destroyAccelerationStructure(structure).has_value());
+    }
+}
+
 TEST_CASE("Vulkan writes the last motion instance into its record's bytes, short of the stride", "[vulkan][gpu]") {
     auto created = Instance::create(vulkanDesc(), {});
     INFO(failureOf(created));

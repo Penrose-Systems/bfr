@@ -31,7 +31,9 @@ instance records, the acceleration structure table); ray tracing pipelines
 and indirect traces, buffer addresses); compaction, serialization and
 acceleration structure properties, stack sizes, position fetch, invocation
 reorder caps; pipeline libraries, capture-replay group identifiers, indirect
-builds; opacity micromaps; motion (vertex, matrix and SRT instance keyframes).
+builds; opacity micromaps; motion (vertex, matrix and SRT instance keyframes);
+partitioned top structures (instances written, updated and moved by partition
+from records the GPU reads, their own table).
 
 D3D12 and Metal are paused while Vulkan takes shape (owner, 2026-11-08); they
 still type-check.

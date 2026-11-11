@@ -58,10 +58,9 @@ constexpr std::uint32_t kFirst = 7;
 constexpr std::uint32_t kSecond = 9;
 constexpr std::uint32_t kBox = 11;
 constexpr std::uint32_t kInstances = 3;
-// A vertex's floats, a triangle's vertices, and a box's floats.
+// A vertex's floats and a triangle's vertices.
 constexpr std::uint32_t kVertexFloats = 3;
 constexpr std::uint32_t kTriangleVertices = 3;
-constexpr std::uint32_t kBoxFloats = 6;
 // A size any backend takes for a structure no build fills.
 constexpr std::uint64_t kSmall = 256;
 constexpr std::uint8_t kAllRays = 0xFF;
@@ -79,6 +78,9 @@ struct RayDevice {
         const bool table = caps.bindless.maxAccelerationStructures != 0;
         auto made = instance->createDevice(0, kNoWindow, testDeviceWith([&](DeviceDesc& device) {
                                                device.maxBindlessAccelerationStructures = table ? tableSlots : 0;
+                                               device.maxBindlessPartitionedTops = caps.features.partitionedTop
+                                                                                       ? tableSlots
+                                                                                       : 0;
                                                device.maxBuildGeometries = kGeometries;
                                                device.maxAccelerationStructurePropertyPools = kPropertyPools;
                                            }));
@@ -1521,6 +1523,132 @@ TEST_CASE("Device builds structures with motion, and rays traced at a time hit t
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
+// An Upload buffer with accelerationStructureInput usage holding records,
+// and its address.
+template <class T, std::size_t N>
+std::pair<BufferHandle, std::uint64_t> addressed(Device& device, const std::array<T, N>& records) {
+    const BufferHandle buffer = input(device, records);
+    const auto address = device.bufferAddress(buffer);
+    INFO(failureOf(address));
+    REQUIRE(address.has_value());
+    return {buffer, *address};
+}
+
+TEST_CASE("Device builds partitioned top structures from records the GPU reads, updates them, and rays traced "
+          "inline hit them, where it has them",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const RayDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        if (!made.caps.features.partitionedTop || !made.caps.features.rayQuery) {
+            SKIP("the adapter has no partitioned top structures or no ray queries");
+        }
+        if (!takesSpirv(backend)) {
+            SKIP("no " << backend.name << " bytecode is checked in");
+        }
+        REQUIRE(made.caps.features.bufferAddress);
+        const RayQuery query{device, bfr::test::spirv::kRayQueryPartitionedComp};
+        Scene scene{device};
+        // The triangle at x = 0 in partition 0, at x = 10 in partition 1, and
+        // the box at x = 20 in the global partition.
+        constexpr std::uint32_t kPartitions = 2;
+        const auto reference = [&](AccelerationStructureHandle structure) {
+            const auto named = device.accelerationStructureReference(structure);
+            REQUIRE(named.has_value());
+            return *named;
+        };
+        const auto [instances,
+                    instancesAddress] = addressed(device, std::array<PartitionedInstanceRecord, kInstances>{{
+                                                              {.transform = movedBy(0),
+                                                               .customIndex = kFirst,
+                                                               .mask = kAllRays,
+                                                               .instanceIndex = 0,
+                                                               .partitionIndex = 0,
+                                                               .bottomReference = reference(scene.triangles.structure)},
+                                                              {.transform = movedBy(2 * kSpacing),
+                                                               .customIndex = kSecond,
+                                                               .mask = kAllRays,
+                                                               .instanceIndex = 1,
+                                                               .partitionIndex = 1,
+                                                               .bottomReference = reference(scene.triangles.structure)},
+                                                              {.transform = movedBy(4 * kSpacing),
+                                                               .customIndex = kBox,
+                                                               .mask = kAllRays,
+                                                               .instanceIndex = 2,
+                                                               .partitionIndex = kGlobalPartition,
+                                                               .bottomReference = reference(scene.box.structure)},
+                                                          }});
+        // The update moves partition 1 on by one ray's spacing.
+        const auto [translations,
+                    translationsAddress] = addressed(device,
+                                                     std::array<PartitionTranslationRecord, 1>{
+                                                         {{.partitionIndex = 1, .translation = {kSpacing, 0, 0}}}});
+        const auto [ops, opsAddress] =
+            addressed(device, std::array<PartitionedTopOp, 2>{{
+                                  {.type = std::to_underlying(PartitionedTopOpType::WriteInstance),
+                                   .count = kInstances,
+                                   .address = instancesAddress,
+                                   .stride = sizeof(PartitionedInstanceRecord)},
+                                  {.type = std::to_underlying(PartitionedTopOpType::WritePartitionTranslation),
+                                   .count = 1,
+                                   .address = translationsAddress,
+                                   .stride = sizeof(PartitionTranslationRecord)},
+                              }});
+        // The build runs the first op, the update the second.
+        const BufferHandle opCount = input(device, std::array<std::uint32_t, 1>{1});
+        AccelerationStructureInputs inputs{.type = AccelerationStructureType::PartitionedTop,
+                                           .partitioned = {.instanceCount = kInstances,
+                                                           .maxPartitionInstances = 1,
+                                                           .partitionCount = kPartitions,
+                                                           .maxGlobalInstances = 1,
+                                                           .partitionTranslation = true,
+                                                           .ops = ops,
+                                                           .opCount = opCount}};
+        const Built top = allocated(device, inputs);
+        const auto build = [&](CommandListHandle list, bool update) {
+            const auto recorded = device.buildAccelerationStructure(list,
+                                                                    {.dst = top.structure,
+                                                                     .src = update ? top.structure
+                                                                                   : AccelerationStructureHandle{},
+                                                                     .update = update,
+                                                                     .inputs = inputs,
+                                                                     .scratch = top.scratch});
+            INFO(failureOf(recorded));
+            CHECK(recorded.has_value());
+            CHECK(device.barrier(list).has_value());
+        };
+
+        const std::array<std::uint32_t, kRays> built{kFirst, kMiss, kSecond, kMiss, kBox, kMiss, kMiss, kMiss};
+        CHECK(traced(
+                  device, top.structure,
+                  [&](CommandListHandle list) {
+                      for (const auto& [bottom, bottomInputs] : {std::pair{scene.triangles, scene.triangleInputs()},
+                                                                 std::pair{scene.box, scene.boxInputs()}}) {
+                          CHECK(device
+                                    .buildAccelerationStructure(list, {.dst = bottom.structure,
+                                                                       .inputs = bottomInputs,
+                                                                       .scratch = bottom.scratch})
+                                    .has_value());
+                      }
+                      CHECK(device.barrier(list).has_value());
+                      build(list, false);
+                  },
+                  query) == built);
+
+        inputs.partitioned.opOffset = sizeof(PartitionedTopOp);
+        const std::array<std::uint32_t, kRays> moved{kFirst, kMiss, kMiss, kSecond, kBox, kMiss, kMiss, kMiss};
+        CHECK(traced(device, top.structure, [&](CommandListHandle list) { build(list, true); }, query) == moved);
+
+        CHECK(device.destroyAccelerationStructure(top.structure).has_value());
+        for (const BufferHandle buffer : {top.scratch, instances, translations, ops, opCount}) {
+            CHECK(device.destroyBuffer(buffer).has_value());
+        }
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
@@ -1554,6 +1682,19 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
                   ErrorCode::RhiUnsupported);
             CHECK(code(device.createAccelerationStructurePropertyPool({.count = 1, .opacityMicromaps = true})) ==
                   ErrorCode::RhiUnsupported);
+        }
+        if (made.caps.features.accelerationStructure && !made.caps.features.partitionedTop) {
+            CHECK(code(device.createAccelerationStructure({.type = AccelerationStructureType::PartitionedTop,
+                                                           .size = kSmall})) == ErrorCode::RhiUnsupported);
+            CHECK(code(device.accelerationStructureSizes({.type = AccelerationStructureType::PartitionedTop})) ==
+                  ErrorCode::RhiUnsupported);
+        }
+        if (!made.caps.features.partitionedTop) {
+            const auto refused = made.instance->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& desc) {
+                                                                 desc.maxBindlessPartitionedTops = 1;
+                                                             }));
+            REQUIRE_FALSE(refused.has_value());
+            CHECK(refused.error().code == ErrorCode::RhiLimitReached);
         }
         if (!made.caps.features.accelerationStructure) {
             std::array<std::byte, 1> out{};

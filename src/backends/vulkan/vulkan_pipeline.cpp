@@ -53,9 +53,9 @@ namespace {
 constexpr std::uint32_t kSampleMaskBits = std::numeric_limits<VkSampleMask>::digits;
 
 constexpr std::uint32_t kBindlessSet = 0;
-// The four tables every device has, and the acceleration structure table.
-constexpr std::uint32_t kCoreBindings = 4;
-constexpr std::uint32_t kBindingCount = 5;
+// The four tables every device has, the acceleration structure table and the
+// partitioned top structure table.
+constexpr std::uint32_t kBindingCount = 6;
 constexpr VkDescriptorBindingFlags kTableFlags = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
                                                  VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
 
@@ -81,6 +81,9 @@ std::array<Table, kBindingCount> tablesFor(const DeviceDesc& desc) {
         {.binding = kAccelerationStructureBinding,
          .type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
          .count = desc.maxBindlessAccelerationStructures},
+        {.binding = kPartitionedTopBinding,
+         .type = VK_DESCRIPTOR_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_NV,
+         .count = desc.maxBindlessPartitionedTops},
     }};
 }
 
@@ -313,26 +316,31 @@ VkPipelineColorBlendAttachmentState blendFor(const BlendState& blend) {
 
 core::Result<VulkanBindlessLayout> VulkanBindlessLayout::create(const VolkDeviceTable& table, VkDevice device,
                                                                 const DeviceDesc& desc, std::uint32_t pushConstantsSize,
-                                                                bool accelerationStructures) {
-    // The acceleration structure table's type exists only with its
-    // extension, and its update after bind only with its feature, so a device
-    // without them has no such binding; checkTables refused slots for it.
-    const std::uint32_t bindingCount = accelerationStructures ? kBindingCount : kCoreBindings;
+                                                                bool accelerationStructures, bool partitionedTops) {
+    // The acceleration structure tables' types exist only with their
+    // extensions, and the first's update after bind only with its feature, so
+    // a device without them has no such binding; checkTables refused slots
+    // for it.
     const std::array<Table, kBindingCount> tables = tablesFor(desc);
     std::array<VkDescriptorSetLayoutBinding, kBindingCount> bindings{};
     std::array<VkDescriptorBindingFlags, kBindingCount> flags{};
     std::array<VkDescriptorPoolSize, kBindingCount> sizes{};
+    std::uint32_t bindingCount = 0;
     std::uint32_t sizeCount = 0;
-    for (std::size_t i = 0; i < bindingCount; ++i) {
-        bindings.at(i) = {.binding = tables.at(i).binding,
-                          .descriptorType = tables.at(i).type,
-                          .descriptorCount = tables.at(i).count,
-                          .stageFlags = VK_SHADER_STAGE_ALL,
-                          .pImmutableSamplers = nullptr};
-        flags.at(i) = kTableFlags;
+    for (const Table& held : tables) {
+        if ((held.binding == kAccelerationStructureBinding && !accelerationStructures) ||
+            (held.binding == kPartitionedTopBinding && !partitionedTops)) {
+            continue;
+        }
+        bindings.at(bindingCount) = {.binding = held.binding,
+                                     .descriptorType = held.type,
+                                     .descriptorCount = held.count,
+                                     .stageFlags = VK_SHADER_STAGE_ALL,
+                                     .pImmutableSamplers = nullptr};
+        flags.at(bindingCount++) = kTableFlags;
         // A table of 0 slots is none: the pool makes room for no descriptor of it.
-        if (tables.at(i).count != 0) {
-            sizes.at(sizeCount++) = {.type = tables.at(i).type, .descriptorCount = tables.at(i).count};
+        if (held.count != 0) {
+            sizes.at(sizeCount++) = {.type = held.type, .descriptorCount = held.count};
         }
     }
     VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlags{};
@@ -355,9 +363,11 @@ core::Result<VulkanBindlessLayout> VulkanBindlessLayout::create(const VolkDevice
     if (support.supported == VK_FALSE) {
         return core::failure(core::ErrorCode::RhiLimitReached,
                              "the adapter cannot hold bindless tables of {} textures, {} storage textures, {} "
-                             "storage buffers, {} samplers and {} acceleration structures together",
+                             "storage buffers, {} samplers, {} acceleration structures and {} partitioned top "
+                             "structures together",
                              desc.maxBindlessTextures, desc.maxBindlessStorageTextures, desc.maxBindlessStorageBuffers,
-                             desc.maxBindlessSamplers, desc.maxBindlessAccelerationStructures);
+                             desc.maxBindlessSamplers, desc.maxBindlessAccelerationStructures,
+                             desc.maxBindlessPartitionedTops);
     }
 
     VulkanBindlessLayout made;
@@ -460,6 +470,17 @@ void VulkanBindlessLayout::writeAccelerationStructure(std::uint32_t slot, VkAcce
     named.pAccelerationStructures = &structure;
     VkWriteDescriptorSet write = writeFor(set_, kAccelerationStructureBinding, slot,
                                           VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
+    write.pNext = &named;
+    table_->vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+}
+
+void VulkanBindlessLayout::writePartitionedTop(std::uint32_t slot, VkDeviceAddress structure) const {
+    VkWriteDescriptorSetPartitionedAccelerationStructureNV named{};
+    named.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_PARTITIONED_ACCELERATION_STRUCTURE_NV;
+    named.accelerationStructureCount = 1;
+    named.pAccelerationStructures = &structure;
+    VkWriteDescriptorSet write = writeFor(set_, kPartitionedTopBinding, slot,
+                                          VK_DESCRIPTOR_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_NV);
     write.pNext = &named;
     table_->vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
 }

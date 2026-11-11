@@ -258,7 +258,7 @@ void VulkanDevice::collectBuffers() {
     propertyPools_.collect(completed);
     pipelines_.collect(completed);
     accelerationStructures_.collect(completed, [this](const VulkanAccelerationStructure& structure) {
-        bindless_.giveAccelerationStructure(structure.slot());
+        bindless_.giveAccelerationStructure(structure.type(), structure.slot());
     });
 }
 

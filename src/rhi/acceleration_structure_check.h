@@ -84,6 +84,16 @@ namespace bfr::rhi {
     return {};
 }
 
+/// Fails with RhiUnsupported for a partitioned top structure where
+/// Features::partitionedTop is false.
+[[nodiscard]] inline core::Result<void> checkPartitionedTops(bool partitionedTop, AccelerationStructureType type) {
+    if (type == AccelerationStructureType::PartitionedTop && !partitionedTop) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device has no partitioned top structures (Features::partitionedTop)");
+    }
+    return {};
+}
+
 /// Whether triangles take their opacity from a micromap.
 [[nodiscard]] inline bool hasOpacityMicromap(const TriangleGeometry& triangles) {
     return !triangles.opacityMicromap.micromap.isNull() || !triangles.opacityMicromap.indices.isNull();
@@ -92,10 +102,15 @@ namespace bfr::rhi {
 /// Fails with RhiInvalidCall when inputs hold an enum value BFR doesn't have,
 /// a bottom structure of both triangles and boxes, or triangles naming
 /// micromap usages past micromapUsages, which BFR reads; and with
-/// RhiUnsupported for opacity micromaps where Features::opacityMicromap is
-/// false.
-[[nodiscard]] inline core::Result<void> checkInputs(const AccelerationStructureInputs& inputs, bool opacityMicromap) {
+/// RhiUnsupported for opacity micromaps or partitioned top structures where
+/// features say the device has none.
+[[nodiscard]] inline core::Result<void> checkInputs(const AccelerationStructureInputs& inputs,
+                                                    const Features& features) {
+    const bool opacityMicromap = features.opacityMicromap;
     if (auto checked = checkEnums(inputs); !checked) {
+        return checked;
+    }
+    if (auto checked = checkPartitionedTops(features.partitionedTop, inputs.type); !checked) {
         return checked;
     }
     if (inputs.type == AccelerationStructureType::Bottom && !inputs.triangles.empty() && !inputs.boxes.empty()) {
@@ -131,12 +146,13 @@ namespace bfr::rhi {
 }
 
 /// The geometries a structure built from inputs holds: a top one's instances
-/// are one.
+/// are one, and a partitioned top one's records none.
 [[nodiscard]] inline std::size_t geometriesOf(const AccelerationStructureInputs& inputs) {
     switch (inputs.type) {
         case AccelerationStructureType::Top:
             return 1;
         case AccelerationStructureType::OpacityMicromap:
+        case AccelerationStructureType::PartitionedTop:
             return 0;
         case AccelerationStructureType::Bottom:
         default:

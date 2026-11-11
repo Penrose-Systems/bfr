@@ -16,7 +16,9 @@ namespace bfr::rhi {
 /// the device allocates. A bottom structure holds triangles or boxes; a top
 /// one holds instances of bottom ones, and is what shaders trace rays
 /// against. An opacity micromap holds micromaps, which say which parts of a
-/// bottom structure's triangles are opaque. Only named, by an
+/// bottom structure's triangles are opaque. A partitioned top one holds
+/// instances in partitions, which builds write, update and move from records
+/// the GPU reads, rebuilding only the partitions they touch. Only named, by an
 /// AccelerationStructureHandle.
 struct AccelerationStructure;
 
@@ -27,6 +29,9 @@ enum class AccelerationStructureType : std::uint8_t {
     Top,
     /// Where Features::opacityMicromap.
     OpacityMicromap,
+    /// Where Features::partitionedTop: traced as a top one is, from its own
+    /// table.
+    PartitionedTop,
 };
 
 /// The states a micromap's subtriangles take: 1 bit each for two, opaque or
@@ -153,6 +158,110 @@ struct BoxGeometry {
     bool noDuplicateAnyHit = false;
 };
 
+/// The floats of a 3x4 row-major transform.
+inline constexpr std::size_t kTransformFloats = 12;
+
+/// The partition index that names a partitioned top structure's global
+/// partition, which holds instances apart from the others.
+inline constexpr std::uint32_t kGlobalPartition = 0xFFFFFFFF;
+
+/// What a PartitionedTopOp record does: writes instances, updates them, or
+/// moves partitions. The values are the records'.
+enum class PartitionedTopOpType : std::uint32_t {
+    WriteInstance = 0,
+    UpdateInstance = 1,
+    WritePartitionTranslation = 2,
+};
+
+/// One kind of work in a partitioned top structure's build, as a buffer
+/// holds it: count records of type (a PartitionedTopOpType's value), stride
+/// bytes apart from address, a Device::bufferAddress plus an offset. No two
+/// of a build's ops are of one type, and no instance is named twice in one.
+/// The layout the backend reads.
+struct PartitionedTopOp {
+    std::uint32_t type = 0;
+    std::uint32_t count = 0;
+    std::uint64_t address = 0;
+    std::uint64_t stride = 0;
+};
+
+/// The bits of a PartitionedInstanceRecord's flags. The values are the
+/// records'.
+enum class PartitionedInstanceFlag : std::uint32_t {
+    CullDisable = 1,
+    FrontCounterClockwise = 2,
+    ForceOpaque = 4,
+    ForceNonOpaque = 8,
+    /// The instance's bounds are read, and later UpdateInstance records may
+    /// name it.
+    ExplicitBounds = 16,
+};
+
+/// The floats of a box: min xyz, then max xyz.
+inline constexpr std::size_t kBoxFloats = 6;
+
+/// A WriteInstance record: instance instanceIndex, below the structure's
+/// instanceCount, of bottomReference (Device::accelerationStructureReference;
+/// 0 is an instance no ray hits, which Vulkan may keep so), in partition
+/// partitionIndex, below its partitionCount, or kGlobalPartition. transform
+/// is a 3x4 row-major object-to-world transform; bounds, read with
+/// ExplicitBounds, hold the bottom structures it will name, transformed,
+/// before any partition translation. hitGroupOffset is below
+/// kInstanceIndexLimit and mask is 8 bits. flags ORs PartitionedInstanceFlag
+/// values. The layout the backend reads.
+struct PartitionedInstanceRecord {
+    std::array<float, kTransformFloats> transform{};
+    std::array<float, kBoxFloats> bounds{};
+    std::uint32_t customIndex = 0;
+    std::uint32_t mask = 0;
+    std::uint32_t hitGroupOffset = 0;
+    std::uint32_t flags = 0;
+    std::uint32_t instanceIndex = 0;
+    std::uint32_t partitionIndex = 0;
+    std::uint64_t bottomReference = 0;
+};
+
+/// An UpdateInstance record: instance instanceIndex, written with
+/// ExplicitBounds or with a bottomReference of 0, takes bottomReference,
+/// within its bounds, or 0, which disables it, and hitGroupOffset, below
+/// kInstanceIndexLimit. One written with 0 may stay disabled, as Vulkan
+/// says. The layout the backend reads.
+struct PartitionedInstanceUpdateRecord {
+    std::uint32_t instanceIndex = 0;
+    std::uint32_t hitGroupOffset = 0;
+    std::uint64_t bottomReference = 0;
+};
+
+/// A WritePartitionTranslation record: partition partitionIndex, below its
+/// partitionCount, or kGlobalPartition, of a structure built with partitionTranslation, is
+/// traced as if translation were added to its instances' transforms. The
+/// layout the backend reads.
+struct PartitionTranslationRecord {
+    std::uint32_t partitionIndex = 0;
+    std::array<float, 3> translation{};
+};
+
+/// A partitioned top structure's counts and work: instanceCount instances, in
+/// partitionCount partitions of at most maxPartitionInstances each and the
+/// global partition of at most maxGlobalInstances, partitionCount plus
+/// maxGlobalInstances at most RayTracingLimits::maxPartitions; with
+/// partitionTranslation, partitions may be moved. A build runs the
+/// PartitionedTopOp records from opOffset in ops, as many as the GPU reads
+/// from the uint32_t at opCountOffset, a multiple of 4, in opCount; both
+/// buffers are given, with accelerationStructureInput usage. The size query reads the
+/// flags, the counts and partitionTranslation.
+struct PartitionedTopInputs {
+    std::uint32_t instanceCount = 0;
+    std::uint32_t maxPartitionInstances = 0;
+    std::uint32_t partitionCount = 0;
+    std::uint32_t maxGlobalInstances = 0;
+    bool partitionTranslation = false;
+    BufferHandle ops{};
+    std::uint64_t opOffset = 0;
+    BufferHandle opCount{};
+    std::uint64_t opCountOffset = 0;
+};
+
 /// What a structure is built from. A bottom one holds triangles or boxes,
 /// not both; a geometry's index in its span is the geometry index a hit
 /// group is chosen by. A top one holds instanceCount instance records from
@@ -164,8 +273,9 @@ struct BoxGeometry {
 /// bytes apart from micromapRecordOffset in
 /// micromapRecords, whose states micromapData holds from micromapDataOffset;
 /// both buffers have accelerationStructureInput usage, both offsets
-/// multiples of 256. The size query reads the counts, formats, flags, usages
-/// and whether a transform is given.
+/// multiples of 256. A partitioned top one is built from partitioned. The
+/// size query reads the counts, formats, flags, usages and whether a
+/// transform is given.
 struct AccelerationStructureInputs {
     AccelerationStructureType type = AccelerationStructureType::Bottom;
     AccelerationStructureFlags flags{};
@@ -184,6 +294,7 @@ struct AccelerationStructureInputs {
     /// triangles' motion vertices are read, or its instance records are
     /// writeMotionInstances'.
     std::uint32_t motionKeyframes = 0;
+    PartitionedTopInputs partitioned{};
 };
 
 /// The bytes a structure takes, and the scratch bytes its build and its
@@ -210,11 +321,14 @@ struct AccelerationStructureDesc {
 
 /// A build of dst, of inputs.type, from inputs; or, with update, an update
 /// of src into dst (they may be the same), src built with allowUpdate and
-/// inputs as its last build gave them but for the data the buffers hold.
-/// Scratch is scratchOffset bytes into scratch, which has
-/// accelerationStructureScratch usage, a multiple of
-/// RayTracingLimits::scratchAlignment, at least the build's or update's
-/// scratch bytes, and overlaps neither structure.
+/// inputs as its last build gave them but for the data the buffers hold. A
+/// partitioned top one's update starts from src, a partitioned top one built
+/// before, with no allowUpdate; its build starts from none. Scratch is
+/// scratchOffset bytes into scratch, which has accelerationStructureScratch
+/// usage, a multiple of RayTracingLimits::scratchAlignment, and of 256 for a
+/// partitioned top one, at least the build's or update's scratch bytes, the
+/// build's for both of a partitioned top one, and overlaps neither
+/// structure.
 struct AccelerationStructureBuild {
     AccelerationStructureHandle dst{};
     AccelerationStructureHandle src{};
@@ -237,9 +351,6 @@ struct AccelerationStructureBuildRange {
     std::uint32_t firstVertex = 0;
     std::uint32_t transformOffset = 0;
 };
-
-/// The floats of a 3x4 row-major transform.
-inline constexpr std::size_t kTransformFloats = 12;
 
 /// What a property pool's entries hold, one per structure a write names, of
 /// RayTracingLimits::propertyEntryBytes each.

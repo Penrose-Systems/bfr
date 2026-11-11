@@ -98,6 +98,14 @@ struct DeviceDesc {
     /// BindlessLimits::maxAccelerationStructures is 0 the adapter has no such
     /// table, and more than 0 fails with RhiLimitReached.
     std::uint32_t maxBindlessAccelerationStructures = 0;
+    /// The slots of the partitioned top table, of partitioned top
+    /// structures; with none, they are made with no slot. It is there where
+    /// Features::partitionedTop, with or without the acceleration structure
+    /// table. No limit names it: the backend says whether it holds the tables
+    /// together. Where
+    /// Features::partitionedTop is false, more than 0 fails with
+    /// RhiLimitReached.
+    std::uint32_t maxBindlessPartitionedTops = 0;
     /// The most geometries one build takes, in buildAccelerationStructure
     /// and the size query; a top structure's instances are one geometry.
     std::uint32_t maxBuildGeometries = 0;

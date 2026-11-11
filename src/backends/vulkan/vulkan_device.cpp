@@ -168,7 +168,7 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
     }
     made->allocator_ = *allocator;
     auto layout = VulkanBindlessLayout::create(made->table_, device, desc, setup.pushConstantsSize,
-                                               setup.accelerationStructureTable);
+                                               setup.accelerationStructureTable, setup.features.partitionedTop);
     if (!layout) {
         return std::unexpected(std::move(layout.error()));
     }
@@ -192,7 +192,9 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       resolve_(setup.resolve),
       rayTracing_(setup.rayTracing),
       addressing_{.indirectAddresses = setup.deviceAddresses,
-                  .scratch = setup.rayTracing.scratchAlignment,
+                  .scratch = setup.features.partitionedTop
+                                 ? std::max<VkDeviceSize>(setup.rayTracing.scratchAlignment, kPartitionedAlignment)
+                                 : setup.rayTracing.scratchAlignment,
                   .input = setup.features.opacityMicromap         ? kMicromapInputAlignment
                            : setup.features.accelerationStructure ? kInputAlignment
                                                                   : 0,

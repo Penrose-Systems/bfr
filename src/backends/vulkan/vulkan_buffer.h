@@ -26,7 +26,8 @@ namespace bfr::rhi::vulkan {
 /// requirements give; 0 where the device has none of that usage.
 struct BufferAddressing {
     bool indirectAddresses = false;
-    /// RayTracingLimits::scratchAlignment.
+    /// RayTracingLimits::scratchAlignment, and kPartitionedAlignment where
+    /// the device has partitioned top structures.
     VkDeviceSize scratch = 0;
     /// The largest a build input's address keeps.
     VkDeviceSize input = 0;

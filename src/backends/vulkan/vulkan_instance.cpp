@@ -404,7 +404,7 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     if (auto checked = checkLimits(wanted); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    if (auto checked = checkTables(wanted, adapters_[adapter].caps.bindless); !checked) {
+    if (auto checked = checkTables(wanted, adapters_[adapter].caps); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     const Adapter& listed = adapters_[adapter];

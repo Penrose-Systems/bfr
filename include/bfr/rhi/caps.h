@@ -166,6 +166,9 @@ struct RayTracingLimits {
     /// The bytes from one record Device::writeMotionInstances writes to the
     /// next.
     std::uint32_t motionInstanceSize = 0;
+    /// The most partitions, the global partition's instances counted as
+    /// partitions, a partitioned top structure holds.
+    std::uint32_t maxPartitions = 0;
 };
 
 struct Features {
@@ -211,6 +214,9 @@ struct Features {
     bool rayTracingMotion = false;
     /// Device::traceRaysIndirect with a pipeline made with allowMotion.
     bool rayTracingMotionIndirect = false;
+    /// AccelerationStructureType::PartitionedTop, and its table
+    /// (DeviceDesc::maxBindlessPartitionedTops).
+    bool partitionedTop = false;
     bool meshShader = false;
     bool taskShader = false;
     bool shadingRate = false;

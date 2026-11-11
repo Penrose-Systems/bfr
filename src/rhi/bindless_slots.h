@@ -30,7 +30,8 @@ public:
           storageTextures_(desc.maxBindlessStorageTextures),
           storageBuffers_(desc.maxBindlessStorageBuffers),
           samplers_(desc.maxBindlessSamplers),
-          accelerationStructures_(desc.maxBindlessAccelerationStructures) {}
+          accelerationStructures_(desc.maxBindlessAccelerationStructures),
+          partitionedTops_(desc.maxBindlessPartitionedTops) {}
 
     /// A storage buffer slot when desc's usage is storage, else kEnd. Fails
     /// with RhiLimitReached when the table is full.
@@ -91,33 +92,39 @@ public:
 
     void giveSampler(std::uint32_t slot) { samplers_.give(slot); }
 
-    /// An acceleration structure table slot for a top structure where the
-    /// device has the table, else kEnd: shaders trace rays against top
-    /// structures only, and reach them without the table where the backend
-    /// lets them. Fails with RhiLimitReached when the table is full.
+    /// A slot for a top structure in the acceleration structure table, or for
+    /// a partitioned top one in the partitioned top table, where the device
+    /// has that table, else kEnd: shaders trace rays against these only, and
+    /// reach them without the table where the backend lets them. Fails with
+    /// RhiLimitReached when the table is full.
     [[nodiscard]] core::Result<std::uint32_t> takeAccelerationStructure(AccelerationStructureType type) {
-        if (type != AccelerationStructureType::Top || desc_.maxBindlessAccelerationStructures == 0) {
+        const bool partitioned = type == AccelerationStructureType::PartitionedTop;
+        const std::uint32_t slots = partitioned ? desc_.maxBindlessPartitionedTops
+                                                : desc_.maxBindlessAccelerationStructures;
+        if ((type != AccelerationStructureType::Top && !partitioned) || slots == 0) {
             return core::SlotChains::kEnd;
         }
-        const auto slot = accelerationStructures_.take(1);
+        const auto slot = (partitioned ? partitionedTops_ : accelerationStructures_).take(1);
         if (!slot) {
-            return core::failure(core::ErrorCode::RhiLimitReached,
-                                 "the acceleration structure table holds at most {} structures",
-                                 desc_.maxBindlessAccelerationStructures);
+            return core::failure(core::ErrorCode::RhiLimitReached, "the {} table holds at most {} structures",
+                                 partitioned ? "partitioned top structure" : "acceleration structure", slots);
         }
         return *slot;
     }
 
-    void giveAccelerationStructure(std::uint32_t slot) { accelerationStructures_.give(slot); }
+    /// Gives back slot, which a structure of type took.
+    void giveAccelerationStructure(AccelerationStructureType type, std::uint32_t slot) {
+        (type == AccelerationStructureType::PartitionedTop ? partitionedTops_ : accelerationStructures_).give(slot);
+    }
 
     /// slot as accelerationStructureSlot reports it. Fails with
-    /// RhiInvalidCall for kEnd: a bottom structure, or one on a device with no
-    /// table.
+    /// RhiInvalidCall for kEnd: a structure in no table, or one on a device
+    /// with no slots in its table.
     [[nodiscard]] static core::Result<std::uint32_t> reportedStructure(std::uint32_t slot) {
         if (slot == core::SlotChains::kEnd) {
             return core::failure(core::ErrorCode::RhiInvalidCall,
-                                 "the acceleration structure has no slot: only top ones are in the table, on a device "
-                                 "made with one");
+                                 "the acceleration structure has no slot: only top and partitioned top ones are in "
+                                 "tables, on a device made with slots in them");
         }
         return slot;
     }
@@ -145,6 +152,7 @@ private:
     core::SlotChains storageBuffers_;
     core::SlotChains samplers_;
     core::SlotChains accelerationStructures_;
+    core::SlotChains partitionedTops_;
 };
 
 } // namespace bfr::rhi

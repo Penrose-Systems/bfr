@@ -39,7 +39,9 @@ struct BufferUsage {
     /// those take.
     bool accelerationStructureInput = false;
     /// Acceleration structure builds use it as scratch. It starts at an
-    /// address that is a multiple of RayTracingLimits::scratchAlignment.
+    /// address that is a multiple of RayTracingLimits::scratchAlignment, and
+    /// of 256 where Features::partitionedTop, as a partitioned top
+    /// structure's build takes.
     bool accelerationStructureScratch = false;
     /// It holds shader binding table records. It starts at an address that is
     /// a multiple of RayTracingLimits::tableAlignment.

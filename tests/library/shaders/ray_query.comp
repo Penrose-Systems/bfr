@@ -2,8 +2,9 @@
 // structure from BFR's table (api/bfr.yaml, bfr_pipeline): ray i starts at
 // x = 5i, five units in front of z = 0, and goes along +z. It writes the
 // custom index of the instance it hits, or all ones for a miss, and takes a
-// box it meets as hit where it is. For the ray tracing tests; spirv.h holds
-// it compiled, see compile.sh.
+// box it meets as hit where it is. Compiled with PARTITIONED, it traces
+// against a partitioned top structure from that table instead. For the ray
+// tracing tests; spirv.h holds it compiled, see compile.sh.
 #version 460
 #extension GL_EXT_ray_query : require
 #extension GL_EXT_nonuniform_qualifier : require
@@ -14,7 +15,11 @@ layout(set = 0, binding = 2) buffer Buffers {
     uint values[];
 } buffers[];
 
+#ifdef PARTITIONED
+layout(set = 0, binding = 5) uniform accelerationStructureEXT structures[];
+#else
 layout(set = 0, binding = 4) uniform accelerationStructureEXT structures[];
+#endif
 
 layout(push_constant) uniform Push {
     uint structure;

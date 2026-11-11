@@ -401,6 +401,15 @@ private:
     // apart; else with the inputs' counts.
     [[nodiscard]] core::Result<void> recordBuild(CommandListHandle commandList, const AccelerationStructureBuild& build,
                                                  const std::pair<VkDeviceAddress, std::uint32_t>* ranges);
+    // Records build of a partitioned top structure into dst, from src where
+    // it updates one, with scratch at scratch, on buffer. Fails with
+    // RhiInvalidCall for an indirect build, and RhiInvalidHandle for a
+    // buffer that is gone.
+    [[nodiscard]] core::Result<void> recordPartitionedBuild(VkCommandBuffer buffer,
+                                                            const AccelerationStructureBuild& build,
+                                                            const VulkanAccelerationStructure& dst,
+                                                            const VulkanAccelerationStructure* src,
+                                                            VkDeviceAddress scratch, bool indirect);
     // structure's VkMicromapEXT; VK_NULL_HANDLE for a null handle. Fails with
     // RhiInvalidCall for a structure that is not an opacity micromap, and
     // RhiInvalidHandle for one that is gone.

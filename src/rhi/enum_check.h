@@ -110,7 +110,7 @@ constexpr std::pair<TileMapping, TileMapping> rangeOf(TileMapping /*unused*/) {
 }
 constexpr std::pair<AccelerationStructureType, AccelerationStructureType> rangeOf(
     AccelerationStructureType /*unused*/) {
-    return {AccelerationStructureType::Bottom, AccelerationStructureType::OpacityMicromap};
+    return {AccelerationStructureType::Bottom, AccelerationStructureType::PartitionedTop};
 }
 constexpr std::pair<InstanceMotion, InstanceMotion> rangeOf(InstanceMotion /*unused*/) {
     return {InstanceMotion::None, InstanceMotion::Srt};
