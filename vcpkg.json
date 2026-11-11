@@ -26,5 +26,12 @@
     "vulkan-memory-allocator",
     "vulkan-utility-libraries",
     "vulkan-validationlayers"
+  ],
+  "overrides": [
+    {
+      "$comment": "3.16.1's catch_discover_tests passes EXTRA_ARGS as one argument (CatchAddTests.cmake prepare_command_fragment quotes the list)",
+      "name": "catch2",
+      "version": "3.15.3"
+    }
   ]
 }
