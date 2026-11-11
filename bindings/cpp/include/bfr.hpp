@@ -760,6 +760,8 @@ enum class Call : std::int32_t {
     BuildAccelerationStructureIndirect = BFR_CALL_BUILD_ACCELERATION_STRUCTURE_INDIRECT,
     CaptureReplayIdentifiers = BFR_CALL_CAPTURE_REPLAY_IDENTIFIERS,
     WriteMotionInstances = BFR_CALL_WRITE_MOTION_INSTANCES,
+    ClusterSizes = BFR_CALL_CLUSTER_SIZES,
+    BuildClusters = BFR_CALL_BUILD_CLUSTERS,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -870,6 +872,8 @@ enum class Call : std::int32_t {
     case Call::BuildAccelerationStructureIndirect: return "build_acceleration_structure_indirect";
     case Call::CaptureReplayIdentifiers: return "capture_replay_identifiers";
     case Call::WriteMotionInstances: return "write_motion_instances";
+    case Call::ClusterSizes: return "cluster_sizes";
+    case Call::BuildClusters: return "build_clusters";
     }
     return {};
 }
@@ -1543,6 +1547,118 @@ enum class InstanceMotion : std::int32_t {
     case InstanceMotion::None: return "none";
     case InstanceMotion::Matrix: return "matrix";
     case InstanceMotion::Srt: return "srt";
+    }
+    return {};
+}
+
+/// What a cluster operation does: moves structures, builds cluster bottom structures from clusters,
+/// builds clusters or cluster templates from triangles, instantiates templates into clusters, or
+/// fetches templates' indices, which is all Vulkan states of it. A cluster holds at most
+/// bfr_caps_ray_tracing.max_cluster_triangles triangles; a cluster bottom structure holds clusters
+/// and is what an instance names; a template is a cluster built without its positions. The values
+/// are Vulkan's.
+enum class ClusterOperation : std::int32_t {
+    Move = BFR_CLUSTER_OPERATION_MOVE,
+    BuildBottoms = BFR_CLUSTER_OPERATION_BUILD_BOTTOMS,
+    BuildClusters = BFR_CLUSTER_OPERATION_BUILD_CLUSTERS,
+    BuildTemplates = BFR_CLUSTER_OPERATION_BUILD_TEMPLATES,
+    InstantiateTemplates = BFR_CLUSTER_OPERATION_INSTANTIATE_TEMPLATES,
+    TemplateIndices = BFR_CLUSTER_OPERATION_TEMPLATE_INDICES,
+};
+
+/// value's name in bfr.yaml; empty for a value ClusterOperation doesn't have.
+[[nodiscard]] constexpr std::string_view name(ClusterOperation value) {
+    switch (value) {
+    case ClusterOperation::Move: return "move";
+    case ClusterOperation::BuildBottoms: return "build_bottoms";
+    case ClusterOperation::BuildClusters: return "build_clusters";
+    case ClusterOperation::BuildTemplates: return "build_templates";
+    case ClusterOperation::InstantiateTemplates: return "instantiate_templates";
+    case ClusterOperation::TemplateIndices: return "template_indices";
+    }
+    return {};
+}
+
+/// Where a cluster operation's structures go: packed from one destination, their addresses and
+/// sizes written; at addresses the GPU reads, their sizes read; or nowhere, only their sizes
+/// written. The values are Vulkan's.
+enum class ClusterMode : std::int32_t {
+    ImplicitDestinations = BFR_CLUSTER_MODE_IMPLICIT_DESTINATIONS,
+    ExplicitDestinations = BFR_CLUSTER_MODE_EXPLICIT_DESTINATIONS,
+    ComputeSizes = BFR_CLUSTER_MODE_COMPUTE_SIZES,
+};
+
+/// value's name in bfr.yaml; empty for a value ClusterMode doesn't have.
+[[nodiscard]] constexpr std::string_view name(ClusterMode value) {
+    switch (value) {
+    case ClusterMode::ImplicitDestinations: return "implicit_destinations";
+    case ClusterMode::ExplicitDestinations: return "explicit_destinations";
+    case ClusterMode::ComputeSizes: return "compute_sizes";
+    }
+    return {};
+}
+
+/// What a move moves. The values are Vulkan's.
+enum class ClusterStructureType : std::int32_t {
+    Bottom = BFR_CLUSTER_STRUCTURE_TYPE_BOTTOM,
+    Cluster = BFR_CLUSTER_STRUCTURE_TYPE_CLUSTER,
+    Template = BFR_CLUSTER_STRUCTURE_TYPE_TEMPLATE,
+};
+
+/// value's name in bfr.yaml; empty for a value ClusterStructureType doesn't have.
+[[nodiscard]] constexpr std::string_view name(ClusterStructureType value) {
+    switch (value) {
+    case ClusterStructureType::Bottom: return "bottom";
+    case ClusterStructureType::Cluster: return "cluster";
+    case ClusterStructureType::Template: return "template";
+    }
+    return {};
+}
+
+/// The index types of a cluster record's indices and micromap indices. The values are the records'.
+enum class ClusterIndexFormat : std::int32_t {
+    Uint8 = BFR_CLUSTER_INDEX_FORMAT_UINT8,
+    Uint16 = BFR_CLUSTER_INDEX_FORMAT_UINT16,
+    Uint32 = BFR_CLUSTER_INDEX_FORMAT_UINT32,
+};
+
+/// value's name in bfr.yaml; empty for a value ClusterIndexFormat doesn't have.
+[[nodiscard]] constexpr std::string_view name(ClusterIndexFormat value) {
+    switch (value) {
+    case ClusterIndexFormat::Uint8: return "uint8";
+    case ClusterIndexFormat::Uint16: return "uint16";
+    case ClusterIndexFormat::Uint32: return "uint32";
+    }
+    return {};
+}
+
+/// The bits of a cluster geometry word's flags. The values are the records'.
+enum class ClusterGeometryFlag : std::int32_t {
+    CullDisable = BFR_CLUSTER_GEOMETRY_FLAG_CULL_DISABLE,
+    NoDuplicateAnyHit = BFR_CLUSTER_GEOMETRY_FLAG_NO_DUPLICATE_ANY_HIT,
+    Opaque = BFR_CLUSTER_GEOMETRY_FLAG_OPAQUE,
+};
+
+/// value's name in bfr.yaml; empty for a value ClusterGeometryFlag doesn't have.
+[[nodiscard]] constexpr std::string_view name(ClusterGeometryFlag value) {
+    switch (value) {
+    case ClusterGeometryFlag::CullDisable: return "cull_disable";
+    case ClusterGeometryFlag::NoDuplicateAnyHit: return "no_duplicate_any_hit";
+    case ClusterGeometryFlag::Opaque: return "opaque";
+    }
+    return {};
+}
+
+/// The bits of a cluster record's cluster_flags. The values are the records'.
+enum class ClusterFlag : std::int32_t {
+    /// Instances may disable its opacity micromaps.
+    AllowDisableOpacityMicromaps = BFR_CLUSTER_FLAG_ALLOW_DISABLE_OPACITY_MICROMAPS,
+};
+
+/// value's name in bfr.yaml; empty for a value ClusterFlag doesn't have.
+[[nodiscard]] constexpr std::string_view name(ClusterFlag value) {
+    switch (value) {
+    case ClusterFlag::AllowDisableOpacityMicromaps: return "allow_disable_opacity_micromaps";
     }
     return {};
 }
@@ -2279,6 +2395,11 @@ struct BufferUsage {
     /// bfr_serialize_acceleration_structure writes it and bfr_deserialize_acceleration_structure
     /// reads it. It starts at an address that is a multiple of 256.
     bool accelerationStructureData{};
+    /// bfr_build_clusters writes structures into it, and moves and builds read them from it, where
+    /// bfr_caps_features.cluster_acceleration_structure. It starts at an address that is a multiple
+    /// of bfr_caps_ray_tracing.cluster_alignment, cluster_template_alignment and
+    /// cluster_bottom_alignment.
+    bool accelerationStructureStorage{};
 };
 
 /// How to create a buffer.
@@ -2655,6 +2776,9 @@ struct RayTracingPipelineDesc {
     /// Its traces are at a time, of structures with motion, where
     /// bfr_caps_features.ray_tracing_motion.
     bool allowMotion{};
+    /// Its traces may reach cluster bottom structures, which they must be made with to, where
+    /// bfr_caps_features.cluster_acceleration_structure.
+    bool allowClusters{};
 };
 
 /// Records in a shader binding table: size bytes from offset in buffer, which has
@@ -3042,6 +3166,110 @@ struct PartitionedTopInputs {
     std::uint64_t opCountOffset{};
 };
 
+/// The upper bounds a cluster operation of clusters or templates is sized for: vertices of
+/// vertex_format, geometry indices to max_geometry_index, at most max_unique_geometries of them,
+/// max_triangles triangles and max_vertices vertices in each, at most
+/// bfr_caps_ray_tracing.max_cluster_triangles and max_cluster_vertices, max_total_triangles and
+/// max_total_vertices in all, and no record truncating fewer than min_truncate_bits position bits,
+/// at most 32.
+struct ClusterTriangleLimits {
+    Format vertexFormat{};
+    std::uint32_t maxGeometryIndex{};
+    std::uint32_t maxUniqueGeometries{};
+    std::uint32_t maxTriangles{};
+    std::uint32_t maxVertices{};
+    std::uint32_t maxTotalTriangles{};
+    std::uint32_t maxTotalVertices{};
+    std::uint32_t minTruncateBits{};
+};
+
+/// The upper bounds a build_bottoms is sized for: max_total_clusters clusters in all,
+/// max_clusters_per_bottom in each bottom structure.
+struct ClusterBottomLimits {
+    std::uint32_t maxTotalClusters{};
+    std::uint32_t maxClustersPerBottom{};
+};
+
+/// What a move moves, and at most max_bytes of it; with no_overlap, no destination overlaps a
+/// source, which stays valid, as after a copy.
+struct ClusterMoveLimits {
+    /// 0 is bottom.
+    ClusterStructureType type{};
+    bool noOverlap{};
+    std::uint64_t maxBytes{};
+};
+
+/// A cluster operation's kind, mode and upper bounds: at most max_count structures, built with
+/// flags as other structures are; with allow_opacity_micromaps, clusters may name opacity
+/// micromaps. The bounds the operation reads: move for move, bottoms for build_bottoms, triangles
+/// for the rest.
+struct ClusterInputs {
+    /// 0 is move.
+    ClusterOperation operation{};
+    /// 0 is implicit_destinations.
+    ClusterMode mode{};
+    AccelerationStructureFlags flags{};
+    bool allowOpacityMicromaps{};
+    std::uint32_t maxCount{};
+    ClusterMoveLimits move{};
+    ClusterBottomLimits bottoms{};
+    ClusterTriangleLimits triangles{};
+};
+
+/// Which of a bfr_cluster_build's regions hold, at their offset, the address of the data rather
+/// than the data, which the GPU reads as it runs.
+struct ClusterIndirection {
+    bool destination{};
+    bool scratch{};
+    bool addresses{};
+    bool sizes{};
+    bool records{};
+    bool count{};
+};
+
+/// A cluster operation, from inputs: the records of its kind from record_offset in records,
+/// record_stride bytes apart (0 packed), as many as the u32 at count_offset, a multiple of 4, in
+/// count, or with no count max_count, never more than max_count; records and count have
+/// acceleration_structure_input usage. implicit_destinations packs the structures from
+/// destination_offset in destination, which has acceleration_structure_storage usage and at least
+/// the size query's size bytes, or for a move the bytes moved, and writes their addresses to
+/// addresses and their sizes to sizes, where given; explicit_destinations reads each structure's
+/// address from addresses, each in a buffer with acceleration_structure_storage usage, and its size
+/// from sizes, where given; compute_sizes writes each structure's size to sizes. Each destination
+/// is a multiple of bfr_caps_ray_tracing.cluster_alignment for clusters, cluster_template_alignment
+/// for templates and cluster_bottom_alignment for bottom structures. addresses holds 8-byte
+/// addresses address_stride bytes apart, at least 8, and has storage usage; sizes holds 4-byte
+/// sizes size_stride bytes apart, at least 4. Every buffer here has a usage bfr_get_buffer_address
+/// gives an address for, and each of addresses, sizes and records is read or written within its
+/// buffer, from its offset. Scratch is scratch_offset bytes into scratch, which has
+/// acceleration_structure_scratch usage, at least the size query's build_scratch bytes, a multiple
+/// of bfr_caps_ray_tracing.cluster_scratch_alignment, and overlaps no destination.
+struct ClusterBuild {
+    ClusterInputs inputs{};
+    BufferRef destination{};
+    /// Bytes into destination.
+    std::uint64_t destinationOffset{};
+    BufferRef scratch{};
+    /// Bytes into scratch.
+    std::uint64_t scratchOffset{};
+    BufferRef addresses{};
+    /// Bytes into addresses.
+    std::uint64_t addressOffset{};
+    std::uint64_t addressStride{};
+    BufferRef sizes{};
+    /// Bytes into sizes.
+    std::uint64_t sizeOffset{};
+    std::uint64_t sizeStride{};
+    BufferRef records{};
+    /// Bytes into records.
+    std::uint64_t recordOffset{};
+    std::uint64_t recordStride{};
+    BufferRef count{};
+    /// Bytes into count.
+    std::uint64_t countOffset{};
+    ClusterIndirection indirection{};
+};
+
 /// What an acceleration structure is built from. A bottom one holds triangles or boxes, not both; a
 /// geometry's index in its array is the geometry index a hit group is chosen by. A top one holds
 /// instance_count instance records from instance_offset, a multiple of 16, in instances, which has
@@ -3142,8 +3370,11 @@ struct AccelerationStructureInstance {
     /// Its opacity micromaps are ignored, of a bottom structure built with
     /// allow_disable_opacity_micromaps.
     bool disableOpacityMicromaps{};
-    /// Null is an instance no ray hits.
+    /// Null, with no bottom_reference, is an instance no ray hits.
     AccelerationStructureRef bottomStructure{};
+    /// Where bottom_structure is null, what the instance names its bottom structure by, for one BFR
+    /// holds no handle to, such as a cluster bottom structure (bfr_build_clusters).
+    std::uint64_t bottomReference{};
 };
 static_assert(sizeof(AccelerationStructureInstance) == sizeof(bfr_acceleration_structure_instance) && alignof(AccelerationStructureInstance) == alignof(bfr_acceleration_structure_instance) &&
               std::is_standard_layout_v<AccelerationStructureInstance> && std::is_trivially_copyable_v<AccelerationStructureInstance>);
@@ -3157,6 +3388,7 @@ static_assert(offsetof(AccelerationStructureInstance, opacity) == offsetof(bfr_a
 static_assert(offsetof(AccelerationStructureInstance, forceOpacityMicromap2State) == offsetof(bfr_acceleration_structure_instance, force_opacity_micromap_2_state));
 static_assert(offsetof(AccelerationStructureInstance, disableOpacityMicromaps) == offsetof(bfr_acceleration_structure_instance, disable_opacity_micromaps));
 static_assert(offsetof(AccelerationStructureInstance, bottomStructure) == offsetof(bfr_acceleration_structure_instance, bottom_structure));
+static_assert(offsetof(AccelerationStructureInstance, bottomReference) == offsetof(bfr_acceleration_structure_instance, bottom_reference));
 
 /// A transform as its parts: scale, the shears a (xy), b (xz) and c (yz), and a pivot added after
 /// them, then a rotation quaternion (x, y, z, w) about the origin and a translation. Keyframes
@@ -3429,6 +3661,22 @@ struct CapsRayTracing {
     /// The most partitions, the global partition's instances counted as partitions, a partitioned
     /// top structure holds.
     std::uint32_t maxPartitions{};
+    /// The most vertices one cluster holds.
+    std::uint32_t maxClusterVertices{};
+    /// The most triangles one cluster holds.
+    std::uint32_t maxClusterTriangles{};
+    /// The alignment in bytes of a cluster operation's scratch.
+    std::uint32_t clusterScratchAlignment{};
+    /// The alignment in bytes of a cluster.
+    std::uint32_t clusterAlignment{};
+    /// The alignment in bytes of a cluster template.
+    std::uint32_t clusterTemplateAlignment{};
+    /// The alignment in bytes of a cluster bottom structure.
+    std::uint32_t clusterBottomAlignment{};
+    /// The alignment in bytes of a template record's bounds_limit.
+    std::uint32_t clusterTemplateBoundsAlignment{};
+    /// The geometry indices of clusters are below it.
+    std::uint32_t maxClusterGeometryIndex{};
 };
 
 /// Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and
@@ -3477,6 +3725,9 @@ struct CapsFeatures {
     bool rayTracingMotionIndirect{};
     /// Partitioned top structures, and their table (bfr_device_desc.max_bindless_partitioned_tops).
     bool partitionedTop{};
+    /// bfr_build_clusters, and traces of the cluster bottom structures it builds by pipelines made
+    /// with allow_clusters.
+    bool clusterAccelerationStructure{};
     bool meshShader{};
     bool taskShader{};
     /// A shading rate per draw.
@@ -3981,6 +4232,7 @@ inline bfr_buffer_usage toC(const BufferUsage& value) {
         .acceleration_structure_scratch = static_cast<bfr_bool>(value.accelerationStructureScratch),
         .shader_binding_table = static_cast<bfr_bool>(value.shaderBindingTable),
         .acceleration_structure_data = static_cast<bfr_bool>(value.accelerationStructureData),
+        .acceleration_structure_storage = static_cast<bfr_bool>(value.accelerationStructureStorage),
     };
 }
 
@@ -4227,6 +4479,58 @@ inline bfr_opacity_micromap_usage toC(const OpacityMicromapUsage& value) {
         .count = value.count,
         .subdivision_level = value.subdivisionLevel,
         .format = static_cast<bfr_opacity_micromap_format>(value.format),
+    };
+}
+
+inline bfr_cluster_triangle_limits toC(const ClusterTriangleLimits& value) {
+    return {
+        .vertex_format = static_cast<bfr_format>(value.vertexFormat),
+        .max_geometry_index = value.maxGeometryIndex,
+        .max_unique_geometries = value.maxUniqueGeometries,
+        .max_triangles = value.maxTriangles,
+        .max_vertices = value.maxVertices,
+        .max_total_triangles = value.maxTotalTriangles,
+        .max_total_vertices = value.maxTotalVertices,
+        .min_truncate_bits = value.minTruncateBits,
+    };
+}
+
+inline bfr_cluster_bottom_limits toC(const ClusterBottomLimits& value) {
+    return {
+        .max_total_clusters = value.maxTotalClusters,
+        .max_clusters_per_bottom = value.maxClustersPerBottom,
+    };
+}
+
+inline bfr_cluster_move_limits toC(const ClusterMoveLimits& value) {
+    return {
+        .type = static_cast<bfr_cluster_structure_type>(value.type),
+        .no_overlap = static_cast<bfr_bool>(value.noOverlap),
+        .max_bytes = value.maxBytes,
+    };
+}
+
+inline bfr_cluster_inputs toC(const ClusterInputs& value) {
+    return {
+        .operation = static_cast<bfr_cluster_operation>(value.operation),
+        .mode = static_cast<bfr_cluster_mode>(value.mode),
+        .flags = toC(value.flags),
+        .allow_opacity_micromaps = static_cast<bfr_bool>(value.allowOpacityMicromaps),
+        .max_count = value.maxCount,
+        .move = toC(value.move),
+        .bottoms = toC(value.bottoms),
+        .triangles = toC(value.triangles),
+    };
+}
+
+inline bfr_cluster_indirection toC(const ClusterIndirection& value) {
+    return {
+        .destination = static_cast<bfr_bool>(value.destination),
+        .scratch = static_cast<bfr_bool>(value.scratch),
+        .addresses = static_cast<bfr_bool>(value.addresses),
+        .sizes = static_cast<bfr_bool>(value.sizes),
+        .records = static_cast<bfr_bool>(value.records),
+        .count = static_cast<bfr_bool>(value.count),
     };
 }
 
@@ -4492,6 +4796,14 @@ inline CapsRayTracing fromC(const bfr_caps_ray_tracing& value) {
         .maxMotionKeyframes = value.max_motion_keyframes,
         .motionInstanceSize = value.motion_instance_size,
         .maxPartitions = value.max_partitions,
+        .maxClusterVertices = value.max_cluster_vertices,
+        .maxClusterTriangles = value.max_cluster_triangles,
+        .clusterScratchAlignment = value.cluster_scratch_alignment,
+        .clusterAlignment = value.cluster_alignment,
+        .clusterTemplateAlignment = value.cluster_template_alignment,
+        .clusterBottomAlignment = value.cluster_bottom_alignment,
+        .clusterTemplateBoundsAlignment = value.cluster_template_bounds_alignment,
+        .maxClusterGeometryIndex = value.max_cluster_geometry_index,
     };
 }
 
@@ -4518,6 +4830,7 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .rayTracingMotion = value.ray_tracing_motion != BFR_FALSE,
         .rayTracingMotionIndirect = value.ray_tracing_motion_indirect != BFR_FALSE,
         .partitionedTop = value.partitioned_top != BFR_FALSE,
+        .clusterAccelerationStructure = value.cluster_acceleration_structure != BFR_FALSE,
         .meshShader = value.mesh_shader != BFR_FALSE,
         .taskShader = value.task_shader != BFR_FALSE,
         .shadingRate = value.shading_rate != BFR_FALSE,
@@ -5225,8 +5538,9 @@ public:
     /// bfr_get_acceleration_structure_reference gives, 0 for an instance no ray hits. Fails with
     /// error_unsupported where bfr_caps_features.acceleration_structure is false,
     /// error_invalid_argument when size is too small, an index or offset is instance_index_limit or
-    /// above, an enum value BFR doesn't have, or an instance names a structure other than a bottom
-    /// one, and error_invalid_handle for a structure that is gone.
+    /// above, an enum value BFR doesn't have, an instance names a structure other than a bottom
+    /// one, or both a bottom_structure and a bottom_reference, and error_invalid_handle for a
+    /// structure that is gone.
     [[nodiscard]] Expected<void> writeInstances(std::span<const AccelerationStructureInstance> instances, void* data, std::size_t size) const;
 
     /// Records build, outside rendering, on a queue whose kind runs compute. A barrier orders the
@@ -5235,8 +5549,9 @@ public:
     /// copy queue, error_invalid_argument for inputs bfr_get_acceleration_structure_sizes refuses,
     /// of a type or motion unlike its structure's, an opacity micromap updated where the backend
     /// builds one only whole (Vulkan), or a partitioned top one updated from a structure of another
-    /// type or another from a partitioned top one, error_limit_reached past the device's
-    /// max_build_geometries, and error_invalid_handle for a structure or buffer that is gone.
+    /// type or another from a partitioned top one, or a buffer with no address, error_limit_reached
+    /// past the device's max_build_geometries, and error_invalid_handle for a structure or buffer
+    /// that is gone.
     [[nodiscard]] Expected<void> buildAccelerationStructure(CommandList commandList, const AccelerationStructureBuild& build) const;
 
     /// Records build as bfr_build_acceleration_structure does, but with each geometry's counts read
@@ -5248,6 +5563,23 @@ public:
     /// a partitioned top one, whose counts the GPU reads in every build, and as
     /// bfr_build_acceleration_structure does.
     [[nodiscard]] Expected<void> buildAccelerationStructureIndirect(CommandList commandList, const AccelerationStructureBuild& build, const Buffer& ranges, std::uint64_t offset, std::uint32_t stride) const;
+
+    /// Writes the bytes a cluster operation from inputs writes and the scratch it takes, as the
+    /// backend says: size is every structure's bytes for implicit_destinations and one structure's
+    /// at most for explicit_destinations; for compute_sizes the backend gives only build_scratch.
+    /// Fails with error_unsupported where bfr_caps_features.cluster_acceleration_structure is
+    /// false, or for flags of opacity micromaps where bfr_caps_features.opacity_micromap is, and
+    /// error_invalid_argument for an enum value BFR doesn't have.
+    [[nodiscard]] Expected<AccelerationStructureSizes> clusterSizes(const ClusterInputs& inputs) const;
+
+    /// Records build, a cluster operation, outside rendering, on a queue whose kind runs compute:
+    /// the GPU reads its records and count as it runs. A barrier orders the work that wrote its
+    /// records, count and the structures it reads before it, and their readers and any reuse of its
+    /// scratch after. Traces reach the cluster bottom structures it builds only through pipelines
+    /// made with allow_clusters. Fails with error_unsupported as bfr_get_cluster_sizes does or on a
+    /// copy queue, error_invalid_argument for inputs bfr_get_cluster_sizes refuses or a buffer with
+    /// no address, and error_invalid_handle for a list or buffer that is gone.
+    [[nodiscard]] Expected<void> buildClusters(CommandList commandList, const ClusterBuild& build) const;
 
     /// Records a copy of src into dst, not overlapping, as builds are recorded: dst at least src's
     /// size, or its current_size where bfr_caps_features.acceleration_structure_current_size; of an
@@ -5269,9 +5601,10 @@ public:
     /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false, or for library or
     /// libraries where bfr_caps_features.ray_tracing_pipeline_library is false, capture_replay
     /// where bfr_caps_features.ray_tracing_capture_replay is false, allow_opacity_micromaps where
-    /// bfr_caps_features.opacity_micromap is false, or allow_motion where
-    /// bfr_caps_features.ray_tracing_motion is false, error_invalid_argument for an enum value BFR
-    /// doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or
+    /// bfr_caps_features.opacity_micromap is false, allow_motion where
+    /// bfr_caps_features.ray_tracing_motion is false, or allow_clusters where
+    /// bfr_caps_features.cluster_acceleration_structure is false, error_invalid_argument for an
+    /// enum value BFR doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or
     /// replay_identifiers neither none nor holding every group's, error_invalid_handle for a
     /// shader, library or desc.cache that is gone, error_limit_reached at the device's maximum of
     /// pipelines, and error_device_failed when the backend refuses the desc; the message carries
@@ -5281,7 +5614,8 @@ public:
     /// Records a trace of desc's rays with the bound ray tracing pipeline, outside rendering, on a
     /// queue whose kind runs compute; commands after a barrier see what it wrote. Fails with
     /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false or on a copy queue,
-    /// and error_invalid_handle for a buffer that is gone.
+    /// error_invalid_argument for a table buffer with no address, and error_invalid_handle for a
+    /// buffer that is gone.
     [[nodiscard]] Expected<void> traceRays(CommandList commandList, const TraceRaysDesc& desc) const;
 
     /// Records a trace as bfr_trace_rays does, of the bfr_trace_rays_indirect_args buffer holds at
@@ -5526,9 +5860,10 @@ public:
     /// not sparse.
     [[nodiscard]] Expected<BufferTiling> bufferTiling();
 
-    /// Writes the buffer's GPU address, for the addresses bfr_trace_rays_indirect_args and shaders
-    /// read. The buffer has indirect, shader_binding_table or acceleration_structure_input usage.
-    /// Fails with error_unsupported where bfr_caps_features.buffer_address is false, and
+    /// Writes the buffer's GPU address, for the addresses bfr_trace_rays_indirect_args, cluster
+    /// records and shaders read. The buffer has indirect, shader_binding_table,
+    /// acceleration_structure_input, acceleration_structure_data or acceleration_structure_storage
+    /// usage. Fails with error_unsupported where bfr_caps_features.buffer_address is false, and
     /// error_invalid_argument for a buffer of none of those usages.
     [[nodiscard]] Expected<std::uint64_t> bufferAddress();
 
@@ -6027,6 +6362,7 @@ inline bfr_ray_tracing_pipeline_desc toC(const RayTracingPipelineDesc& value, co
         .replay_identifiers_size = static_cast<size_t>(value.replayIdentifiers.size()),
         .allow_opacity_micromaps = static_cast<bfr_bool>(value.allowOpacityMicromaps),
         .allow_motion = static_cast<bfr_bool>(value.allowMotion),
+        .allow_clusters = static_cast<bfr_bool>(value.allowClusters),
     };
 }
 
@@ -6181,6 +6517,28 @@ inline bfr_partitioned_top_inputs toC(const PartitionedTopInputs& value) {
     };
 }
 
+inline bfr_cluster_build toC(const ClusterBuild& value) {
+    return {
+        .inputs = toC(value.inputs),
+        .destination = value.destination.get(),
+        .destination_offset = value.destinationOffset,
+        .scratch = value.scratch.get(),
+        .scratch_offset = value.scratchOffset,
+        .addresses = value.addresses.get(),
+        .address_offset = value.addressOffset,
+        .address_stride = value.addressStride,
+        .sizes = value.sizes.get(),
+        .size_offset = value.sizeOffset,
+        .size_stride = value.sizeStride,
+        .records = value.records.get(),
+        .record_offset = value.recordOffset,
+        .record_stride = value.recordStride,
+        .count = value.count.get(),
+        .count_offset = value.countOffset,
+        .indirection = toC(value.indirection),
+    };
+}
+
 inline bfr_acceleration_structure_inputs toC(const AccelerationStructureInputs& value) {
     return {
         .type = static_cast<bfr_acceleration_structure_type>(value.type),
@@ -6227,6 +6585,7 @@ inline bfr_acceleration_structure_instance toC(const AccelerationStructureInstan
         .force_opacity_micromap_2_state = static_cast<bfr_bool>(value.forceOpacityMicromap2State),
         .disable_opacity_micromaps = static_cast<bfr_bool>(value.disableOpacityMicromaps),
         .bottom_structure = value.bottomStructure.get(),
+        .bottom_reference = value.bottomReference,
     };
 }
 
@@ -6883,6 +7242,23 @@ inline Expected<void> Device::buildAccelerationStructure(CommandList commandList
 inline Expected<void> Device::buildAccelerationStructureIndirect(CommandList commandList, const AccelerationStructureBuild& build, const Buffer& ranges, std::uint64_t offset, std::uint32_t stride) const {
     const bfr_acceleration_structure_build cBuild = detail::toC(build);
     if (const bfr_result result = bfr_build_acceleration_structure_indirect(device_, commandList.get(), &cBuild, ranges.get(), offset, stride); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<AccelerationStructureSizes> Device::clusterSizes(const ClusterInputs& inputs) const {
+    const bfr_cluster_inputs cInputs = detail::toC(inputs);
+    bfr_acceleration_structure_sizes sizes{};
+    if (const bfr_result result = bfr_get_cluster_sizes(device_, &cInputs, &sizes); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(sizes);
+}
+
+inline Expected<void> Device::buildClusters(CommandList commandList, const ClusterBuild& build) const {
+    const bfr_cluster_build cBuild = detail::toC(build);
+    if (const bfr_result result = bfr_build_clusters(device_, commandList.get(), &cBuild); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return {};

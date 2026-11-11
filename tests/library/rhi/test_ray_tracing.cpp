@@ -375,6 +375,7 @@ struct TracingOptions {
     // Made with allowMotion, its ray generation trace_motion.rgen, which
     // traces at the time a third push constant holds.
     bool motion = false;
+    bool allowClusters = false;
 };
 
 // trace.rgen, trace.rmiss, and hit groups of trace.rchit for triangles and
@@ -414,7 +415,8 @@ struct RayTracing {
                                            .captureReplay = options.captureReplay,
                                            .replayIdentifiers = options.replayIdentifiers,
                                            .allowOpacityMicromaps = options.allowOpacityMicromaps,
-                                           .allowMotion = options.motion};
+                                           .allowMotion = options.motion,
+                                           .allowClusters = options.allowClusters};
         if (options.linked) {
             // The library's shader indices are its own, from the miss shader.
             const std::array<RayTracingGroup, kGroups - 1> libraryGroups{{
@@ -972,6 +974,9 @@ TEST_CASE("Device refuses ray tracing pipeline work it can't pass on", "[rhi][ag
         }
         if (made.caps.features.rayTracingPipeline && !made.caps.features.opacityMicromap) {
             CHECK(code(device.createRayTracingPipeline({.allowOpacityMicromaps = true})) == ErrorCode::RhiUnsupported);
+        }
+        if (made.caps.features.rayTracingPipeline && !made.caps.features.clusterAccelerationStructure) {
+            CHECK(code(device.createRayTracingPipeline({.allowClusters = true})) == ErrorCode::RhiUnsupported);
         }
         if (!made.caps.features.rayTracingCaptureReplay) {
             std::vector<std::byte> out(1);
@@ -1649,6 +1654,185 @@ TEST_CASE("Device builds partitioned top structures from records the GPU reads, 
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("Device builds clusters and cluster bottom structures from records the GPU reads, and rays traced inline "
+          "hit them, where it has them",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const RayDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        if (!made.caps.features.clusterAccelerationStructure || !made.caps.features.rayQuery) {
+            SKIP("the adapter has no cluster acceleration structures or no ray queries");
+        }
+        if (!takesSpirv(backend)) {
+            SKIP("no " << backend.name << " bytecode is checked in");
+        }
+        REQUIRE(made.caps.features.bufferAddress);
+        const RayTracingLimits& limits = made.caps.rayTracing;
+        const RayQuery query{device};
+        // Two clusters of the one triangle about the origin, each in its own
+        // cluster bottom structure, at addresses the CPU picks.
+        constexpr std::uint32_t kClusters = 2;
+        const auto [vertices, verticesAddress] =
+            addressed(device, std::array<float, kVertexFloats * kTriangleVertices>{-1, -1, 0, 1, -1, 0, 0, 1, 0});
+        const auto [indices, indicesAddress] = addressed(device, std::array<std::uint8_t, kTriangleVertices>{0, 1, 2});
+        const ClusterInputs clusterInputs{.operation = ClusterOperation::BuildClusters,
+                                          .mode = ClusterMode::ExplicitDestinations,
+                                          .maxCount = kClusters,
+                                          .triangles = {.vertexFormat = Format::Rgb32Float,
+                                                        .maxGeometryIndex = 0,
+                                                        .maxUniqueGeometries = 1,
+                                                        .maxTriangles = 1,
+                                                        .maxVertices = kTriangleVertices,
+                                                        .maxTotalTriangles = kClusters,
+                                                        .maxTotalVertices = kClusters * kTriangleVertices}};
+        const ClusterInputs bottomInputs{.operation = ClusterOperation::BuildBottoms,
+                                         .mode = ClusterMode::ExplicitDestinations,
+                                         .maxCount = kClusters,
+                                         .bottoms = {.maxTotalClusters = kClusters, .maxClustersPerBottom = 1}};
+        const auto clusterSizes = device.clusterSizes(clusterInputs);
+        INFO(failureOf(clusterSizes));
+        REQUIRE(clusterSizes.has_value());
+        const auto bottomSizes = device.clusterSizes(bottomInputs);
+        INFO(failureOf(bottomSizes));
+        REQUIRE(bottomSizes.has_value());
+        REQUIRE(clusterSizes->size != 0);
+        REQUIRE(bottomSizes->size != 0);
+
+        // Each cluster, then each bottom structure, at its alignment.
+        const std::uint64_t clusterStep = alignUp(clusterSizes->size, limits.clusterAlignment);
+        const std::uint64_t bottomsAt = alignUp(clusterStep * kClusters, limits.clusterBottomAlignment);
+        const std::uint64_t bottomStep = alignUp(bottomSizes->size, limits.clusterBottomAlignment);
+        const BufferHandle storage = created(device, {.size = bottomsAt + (bottomStep * kClusters),
+                                                      .usage = {.accelerationStructureStorage = true}});
+        const auto storageAddress = device.bufferAddress(storage);
+        INFO(failureOf(storageAddress));
+        REQUIRE(storageAddress.has_value());
+        std::array<std::uint64_t, kClusters> clusterAddresses{};
+        std::array<std::uint64_t, kClusters> bottomAddresses{};
+        for (std::uint32_t i = 0; i < kClusters; ++i) {
+            clusterAddresses.at(i) = *storageAddress + (clusterStep * i);
+            bottomAddresses.at(i) = *storageAddress + bottomsAt + (bottomStep * i);
+        }
+        // The addresses each build reads its destinations from; the bottom
+        // records name the clusters' by where they are in this buffer.
+        const BufferHandle destinations = created(device,
+                                                  {.size = sizeof(std::uint64_t) * kClusters * 2,
+                                                   .memory = BufferMemory::Upload,
+                                                   .usage = {.storage = true, .accelerationStructureInput = true}});
+        const auto destinationsAddress = device.bufferAddress(destinations);
+        REQUIRE(destinationsAddress.has_value());
+        {
+            const auto mapped = device.mapBuffer(destinations);
+            REQUIRE(mapped.has_value());
+            std::memcpy(mapped->data(), clusterAddresses.data(), sizeof(clusterAddresses));
+            std::memcpy(mapped->subspan(sizeof(clusterAddresses)).data(), bottomAddresses.data(),
+                        sizeof(bottomAddresses));
+        }
+
+        constexpr std::uint32_t kCounts = 1U | (kTriangleVertices << kClusterVertexCountShift) |
+                                          (std::to_underlying(ClusterIndexFormat::Uint8) << kClusterIndexFormatShift);
+        constexpr std::uint32_t kOpaque = std::to_underlying(ClusterGeometryFlag::Opaque) << kClusterGeometryFlagsShift;
+        const ClusterTriangleRecord cluster{.clusterId = 0,
+                                            .counts = kCounts,
+                                            .baseGeometry = kOpaque,
+                                            .indexStride = sizeof(std::uint8_t),
+                                            .vertexStride = kVertexFloats * sizeof(float),
+                                            .indices = indicesAddress,
+                                            .vertices = verticesAddress};
+        const BufferHandle clusterRecords = input(device,
+                                                  std::array<ClusterTriangleRecord, kClusters>{cluster, cluster});
+        std::array<ClusterBottomRecord, kClusters> bottoms{};
+        for (std::uint32_t i = 0; i < kClusters; ++i) {
+            bottoms.at(i) = {.clusterCount = 1,
+                             .clusterStride = sizeof(std::uint64_t),
+                             .clusters = *destinationsAddress + (sizeof(std::uint64_t) * i)};
+        }
+        const BufferHandle bottomRecords = input(device, bottoms);
+        // Vulkan may need no scratch, and a buffer has bytes.
+        const std::uint64_t scratchBytes = std::max(clusterSizes->buildScratch, bottomSizes->buildScratch);
+        const BufferHandle scratch = scratchBytes == 0
+                                         ? BufferHandle{}
+                                         : created(device, {.size = scratchBytes,
+                                                            .usage = {.accelerationStructureScratch = true}});
+
+        // A top structure of the two bottom structures, the second at x = 10.
+        const BufferHandle instances = created(device, {.size = std::uint64_t{limits.instanceSize} * kClusters,
+                                                        .memory = BufferMemory::Upload,
+                                                        .usage = {.accelerationStructureInput = true}});
+        {
+            const std::array<AccelerationStructureInstance, kClusters> placed{{
+                {.transform = movedBy(0),
+                 .customIndex = kFirst,
+                 .mask = kAllRays,
+                 .bottomReference = bottomAddresses[0]},
+                {.transform = movedBy(2 * kSpacing),
+                 .customIndex = kSecond,
+                 .mask = kAllRays,
+                 .bottomReference = bottomAddresses[1]},
+            }};
+            const auto mapped = device.mapBuffer(instances);
+            REQUIRE(mapped.has_value());
+            const auto written = device.writeInstances(placed, *mapped);
+            INFO(failureOf(written));
+            REQUIRE(written.has_value());
+        }
+        const AccelerationStructureInputs topInputs{.type = AccelerationStructureType::Top,
+                                                    .instances = instances,
+                                                    .instanceCount = kClusters};
+        const Built top = allocated(device, topInputs);
+
+        const auto built = [&](CommandListHandle list) {
+            const auto clustersBuilt = device.buildClusters(list, {.inputs = clusterInputs,
+                                                                   .scratch = scratch,
+                                                                   .addresses = destinations,
+                                                                   .addressStride = sizeof(std::uint64_t),
+                                                                   .records = clusterRecords});
+            INFO(failureOf(clustersBuilt));
+            CHECK(clustersBuilt.has_value());
+            CHECK(device.barrier(list).has_value());
+            const auto bottomsBuilt = device.buildClusters(list, {.inputs = bottomInputs,
+                                                                  .scratch = scratch,
+                                                                  .addresses = destinations,
+                                                                  .addressOffset = sizeof(clusterAddresses),
+                                                                  .addressStride = sizeof(std::uint64_t),
+                                                                  .records = bottomRecords});
+            INFO(failureOf(bottomsBuilt));
+            CHECK(bottomsBuilt.has_value());
+            CHECK(device.barrier(list).has_value());
+            CHECK(device
+                      .buildAccelerationStructure(list,
+                                                  {.dst = top.structure, .inputs = topInputs, .scratch = top.scratch})
+                      .has_value());
+            CHECK(device.barrier(list).has_value());
+        };
+        constexpr std::array<std::uint32_t, kRays> kClustered{kFirst, kMiss, kSecond, kMiss,
+                                                              kMiss,  kMiss, kMiss,   kMiss};
+        CHECK(traced(device, top.structure, built, query) == kClustered);
+        // A trace reaches cluster bottom structures through a pipeline made
+        // to.
+        if (made.caps.features.rayTracingPipeline) {
+            const RayTracing tracing{device, made.caps, {.allowClusters = true}};
+            const auto trace = [&](CommandListHandle list, std::span<const std::byte> push) {
+                CHECK(device.bindPipeline(list, tracing.pipeline).has_value());
+                CHECK(device.pushConstants(list, push).has_value());
+                const auto traced = device.traceRays(list, tracing.desc());
+                INFO(failureOf(traced));
+                CHECK(traced.has_value());
+            };
+            CHECK(traced(device, top.structure, built, trace) == kClustered);
+        }
+
+        CHECK(device.destroyAccelerationStructure(top.structure).has_value());
+        for (const BufferHandle buffer : {top.scratch, instances, scratch, bottomRecords, clusterRecords, destinations,
+                                          storage, indices, vertices}) {
+            CHECK(device.destroyBuffer(buffer).has_value());
+        }
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
@@ -1688,6 +1872,27 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
                                                            .size = kSmall})) == ErrorCode::RhiUnsupported);
             CHECK(code(device.accelerationStructureSizes({.type = AccelerationStructureType::PartitionedTop})) ==
                   ErrorCode::RhiUnsupported);
+        }
+        if (!made.caps.features.clusterAccelerationStructure) {
+            CHECK(code(device.clusterSizes({})) == ErrorCode::RhiUnsupported);
+            CHECK(code(device.buildClusters(*list, {})) == ErrorCode::RhiUnsupported);
+        }
+        else {
+            // A value past every enum BFR has.
+            constexpr std::uint8_t kNoSuchValue = 0xFF;
+            CHECK(code(device.clusterSizes({.operation = static_cast<ClusterOperation>(kNoSuchValue)})) ==
+                  ErrorCode::RhiInvalidCall);
+            CHECK(code(device.buildClusters(*list, {.inputs = {.mode = static_cast<ClusterMode>(kNoSuchValue)}})) ==
+                  ErrorCode::RhiInvalidCall);
+        }
+        if (made.caps.features.accelerationStructure) {
+            // An instance names its bottom structure one way.
+            const AccelerationStructureHandle bottom = created(device, {.type = AccelerationStructureType::Bottom,
+                                                                        .size = kSmall});
+            std::vector<std::byte> out(made.caps.rayTracing.instanceSize);
+            const AccelerationStructureInstance both{.bottomStructure = bottom, .bottomReference = 1};
+            CHECK(code(device.writeInstances(std::span{&both, 1}, out)) == ErrorCode::RhiInvalidCall);
+            CHECK(device.destroyAccelerationStructure(bottom).has_value());
         }
         if (!made.caps.features.partitionedTop) {
             const auto refused = made.instance->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& desc) {

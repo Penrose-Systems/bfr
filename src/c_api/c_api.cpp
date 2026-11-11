@@ -297,7 +297,8 @@ std::optional<bfr::rhi::BufferDesc> bufferIn(const bfr_buffer_desc& desc, bfr::c
                                 .accelerationStructureInput = desc.usage.acceleration_structure_input != BFR_FALSE,
                                 .accelerationStructureScratch = desc.usage.acceleration_structure_scratch != BFR_FALSE,
                                 .shaderBindingTable = desc.usage.shader_binding_table != BFR_FALSE,
-                                .accelerationStructureData = desc.usage.acceleration_structure_data != BFR_FALSE},
+                                .accelerationStructureData = desc.usage.acceleration_structure_data != BFR_FALSE,
+                                .accelerationStructureStorage = desc.usage.acceleration_structure_storage != BFR_FALSE},
                       .sparse = desc.sparse != BFR_FALSE,
                       .sparseAliased = desc.sparse_aliased != BFR_FALSE,
                       .tileBytes = desc.tile_bytes};
@@ -545,7 +546,8 @@ static_assert(static_cast<int>(bfr::rhi::Call::BuildAccelerationStructure) == BF
 static_assert(static_cast<int>(bfr::rhi::Call::CopyAccelerationStructure) == BFR_CALL_COPY_ACCELERATION_STRUCTURE);
 static_assert(static_cast<int>(bfr::rhi::Call::RayTracingStackSize) == BFR_CALL_RAY_TRACING_STACK_SIZE);
 static_assert(static_cast<int>(bfr::rhi::Call::WriteMotionInstances) == BFR_CALL_WRITE_MOTION_INSTANCES);
-static_assert(bfr::rhi::kCallCount == BFR_CALL_WRITE_MOTION_INSTANCES + 1);
+static_assert(static_cast<int>(bfr::rhi::Call::BuildClusters) == BFR_CALL_BUILD_CLUSTERS);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_BUILD_CLUSTERS + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
@@ -629,6 +631,114 @@ static_assert(sizeof(bfr_partition_translation_record) == sizeof(bfr::rhi::Parti
               offsetof(bfr_partition_translation_record, translation) ==
                   offsetof(bfr::rhi::PartitionTranslationRecord, translation));
 
+// The rhi form of a structure's build flags; nothing when the preference is
+// not one BFR has, and error says so.
+std::optional<bfr::rhi::AccelerationStructureFlags> flagsIn(const bfr_acceleration_structure_flags& flags,
+                                                            bfr::core::Message& error) {
+    using namespace bfr::rhi;
+    const auto preference = enumIn(flags.preference, BuildPreference::FastBuild, "build preference", error);
+    if (!preference) {
+        return std::nullopt;
+    }
+    return AccelerationStructureFlags{.preference = *preference,
+                                      .allowUpdate = flags.allow_update != BFR_FALSE,
+                                      .minimizeMemory = flags.minimize_memory != BFR_FALSE,
+                                      .allowCompaction = flags.allow_compaction != BFR_FALSE,
+                                      .allowDataAccess = flags.allow_data_access != BFR_FALSE,
+                                      .allowOpacityMicromapUpdate = flags.allow_opacity_micromap_update != BFR_FALSE,
+                                      .allowDisableOpacityMicromaps = flags.allow_disable_opacity_micromaps !=
+                                                                      BFR_FALSE,
+                                      .allowOpacityMicromapDataUpdate = flags.allow_opacity_micromap_data_update !=
+                                                                        BFR_FALSE};
+}
+
+// The rhi form of a cluster operation's inputs; nothing when an enum is not
+// one BFR has, and error says which.
+std::optional<bfr::rhi::ClusterInputs> clusterInputsIn(const bfr_cluster_inputs& inputs, bfr::core::Message& error) {
+    using namespace bfr::rhi;
+    const auto operation = enumIn(inputs.operation, ClusterOperation::TemplateIndices, "cluster operation", error);
+    const auto mode = enumIn(inputs.mode, ClusterMode::ComputeSizes, "cluster mode", error);
+    const auto moved = enumIn(inputs.move.type, ClusterStructureType::Template, "cluster structure type", error);
+    const auto format = formatIn(inputs.triangles.vertex_format, "vertex format", error);
+    const auto flags = flagsIn(inputs.flags, error);
+    if (!operation || !mode || !moved || !format || !flags) {
+        return std::nullopt;
+    }
+    const bfr_cluster_triangle_limits& triangles = inputs.triangles;
+    return ClusterInputs{.operation = *operation,
+                         .mode = *mode,
+                         .flags = *flags,
+                         .allowOpacityMicromaps = inputs.allow_opacity_micromaps != BFR_FALSE,
+                         .maxCount = inputs.max_count,
+                         .move = {.type = *moved,
+                                  .noOverlap = inputs.move.no_overlap != BFR_FALSE,
+                                  .maxBytes = inputs.move.max_bytes},
+                         .bottoms = {.maxTotalClusters = inputs.bottoms.max_total_clusters,
+                                     .maxClustersPerBottom = inputs.bottoms.max_clusters_per_bottom},
+                         .triangles = {.vertexFormat = *format,
+                                       .maxGeometryIndex = triangles.max_geometry_index,
+                                       .maxUniqueGeometries = triangles.max_unique_geometries,
+                                       .maxTriangles = triangles.max_triangles,
+                                       .maxVertices = triangles.max_vertices,
+                                       .maxTotalTriangles = triangles.max_total_triangles,
+                                       .maxTotalVertices = triangles.max_total_vertices,
+                                       .minTruncateBits = triangles.min_truncate_bits}};
+}
+
+static_assert(static_cast<int>(bfr::rhi::ClusterOperation::TemplateIndices) == BFR_CLUSTER_OPERATION_TEMPLATE_INDICES);
+static_assert(static_cast<int>(bfr::rhi::ClusterMode::ComputeSizes) == BFR_CLUSTER_MODE_COMPUTE_SIZES);
+static_assert(static_cast<int>(bfr::rhi::ClusterStructureType::Template) == BFR_CLUSTER_STRUCTURE_TYPE_TEMPLATE);
+static_assert(static_cast<int>(bfr::rhi::ClusterIndexFormat::Uint8) == BFR_CLUSTER_INDEX_FORMAT_UINT8 &&
+              static_cast<int>(bfr::rhi::ClusterIndexFormat::Uint16) == BFR_CLUSTER_INDEX_FORMAT_UINT16 &&
+              static_cast<int>(bfr::rhi::ClusterIndexFormat::Uint32) == BFR_CLUSTER_INDEX_FORMAT_UINT32);
+static_assert(static_cast<int>(bfr::rhi::ClusterGeometryFlag::CullDisable) == BFR_CLUSTER_GEOMETRY_FLAG_CULL_DISABLE &&
+              static_cast<int>(bfr::rhi::ClusterGeometryFlag::NoDuplicateAnyHit) ==
+                  BFR_CLUSTER_GEOMETRY_FLAG_NO_DUPLICATE_ANY_HIT &&
+              static_cast<int>(bfr::rhi::ClusterGeometryFlag::Opaque) == BFR_CLUSTER_GEOMETRY_FLAG_OPAQUE);
+static_assert(static_cast<int>(bfr::rhi::ClusterFlag::AllowDisableOpacityMicromaps) ==
+              BFR_CLUSTER_FLAG_ALLOW_DISABLE_OPACITY_MICROMAPS);
+static_assert(bfr::rhi::kClusterGeometryFlagsShift == BFR_CLUSTER_GEOMETRY_FLAGS_SHIFT &&
+              bfr::rhi::kClusterVertexCountShift == BFR_CLUSTER_VERTEX_COUNT_SHIFT &&
+              bfr::rhi::kClusterTruncateShift == BFR_CLUSTER_TRUNCATE_SHIFT &&
+              bfr::rhi::kClusterIndexFormatShift == BFR_CLUSTER_INDEX_FORMAT_SHIFT &&
+              bfr::rhi::kClusterMicromapIndexFormatShift == BFR_CLUSTER_MICROMAP_INDEX_FORMAT_SHIFT);
+// Cluster records are read in place on the GPU too.
+static_assert(sizeof(bfr_cluster_move_record) == sizeof(bfr::rhi::ClusterMoveRecord));
+static_assert(sizeof(bfr_cluster_bottom_record) == sizeof(bfr::rhi::ClusterBottomRecord) &&
+              offsetof(bfr_cluster_bottom_record, cluster_stride) ==
+                  offsetof(bfr::rhi::ClusterBottomRecord, clusterStride) &&
+              offsetof(bfr_cluster_bottom_record, clusters) == offsetof(bfr::rhi::ClusterBottomRecord, clusters));
+static_assert(
+    sizeof(bfr_cluster_triangle_record) == sizeof(bfr::rhi::ClusterTriangleRecord) &&
+    offsetof(bfr_cluster_triangle_record, cluster_flags) == offsetof(bfr::rhi::ClusterTriangleRecord, clusterFlags) &&
+    offsetof(bfr_cluster_triangle_record, counts) == offsetof(bfr::rhi::ClusterTriangleRecord, counts) &&
+    offsetof(bfr_cluster_triangle_record, base_geometry) == offsetof(bfr::rhi::ClusterTriangleRecord, baseGeometry) &&
+    offsetof(bfr_cluster_triangle_record, index_stride) == offsetof(bfr::rhi::ClusterTriangleRecord, indexStride) &&
+    offsetof(bfr_cluster_triangle_record, vertex_stride) == offsetof(bfr::rhi::ClusterTriangleRecord, vertexStride) &&
+    offsetof(bfr_cluster_triangle_record, geometry_stride) ==
+        offsetof(bfr::rhi::ClusterTriangleRecord, geometryStride) &&
+    offsetof(bfr_cluster_triangle_record, micromap_index_stride) ==
+        offsetof(bfr::rhi::ClusterTriangleRecord, micromapIndexStride) &&
+    offsetof(bfr_cluster_triangle_record, indices) == offsetof(bfr::rhi::ClusterTriangleRecord, indices) &&
+    offsetof(bfr_cluster_triangle_record, vertices) == offsetof(bfr::rhi::ClusterTriangleRecord, vertices) &&
+    offsetof(bfr_cluster_triangle_record, geometries) == offsetof(bfr::rhi::ClusterTriangleRecord, geometries) &&
+    offsetof(bfr_cluster_triangle_record, micromaps) == offsetof(bfr::rhi::ClusterTriangleRecord, micromaps) &&
+    offsetof(bfr_cluster_triangle_record, micromap_indices) ==
+        offsetof(bfr::rhi::ClusterTriangleRecord, micromapIndices));
+static_assert(sizeof(bfr_cluster_template_record) == sizeof(bfr::rhi::ClusterTemplateRecord) &&
+              offsetof(bfr_cluster_template_record, bounds_limit) ==
+                  offsetof(bfr::rhi::ClusterTemplateRecord, boundsLimit));
+static_assert(sizeof(bfr_cluster_instantiate_record) == sizeof(bfr::rhi::ClusterInstantiateRecord) &&
+              offsetof(bfr_cluster_instantiate_record, geometry_index_offset) ==
+                  offsetof(bfr::rhi::ClusterInstantiateRecord, geometryIndexOffset) &&
+              offsetof(bfr_cluster_instantiate_record, cluster_template) ==
+                  offsetof(bfr::rhi::ClusterInstantiateRecord, clusterTemplate) &&
+              offsetof(bfr_cluster_instantiate_record, vertices) ==
+                  offsetof(bfr::rhi::ClusterInstantiateRecord, vertices) &&
+              offsetof(bfr_cluster_instantiate_record, vertex_stride) ==
+                  offsetof(bfr::rhi::ClusterInstantiateRecord, vertexStride));
+static_assert(sizeof(bfr_cluster_template_indices_record) == sizeof(bfr::rhi::ClusterTemplateIndicesRecord));
+
 // The rhi form of a structure's inputs, its triangles and boxes written to
 // device's arrays from triangles and boxes on, which those advance past; a
 // top structure's are none, as the rhi reads none. Nothing when an array is
@@ -642,20 +752,13 @@ std::optional<bfr::rhi::AccelerationStructureInputs> inputsIn(const bfr_accelera
     limit = false;
     const auto type = enumIn(inputs.type, AccelerationStructureType::PartitionedTop, "acceleration structure type",
                              error);
-    const auto preference = enumIn(inputs.flags.preference, BuildPreference::FastBuild, "build preference", error);
-    if (!type || !preference) {
+    const auto flags = flagsIn(inputs.flags, error);
+    if (!type || !flags) {
         return std::nullopt;
     }
     AccelerationStructureInputs made{
         .type = *type,
-        .flags = {.preference = *preference,
-                  .allowUpdate = inputs.flags.allow_update != BFR_FALSE,
-                  .minimizeMemory = inputs.flags.minimize_memory != BFR_FALSE,
-                  .allowCompaction = inputs.flags.allow_compaction != BFR_FALSE,
-                  .allowDataAccess = inputs.flags.allow_data_access != BFR_FALSE,
-                  .allowOpacityMicromapUpdate = inputs.flags.allow_opacity_micromap_update != BFR_FALSE,
-                  .allowDisableOpacityMicromaps = inputs.flags.allow_disable_opacity_micromaps != BFR_FALSE,
-                  .allowOpacityMicromapDataUpdate = inputs.flags.allow_opacity_micromap_data_update != BFR_FALSE},
+        .flags = *flags,
         .triangles = {},
         .boxes = {},
         .instances = fromC(inputs.instances),
@@ -1329,6 +1432,14 @@ bfr_caps_ray_tracing toC(const bfr::rhi::RayTracingLimits& rayTracing) {
         .max_motion_keyframes = rayTracing.maxMotionKeyframes,
         .motion_instance_size = rayTracing.motionInstanceSize,
         .max_partitions = rayTracing.maxPartitions,
+        .max_cluster_vertices = rayTracing.maxClusterVertices,
+        .max_cluster_triangles = rayTracing.maxClusterTriangles,
+        .cluster_scratch_alignment = rayTracing.clusterScratchAlignment,
+        .cluster_alignment = rayTracing.clusterAlignment,
+        .cluster_template_alignment = rayTracing.clusterTemplateAlignment,
+        .cluster_bottom_alignment = rayTracing.clusterBottomAlignment,
+        .cluster_template_bounds_alignment = rayTracing.clusterTemplateBoundsAlignment,
+        .max_cluster_geometry_index = rayTracing.maxClusterGeometryIndex,
     };
 }
 
@@ -1355,6 +1466,7 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .ray_tracing_motion = toC(features.rayTracingMotion),
         .ray_tracing_motion_indirect = toC(features.rayTracingMotionIndirect),
         .partitioned_top = toC(features.partitionedTop),
+        .cluster_acceleration_structure = toC(features.clusterAccelerationStructure),
         .mesh_shader = toC(features.meshShader),
         .task_shader = toC(features.taskShader),
         .shading_rate = toC(features.shadingRate),
@@ -3212,7 +3324,8 @@ std::optional<bfr::rhi::AccelerationStructureInstance> instanceIn(const bfr_acce
                                          .forceOpacityMicromap2State = instance.force_opacity_micromap_2_state !=
                                                                        BFR_FALSE,
                                          .disableOpacityMicromaps = instance.disable_opacity_micromaps != BFR_FALSE,
-                                         .bottomStructure = fromC(instance.bottom_structure)};
+                                         .bottomStructure = fromC(instance.bottom_structure),
+                                         .bottomReference = instance.bottom_reference};
 }
 
 } // namespace
@@ -3377,6 +3490,68 @@ bfr_result bfr_build_acceleration_structure_indirect(bfr_device* device, bfr_com
     });
 }
 
+bfr_result bfr_get_cluster_sizes(bfr_device* device, const bfr_cluster_inputs* inputs,
+                                 bfr_acceleration_structure_sizes* sizes) {
+    return guarded([&] {
+        if (device == nullptr || inputs == nullptr || sizes == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, inputs and sizes must not be null");
+        }
+        *sizes = {};
+        bfr::core::Message error;
+        const auto made = clusterInputsIn(*inputs, error);
+        if (!made) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const auto found = device->device->clusterSizes(*made);
+        if (!found) {
+            return fail(found.error());
+        }
+        *sizes = {.size = found->size,
+                  .build_scratch = found->buildScratch,
+                  .update_scratch = found->updateScratch,
+                  .discardable = toC(found->discardable)};
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_build_clusters(bfr_device* device, bfr_command_list command_list, const bfr_cluster_build* build) {
+    return guarded([&] {
+        if (device == nullptr || build == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and build must not be null");
+        }
+        bfr::core::Message error;
+        const auto inputs = clusterInputsIn(build->inputs, error);
+        if (!inputs) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const bfr_cluster_indirection& indirection = build->indirection;
+        const auto built = device->device->buildClusters(
+            fromC(command_list), {.inputs = *inputs,
+                                  .destination = fromC(build->destination),
+                                  .destinationOffset = build->destination_offset,
+                                  .scratch = fromC(build->scratch),
+                                  .scratchOffset = build->scratch_offset,
+                                  .addresses = fromC(build->addresses),
+                                  .addressOffset = build->address_offset,
+                                  .addressStride = build->address_stride,
+                                  .sizes = fromC(build->sizes),
+                                  .sizeOffset = build->size_offset,
+                                  .sizeStride = build->size_stride,
+                                  .records = fromC(build->records),
+                                  .recordOffset = build->record_offset,
+                                  .recordStride = build->record_stride,
+                                  .count = fromC(build->count),
+                                  .countOffset = build->count_offset,
+                                  .indirection = {.destination = indirection.destination != BFR_FALSE,
+                                                  .scratch = indirection.scratch != BFR_FALSE,
+                                                  .addresses = indirection.addresses != BFR_FALSE,
+                                                  .sizes = indirection.sizes != BFR_FALSE,
+                                                  .records = indirection.records != BFR_FALSE,
+                                                  .count = indirection.count != BFR_FALSE}});
+        return built ? BFR_RESULT_SUCCESS : fail(built.error());
+    });
+}
+
 bfr_result bfr_copy_acceleration_structure(bfr_device* device, bfr_command_list command_list,
                                            bfr_acceleration_structure dst, bfr_acceleration_structure src) {
     return guarded([&] {
@@ -3478,7 +3653,8 @@ bfr_result bfr_create_ray_tracing_pipeline(bfr_device* device, const bfr_ray_tra
              .captureReplay = desc->capture_replay != BFR_FALSE,
              .replayIdentifiers = std::as_bytes(std::span{desc->replay_identifiers, desc->replay_identifiers_size}),
              .allowOpacityMicromaps = desc->allow_opacity_micromaps != BFR_FALSE,
-             .allowMotion = desc->allow_motion != BFR_FALSE});
+             .allowMotion = desc->allow_motion != BFR_FALSE,
+             .allowClusters = desc->allow_clusters != BFR_FALSE});
         if (!created) {
             return fail(created.error());
         }

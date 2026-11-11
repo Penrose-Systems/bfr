@@ -828,6 +828,12 @@ core::Result<VulkanPipeline> createVulkanRayTracingPipeline(const VolkDeviceTabl
     if (desc.stackSize != 0) {
         info.pDynamicState = &dynamic;
     }
+    VkRayTracingPipelineClusterAccelerationStructureCreateInfoNV clusters{};
+    clusters.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CLUSTER_ACCELERATION_STRUCTURE_CREATE_INFO_NV;
+    clusters.allowClusterAccelerationStructure = VK_TRUE;
+    if (desc.allowClusters) {
+        info.pNext = &clusters;
+    }
     VkPipeline pipeline = VK_NULL_HANDLE;
     const VkResult result = table.vkCreateRayTracingPipelinesKHR(device, VK_NULL_HANDLE, cache, 1, &info, nullptr,
                                                                  &pipeline);

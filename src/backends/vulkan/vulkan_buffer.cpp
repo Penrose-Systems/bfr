@@ -48,13 +48,17 @@ VkBufferUsageFlags usageFor(const BufferUsage& usage, const BufferAddressing& ad
            flag(usage.accelerationStructureInput && addressing.micromapInputs,
                 VK_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT) |
            flag(usage.accelerationStructureScratch, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) |
+           // Cluster operations write structures to it by address
+           // (VUID-vkCmdBuildClusterAccelerationStructureIndirectNV-pCommandInfos-12308, -12382).
+           flag(usage.accelerationStructureStorage, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR) |
            // Traces read binding tables, and indirect traces their
            // arguments, by address (VUID-vkCmdTraceRaysIndirect2KHR-indirectDeviceAddress-03633).
            flag(usage.shaderBindingTable, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR) |
            // Serialized structures are copied to and from by address
            // (VUID-vkCmdCopyAccelerationStructureToMemoryKHR-pInfo-03739).
            flag(usage.accelerationStructureInput || usage.accelerationStructureScratch || usage.shaderBindingTable ||
-                    usage.accelerationStructureData || (usage.indirect && addressing.indirectAddresses),
+                    usage.accelerationStructureData || usage.accelerationStructureStorage ||
+                    (usage.indirect && addressing.indirectAddresses),
                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
 }
 
@@ -62,7 +66,8 @@ VkDeviceSize alignmentFor(const BufferUsage& usage, const BufferAddressing& addr
     return std::max({usage.accelerationStructureScratch ? addressing.scratch : 0,
                      usage.accelerationStructureInput ? addressing.input : 0,
                      usage.shaderBindingTable ? addressing.table : 0,
-                     usage.accelerationStructureData ? addressing.data : 0});
+                     usage.accelerationStructureData ? addressing.data : 0,
+                     usage.accelerationStructureStorage ? addressing.storage : 0});
 }
 
 // The memory properties each BufferMemory requires, and the ones it would
@@ -131,17 +136,18 @@ core::Result<VmaAllocator> createAllocator(VkInstance instance, VkPhysicalDevice
 }
 
 VulkanBuffer::VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, VmaAllocation allocation, BufferMemory memory,
-                           std::span<std::byte> mapped, std::uint32_t slot, VkDeviceAddress address)
+                           std::span<std::byte> mapped, std::uint32_t slot, VkDeviceAddress address, VkDeviceSize size)
     : allocator_(allocator),
       buffer_(buffer),
       allocation_(allocation),
       memory_(memory),
       mapped_(mapped),
       slot_(slot),
-      address_(address) {}
+      address_(address),
+      size_(size) {}
 
 VulkanBuffer::VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, std::uint32_t slot,
-                           const VkMemoryRequirements& sparse)
+                           const VkMemoryRequirements& sparse, VkDeviceSize size)
     : allocator_(allocator),
       buffer_(buffer),
       allocation_(VK_NULL_HANDLE),
@@ -149,7 +155,8 @@ VulkanBuffer::VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, std::uint32_
       slot_(slot),
       sparse_(true),
       tileBytes_(sparse.alignment),
-      memoryTypes_(sparse.memoryTypeBits) {}
+      memoryTypes_(sparse.memoryTypeBits),
+      size_(size) {}
 
 VulkanBuffer::VulkanBuffer(VulkanBuffer&& other) noexcept
     : allocator_(other.allocator_),
@@ -161,7 +168,8 @@ VulkanBuffer::VulkanBuffer(VulkanBuffer&& other) noexcept
       sparse_(other.sparse_),
       tileBytes_(other.tileBytes_),
       memoryTypes_(other.memoryTypes_),
-      address_(other.address_) {}
+      address_(other.address_),
+      size_(other.size_) {}
 
 VulkanBuffer::~VulkanBuffer() {
     if (buffer_ != VK_NULL_HANDLE) {
@@ -200,7 +208,7 @@ core::Result<VulkanBuffer> placeVulkanBuffer(const VolkDeviceTable& table, VkDev
         named.buffer = buffer;
         address = table.vkGetBufferDeviceAddress(device, &named);
     }
-    return VulkanBuffer{allocator, buffer, made, memory, mapped, slot, address};
+    return VulkanBuffer{allocator, buffer, made, memory, mapped, slot, address, size};
 }
 
 core::Result<VulkanBuffer> createVulkanBuffer(const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator,
@@ -229,7 +237,7 @@ core::Result<VulkanBuffer> createVulkanBuffer(const VolkDeviceTable& table, VkDe
     }
     VkMemoryRequirements requirements{};
     table.vkGetBufferMemoryRequirements(device, buffer, &requirements);
-    return VulkanBuffer{allocator, buffer, slot, requirements};
+    return VulkanBuffer{allocator, buffer, slot, requirements, desc.size};
 }
 
 // The device's buffer calls, beside the buffers they make.

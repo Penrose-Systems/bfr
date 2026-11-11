@@ -26,8 +26,9 @@ namespace bfr::rhi::vulkan {
 /// requirements give; 0 where the device has none of that usage.
 struct BufferAddressing {
     bool indirectAddresses = false;
-    /// RayTracingLimits::scratchAlignment, and kPartitionedAlignment where
-    /// the device has partitioned top structures.
+    /// RayTracingLimits::scratchAlignment, kPartitionedAlignment where the
+    /// device has partitioned top structures, and clusterScratchAlignment
+    /// where it has clusters.
     VkDeviceSize scratch = 0;
     /// The largest a build input's address keeps.
     VkDeviceSize input = 0;
@@ -35,6 +36,8 @@ struct BufferAddressing {
     VkDeviceSize table = 0;
     /// A serialized structure's.
     VkDeviceSize data = 0;
+    /// The largest of the cluster alignments in RayTracingLimits.
+    VkDeviceSize storage = 0;
     /// Build inputs are opacity micromaps' too.
     bool micromapInputs = false;
 };
@@ -44,13 +47,14 @@ struct BufferAddressing {
 /// readback memory, empty for device memory. slot is its place in the storage
 /// buffer table, kEnd without storage usage; the device gives it back when
 /// the buffer is collected. address is its device address, 0 for a buffer
-/// made without one. A sparse one has no allocation; tileBytes and
+/// made without one; size is its bytes. A sparse one has no allocation; tileBytes and
 /// memoryTypes are its memory requirements' alignment and memoryTypeBits.
 class VulkanBuffer {
 public:
     VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, VmaAllocation allocation, BufferMemory memory,
-                 std::span<std::byte> mapped, std::uint32_t slot, VkDeviceAddress address);
-    VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, std::uint32_t slot, const VkMemoryRequirements& sparse);
+                 std::span<std::byte> mapped, std::uint32_t slot, VkDeviceAddress address, VkDeviceSize size);
+    VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, std::uint32_t slot, const VkMemoryRequirements& sparse,
+                 VkDeviceSize size);
     ~VulkanBuffer();
     VulkanBuffer(const VulkanBuffer&) = delete;
     VulkanBuffer& operator=(const VulkanBuffer&) = delete;
@@ -65,6 +69,7 @@ public:
     [[nodiscard]] VkDeviceSize tileBytes() const { return tileBytes_; }
     [[nodiscard]] std::uint32_t memoryTypes() const { return memoryTypes_; }
     [[nodiscard]] VkDeviceAddress address() const { return address_; }
+    [[nodiscard]] VkDeviceSize size() const { return size_; }
 
 private:
     VmaAllocator allocator_;
@@ -77,6 +82,7 @@ private:
     VkDeviceSize tileBytes_ = 0;
     std::uint32_t memoryTypes_ = 0;
     VkDeviceAddress address_ = 0;
+    VkDeviceSize size_ = 0;
 };
 
 /// A buffer of size bytes, of usage, in memory, shared by families as

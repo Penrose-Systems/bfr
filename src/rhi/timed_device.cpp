@@ -453,6 +453,14 @@ core::Result<void> TimedDevice::buildAccelerationStructureIndirect(CommandListHa
     });
 }
 
+core::Result<AccelerationStructureSizes> TimedDevice::clusterSizes(const ClusterInputs& inputs) {
+    return counters_.time(Call::ClusterSizes, [&] { return device_->clusterSizes(inputs); });
+}
+
+core::Result<void> TimedDevice::buildClusters(CommandListHandle commandList, const ClusterBuild& build) {
+    return counters_.time(Call::BuildClusters, [&] { return device_->buildClusters(commandList, build); });
+}
+
 core::Result<void> TimedDevice::copyAccelerationStructure(CommandListHandle commandList,
                                                           AccelerationStructureHandle dst,
                                                           AccelerationStructureHandle src) {

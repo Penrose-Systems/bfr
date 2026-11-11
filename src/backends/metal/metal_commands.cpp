@@ -531,6 +531,14 @@ core::Result<void> MetalDevice::buildAccelerationStructureIndirect(CommandListHa
     return checkIndirectBuilds(features_.accelerationStructureIndirectBuild);
 }
 
+core::Result<AccelerationStructureSizes> MetalDevice::clusterSizes(const ClusterInputs& /*inputs*/) {
+    return std::unexpected(checkClusters(features_.clusterAccelerationStructure).error());
+}
+
+core::Result<void> MetalDevice::buildClusters(CommandListHandle /*commandList*/, const ClusterBuild& /*build*/) {
+    return checkClusters(features_.clusterAccelerationStructure);
+}
+
 core::Result<void> MetalDevice::traceRays(CommandListHandle /*commandList*/, const TraceRaysDesc& /*desc*/) {
     return checkRayTracingPipelines(features_.rayTracingPipeline);
 }

@@ -320,6 +320,8 @@ public:
                                                                         const AccelerationStructureBuild& build,
                                                                         BufferHandle ranges, std::uint64_t offset,
                                                                         std::uint32_t stride) override;
+    [[nodiscard]] core::Result<AccelerationStructureSizes> clusterSizes(const ClusterInputs& inputs) override;
+    [[nodiscard]] core::Result<void> buildClusters(CommandListHandle commandList, const ClusterBuild& build) override;
     [[nodiscard]] core::Result<void> copyAccelerationStructure(CommandListHandle commandList,
                                                                AccelerationStructureHandle dst,
                                                                AccelerationStructureHandle src) override;
@@ -426,8 +428,13 @@ private:
     // builds and traces need, and RhiInvalidHandle when its pool is gone.
     [[nodiscard]] core::Result<void> checkRunsCompute(const VulkanCommandList& list);
     // buffer's device address, offset bytes in; 0 for a null buffer. Fails
-    // with RhiInvalidHandle when the buffer is gone.
+    // with RhiInvalidHandle when the buffer is gone, and RhiInvalidCall when
+    // it has no address.
     [[nodiscard]] core::Result<VkDeviceAddress> addressOf(BufferHandle buffer, std::uint64_t offset);
+    // The bytes of buffer from offset, stride apart, by address; none for a
+    // null buffer. Fails as addressOf does.
+    [[nodiscard]] core::Result<VkStridedDeviceAddressRegionKHR> regionOf(BufferHandle buffer, std::uint64_t offset,
+                                                                         std::uint64_t stride);
     // region as Vulkan takes it, by its buffer's address; none for a null
     // buffer. Fails as addressOf does.
     [[nodiscard]] core::Result<VkStridedDeviceAddressRegionKHR> regionOf(const ShaderTableRegion& region);

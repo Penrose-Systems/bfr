@@ -681,6 +681,72 @@ TEST_CASE("Vulkan without VK_NV_partitioned_acceleration_structure reports no pa
     CHECK(refused.error().code == bfr::core::ErrorCode::RhiLimitReached);
 }
 
+TEST_CASE("Vulkan without VK_NV_cluster_acceleration_structure reports no clusters, and refuses them",
+          "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride;
+    const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_NV_cluster_acceleration_structure");
+    auto created = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(created));
+    REQUIRE(created.has_value());
+    const std::unique_ptr<Instance> instance = std::move(*created);
+    const Caps& caps = instance->adapters()[0].caps;
+    CHECK_FALSE(caps.features.clusterAccelerationStructure);
+    CHECK(caps.rayTracing.maxClusterVertices == 0);
+    CHECK(caps.rayTracing.maxClusterTriangles == 0);
+    CHECK(caps.rayTracing.clusterScratchAlignment == 0);
+    CHECK(caps.rayTracing.clusterAlignment == 0);
+    CHECK(caps.rayTracing.clusterTemplateAlignment == 0);
+    CHECK(caps.rayTracing.clusterBottomAlignment == 0);
+    CHECK(caps.rayTracing.clusterTemplateBoundsAlignment == 0);
+    CHECK(caps.rayTracing.maxClusterGeometryIndex == 0);
+    if (!caps.features.accelerationStructure) {
+        SKIP("the adapter has no acceleration structures");
+    }
+    auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+    INFO(failureOf(made));
+    REQUIRE(made.has_value());
+    Device& device = **made;
+    const auto sizes = device.clusterSizes({.operation = ClusterOperation::BuildClusters});
+    REQUIRE_FALSE(sizes.has_value());
+    CHECK(sizes.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    if (caps.features.rayTracingPipeline) {
+        const auto pipeline = device.createRayTracingPipeline({.allowClusters = true});
+        REQUIRE_FALSE(pipeline.has_value());
+        CHECK(pipeline.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    }
+}
+
+TEST_CASE("Vulkan refuses a cluster operation reading or writing a buffer with no address", "[vulkan][gpu]") {
+    auto created = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(created));
+    REQUIRE(created.has_value());
+    const std::unique_ptr<Instance> instance = std::move(*created);
+    if (!instance->adapters()[0].caps.features.clusterAccelerationStructure) {
+        SKIP("the adapter has no cluster acceleration structures");
+    }
+    auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+    INFO(failureOf(made));
+    REQUIRE(made.has_value());
+    Device& device = **made;
+    constexpr std::uint64_t kSmall = 256;
+    // Storage usage alone gives a Vulkan buffer no address.
+    const auto plain = device.createBuffer({.size = kSmall, .usage = {.storage = true}});
+    REQUIRE(plain.has_value());
+    const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+    REQUIRE(pool.has_value());
+    const auto list = device.beginCommands(*pool);
+    REQUIRE(list.has_value());
+    const auto built = device.buildClusters(*list, {.inputs = {.operation = ClusterOperation::BuildClusters,
+                                                               .mode = ClusterMode::ExplicitDestinations},
+                                                    .addresses = *plain,
+                                                    .addressStride = sizeof(std::uint64_t)});
+    REQUIRE_FALSE(built.has_value());
+    CHECK(built.error().code == bfr::core::ErrorCode::RhiInvalidCall);
+    CHECK(device.destroyCommandList(*list).has_value());
+    CHECK(device.destroyCommandPool(*pool).has_value());
+    CHECK(device.destroyBuffer(*plain).has_value());
+}
+
 TEST_CASE("Vulkan refuses partitioned top structure work it has no call for", "[vulkan][gpu]") {
     auto created = Instance::create(vulkanDesc(), {});
     INFO(failureOf(created));

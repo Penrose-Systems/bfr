@@ -3,6 +3,7 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/pipeline.h"
+#include "rhi/acceleration_structure_check.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -54,8 +55,9 @@ namespace bfr::rhi {
 /// Fails with RhiUnsupported for a library, or libraries linked, where
 /// Features::rayTracingPipelineLibrary is false, captureReplay where
 /// Features::rayTracingCaptureReplay is, allowOpacityMicromaps where
-/// Features::opacityMicromap is, or allowMotion where Features::rayTracingMotion
-/// is, and RhiInvalidCall for
+/// Features::opacityMicromap is, allowMotion where Features::rayTracingMotion
+/// is, or allowClusters where Features::clusterAccelerationStructure is, and
+/// RhiInvalidCall for
 /// replayIdentifiers neither empty nor at least replaySize bytes for each
 /// group, which BFR reads.
 [[nodiscard]] inline core::Result<void> checkPipelineExtras(const RayTracingPipelineDesc& desc,
@@ -72,6 +74,11 @@ namespace bfr::rhi {
     if (desc.allowMotion && !features.rayTracingMotion) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "the device has no structures with motion (Features::rayTracingMotion)");
+    }
+    if (desc.allowClusters) {
+        if (auto checked = checkClusters(features.clusterAccelerationStructure); !checked) {
+            return checked;
+        }
     }
     if (desc.allowOpacityMicromaps && !features.opacityMicromap) {
         return core::failure(core::ErrorCode::RhiUnsupported,
@@ -101,8 +108,8 @@ namespace bfr::rhi {
 
 /// Fails with RhiUnsupported where the device gives no buffer addresses, as
 /// Features::bufferAddress says, and RhiInvalidCall for a buffer of no usage
-/// that has one: indirect, shaderBindingTable, accelerationStructureInput or
-/// accelerationStructureData.
+/// that has one: indirect, shaderBindingTable, accelerationStructureInput,
+/// accelerationStructureData or accelerationStructureStorage.
 [[nodiscard]] inline core::Result<void> checkBufferAddress(bool bufferAddress, bool addressed) {
     if (!bufferAddress) {
         return core::failure(core::ErrorCode::RhiUnsupported,
@@ -110,8 +117,8 @@ namespace bfr::rhi {
     }
     if (!addressed) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "the buffer has no indirect, shaderBindingTable or accelerationStructureInput usage, "
-                             "so no address");
+                             "the buffer has no indirect, shaderBindingTable, accelerationStructureInput, "
+                             "accelerationStructureData or accelerationStructureStorage usage, so no address");
     }
     return {};
 }

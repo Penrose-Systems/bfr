@@ -19,7 +19,7 @@ namespace bfr::rhi {
     const BufferUsage& usage = desc.usage;
     if (!(usage.copySrc || usage.copyDst || usage.uniform || usage.storage || usage.index || usage.indirect ||
           usage.accelerationStructureInput || usage.accelerationStructureScratch || usage.shaderBindingTable ||
-          usage.accelerationStructureData)) {
+          usage.accelerationStructureData || usage.accelerationStructureStorage)) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "the buffer has no usage; set every use it will have");
     }
     return {};

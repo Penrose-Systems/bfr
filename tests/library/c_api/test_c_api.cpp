@@ -689,7 +689,9 @@ TEST_CASE("C API passes sparse calls through, and refuses what is not sparse or 
 
                                    .shader_binding_table = BFR_FALSE,
 
-                                   .acceleration_structure_data = BFR_FALSE},
+                                   .acceleration_structure_data = BFR_FALSE,
+
+                                   .acceleration_structure_storage = BFR_FALSE},
                          .sparse = BFR_FALSE,
                          .sparse_aliased = BFR_FALSE,
                          .tile_bytes = 0};
@@ -754,7 +756,9 @@ TEST_CASE("C API creates, maps and destroys a buffer, and refuses what it can't 
 
                                    .shader_binding_table = BFR_FALSE,
 
-                                   .acceleration_structure_data = BFR_FALSE},
+                                   .acceleration_structure_data = BFR_FALSE,
+
+                                   .acceleration_structure_storage = BFR_FALSE},
                          .sparse = BFR_FALSE,
                          .sparse_aliased = BFR_FALSE,
                          .tile_bytes = 0};
@@ -967,7 +971,9 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, directly
 
                                          .shader_binding_table = BFR_FALSE,
 
-                                         .acceleration_structure_data = BFR_FALSE},
+                                         .acceleration_structure_data = BFR_FALSE,
+
+                                         .acceleration_structure_storage = BFR_FALSE},
                                .sparse = BFR_FALSE,
                                .sparse_aliased = BFR_FALSE,
                                .tile_bytes = 0};
@@ -987,7 +993,9 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, directly
 
                         .shader_binding_table = BFR_FALSE,
 
-                        .acceleration_structure_data = BFR_FALSE};
+                        .acceleration_structure_data = BFR_FALSE,
+
+                        .acceleration_structure_storage = BFR_FALSE};
     bfr_buffer readback{};
     REQUIRE(bfr_create_buffer(device.device, &bufferDesc, &readback) == BFR_RESULT_SUCCESS);
     std::uint32_t slot = 0;
@@ -1010,7 +1018,9 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, directly
 
                         .shader_binding_table = BFR_FALSE,
 
-                        .acceleration_structure_data = BFR_FALSE};
+                        .acceleration_structure_data = BFR_FALSE,
+
+                        .acceleration_structure_storage = BFR_FALSE};
     bfr_buffer args{};
     REQUIRE(bfr_create_buffer(device.device, &bufferDesc, &args) == BFR_RESULT_SUCCESS);
     void* argsData = nullptr;
@@ -1196,7 +1206,7 @@ TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call tim
 
     std::uint32_t count = 0;
     REQUIRE(bfr_get_call_timings(device.device, &count, nullptr) == BFR_RESULT_SUCCESS);
-    CHECK(count == BFR_CALL_WRITE_MOTION_INSTANCES + 1);
+    CHECK(count == BFR_CALL_BUILD_CLUSTERS + 1);
     std::vector<bfr_call_timing> timings(count);
     REQUIRE(bfr_get_call_timings(device.device, &count, timings.data()) == BFR_RESULT_SUCCESS);
     CHECK(timings.at(BFR_CALL_CREATE_TIMESTAMP_POOL).count == 2);
@@ -1723,6 +1733,78 @@ TEST_CASE("C API refuses acceleration structure calls on a null device", "[c_api
     const bfr_acceleration_structure_build build{};
     CHECK(bfr_build_acceleration_structure(nullptr, bfr_command_list{}, &build) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     CHECK(bfr_copy_acceleration_structure(nullptr, bfr_command_list{}, {}, {}) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    const bfr_cluster_inputs clusterInputs{};
+    CHECK(bfr_get_cluster_sizes(nullptr, &clusterInputs, &sizes) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    const bfr_cluster_build clusterBuild{};
+    CHECK(bfr_build_clusters(nullptr, bfr_command_list{}, &clusterBuild) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("C API passes cluster inputs through, where the adapter has them", "[c_api][gpu]") {
+    const bfr_backend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const Instance instance{backend, messages};
+        bfr_caps caps{};
+        REQUIRE(bfr_get_caps(instance.instance, 0, &caps) == BFR_RESULT_SUCCESS);
+        const bfr_device_desc desc{.next = nullptr,
+                                   .adapter = 0,
+                                   .window = {},
+                                   .graphics_queues = &kOneQueue,
+                                   .graphics_queue_count = 1,
+                                   .compute_queues = nullptr,
+                                   .compute_queue_count = 0,
+                                   .copy_queues = nullptr,
+                                   .copy_queue_count = 0,
+                                   .max_command_lists = kDeviceLists,
+                                   .max_command_pools = kDevicePools,
+                                   .max_swapchains = 0,
+                                   .max_bindless_textures = 0,
+                                   .max_bindless_storage_textures = 0,
+                                   .max_bindless_storage_buffers = 0,
+                                   .max_bindless_samplers = 0,
+                                   .max_timestamp_pools = 0,
+                                   .max_sparse_memories = 0,
+                                   .max_tile_mappings = 0,
+                                   .max_bindless_acceleration_structures = 0,
+                                   .max_bindless_partitioned_tops = 0,
+                                   .max_build_geometries = 0,
+                                   .max_acceleration_structure_property_pools = 0,
+                                   .indirect_strides = nullptr,
+                                   .indirect_stride_count = 0};
+        bfr_device* device = nullptr;
+        REQUIRE(bfr_create_device(instance.instance, &desc, &device) == BFR_RESULT_SUCCESS);
+        constexpr std::uint32_t kClusters = 2;
+        constexpr std::uint32_t kVertices = 3;
+        bfr_cluster_inputs inputs{};
+        inputs.operation = BFR_CLUSTER_OPERATION_BUILD_CLUSTERS;
+        inputs.mode = BFR_CLUSTER_MODE_EXPLICIT_DESTINATIONS;
+        inputs.max_count = kClusters;
+        inputs.triangles = {.vertex_format = BFR_FORMAT_RGB32_FLOAT,
+                            .max_geometry_index = 0,
+                            .max_unique_geometries = 1,
+                            .max_triangles = 1,
+                            .max_vertices = kVertices,
+                            .max_total_triangles = kClusters,
+                            .max_total_vertices = kClusters * kVertices,
+                            .min_truncate_bits = 0};
+        bfr_acceleration_structure_sizes sizes{};
+        if (caps.features.cluster_acceleration_structure == BFR_FALSE) {
+            CHECK(bfr_get_cluster_sizes(device, &inputs, &sizes) == BFR_RESULT_ERROR_UNSUPPORTED);
+            CHECK(caps.ray_tracing.max_cluster_triangles == 0);
+            bfr_destroy_device(device);
+            SKIP("the adapter has no cluster acceleration structures");
+        }
+        CHECK(caps.ray_tracing.max_cluster_triangles != 0);
+        CHECK(caps.ray_tracing.cluster_alignment != 0);
+        REQUIRE(bfr_get_cluster_sizes(device, &inputs, &sizes) == BFR_RESULT_SUCCESS);
+        CHECK(sizes.size != 0);
+        // A value past every operation BFR has.
+        constexpr int kNoSuchOperation = BFR_CLUSTER_OPERATION_TEMPLATE_INDICES + 1;
+        inputs.operation = static_cast<bfr_cluster_operation>(kNoSuchOperation);
+        CHECK(bfr_get_cluster_sizes(device, &inputs, &sizes) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+        bfr_destroy_device(device);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
 TEST_CASE("C API passes acceleration structure inputs and instances through, where the adapter has them",
@@ -1783,7 +1865,8 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
                                                    .acceleration_structure_input = BFR_TRUE,
                                                    .acceleration_structure_scratch = BFR_FALSE,
                                                    .shader_binding_table = BFR_FALSE,
-                                                   .acceleration_structure_data = BFR_FALSE},
+                                                   .acceleration_structure_data = BFR_FALSE,
+                                                   .acceleration_structure_storage = BFR_FALSE},
                                          .sparse = BFR_FALSE,
                                          .sparse_aliased = BFR_FALSE,
                                          .tile_bytes = 0};
@@ -2014,7 +2097,8 @@ TEST_CASE("C API makes shaders and a ray tracing pipeline from them, and gives i
                                                  .replay_identifiers = nullptr,
                                                  .replay_identifiers_size = 0,
                                                  .allow_opacity_micromaps = BFR_FALSE,
-                                                 .allow_motion = BFR_FALSE};
+                                                 .allow_motion = BFR_FALSE,
+                                                 .allow_clusters = BFR_FALSE};
         bfr_pipeline pipeline{};
         bfr_ray_tracing_pipeline_desc unnamed = desc;
         unnamed.library_count = 1;

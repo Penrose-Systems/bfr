@@ -14,6 +14,7 @@
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -232,6 +233,151 @@ VkPartitionedAccelerationStructureInstancesInputNV partitionedInputOf(
     input.partitionCount = inputs.partitioned.partitionCount;
     input.maxInstanceInGlobalPartitionCount = inputs.partitioned.maxGlobalInstances;
     return input;
+}
+
+// Cluster records are read in place on the GPU, so BFR's are Vulkan's; a
+// word Vulkan splits into bit-fields is one uint32_t here.
+static_assert(sizeof(ClusterMoveRecord) == sizeof(VkClusterAccelerationStructureMoveObjectsInfoNV));
+static_assert(sizeof(ClusterBottomRecord) == sizeof(VkClusterAccelerationStructureBuildClustersBottomLevelInfoNV) &&
+              offsetof(ClusterBottomRecord, clusterStride) ==
+                  offsetof(VkClusterAccelerationStructureBuildClustersBottomLevelInfoNV, clusterReferencesStride) &&
+              offsetof(ClusterBottomRecord, clusters) ==
+                  offsetof(VkClusterAccelerationStructureBuildClustersBottomLevelInfoNV, clusterReferences));
+static_assert(sizeof(ClusterTriangleRecord) == sizeof(VkClusterAccelerationStructureBuildTriangleClusterInfoNV) &&
+              offsetof(ClusterTriangleRecord, clusterFlags) ==
+                  offsetof(VkClusterAccelerationStructureBuildTriangleClusterInfoNV, clusterFlags) &&
+              offsetof(ClusterTriangleRecord, baseGeometry) ==
+                  offsetof(VkClusterAccelerationStructureBuildTriangleClusterInfoNV,
+                           baseGeometryIndexAndGeometryFlags) &&
+              offsetof(ClusterTriangleRecord, indexStride) ==
+                  offsetof(VkClusterAccelerationStructureBuildTriangleClusterInfoNV, indexBufferStride) &&
+              offsetof(ClusterTriangleRecord, micromapIndexStride) ==
+                  offsetof(VkClusterAccelerationStructureBuildTriangleClusterInfoNV,
+                           opacityMicromapIndexBufferStride) &&
+              offsetof(ClusterTriangleRecord, indices) ==
+                  offsetof(VkClusterAccelerationStructureBuildTriangleClusterInfoNV, indexBuffer) &&
+              offsetof(ClusterTriangleRecord, micromapIndices) ==
+                  offsetof(VkClusterAccelerationStructureBuildTriangleClusterInfoNV, opacityMicromapIndexBuffer));
+static_assert(sizeof(ClusterTemplateRecord) ==
+                  sizeof(VkClusterAccelerationStructureBuildTriangleClusterTemplateInfoNV) &&
+              offsetof(ClusterTemplateRecord, boundsLimit) ==
+                  offsetof(VkClusterAccelerationStructureBuildTriangleClusterTemplateInfoNV,
+                           instantiationBoundingBoxLimit));
+static_assert(sizeof(ClusterInstantiateRecord) == sizeof(VkClusterAccelerationStructureInstantiateClusterInfoNV) &&
+              offsetof(ClusterInstantiateRecord, clusterTemplate) ==
+                  offsetof(VkClusterAccelerationStructureInstantiateClusterInfoNV, clusterTemplateAddress) &&
+              offsetof(ClusterInstantiateRecord, vertices) ==
+                  offsetof(VkClusterAccelerationStructureInstantiateClusterInfoNV, vertexBuffer));
+static_assert(sizeof(ClusterTemplateIndicesRecord) == sizeof(VkClusterAccelerationStructureGetTemplateIndicesInfoNV));
+static_assert(std::to_underlying(ClusterOperation::Move) == VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_MOVE_OBJECTS_NV &&
+              std::to_underlying(ClusterOperation::BuildBottoms) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_CLUSTERS_BOTTOM_LEVEL_NV &&
+              std::to_underlying(ClusterOperation::BuildClusters) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_TRIANGLE_CLUSTER_NV &&
+              std::to_underlying(ClusterOperation::BuildTemplates) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_TRIANGLE_CLUSTER_TEMPLATE_NV &&
+              std::to_underlying(ClusterOperation::InstantiateTemplates) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_INSTANTIATE_TRIANGLE_CLUSTER_NV &&
+              std::to_underlying(ClusterOperation::TemplateIndices) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_GET_CLUSTER_TEMPLATE_INDICES_NV);
+static_assert(std::to_underlying(ClusterMode::ImplicitDestinations) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV &&
+              std::to_underlying(ClusterMode::ExplicitDestinations) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_EXPLICIT_DESTINATIONS_NV &&
+              std::to_underlying(ClusterMode::ComputeSizes) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_COMPUTE_SIZES_NV);
+static_assert(std::to_underlying(ClusterStructureType::Bottom) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_TYPE_CLUSTERS_BOTTOM_LEVEL_NV &&
+              std::to_underlying(ClusterStructureType::Cluster) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_TYPE_TRIANGLE_CLUSTER_NV &&
+              std::to_underlying(ClusterStructureType::Template) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_TYPE_TRIANGLE_CLUSTER_TEMPLATE_NV);
+static_assert(std::to_underlying(ClusterIndexFormat::Uint8) == VK_CLUSTER_ACCELERATION_STRUCTURE_INDEX_FORMAT_8BIT_NV &&
+              std::to_underlying(ClusterIndexFormat::Uint16) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_INDEX_FORMAT_16BIT_NV &&
+              std::to_underlying(ClusterIndexFormat::Uint32) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_INDEX_FORMAT_32BIT_NV);
+static_assert(std::to_underlying(ClusterGeometryFlag::CullDisable) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_GEOMETRY_CULL_DISABLE_BIT_NV &&
+              std::to_underlying(ClusterGeometryFlag::NoDuplicateAnyHit) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_GEOMETRY_NO_DUPLICATE_ANYHIT_INVOCATION_BIT_NV &&
+              std::to_underlying(ClusterGeometryFlag::Opaque) ==
+                  VK_CLUSTER_ACCELERATION_STRUCTURE_GEOMETRY_OPAQUE_BIT_NV);
+static_assert(std::to_underlying(ClusterFlag::AllowDisableOpacityMicromaps) ==
+              VK_CLUSTER_ACCELERATION_STRUCTURE_CLUSTER_ALLOW_DISABLE_OPACITY_MICROMAPS_NV);
+
+// A cluster operation's kind, mode and bounds as Vulkan takes them; info
+// points at the bound the operation reads, held beside it.
+struct VulkanClusterInput {
+    VkClusterAccelerationStructureInputInfoNV info{};
+    VkClusterAccelerationStructureMoveObjectsInputNV move{};
+    VkClusterAccelerationStructureClustersBottomLevelInputNV bottoms{};
+    VkClusterAccelerationStructureTriangleClusterInputNV triangles{};
+
+    explicit VulkanClusterInput(const ClusterInputs& inputs) {
+        info.sType = VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV;
+        info.maxAccelerationStructureCount = inputs.maxCount;
+        info.flags =
+            flagsFor(inputs.flags) |
+            (inputs.allowOpacityMicromaps
+                 ? VkBuildAccelerationStructureFlagsKHR{VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_CLUSTER_OPACITY_MICROMAPS_BIT_NV}
+                 : 0U);
+        info.opType = static_cast<VkClusterAccelerationStructureOpTypeNV>(inputs.operation);
+        info.opMode = static_cast<VkClusterAccelerationStructureOpModeNV>(inputs.mode);
+        switch (inputs.operation) {
+            case ClusterOperation::Move:
+                move.sType = VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_MOVE_OBJECTS_INPUT_NV;
+                move.type = static_cast<VkClusterAccelerationStructureTypeNV>(inputs.move.type);
+                move.noMoveOverlap = inputs.move.noOverlap ? VK_TRUE : VK_FALSE;
+                move.maxMovedBytes = inputs.move.maxBytes;
+                info.opInput.pMoveObjects = &move;
+                break;
+            case ClusterOperation::BuildBottoms:
+                bottoms.sType = VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_CLUSTERS_BOTTOM_LEVEL_INPUT_NV;
+                bottoms.maxTotalClusterCount = inputs.bottoms.maxTotalClusters;
+                bottoms.maxClusterCountPerAccelerationStructure = inputs.bottoms.maxClustersPerBottom;
+                info.opInput.pClustersBottomLevel = &bottoms;
+                break;
+            case ClusterOperation::BuildClusters:
+            case ClusterOperation::BuildTemplates:
+            case ClusterOperation::InstantiateTemplates:
+            case ClusterOperation::TemplateIndices:
+                triangles.sType = VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_TRIANGLE_CLUSTER_INPUT_NV;
+                triangles.vertexFormat = vulkanFormat(inputs.triangles.vertexFormat);
+                triangles.maxGeometryIndexValue = inputs.triangles.maxGeometryIndex;
+                triangles.maxClusterUniqueGeometryCount = inputs.triangles.maxUniqueGeometries;
+                triangles.maxClusterTriangleCount = inputs.triangles.maxTriangles;
+                triangles.maxClusterVertexCount = inputs.triangles.maxVertices;
+                triangles.maxTotalTriangleCount = inputs.triangles.maxTotalTriangles;
+                triangles.maxTotalVertexCount = inputs.triangles.maxTotalVertices;
+                triangles.minPositionTruncateBitCount = inputs.triangles.minTruncateBits;
+                info.opInput.pTriangleClusters = &triangles;
+                break;
+        }
+    }
+    VulkanClusterInput(const VulkanClusterInput&) = delete;
+    VulkanClusterInput& operator=(const VulkanClusterInput&) = delete;
+    VulkanClusterInput(VulkanClusterInput&&) = delete;
+    VulkanClusterInput& operator=(VulkanClusterInput&&) = delete;
+    ~VulkanClusterInput() = default;
+};
+
+VkClusterAccelerationStructureAddressResolutionFlagsNV resolutionFor(const ClusterIndirection& indirection) {
+    const auto flag = [](bool set, VkClusterAccelerationStructureAddressResolutionFlagBitsNV bit) {
+        return set ? VkClusterAccelerationStructureAddressResolutionFlagsNV{bit} : 0U;
+    };
+    return flag(indirection.destination,
+                VK_CLUSTER_ACCELERATION_STRUCTURE_ADDRESS_RESOLUTION_INDIRECTED_DST_IMPLICIT_DATA_BIT_NV) |
+           flag(indirection.scratch,
+                VK_CLUSTER_ACCELERATION_STRUCTURE_ADDRESS_RESOLUTION_INDIRECTED_SCRATCH_DATA_BIT_NV) |
+           flag(indirection.addresses,
+                VK_CLUSTER_ACCELERATION_STRUCTURE_ADDRESS_RESOLUTION_INDIRECTED_DST_ADDRESS_ARRAY_BIT_NV) |
+           flag(indirection.sizes,
+                VK_CLUSTER_ACCELERATION_STRUCTURE_ADDRESS_RESOLUTION_INDIRECTED_DST_SIZES_ARRAY_BIT_NV) |
+           flag(indirection.records,
+                VK_CLUSTER_ACCELERATION_STRUCTURE_ADDRESS_RESOLUTION_INDIRECTED_SRC_INFOS_ARRAY_BIT_NV) |
+           flag(indirection.count,
+                VK_CLUSTER_ACCELERATION_STRUCTURE_ADDRESS_RESOLUTION_INDIRECTED_SRC_INFOS_COUNT_BIT_NV);
 }
 
 // usages as Vulkan reads them, in place: the layouts and format values are
@@ -476,7 +622,27 @@ core::Result<VkDeviceAddress> VulkanDevice::addressOf(BufferHandle buffer, std::
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
+    if ((*found)->address() == 0) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "a buffer read or written by address has no usage that gives it one");
+    }
     return (*found)->address() + offset;
+}
+
+core::Result<VkStridedDeviceAddressRegionKHR> VulkanDevice::regionOf(BufferHandle buffer, std::uint64_t offset,
+                                                                     std::uint64_t stride) {
+    if (buffer.isNull()) {
+        return VkStridedDeviceAddressRegionKHR{};
+    }
+    const auto address = addressOf(buffer, offset);
+    if (!address) {
+        return std::unexpected(address.error());
+    }
+    // The region is the buffer's bytes from offset, as the caller made it.
+    const VkDeviceSize size = (*bufferFor(buffer))->size();
+    return VkStridedDeviceAddressRegionKHR{.deviceAddress = *address,
+                                           .stride = stride,
+                                           .size = size > offset ? size - offset : 0};
 }
 
 core::Result<AccelerationStructureSizes> VulkanDevice::accelerationStructureSizes(
@@ -719,7 +885,7 @@ core::Result<void> VulkanDevice::writeInstances(std::span<const AccelerationStru
 
 core::Result<VkAccelerationStructureInstanceKHR> VulkanDevice::instanceRecord(
     const AccelerationStructureInstance& instance, std::size_t index) {
-    VkDeviceAddress reference = 0;
+    VkDeviceAddress reference = instance.bottomReference;
     if (!instance.bottomStructure.isNull()) {
         auto found = accelerationStructureFor(instance.bottomStructure);
         if (!found) {
@@ -1001,6 +1167,61 @@ core::Result<void> VulkanDevice::recordPartitionedBuild(VkCommandBuffer buffer, 
     info.srcInfos = *ops;
     info.srcInfosCount = *opCount;
     table_.vkCmdBuildPartitionedAccelerationStructuresNV(buffer, &info);
+    return {};
+}
+
+core::Result<AccelerationStructureSizes> VulkanDevice::clusterSizes(const ClusterInputs& inputs) {
+    if (auto checked = checkClusterInputs(inputs, features_); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    const VulkanClusterInput input{inputs};
+    VkAccelerationStructureBuildSizesInfoKHR sizes{};
+    sizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+    table_.vkGetClusterAccelerationStructureBuildSizesNV(device_, &input.info, &sizes);
+    return AccelerationStructureSizes{.size = sizes.accelerationStructureSize,
+                                      .buildScratch = sizes.buildScratchSize,
+                                      .updateScratch = sizes.updateScratchSize};
+}
+
+core::Result<void> VulkanDevice::buildClusters(CommandListHandle commandList, const ClusterBuild& build) {
+    if (auto checked = checkClusterInputs(build.inputs, features_); !checked) {
+        return checked;
+    }
+    auto list = commandListFor(commandList);
+    if (!list) {
+        return std::unexpected(std::move(list.error()));
+    }
+    if (auto checked = checkRunsCompute(**list); !checked) {
+        return checked;
+    }
+    const auto destination = addressOf(build.destination, build.destinationOffset);
+    const auto scratch = addressOf(build.scratch, build.scratchOffset);
+    const auto count = addressOf(build.count, build.countOffset);
+    const auto addresses = regionOf(build.addresses, build.addressOffset, build.addressStride);
+    const auto sizes = regionOf(build.sizes, build.sizeOffset, build.sizeStride);
+    const auto records = regionOf(build.records, build.recordOffset, build.recordStride);
+    for (const auto* address : {&destination, &scratch, &count}) {
+        if (!*address) {
+            return std::unexpected(address->error());
+        }
+    }
+    for (const auto* region : {&addresses, &sizes, &records}) {
+        if (!*region) {
+            return std::unexpected(region->error());
+        }
+    }
+    const VulkanClusterInput input{build.inputs};
+    VkClusterAccelerationStructureCommandsInfoNV info{};
+    info.sType = VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_COMMANDS_INFO_NV;
+    info.input = input.info;
+    info.dstImplicitData = *destination;
+    info.scratchData = *scratch;
+    info.dstAddressesArray = *addresses;
+    info.dstSizesArray = *sizes;
+    info.srcInfosArray = *records;
+    info.srcInfosCount = *count;
+    info.addressResolutionFlags = resolutionFor(build.indirection);
+    table_.vkCmdBuildClusterAccelerationStructureIndirectNV((*list)->buffer, &info);
     return {};
 }
 

@@ -370,6 +370,9 @@ struct RayTracingPipelineDesc {
     /// Its traces are at a time, of structures with motion, where
     /// Features::rayTracingMotion.
     bool allowMotion = false;
+    /// Its traces may reach cluster bottom structures, which they must be
+    /// made with to, where Features::clusterAccelerationStructure.
+    bool allowClusters = false;
 };
 
 } // namespace bfr::rhi

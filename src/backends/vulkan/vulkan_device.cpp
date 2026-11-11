@@ -192,14 +192,16 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       resolve_(setup.resolve),
       rayTracing_(setup.rayTracing),
       addressing_{.indirectAddresses = setup.deviceAddresses,
-                  .scratch = setup.features.partitionedTop
-                                 ? std::max<VkDeviceSize>(setup.rayTracing.scratchAlignment, kPartitionedAlignment)
-                                 : setup.rayTracing.scratchAlignment,
+                  .scratch = std::max<VkDeviceSize>({setup.rayTracing.scratchAlignment,
+                                                     setup.features.partitionedTop ? kPartitionedAlignment : 0,
+                                                     setup.rayTracing.clusterScratchAlignment}),
                   .input = setup.features.opacityMicromap         ? kMicromapInputAlignment
                            : setup.features.accelerationStructure ? kInputAlignment
                                                                   : 0,
                   .table = setup.rayTracing.tableAlignment,
                   .data = setup.features.accelerationStructure ? kSerializedAlignment : 0,
+                  .storage = std::max({setup.rayTracing.clusterAlignment, setup.rayTracing.clusterTemplateAlignment,
+                                       setup.rayTracing.clusterBottomAlignment}),
                   .micromapInputs = setup.features.opacityMicromap},
       formats13_(setup.formats13),
       desc_(heldPart(desc)),

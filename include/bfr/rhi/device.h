@@ -618,8 +618,9 @@ public:
     /// RayTracingLimits::instanceSize bytes each, on the CPU. Fails with
     /// RhiUnsupported where Features::accelerationStructure is false,
     /// RhiInvalidCall when out is too small, an index or offset is
-    /// kInstanceIndexLimit or above, an enum value BFR doesn't have, or an
-    /// instance names a structure other than a bottom one, and
+    /// kInstanceIndexLimit or above, an enum value BFR doesn't have, an
+    /// instance names a structure other than a bottom one, or both a
+    /// bottomStructure and a bottomReference, and
     /// RhiInvalidHandle for a structure
     /// that is gone.
     [[nodiscard]] virtual core::Result<void> writeInstances(std::span<const AccelerationStructureInstance> instances,
@@ -645,7 +646,7 @@ public:
     /// of a type or motion unlike its structure's, an opacity micromap updated
     /// where the backend builds one only whole (Vulkan), or a partitioned top
     /// one updated from a structure of another type or another from a
-    /// partitioned top one, RhiLimitReached past
+    /// partitioned top one, or a buffer with no address, RhiLimitReached past
     /// DeviceDesc::maxBuildGeometries, and RhiInvalidHandle for a list,
     /// structure or buffer that is gone.
     [[nodiscard]] virtual core::Result<void> buildAccelerationStructure(CommandListHandle commandList,
@@ -666,6 +667,28 @@ public:
                                                                                 BufferHandle ranges,
                                                                                 std::uint64_t offset,
                                                                                 std::uint32_t stride) = 0;
+
+    /// The bytes a cluster operation from inputs writes and the scratch it
+    /// takes, as the backend says: size is every structure's bytes for
+    /// ImplicitDestinations and one structure's at most for
+    /// ExplicitDestinations; for ComputeSizes the backend gives only
+    /// buildScratch. Fails with RhiUnsupported where
+    /// Features::clusterAccelerationStructure is false, or for flags of opacity
+    /// micromaps where Features::opacityMicromap is, and RhiInvalidCall for
+    /// an enum value BFR doesn't have.
+    [[nodiscard]] virtual core::Result<AccelerationStructureSizes> clusterSizes(const ClusterInputs& inputs) = 0;
+
+    /// Records build, a cluster operation, outside rendering, on a queue whose
+    /// kind runs compute: the GPU reads its records and count as it runs. A
+    /// barrier orders the work that wrote its records, count and the
+    /// structures it reads before it, and their readers and any reuse of its
+    /// scratch after. Traces reach the cluster bottom structures it builds
+    /// only through pipelines made with allowClusters. Fails with
+    /// RhiUnsupported as clusterSizes does or on a copy queue, RhiInvalidCall
+    /// for inputs clusterSizes refuses or a buffer with no address, and
+    /// RhiInvalidHandle for a list or buffer that is gone.
+    [[nodiscard]] virtual core::Result<void> buildClusters(CommandListHandle commandList,
+                                                           const ClusterBuild& build) = 0;
 
     /// Records a copy of src into dst, not overlapping, as builds are
     /// recorded: dst at least src's size, or its CurrentSize where
@@ -823,7 +846,8 @@ public:
     /// Records a trace of desc's rays with the bound ray tracing pipeline,
     /// outside rendering, on a queue whose kind runs compute; commands after
     /// a barrier see what it wrote. Fails with RhiUnsupported where
-    /// Features::rayTracingPipeline is false or on a copy queue, and
+    /// Features::rayTracingPipeline is false or on a copy queue,
+    /// RhiInvalidCall for a table buffer with no address, and
     /// RhiInvalidHandle for a list or buffer that is gone.
     [[nodiscard]] virtual core::Result<void> traceRays(CommandListHandle commandList, const TraceRaysDesc& desc) = 0;
 
@@ -835,9 +859,10 @@ public:
     [[nodiscard]] virtual core::Result<void> traceRaysIndirect(CommandListHandle commandList, BufferHandle buffer,
                                                                std::uint64_t offset) = 0;
 
-    /// The buffer's GPU address, for the addresses TraceRaysIndirectArgs and
-    /// shaders read. The buffer has indirect, shaderBindingTable or
-    /// accelerationStructureInput usage. Fails with RhiUnsupported where
+    /// The buffer's GPU address, for the addresses TraceRaysIndirectArgs,
+    /// cluster records and shaders read. The buffer has indirect,
+    /// shaderBindingTable, accelerationStructureInput, accelerationStructureData
+    /// or accelerationStructureStorage usage. Fails with RhiUnsupported where
     /// Features::bufferAddress is false, RhiInvalidCall for a buffer of none
     /// of those usages, and RhiInvalidHandle when it is gone.
     [[nodiscard]] virtual core::Result<std::uint64_t> bufferAddress(BufferHandle buffer) = 0;

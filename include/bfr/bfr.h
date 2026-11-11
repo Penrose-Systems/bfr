@@ -55,6 +55,24 @@ typedef uint8_t bfr_bool;
 // The floats of a box: min xyz, then max xyz.
 #define BFR_BOX_FLOATS 6u
 
+// The bit a cluster geometry word's bfr_cluster_geometry_flag bits start at; the geometry index is
+// its low 24 bits.
+#define BFR_CLUSTER_GEOMETRY_FLAGS_SHIFT 29u
+
+// The bit a cluster record's counts word's vertices (9 bits) start at; its triangles are the low 9
+// bits.
+#define BFR_CLUSTER_VERTEX_COUNT_SHIFT 9u
+
+// The bit a cluster record's counts word's truncated position bits (6 bits) start at.
+#define BFR_CLUSTER_TRUNCATE_SHIFT 18u
+
+// The bit a cluster record's counts word's index bfr_cluster_index_format (4 bits) starts at.
+#define BFR_CLUSTER_INDEX_FORMAT_SHIFT 24u
+
+// The bit a cluster record's counts word's micromap index bfr_cluster_index_format (4 bits) starts
+// at.
+#define BFR_CLUSTER_MICROMAP_INDEX_FORMAT_SHIFT 28u
+
 // The partition index that names a partitioned top structure's global partition, which holds
 // instances apart from the others.
 #define BFR_GLOBAL_PARTITION 4294967295u
@@ -534,6 +552,8 @@ typedef enum bfr_call {
     BFR_CALL_BUILD_ACCELERATION_STRUCTURE_INDIRECT = 102,
     BFR_CALL_CAPTURE_REPLAY_IDENTIFIERS = 103,
     BFR_CALL_WRITE_MOTION_INSTANCES = 104,
+    BFR_CALL_CLUSTER_SIZES = 105,
+    BFR_CALL_BUILD_CLUSTERS = 106,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -914,6 +934,63 @@ typedef enum bfr_instance_motion {
     BFR_INSTANCE_MOTION_SRT = 2,
     BFR_INSTANCE_MOTION_FORCE32 = 0x7FFFFFFF
 } bfr_instance_motion;
+
+// What a cluster operation does: moves structures, builds cluster bottom structures from clusters,
+// builds clusters or cluster templates from triangles, instantiates templates into clusters, or
+// fetches templates' indices, which is all Vulkan states of it. A cluster holds at most
+// bfr_caps_ray_tracing.max_cluster_triangles triangles; a cluster bottom structure holds clusters
+// and is what an instance names; a template is a cluster built without its positions. The values
+// are Vulkan's.
+typedef enum bfr_cluster_operation {
+    BFR_CLUSTER_OPERATION_MOVE = 0,
+    BFR_CLUSTER_OPERATION_BUILD_BOTTOMS = 1,
+    BFR_CLUSTER_OPERATION_BUILD_CLUSTERS = 2,
+    BFR_CLUSTER_OPERATION_BUILD_TEMPLATES = 3,
+    BFR_CLUSTER_OPERATION_INSTANTIATE_TEMPLATES = 4,
+    BFR_CLUSTER_OPERATION_TEMPLATE_INDICES = 5,
+    BFR_CLUSTER_OPERATION_FORCE32 = 0x7FFFFFFF
+} bfr_cluster_operation;
+
+// Where a cluster operation's structures go: packed from one destination, their addresses and sizes
+// written; at addresses the GPU reads, their sizes read; or nowhere, only their sizes written. The
+// values are Vulkan's.
+typedef enum bfr_cluster_mode {
+    BFR_CLUSTER_MODE_IMPLICIT_DESTINATIONS = 0,
+    BFR_CLUSTER_MODE_EXPLICIT_DESTINATIONS = 1,
+    BFR_CLUSTER_MODE_COMPUTE_SIZES = 2,
+    BFR_CLUSTER_MODE_FORCE32 = 0x7FFFFFFF
+} bfr_cluster_mode;
+
+// What a move moves. The values are Vulkan's.
+typedef enum bfr_cluster_structure_type {
+    BFR_CLUSTER_STRUCTURE_TYPE_BOTTOM = 0,
+    BFR_CLUSTER_STRUCTURE_TYPE_CLUSTER = 1,
+    BFR_CLUSTER_STRUCTURE_TYPE_TEMPLATE = 2,
+    BFR_CLUSTER_STRUCTURE_TYPE_FORCE32 = 0x7FFFFFFF
+} bfr_cluster_structure_type;
+
+// The index types of a cluster record's indices and micromap indices. The values are the records'.
+typedef enum bfr_cluster_index_format {
+    BFR_CLUSTER_INDEX_FORMAT_UINT8 = 1,
+    BFR_CLUSTER_INDEX_FORMAT_UINT16 = 2,
+    BFR_CLUSTER_INDEX_FORMAT_UINT32 = 4,
+    BFR_CLUSTER_INDEX_FORMAT_FORCE32 = 0x7FFFFFFF
+} bfr_cluster_index_format;
+
+// The bits of a cluster geometry word's flags. The values are the records'.
+typedef enum bfr_cluster_geometry_flag {
+    BFR_CLUSTER_GEOMETRY_FLAG_CULL_DISABLE = 1,
+    BFR_CLUSTER_GEOMETRY_FLAG_NO_DUPLICATE_ANY_HIT = 2,
+    BFR_CLUSTER_GEOMETRY_FLAG_OPAQUE = 4,
+    BFR_CLUSTER_GEOMETRY_FLAG_FORCE32 = 0x7FFFFFFF
+} bfr_cluster_geometry_flag;
+
+// The bits of a cluster record's cluster_flags. The values are the records'.
+typedef enum bfr_cluster_flag {
+    // Instances may disable its opacity micromaps.
+    BFR_CLUSTER_FLAG_ALLOW_DISABLE_OPACITY_MICROMAPS = 1,
+    BFR_CLUSTER_FLAG_FORCE32 = 0x7FFFFFFF
+} bfr_cluster_flag;
 
 // What a bfr_partitioned_top_op does: writes instances, updates them, or moves partitions. The
 // values are the records'.
@@ -1469,6 +1546,11 @@ typedef struct bfr_buffer_usage {
     // bfr_serialize_acceleration_structure writes it and bfr_deserialize_acceleration_structure
     // reads it. It starts at an address that is a multiple of 256.
     bfr_bool acceleration_structure_data;
+    // bfr_build_clusters writes structures into it, and moves and builds read them from it, where
+    // bfr_caps_features.cluster_acceleration_structure. It starts at an address that is a multiple
+    // of bfr_caps_ray_tracing.cluster_alignment, cluster_template_alignment and
+    // cluster_bottom_alignment.
+    bfr_bool acceleration_structure_storage;
 } bfr_buffer_usage;
 
 // How to create a buffer.
@@ -1837,6 +1919,9 @@ typedef struct bfr_ray_tracing_pipeline_desc {
     // Its traces are at a time, of structures with motion, where
     // bfr_caps_features.ray_tracing_motion.
     bfr_bool allow_motion;
+    // Its traces may reach cluster bottom structures, which they must be made with to, where
+    // bfr_caps_features.cluster_acceleration_structure.
+    bfr_bool allow_clusters;
 } bfr_ray_tracing_pipeline_desc;
 
 // Records in a shader binding table: size bytes from offset in buffer, which has
@@ -2262,6 +2347,176 @@ typedef struct bfr_partitioned_top_inputs {
     uint64_t op_count_offset;
 } bfr_partitioned_top_inputs;
 
+// The upper bounds a cluster operation of clusters or templates is sized for: vertices of
+// vertex_format, geometry indices to max_geometry_index, at most max_unique_geometries of them,
+// max_triangles triangles and max_vertices vertices in each, at most
+// bfr_caps_ray_tracing.max_cluster_triangles and max_cluster_vertices, max_total_triangles and
+// max_total_vertices in all, and no record truncating fewer than min_truncate_bits position bits,
+// at most 32.
+typedef struct bfr_cluster_triangle_limits {
+    bfr_format vertex_format;
+    uint32_t max_geometry_index;
+    uint32_t max_unique_geometries;
+    uint32_t max_triangles;
+    uint32_t max_vertices;
+    uint32_t max_total_triangles;
+    uint32_t max_total_vertices;
+    uint32_t min_truncate_bits;
+} bfr_cluster_triangle_limits;
+
+// The upper bounds a build_bottoms is sized for: max_total_clusters clusters in all,
+// max_clusters_per_bottom in each bottom structure.
+typedef struct bfr_cluster_bottom_limits {
+    uint32_t max_total_clusters;
+    uint32_t max_clusters_per_bottom;
+} bfr_cluster_bottom_limits;
+
+// What a move moves, and at most max_bytes of it; with no_overlap, no destination overlaps a
+// source, which stays valid, as after a copy.
+typedef struct bfr_cluster_move_limits {
+    // 0 is bottom.
+    bfr_cluster_structure_type type;
+    bfr_bool no_overlap;
+    uint64_t max_bytes;
+} bfr_cluster_move_limits;
+
+// A cluster operation's kind, mode and upper bounds: at most max_count structures, built with flags
+// as other structures are; with allow_opacity_micromaps, clusters may name opacity micromaps. The
+// bounds the operation reads: move for move, bottoms for build_bottoms, triangles for the rest.
+typedef struct bfr_cluster_inputs {
+    // 0 is move.
+    bfr_cluster_operation operation;
+    // 0 is implicit_destinations.
+    bfr_cluster_mode mode;
+    bfr_acceleration_structure_flags flags;
+    bfr_bool allow_opacity_micromaps;
+    uint32_t max_count;
+    bfr_cluster_move_limits move;
+    bfr_cluster_bottom_limits bottoms;
+    bfr_cluster_triangle_limits triangles;
+} bfr_cluster_inputs;
+
+// Which of a bfr_cluster_build's regions hold, at their offset, the address of the data rather than
+// the data, which the GPU reads as it runs.
+typedef struct bfr_cluster_indirection {
+    bfr_bool destination;
+    bfr_bool scratch;
+    bfr_bool addresses;
+    bfr_bool sizes;
+    bfr_bool records;
+    bfr_bool count;
+} bfr_cluster_indirection;
+
+// A cluster operation, from inputs: the records of its kind from record_offset in records,
+// record_stride bytes apart (0 packed), as many as the u32 at count_offset, a multiple of 4, in
+// count, or with no count max_count, never more than max_count; records and count have
+// acceleration_structure_input usage. implicit_destinations packs the structures from
+// destination_offset in destination, which has acceleration_structure_storage usage and at least
+// the size query's size bytes, or for a move the bytes moved, and writes their addresses to
+// addresses and their sizes to sizes, where given; explicit_destinations reads each structure's
+// address from addresses, each in a buffer with acceleration_structure_storage usage, and its size
+// from sizes, where given; compute_sizes writes each structure's size to sizes. Each destination is
+// a multiple of bfr_caps_ray_tracing.cluster_alignment for clusters, cluster_template_alignment for
+// templates and cluster_bottom_alignment for bottom structures. addresses holds 8-byte addresses
+// address_stride bytes apart, at least 8, and has storage usage; sizes holds 4-byte sizes
+// size_stride bytes apart, at least 4. Every buffer here has a usage bfr_get_buffer_address gives
+// an address for, and each of addresses, sizes and records is read or written within its buffer,
+// from its offset. Scratch is scratch_offset bytes into scratch, which has
+// acceleration_structure_scratch usage, at least the size query's build_scratch bytes, a multiple
+// of bfr_caps_ray_tracing.cluster_scratch_alignment, and overlaps no destination.
+typedef struct bfr_cluster_build {
+    bfr_cluster_inputs inputs;
+    bfr_buffer destination;
+    // Bytes into destination.
+    uint64_t destination_offset;
+    bfr_buffer scratch;
+    // Bytes into scratch.
+    uint64_t scratch_offset;
+    bfr_buffer addresses;
+    // Bytes into addresses.
+    uint64_t address_offset;
+    uint64_t address_stride;
+    bfr_buffer sizes;
+    // Bytes into sizes.
+    uint64_t size_offset;
+    uint64_t size_stride;
+    bfr_buffer records;
+    // Bytes into records.
+    uint64_t record_offset;
+    uint64_t record_stride;
+    bfr_buffer count;
+    // Bytes into count.
+    uint64_t count_offset;
+    bfr_cluster_indirection indirection;
+} bfr_cluster_build;
+
+// A move record. The layout the backend reads.
+typedef struct bfr_cluster_move_record {
+    // The address of the structure moved.
+    uint64_t source;
+} bfr_cluster_move_record;
+
+// A build_bottoms record: a cluster bottom structure of cluster_count clusters, each named once,
+// whose addresses are cluster_stride bytes apart, at least 8, from clusters. The layout the backend
+// reads.
+typedef struct bfr_cluster_bottom_record {
+    uint32_t cluster_count;
+    uint32_t cluster_stride;
+    uint64_t clusters;
+} bfr_cluster_bottom_record;
+
+// A build_clusters record: a cluster of id cluster_id, not 0xFFFFFFFF, with cluster_flags
+// (bfr_cluster_flag bits) and counts (a counts word, laid out by the cluster shift constants), at
+// most bfr_caps_ray_tracing.max_cluster_triangles triangles and max_cluster_vertices vertices, its
+// truncation at least the inputs' min_truncate_bits. base_geometry is a geometry word for every
+// triangle; geometries, where not 0, holds a geometry word for each triangle, geometry_stride
+// apart, which the backend combines with it. indices and vertices are addresses, index_stride and
+// vertex_stride bytes apart (0 packed); micromaps, where not 0, is an opacity micromap's address,
+// of operations with allow_opacity_micromaps, and micromap_indices, where not 0, its indices,
+// micromap_index_stride apart. The layout the backend reads.
+typedef struct bfr_cluster_triangle_record {
+    uint32_t cluster_id;
+    uint32_t cluster_flags;
+    uint32_t counts;
+    uint32_t base_geometry;
+    uint16_t index_stride;
+    uint16_t vertex_stride;
+    uint16_t geometry_stride;
+    uint16_t micromap_index_stride;
+    uint64_t indices;
+    uint64_t vertices;
+    uint64_t geometries;
+    uint64_t micromaps;
+    uint64_t micromap_indices;
+} bfr_cluster_triangle_record;
+
+// A build_templates record: as a bfr_cluster_triangle_record, but vertices may be 0, and
+// bounds_limit, where not 0, is the address, a multiple of
+// bfr_caps_ray_tracing.cluster_template_bounds_alignment, of a box of box_floats every
+// instantiation lies within. The layout the backend reads.
+typedef struct bfr_cluster_template_record {
+    bfr_cluster_triangle_record cluster;
+    uint64_t bounds_limit;
+} bfr_cluster_template_record;
+
+// An instantiate_templates record: the template at cluster_template, its cluster id offset by
+// cluster_id_offset and its geometry indices by geometry_index_offset (the low 24 bits, signed; the
+// rest 0), with vertices read from vertices, vertex_stride bytes apart, or, where vertices is 0,
+// the template's own. The layout the backend reads.
+typedef struct bfr_cluster_instantiate_record {
+    uint32_t cluster_id_offset;
+    uint32_t geometry_index_offset;
+    uint64_t cluster_template;
+    uint64_t vertices;
+    uint64_t vertex_stride;
+} bfr_cluster_instantiate_record;
+
+// A template_indices record. The layout the backend reads.
+typedef struct bfr_cluster_template_indices_record {
+    // The address of the template whose indices are written.
+    uint64_t cluster_template;
+} bfr_cluster_template_indices_record;
+
 // What an acceleration structure is built from. A bottom one holds triangles or boxes, not both; a
 // geometry's index in its array is the geometry index a hit group is chosen by. A top one holds
 // instance_count instance records from instance_offset, a multiple of 16, in instances, which has
@@ -2378,8 +2633,11 @@ typedef struct bfr_acceleration_structure_instance {
     // Its opacity micromaps are ignored, of a bottom structure built with
     // allow_disable_opacity_micromaps.
     bfr_bool disable_opacity_micromaps;
-    // Null is an instance no ray hits.
+    // Null, with no bottom_reference, is an instance no ray hits.
     bfr_acceleration_structure bottom_structure;
+    // Where bottom_structure is null, what the instance names its bottom structure by, for one BFR
+    // holds no handle to, such as a cluster bottom structure (bfr_build_clusters).
+    uint64_t bottom_reference;
 } bfr_acceleration_structure_instance;
 
 // A transform as its parts: scale, the shears a (xy), b (xz) and c (yz), and a pivot added after
@@ -2647,6 +2905,22 @@ typedef struct bfr_caps_ray_tracing {
     // The most partitions, the global partition's instances counted as partitions, a partitioned
     // top structure holds.
     uint32_t max_partitions;
+    // The most vertices one cluster holds.
+    uint32_t max_cluster_vertices;
+    // The most triangles one cluster holds.
+    uint32_t max_cluster_triangles;
+    // The alignment in bytes of a cluster operation's scratch.
+    uint32_t cluster_scratch_alignment;
+    // The alignment in bytes of a cluster.
+    uint32_t cluster_alignment;
+    // The alignment in bytes of a cluster template.
+    uint32_t cluster_template_alignment;
+    // The alignment in bytes of a cluster bottom structure.
+    uint32_t cluster_bottom_alignment;
+    // The alignment in bytes of a template record's bounds_limit.
+    uint32_t cluster_template_bounds_alignment;
+    // The geometry indices of clusters are below it.
+    uint32_t max_cluster_geometry_index;
 } bfr_caps_ray_tracing;
 
 // Optional features the adapter has. What BFR needs, which bfr_backend states, is always there and
@@ -2695,6 +2969,9 @@ typedef struct bfr_caps_features {
     bfr_bool ray_tracing_motion_indirect;
     // Partitioned top structures, and their table (bfr_device_desc.max_bindless_partitioned_tops).
     bfr_bool partitioned_top;
+    // bfr_build_clusters, and traces of the cluster bottom structures it builds by pipelines made
+    // with allow_clusters.
+    bfr_bool cluster_acceleration_structure;
     bfr_bool mesh_shader;
     bfr_bool task_shader;
     // A shading rate per draw.
@@ -3869,8 +4146,9 @@ BFR_API void bfr_destroy_acceleration_structure(
 // micromaps), then the 64-bit reference bfr_get_acceleration_structure_reference gives, 0 for an
 // instance no ray hits. Fails with error_unsupported where bfr_caps_features.acceleration_structure
 // is false, error_invalid_argument when size is too small, an index or offset is
-// instance_index_limit or above, an enum value BFR doesn't have, or an instance names a structure
-// other than a bottom one, and error_invalid_handle for a structure that is gone.
+// instance_index_limit or above, an enum value BFR doesn't have, an instance names a structure
+// other than a bottom one, or both a bottom_structure and a bottom_reference, and
+// error_invalid_handle for a structure that is gone.
 // instances: An array of instance_count elements. May be null.
 // data: Where the records go.
 // size: Bytes of data.
@@ -3887,8 +4165,8 @@ BFR_API bfr_result bfr_write_instances(
 // error_invalid_argument for inputs bfr_get_acceleration_structure_sizes refuses, of a type or
 // motion unlike its structure's, an opacity micromap updated where the backend builds one only
 // whole (Vulkan), or a partitioned top one updated from a structure of another type or another from
-// a partitioned top one, error_limit_reached past the device's max_build_geometries, and
-// error_invalid_handle for a structure or buffer that is gone.
+// a partitioned top one, or a buffer with no address, error_limit_reached past the device's
+// max_build_geometries, and error_invalid_handle for a structure or buffer that is gone.
 BFR_API bfr_result bfr_build_acceleration_structure(
     bfr_device* device,
     bfr_command_list command_list,
@@ -3910,6 +4188,29 @@ BFR_API bfr_result bfr_build_acceleration_structure_indirect(
     bfr_buffer ranges,
     uint64_t offset,
     uint32_t stride);
+
+// Writes the bytes a cluster operation from inputs writes and the scratch it takes, as the backend
+// says: size is every structure's bytes for implicit_destinations and one structure's at most for
+// explicit_destinations; for compute_sizes the backend gives only build_scratch. Fails with
+// error_unsupported where bfr_caps_features.cluster_acceleration_structure is false, or for flags
+// of opacity micromaps where bfr_caps_features.opacity_micromap is, and error_invalid_argument for
+// an enum value BFR doesn't have.
+BFR_API bfr_result bfr_get_cluster_sizes(
+    bfr_device* device,
+    const bfr_cluster_inputs* inputs,
+    bfr_acceleration_structure_sizes* sizes);
+
+// Records build, a cluster operation, outside rendering, on a queue whose kind runs compute: the
+// GPU reads its records and count as it runs. A barrier orders the work that wrote its records,
+// count and the structures it reads before it, and their readers and any reuse of its scratch
+// after. Traces reach the cluster bottom structures it builds only through pipelines made with
+// allow_clusters. Fails with error_unsupported as bfr_get_cluster_sizes does or on a copy queue,
+// error_invalid_argument for inputs bfr_get_cluster_sizes refuses or a buffer with no address, and
+// error_invalid_handle for a list or buffer that is gone.
+BFR_API bfr_result bfr_build_clusters(
+    bfr_device* device,
+    bfr_command_list command_list,
+    const bfr_cluster_build* build);
 
 // Records a copy of src into dst, not overlapping, as builds are recorded: dst at least src's size,
 // or its current_size where bfr_caps_features.acceleration_structure_current_size; of an opacity
@@ -3942,12 +4243,13 @@ BFR_API void bfr_destroy_shader(bfr_device* device, bfr_shader shader);
 // where bfr_caps_features.ray_tracing_pipeline is false, or for library or libraries where
 // bfr_caps_features.ray_tracing_pipeline_library is false, capture_replay where
 // bfr_caps_features.ray_tracing_capture_replay is false, allow_opacity_micromaps where
-// bfr_caps_features.opacity_micromap is false, or allow_motion where
-// bfr_caps_features.ray_tracing_motion is false, error_invalid_argument for an enum value BFR
-// doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or replay_identifiers
-// neither none nor holding every group's, error_invalid_handle for a shader, library or desc.cache
-// that is gone, error_limit_reached at the device's maximum of pipelines, and error_device_failed
-// when the backend refuses the desc; the message carries what it said.
+// bfr_caps_features.opacity_micromap is false, allow_motion where
+// bfr_caps_features.ray_tracing_motion is false, or allow_clusters where
+// bfr_caps_features.cluster_acceleration_structure is false, error_invalid_argument for an enum
+// value BFR doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or
+// replay_identifiers neither none nor holding every group's, error_invalid_handle for a shader,
+// library or desc.cache that is gone, error_limit_reached at the device's maximum of pipelines, and
+// error_device_failed when the backend refuses the desc; the message carries what it said.
 BFR_API bfr_result bfr_create_ray_tracing_pipeline(
     bfr_device* device,
     const bfr_ray_tracing_pipeline_desc* desc,
@@ -3983,8 +4285,8 @@ BFR_API bfr_result bfr_get_capture_replay_identifiers(
 
 // Records a trace of desc's rays with the bound ray tracing pipeline, outside rendering, on a queue
 // whose kind runs compute; commands after a barrier see what it wrote. Fails with error_unsupported
-// where bfr_caps_features.ray_tracing_pipeline is false or on a copy queue, and
-// error_invalid_handle for a buffer that is gone.
+// where bfr_caps_features.ray_tracing_pipeline is false or on a copy queue, error_invalid_argument
+// for a table buffer with no address, and error_invalid_handle for a buffer that is gone.
 BFR_API bfr_result bfr_trace_rays(
     bfr_device* device,
     bfr_command_list command_list,
@@ -4001,10 +4303,11 @@ BFR_API bfr_result bfr_trace_rays_indirect(
     bfr_buffer buffer,
     uint64_t offset);
 
-// Writes the buffer's GPU address, for the addresses bfr_trace_rays_indirect_args and shaders read.
-// The buffer has indirect, shader_binding_table or acceleration_structure_input usage. Fails with
-// error_unsupported where bfr_caps_features.buffer_address is false, and error_invalid_argument for
-// a buffer of none of those usages.
+// Writes the buffer's GPU address, for the addresses bfr_trace_rays_indirect_args, cluster records
+// and shaders read. The buffer has indirect, shader_binding_table, acceleration_structure_input,
+// acceleration_structure_data or acceleration_structure_storage usage. Fails with error_unsupported
+// where bfr_caps_features.buffer_address is false, and error_invalid_argument for a buffer of none
+// of those usages.
 BFR_API bfr_result bfr_get_buffer_address(bfr_device* device, bfr_buffer buffer, uint64_t* address);
 
 // Creates a pool of desc's count entries of its property. Not for the frame path. Fails with

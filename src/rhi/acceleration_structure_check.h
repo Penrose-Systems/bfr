@@ -94,6 +94,37 @@ namespace bfr::rhi {
     return {};
 }
 
+/// Fails with RhiUnsupported where Features::clusterAccelerationStructure is
+/// false.
+[[nodiscard]] inline core::Result<void> checkClusters(bool clusterAccelerationStructure) {
+    if (!clusterAccelerationStructure) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "the device has no cluster acceleration structures "
+                                                              "(Features::clusterAccelerationStructure)");
+    }
+    return {};
+}
+
+/// Fails as checkOpacityMicromaps does for flags of opacity micromaps, which
+/// are the extension's (VUID-VkAccelerationStructureBuildGeometryInfoKHR-flags-11710).
+[[nodiscard]] inline core::Result<void> checkMicromapFlags(bool opacityMicromap,
+                                                           const AccelerationStructureFlags& flags) {
+    return checkOpacityMicromaps(opacityMicromap, flags.allowOpacityMicromapUpdate ||
+                                                      flags.allowDisableOpacityMicromaps ||
+                                                      flags.allowOpacityMicromapDataUpdate);
+}
+
+/// Fails as checkClusters does, as checkMicromapFlags does for its flags, and
+/// with RhiInvalidCall for inputs holding an enum value BFR doesn't have.
+[[nodiscard]] inline core::Result<void> checkClusterInputs(const ClusterInputs& inputs, const Features& features) {
+    if (auto checked = checkClusters(features.clusterAccelerationStructure); !checked) {
+        return checked;
+    }
+    if (auto checked = checkEnums(inputs); !checked) {
+        return checked;
+    }
+    return checkMicromapFlags(features.opacityMicromap, inputs.flags);
+}
+
 /// Whether triangles take their opacity from a micromap.
 [[nodiscard]] inline bool hasOpacityMicromap(const TriangleGeometry& triangles) {
     return !triangles.opacityMicromap.micromap.isNull() || !triangles.opacityMicromap.indices.isNull();
@@ -117,14 +148,12 @@ namespace bfr::rhi {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "a bottom acceleration structure holds triangles or boxes, not both");
     }
-    // The micromap build flags are the extension's (VUID-VkAccelerationStructureBuildGeometryInfoKHR-flags-11710).
-    const AccelerationStructureFlags& flags = inputs.flags;
-    const bool micromapFlags = flags.allowOpacityMicromapUpdate || flags.allowDisableOpacityMicromaps ||
-                               flags.allowOpacityMicromapDataUpdate;
     if (auto checked = checkOpacityMicromaps(opacityMicromap,
-                                             inputs.type == AccelerationStructureType::OpacityMicromap ||
-                                                 micromapFlags);
+                                             inputs.type == AccelerationStructureType::OpacityMicromap);
         !checked) {
+        return checked;
+    }
+    if (auto checked = checkMicromapFlags(opacityMicromap, inputs.flags); !checked) {
         return checked;
     }
     for (const TriangleGeometry& triangles : inputs.triangles) {
@@ -187,6 +216,10 @@ namespace bfr::rhi {
                                              instance.forceOpacityMicromap2State || instance.disableOpacityMicromaps);
         !checked) {
         return checked;
+    }
+    if (!instance.bottomStructure.isNull() && instance.bottomReference != 0) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "an instance names its bottom structure by a handle or by a reference, not both");
     }
     return checkKnown(instance.opacity, "instance opacity");
 }

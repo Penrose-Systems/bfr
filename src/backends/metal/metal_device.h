@@ -301,6 +301,8 @@ public:
                                                                         const AccelerationStructureBuild& build,
                                                                         BufferHandle ranges, std::uint64_t offset,
                                                                         std::uint32_t stride) override;
+    [[nodiscard]] core::Result<AccelerationStructureSizes> clusterSizes(const ClusterInputs& inputs) override;
+    [[nodiscard]] core::Result<void> buildClusters(CommandListHandle commandList, const ClusterBuild& build) override;
     [[nodiscard]] core::Result<void> copyAccelerationStructure(CommandListHandle commandList,
                                                                AccelerationStructureHandle dst,
                                                                AccelerationStructureHandle src) override;

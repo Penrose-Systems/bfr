@@ -423,6 +423,11 @@ struct AccelerationStructureInstance {
     bool forceOpacityMicromap2State = false;
     bool disableOpacityMicromaps = false;
     AccelerationStructureHandle bottomStructure{};
+    /// Where bottomStructure is null, what the instance names its bottom
+    /// structure by, for one BFR holds no handle to, such as a cluster bottom
+    /// structure (Device::buildClusters); 0, with no bottomStructure, is an
+    /// instance no ray hits.
+    std::uint64_t bottomReference = 0;
 };
 
 /// How a motion instance moves: not at all, by its keyframes' matrices, or
@@ -460,6 +465,248 @@ struct AccelerationStructureMotionInstance {
     InstanceMotion motion = InstanceMotion::None;
     std::uint32_t firstKeyframe = 0;
     std::uint32_t keyframeCount = 0;
+};
+
+/// What a cluster operation does: moves structures, builds cluster bottom
+/// structures from clusters, builds clusters or cluster templates from
+/// triangles, instantiates templates into clusters, or fetches templates'
+/// indices, which is all Vulkan states of it. A cluster holds at most RayTracingLimits::maxClusterTriangles
+/// triangles; a cluster bottom structure holds clusters and is what an
+/// instance names; a template is a cluster built without its positions. The
+/// values are Vulkan's.
+enum class ClusterOperation : std::uint8_t {
+    Move = 0,
+    BuildBottoms = 1,
+    BuildClusters = 2,
+    BuildTemplates = 3,
+    InstantiateTemplates = 4,
+    TemplateIndices = 5,
+};
+
+/// Where a cluster operation's structures go: packed from one destination,
+/// their addresses and sizes written; at addresses the GPU reads, their
+/// sizes read; or nowhere, only their sizes written. The values are
+/// Vulkan's.
+enum class ClusterMode : std::uint8_t {
+    ImplicitDestinations = 0,
+    ExplicitDestinations = 1,
+    ComputeSizes = 2,
+};
+
+/// What a Move moves. The values are Vulkan's.
+enum class ClusterStructureType : std::uint8_t {
+    Bottom = 0,
+    Cluster = 1,
+    Template = 2,
+};
+
+/// The upper bounds a cluster operation of clusters or templates is sized
+/// for: vertices of vertexFormat, geometry indices to maxGeometryIndex, at
+/// most maxUniqueGeometries of them, maxTriangles triangles and maxVertices
+/// vertices in each, at most RayTracingLimits::maxClusterTriangles and
+/// maxClusterVertices, maxTotalTriangles and maxTotalVertices in all, and no
+/// record truncating fewer than minTruncateBits position bits, at most 32.
+struct ClusterTriangleLimits {
+    Format vertexFormat = Format::Undefined;
+    std::uint32_t maxGeometryIndex = 0;
+    std::uint32_t maxUniqueGeometries = 0;
+    std::uint32_t maxTriangles = 0;
+    std::uint32_t maxVertices = 0;
+    std::uint32_t maxTotalTriangles = 0;
+    std::uint32_t maxTotalVertices = 0;
+    std::uint32_t minTruncateBits = 0;
+};
+
+/// The upper bounds a BuildBottoms is sized for: maxTotalClusters clusters
+/// in all, maxClustersPerBottom in each bottom structure.
+struct ClusterBottomLimits {
+    std::uint32_t maxTotalClusters = 0;
+    std::uint32_t maxClustersPerBottom = 0;
+};
+
+/// What a Move moves, and at most maxBytes of it; with noOverlap, no
+/// destination overlaps a source, which stays valid, as after a copy.
+struct ClusterMoveLimits {
+    ClusterStructureType type = ClusterStructureType::Bottom;
+    bool noOverlap = false;
+    std::uint64_t maxBytes = 0;
+};
+
+/// A cluster operation's kind, mode and upper bounds: at most maxCount
+/// structures, built with flags as other structures are; with
+/// allowOpacityMicromaps, clusters may name opacity micromaps. The bounds
+/// the operation reads: move for Move, bottoms for BuildBottoms, triangles
+/// for the rest.
+struct ClusterInputs {
+    ClusterOperation operation = ClusterOperation::Move;
+    ClusterMode mode = ClusterMode::ImplicitDestinations;
+    AccelerationStructureFlags flags{};
+    bool allowOpacityMicromaps = false;
+    std::uint32_t maxCount = 0;
+    ClusterMoveLimits move{};
+    ClusterBottomLimits bottoms{};
+    ClusterTriangleLimits triangles{};
+};
+
+/// Which of a ClusterBuild's regions hold, at their offset, the address of
+/// the data rather than the data, which the GPU reads as it runs.
+struct ClusterIndirection {
+    bool destination = false;
+    bool scratch = false;
+    bool addresses = false;
+    bool sizes = false;
+    bool records = false;
+    bool count = false;
+};
+
+/// A cluster operation, from inputs: the records of its kind from
+/// recordOffset in records, recordStride bytes apart (0 packed), as many as
+/// the uint32_t at countOffset, a multiple of 4, in count, or with no count
+/// maxCount, never more than maxCount; records and count have
+/// accelerationStructureInput usage. ImplicitDestinations packs the
+/// structures from destinationOffset in destination, which has
+/// accelerationStructureStorage usage and at least the size query's size
+/// bytes, or for a Move the bytes moved, and writes their addresses to
+/// addresses and their sizes to sizes, where given; ExplicitDestinations
+/// reads each structure's address from addresses, each in a buffer with
+/// accelerationStructureStorage usage, and its size from sizes, where given;
+/// ComputeSizes writes each structure's size to sizes. Each destination is
+/// a multiple of RayTracingLimits::clusterAlignment for clusters,
+/// clusterTemplateAlignment for templates and clusterBottomAlignment for
+/// bottom structures. addresses holds 8-byte addresses addressStride bytes
+/// apart, at least 8, and has storage usage; sizes holds 4-byte sizes
+/// sizeStride bytes apart, at least 4. Every buffer here has a usage
+/// Device::bufferAddress gives an address for, and each of addresses, sizes
+/// and records is read or written within its buffer, from its offset.
+/// Scratch is scratchOffset bytes into scratch, which has
+/// accelerationStructureScratch usage, at least the size query's
+/// buildScratch bytes, a multiple of
+/// RayTracingLimits::clusterScratchAlignment, and overlaps no destination.
+struct ClusterBuild {
+    ClusterInputs inputs{};
+    BufferHandle destination{};
+    std::uint64_t destinationOffset = 0;
+    BufferHandle scratch{};
+    std::uint64_t scratchOffset = 0;
+    BufferHandle addresses{};
+    std::uint64_t addressOffset = 0;
+    std::uint64_t addressStride = 0;
+    BufferHandle sizes{};
+    std::uint64_t sizeOffset = 0;
+    std::uint64_t sizeStride = 0;
+    BufferHandle records{};
+    std::uint64_t recordOffset = 0;
+    std::uint64_t recordStride = 0;
+    BufferHandle count{};
+    std::uint64_t countOffset = 0;
+    ClusterIndirection indirection{};
+};
+
+/// A Move record: the address of the structure moved. The layout the
+/// backend reads.
+struct ClusterMoveRecord {
+    std::uint64_t source = 0;
+};
+
+/// A BuildBottoms record: a cluster bottom structure of clusterCount
+/// clusters, each named once, whose addresses are clusterStride bytes apart,
+/// at least 8, from clusters. The layout the backend reads.
+struct ClusterBottomRecord {
+    std::uint32_t clusterCount = 0;
+    std::uint32_t clusterStride = 0;
+    std::uint64_t clusters = 0;
+};
+
+/// The index types of a cluster record's indices and micromap indices. The
+/// values are the records'.
+enum class ClusterIndexFormat : std::uint32_t {
+    Uint8 = 1,
+    Uint16 = 2,
+    Uint32 = 4,
+};
+
+/// The bits of a geometry word's flags. The values are the records'.
+enum class ClusterGeometryFlag : std::uint32_t {
+    CullDisable = 1,
+    NoDuplicateAnyHit = 2,
+    Opaque = 4,
+};
+
+/// The bits of a cluster record's clusterFlags. The values are the records'.
+enum class ClusterFlag : std::uint32_t {
+    /// Instances may disable its opacity micromaps.
+    AllowDisableOpacityMicromaps = 1,
+};
+
+/// A geometry word: the geometry index in its low 24 bits, below
+/// RayTracingLimits::maxClusterGeometryIndex, and ClusterGeometryFlag bits
+/// from bit kClusterGeometryFlagsShift; the bits between are 0.
+inline constexpr std::uint32_t kClusterGeometryFlagsShift = 29;
+
+/// A cluster record's counts word: from bit 0 the triangles (9 bits), from
+/// kClusterVertexCountShift the vertices (9 bits), from
+/// kClusterTruncateShift the position bits truncated (6 bits), from
+/// kClusterIndexFormatShift the indices' ClusterIndexFormat (4 bits), and
+/// from kClusterMicromapIndexFormatShift the micromap indices' (4 bits).
+inline constexpr std::uint32_t kClusterVertexCountShift = 9;
+inline constexpr std::uint32_t kClusterTruncateShift = 18;
+inline constexpr std::uint32_t kClusterIndexFormatShift = 24;
+inline constexpr std::uint32_t kClusterMicromapIndexFormatShift = 28;
+
+/// A BuildClusters record: a cluster of id clusterId, not 0xFFFFFFFF, with
+/// clusterFlags (ClusterFlag bits) and counts (a counts word), at most
+/// RayTracingLimits::maxClusterTriangles triangles and maxClusterVertices
+/// vertices, its truncation at least the inputs' minTruncateBits.
+/// baseGeometry is a geometry word for every triangle; geometries, where
+/// not 0, holds a geometry word for each triangle, geometryStride apart,
+/// which the backend combines with it.
+/// indices and vertices are addresses, indexStride and vertexStride bytes
+/// apart (0 packed); micromaps, where not 0, is an opacity micromap's
+/// address, of operations with allowOpacityMicromaps, and micromapIndices,
+/// where not 0, its indices, micromapIndexStride apart. The layout the
+/// backend reads.
+struct ClusterTriangleRecord {
+    std::uint32_t clusterId = 0;
+    std::uint32_t clusterFlags = 0;
+    std::uint32_t counts = 0;
+    std::uint32_t baseGeometry = 0;
+    std::uint16_t indexStride = 0;
+    std::uint16_t vertexStride = 0;
+    std::uint16_t geometryStride = 0;
+    std::uint16_t micromapIndexStride = 0;
+    std::uint64_t indices = 0;
+    std::uint64_t vertices = 0;
+    std::uint64_t geometries = 0;
+    std::uint64_t micromaps = 0;
+    std::uint64_t micromapIndices = 0;
+};
+
+/// A BuildTemplates record: as a ClusterTriangleRecord, but vertices may be
+/// 0, and boundsLimit, where not 0, is the address, a multiple of
+/// RayTracingLimits::clusterTemplateBoundsAlignment, of a box of kBoxFloats
+/// every instantiation lies within. The layout the backend reads.
+struct ClusterTemplateRecord {
+    ClusterTriangleRecord cluster{};
+    std::uint64_t boundsLimit = 0;
+};
+
+/// An InstantiateTemplates record: the template at clusterTemplate, its
+/// cluster id offset by clusterIdOffset and its geometry indices by
+/// geometryIndexOffset (the low 24 bits, signed; the rest 0), with vertices
+/// read from vertices, vertexStride bytes apart, or, where vertices is 0,
+/// the template's own. The layout the backend reads.
+struct ClusterInstantiateRecord {
+    std::uint32_t clusterIdOffset = 0;
+    std::uint32_t geometryIndexOffset = 0;
+    std::uint64_t clusterTemplate = 0;
+    std::uint64_t vertices = 0;
+    std::uint64_t vertexStride = 0;
+};
+
+/// A TemplateIndices record: the address of the template whose indices are
+/// written. The layout the backend reads.
+struct ClusterTemplateIndicesRecord {
+    std::uint64_t clusterTemplate = 0;
 };
 
 } // namespace bfr::rhi

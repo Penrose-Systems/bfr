@@ -420,6 +420,14 @@ core::Result<void> D3D12Device::buildAccelerationStructureIndirect(CommandListHa
     return checkIndirectBuilds(features_.accelerationStructureIndirectBuild);
 }
 
+core::Result<AccelerationStructureSizes> D3D12Device::clusterSizes(const ClusterInputs& /*inputs*/) {
+    return std::unexpected(checkClusters(features_.clusterAccelerationStructure).error());
+}
+
+core::Result<void> D3D12Device::buildClusters(CommandListHandle /*commandList*/, const ClusterBuild& /*build*/) {
+    return checkClusters(features_.clusterAccelerationStructure);
+}
+
 core::Result<void> D3D12Device::traceRays(CommandListHandle /*commandList*/, const TraceRaysDesc& /*desc*/) {
     return checkRayTracingPipelines(features_.rayTracingPipeline);
 }

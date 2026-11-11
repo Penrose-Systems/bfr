@@ -169,6 +169,19 @@ struct RayTracingLimits {
     /// The most partitions, the global partition's instances counted as
     /// partitions, a partitioned top structure holds.
     std::uint32_t maxPartitions = 0;
+    /// The most vertices and triangles one cluster holds.
+    std::uint32_t maxClusterVertices = 0;
+    std::uint32_t maxClusterTriangles = 0;
+    /// The alignment in bytes of a cluster operation's scratch, and of the
+    /// clusters, templates, cluster bottom structures and template bounds it
+    /// writes or reads.
+    std::uint32_t clusterScratchAlignment = 0;
+    std::uint32_t clusterAlignment = 0;
+    std::uint32_t clusterTemplateAlignment = 0;
+    std::uint32_t clusterBottomAlignment = 0;
+    std::uint32_t clusterTemplateBoundsAlignment = 0;
+    /// The geometry indices of clusters are below it.
+    std::uint32_t maxClusterGeometryIndex = 0;
 };
 
 struct Features {
@@ -217,6 +230,9 @@ struct Features {
     /// AccelerationStructureType::PartitionedTop, and its table
     /// (DeviceDesc::maxBindlessPartitionedTops).
     bool partitionedTop = false;
+    /// Device::buildClusters, and traces of the cluster bottom structures it
+    /// builds by pipelines made with allowClusters.
+    bool clusterAccelerationStructure = false;
     bool meshShader = false;
     bool taskShader = false;
     bool shadingRate = false;

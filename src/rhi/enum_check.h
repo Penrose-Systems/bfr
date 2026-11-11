@@ -115,6 +115,15 @@ constexpr std::pair<AccelerationStructureType, AccelerationStructureType> rangeO
 constexpr std::pair<InstanceMotion, InstanceMotion> rangeOf(InstanceMotion /*unused*/) {
     return {InstanceMotion::None, InstanceMotion::Srt};
 }
+constexpr std::pair<ClusterOperation, ClusterOperation> rangeOf(ClusterOperation /*unused*/) {
+    return {ClusterOperation::Move, ClusterOperation::TemplateIndices};
+}
+constexpr std::pair<ClusterMode, ClusterMode> rangeOf(ClusterMode /*unused*/) {
+    return {ClusterMode::ImplicitDestinations, ClusterMode::ComputeSizes};
+}
+constexpr std::pair<ClusterStructureType, ClusterStructureType> rangeOf(ClusterStructureType /*unused*/) {
+    return {ClusterStructureType::Bottom, ClusterStructureType::Template};
+}
 constexpr std::pair<OpacityMicromapFormat, OpacityMicromapFormat> rangeOf(OpacityMicromapFormat /*unused*/) {
     return {OpacityMicromapFormat::TwoState, OpacityMicromapFormat::FourState};
 }
@@ -204,6 +213,27 @@ template <class Enum>
         }
     }
     return {};
+}
+
+/// Fails with RhiInvalidCall when a cluster operation's inputs hold an enum
+/// value BFR doesn't have.
+[[nodiscard]] inline core::Result<void> checkEnums(const ClusterInputs& inputs) {
+    if (auto checked = checkKnown(inputs.operation, "cluster operation"); !checked) {
+        return checked;
+    }
+    if (auto checked = checkKnown(inputs.mode, "cluster mode"); !checked) {
+        return checked;
+    }
+    if (auto checked = checkKnown(inputs.flags.preference, "build preference"); !checked) {
+        return checked;
+    }
+    if (auto checked = checkKnown(inputs.move.type, "cluster structure type"); !checked) {
+        return checked;
+    }
+    if (inputs.triangles.vertexFormat == Format::Undefined) {
+        return {};
+    }
+    return checkFormat(inputs.triangles.vertexFormat);
 }
 
 /// Fails with RhiInvalidCall when a shader's stage or a group's type in desc
