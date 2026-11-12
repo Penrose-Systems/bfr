@@ -31,30 +31,8 @@ namespace bfr::rhi {
     return {};
 }
 
-/// Fails with RhiUnsupported for an indirect trace with a pipeline made with
-/// allowMotion bound, where Features::rayTracingMotionIndirect is false.
-[[nodiscard]] inline core::Result<void> checkMotionTraceRaysIndirect(bool motionPipeline,
-                                                                     bool rayTracingMotionIndirect) {
-    if (motionPipeline && !rayTracingMotionIndirect) {
-        return core::failure(core::ErrorCode::RhiUnsupported,
-                             "the device has no indirect traces with motion (Features::rayTracingMotionIndirect)");
-    }
-    return {};
-}
-
-/// Fails with RhiUnsupported where the device has no capture-replay
-/// identifiers, as Features::rayTracingCaptureReplay says.
-[[nodiscard]] inline core::Result<void> checkCaptureReplay(bool captureReplay) {
-    if (!captureReplay) {
-        return core::failure(core::ErrorCode::RhiUnsupported,
-                             "the device captures no ray tracing identifiers (Features::rayTracingCaptureReplay)");
-    }
-    return {};
-}
-
 /// Fails with RhiUnsupported for a library, or libraries linked, where
-/// Features::rayTracingPipelineLibrary is false, captureReplay where
-/// Features::rayTracingCaptureReplay is, allowOpacityMicromaps where
+/// Features::rayTracingPipelineLibrary is false, allowOpacityMicromaps where
 /// Features::opacityMicromap is, allowMotion where Features::rayTracingMotion
 /// is, or allowClusters where Features::clusterAccelerationStructure is, and
 /// RhiInvalidCall for
@@ -65,11 +43,6 @@ namespace bfr::rhi {
     if ((desc.library || !desc.libraries.empty()) && !features.rayTracingPipelineLibrary) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "the device has no ray tracing pipeline libraries (Features::rayTracingPipelineLibrary)");
-    }
-    if (desc.captureReplay) {
-        if (auto checked = checkCaptureReplay(features.rayTracingCaptureReplay); !checked) {
-            return checked;
-        }
     }
     if (desc.allowMotion && !features.rayTracingMotion) {
         return core::failure(core::ErrorCode::RhiUnsupported,
@@ -92,13 +65,10 @@ namespace bfr::rhi {
     return {};
 }
 
-/// Fails with RhiInvalidCall when the pipeline is not a ray tracing one, or
-/// out holds fewer than count identifiers of identifierSize bytes.
-[[nodiscard]] inline core::Result<void> checkIdentifiers(bool rayTracing, std::uint32_t count,
-                                                         std::span<const std::byte> out, std::uint32_t identifierSize) {
-    if (!rayTracing) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "the pipeline is not a ray tracing one");
-    }
+/// Fails with RhiInvalidCall when out holds fewer than count identifiers of
+/// identifierSize bytes, which BFR writes.
+[[nodiscard]] inline core::Result<void> checkIdentifiers(std::uint32_t count, std::span<const std::byte> out,
+                                                         std::uint32_t identifierSize) {
     if (out.size() / identifierSize < count) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes hold fewer than {} identifiers of {}",
                              out.size(), count, identifierSize);

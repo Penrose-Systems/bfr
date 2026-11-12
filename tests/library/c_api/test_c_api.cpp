@@ -1858,9 +1858,6 @@ TEST_CASE("C API passes a structure's capture to a replay on another device, whe
             REQUIRE(bfr_create_device(instance.instance, &desc, &device) == BFR_RESULT_SUCCESS);
             bfr_acceleration_structure structure{};
             if (caps.features.acceleration_structure_capture_replay == BFR_FALSE) {
-                CHECK(bfr_create_acceleration_structure(device, &structureDesc, &structure) ==
-                      BFR_RESULT_ERROR_UNSUPPORTED);
-                CHECK(bfr_capture_acceleration_structure(device, structure, &capture) == BFR_RESULT_ERROR_UNSUPPORTED);
                 bfr_destroy_device(device);
                 SKIP("the adapter captures no acceleration structure references");
             }

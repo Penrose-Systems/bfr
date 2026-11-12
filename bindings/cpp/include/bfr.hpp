@@ -5526,31 +5526,28 @@ public:
     /// bfr_caps_features.acceleration_structure is false, or for opacity micromaps, their flags or
     /// triangles that take their opacity from one where bfr_caps_features.opacity_micromap is,
     /// partitioned top ones where bfr_caps_features.partitioned_top is, or motion where
-    /// bfr_caps_features.ray_tracing_motion is, error_invalid_argument for a bottom structure of
-    /// both triangles and boxes, an enum value BFR doesn't have, triangles naming a structure other
-    /// than an opacity micromap as theirs or usages past micromap_usages, or motion keyframes other
-    /// than the backend takes (Vulkan, two) or on an opacity micromap or partitioned top structure
-    /// where the backend's has none (Vulkan), error_invalid_handle for a micromap that is gone, and
-    /// error_limit_reached past the device's max_build_geometries.
+    /// bfr_caps_features.ray_tracing_motion is, error_invalid_argument for an enum value BFR
+    /// doesn't have, triangles naming a structure other than an opacity micromap as theirs or
+    /// usages past micromap_usages, or motion keyframes other than the backend takes (Vulkan, two)
+    /// or on an opacity micromap or partitioned top structure where the backend's has none
+    /// (Vulkan), error_invalid_handle for a micromap that is gone, and error_limit_reached past the
+    /// device's max_build_geometries.
     [[nodiscard]] Expected<AccelerationStructureSizes> accelerationStructureSizes(const AccelerationStructureInputs& inputs) const;
 
     /// Creates an empty acceleration structure of desc's size bytes, which a build fills. Not for
     /// the frame path: it frees structures the GPU is done with. Fails with error_unsupported where
-    /// bfr_caps_features.acceleration_structure is false, error_invalid_argument for a size of 0 or
-    /// an enum value BFR doesn't have, error_unsupported for motion_keyframes where
+    /// bfr_caps_features.acceleration_structure is false, error_invalid_argument for an enum value
+    /// BFR doesn't have, error_unsupported for motion_keyframes where
     /// bfr_caps_features.ray_tracing_motion is false, for an opacity micromap where
     /// bfr_caps_features.opacity_micromap is, or for a partitioned top structure where
     /// bfr_caps_features.partitioned_top is, error_invalid_argument for motion_keyframes other than
     /// the backend takes (Vulkan, two) or on an opacity micromap or partitioned top structure where
-    /// the backend's has none (Vulkan), error_unsupported for capture_replay where
-    /// bfr_caps_features.acceleration_structure_capture_replay is false, error_invalid_argument for
-    /// a replay without capture_replay or capture_replay on an opacity micromap where the backend
+    /// the backend's has none (Vulkan), or capture_replay on an opacity micromap where the backend
     /// gives it no reference (Vulkan), error_limit_reached at the device's maximum or, for a top or
     /// partitioned top structure on a device with slots in its table, when they are all held,
     /// error_out_of_memory when the backend says memory ran out, and error_device_failed when it
-    /// refuses or, with capture_replay, places a partitioned top structure at an address its builds
-    /// cannot take (Vulkan, a multiple of 256); a replay at a reference the backend cannot give
-    /// fails with error_out_of_memory or error_device_failed, as its API says.
+    /// refuses; a replay at a reference the backend cannot give fails with error_out_of_memory or
+    /// error_device_failed, as its API says.
     [[nodiscard]] Expected<AccelerationStructure> createAccelerationStructure(const AccelerationStructureDesc& desc) const;
 
     /// Writes instances to data as the records a top acceleration structure with motion is built
@@ -5572,30 +5569,28 @@ public:
     /// disable opacity micromaps), then the 64-bit reference
     /// bfr_get_acceleration_structure_reference gives, 0 for an instance no ray hits. Fails with
     /// error_unsupported where bfr_caps_features.acceleration_structure is false,
-    /// error_invalid_argument when size is too small, an index or offset is instance_index_limit or
-    /// above, an enum value BFR doesn't have, an instance names a structure other than a bottom
-    /// one, or both a bottom_structure and a bottom_reference, and error_invalid_handle for a
-    /// structure that is gone.
+    /// error_invalid_argument when size is too small, for an enum value BFR doesn't have, or an
+    /// instance naming an opacity micromap where the backend gives it no reference (Vulkan), and
+    /// error_invalid_handle for a structure that is gone. An index or offset keeps its low 24 bits,
+    /// and a bottom_structure is named where it is not null, else bottom_reference.
     [[nodiscard]] Expected<void> writeInstances(std::span<const AccelerationStructureInstance> instances, void* data, std::size_t size) const;
 
     /// Records build, outside rendering, on a queue whose kind runs compute. A barrier orders the
     /// work that wrote its inputs before it, and its readers and any reuse of its scratch after.
-    /// Fails with error_unsupported where bfr_caps_features.acceleration_structure is false or on a
-    /// copy queue, error_invalid_argument for inputs bfr_get_acceleration_structure_sizes refuses,
-    /// of a type or motion unlike its structure's, an opacity micromap updated where the backend
-    /// builds one only whole (Vulkan), or a partitioned top one updated from a structure of another
-    /// type or another from a partitioned top one, or a buffer with no address, error_limit_reached
-    /// past the device's max_build_geometries, and error_invalid_handle for a structure or buffer
-    /// that is gone.
+    /// Fails with error_unsupported where bfr_caps_features.acceleration_structure is false,
+    /// error_invalid_argument for inputs bfr_get_acceleration_structure_sizes refuses, an opacity
+    /// micromap updated where the backend builds one only whole (Vulkan), or a buffer with no
+    /// address, error_limit_reached past the device's max_build_geometries, and
+    /// error_invalid_handle for a structure or buffer that is gone.
     [[nodiscard]] Expected<void> buildAccelerationStructure(CommandList commandList, const AccelerationStructureBuild& build) const;
 
     /// Records build as bfr_build_acceleration_structure does, but with each geometry's counts read
     /// by the GPU as it runs: one bfr_acceleration_structure_build_range per geometry of build's
     /// inputs, in order, stride bytes apart from offset in ranges, which has indirect usage; offset
     /// and stride are multiples of 4. The inputs' counts are the most a range names. Fails with
-    /// error_unsupported where bfr_caps_features.acceleration_structure_indirect_build is false,
-    /// error_invalid_argument for an opacity micromap where the backend builds none so (Vulkan) or
-    /// a partitioned top one, whose counts the GPU reads in every build, and as
+    /// error_unsupported where the backend has no indirect builds (D3D12, Metal, until they
+    /// resume), error_invalid_argument for an opacity micromap where the backend builds none so
+    /// (Vulkan) or a partitioned top one, whose counts the GPU reads in every build, and as
     /// bfr_build_acceleration_structure does.
     [[nodiscard]] Expected<void> buildAccelerationStructureIndirect(CommandList commandList, const AccelerationStructureBuild& build, const Buffer& ranges, std::uint64_t offset, std::uint32_t stride) const;
 
@@ -5611,9 +5606,9 @@ public:
     /// the GPU reads its records and count as it runs. A barrier orders the work that wrote its
     /// records, count and the structures it reads before it, and their readers and any reuse of its
     /// scratch after. Traces reach the cluster bottom structures it builds only through pipelines
-    /// made with allow_clusters. Fails with error_unsupported as bfr_get_cluster_sizes does or on a
-    /// copy queue, error_invalid_argument for inputs bfr_get_cluster_sizes refuses or a buffer with
-    /// no address, and error_invalid_handle for a list or buffer that is gone.
+    /// made with allow_clusters. Fails with error_unsupported as bfr_get_cluster_sizes does,
+    /// error_invalid_argument for inputs bfr_get_cluster_sizes refuses or a buffer with no address,
+    /// and error_invalid_handle for a list or buffer that is gone.
     [[nodiscard]] Expected<void> buildClusters(CommandList commandList, const ClusterBuild& build) const;
 
     /// Records a copy of src into dst, not overlapping, as builds are recorded: dst at least src's
@@ -5634,10 +5629,9 @@ public:
     /// Creates a ray tracing pipeline, as desc says, before returning. Not for the frame path. A
     /// desc.cache is looked in first, and the pipeline added on a miss. Fails with
     /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false, or for library or
-    /// libraries where bfr_caps_features.ray_tracing_pipeline_library is false, capture_replay
-    /// where bfr_caps_features.ray_tracing_capture_replay is false, allow_opacity_micromaps where
-    /// bfr_caps_features.opacity_micromap is false, allow_motion where
-    /// bfr_caps_features.ray_tracing_motion is false, or allow_clusters where
+    /// libraries where bfr_caps_features.ray_tracing_pipeline_library is false,
+    /// allow_opacity_micromaps where bfr_caps_features.opacity_micromap is false, allow_motion
+    /// where bfr_caps_features.ray_tracing_motion is false, or allow_clusters where
     /// bfr_caps_features.cluster_acceleration_structure is false, error_invalid_argument for an
     /// enum value BFR doesn't have, a stack_size past 32 bits on Vulkan, which takes no more, or
     /// replay_identifiers neither none nor holding every group's, error_invalid_handle for a
@@ -5648,15 +5642,14 @@ public:
 
     /// Records a trace of desc's rays with the bound ray tracing pipeline, outside rendering, on a
     /// queue whose kind runs compute; commands after a barrier see what it wrote. Fails with
-    /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false or on a copy queue,
+    /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false,
     /// error_invalid_argument for a table buffer with no address, and error_invalid_handle for a
     /// buffer that is gone.
     [[nodiscard]] Expected<void> traceRays(CommandList commandList, const TraceRaysDesc& desc) const;
 
     /// Records a trace as bfr_trace_rays does, of the bfr_trace_rays_indirect_args buffer holds at
     /// offset, a multiple of 4; buffer has indirect usage. Fails with error_unsupported where
-    /// bfr_caps_features.trace_rays_indirect is false, or with a pipeline made with allow_motion
-    /// bound where bfr_caps_features.ray_tracing_motion_indirect is, and as bfr_trace_rays does.
+    /// bfr_caps_features.trace_rays_indirect is false, and as bfr_trace_rays does.
     [[nodiscard]] Expected<void> traceRaysIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset) const;
 
     /// Creates a pool of desc's count entries of its property. Not for the frame path. Fails with
@@ -5670,23 +5663,20 @@ public:
 
     /// Records a reset of count entries from first, which a backend that needs one before an entry
     /// is written, the first time too, is given; the others record nothing. Outside rendering, on a
-    /// queue whose kind runs compute. Fails with error_unsupported on a copy queue.
+    /// queue whose kind runs compute.
     [[nodiscard]] Expected<void> resetAccelerationStructureProperties(CommandList commandList, const AccelerationStructurePropertyPool& pool, std::uint32_t first, std::uint32_t count) const;
 
     /// Records writes of structures' property into the pool's entries from first, in order, outside
     /// rendering, on a queue whose kind runs compute. A barrier orders their builds before it. A
     /// compacted_size is of structures built with allow_compaction, a serialized_bottom_count of
-    /// top ones. Fails with error_unsupported on a copy queue, error_invalid_argument for more
-    /// structures than the pool holds from first, for opacity micromaps in a pool of other
-    /// structures' properties or the reverse, or for a partitioned top structure where the backend
-    /// writes none of its properties (Vulkan), and error_invalid_handle for a structure that is
-    /// gone.
+    /// top ones. Fails with error_invalid_argument for more structures than the pool holds from
+    /// first, or for a partitioned top structure where the backend writes none of its properties
+    /// (Vulkan), and error_invalid_handle for a structure that is gone.
     [[nodiscard]] Expected<void> writeAccelerationStructureProperties(CommandList commandList, const AccelerationStructurePropertyPool& pool, std::uint32_t first, std::span<const AccelerationStructureRef> structures) const;
 
     /// Records a copy of count entries from first into buffer at offset, a multiple of 8, as
     /// bfr_caps_ray_tracing.property_entry_bytes each, once the GPU has written them. buffer has
-    /// copy_dst usage. Outside rendering, on a queue whose kind runs compute. Fails with
-    /// error_unsupported on a copy queue.
+    /// copy_dst usage. Outside rendering, on a queue whose kind runs compute.
     [[nodiscard]] Expected<void> resolveAccelerationStructureProperties(CommandList commandList, const AccelerationStructurePropertyPool& pool, std::uint32_t first, std::uint32_t count, const Buffer& buffer, std::uint64_t offset) const;
 
     /// Records a compact copy of src, built with allow_compaction, into dst, at least its
@@ -5698,9 +5688,9 @@ public:
     /// structure's data holds its bottom structures' references, which the caller rewrites with
     /// bfr_get_acceleration_structure_reference values before deserializing it on another device.
     /// buffer has acceleration_structure_data usage. As builds are recorded. Fails with
-    /// error_unsupported where bfr_caps_features.acceleration_structure_serialization is false or
-    /// on a copy queue, and error_invalid_argument for a partitioned top structure where the
-    /// backend serializes none (Vulkan).
+    /// error_unsupported where bfr_caps_features.acceleration_structure_serialization is false, and
+    /// error_invalid_argument for a partitioned top structure where the backend serializes none
+    /// (Vulkan).
     [[nodiscard]] Expected<void> serializeAccelerationStructure(CommandList commandList, const AccelerationStructure& src, const Buffer& buffer, std::uint64_t offset) const;
 
     /// Records the structure buffer holds at offset, a multiple of 256, deserialized into dst, of
@@ -6006,15 +5996,15 @@ public:
 
     /// Writes count groups' identifiers from first, bfr_caps_ray_tracing.identifier_size bytes
     /// each, into data, for binding table records. Fails with error_invalid_argument when size is
-    /// too small or the pipeline is not a ray tracing one.
+    /// too small.
     [[nodiscard]] Expected<void> shaderIdentifiers(std::uint32_t first, std::uint32_t count, void* data, std::size_t size);
 
     /// Writes count groups' capture-replay identifiers from first,
     /// bfr_caps_ray_tracing.capture_replay_identifier_size bytes each, into data, of a pipeline
     /// made with capture_replay, for bfr_ray_tracing_pipeline_desc.replay_identifiers; of a
     /// library, where bfr_caps_features.pipeline_library_identifiers. Fails with error_unsupported
-    /// where bfr_caps_features.ray_tracing_capture_replay is false, and as
-    /// bfr_get_shader_identifiers does.
+    /// where bfr_caps_features.ray_tracing_pipeline is false, and as bfr_get_shader_identifiers
+    /// does.
     [[nodiscard]] Expected<void> captureReplayIdentifiers(std::uint32_t first, std::uint32_t count, void* data, std::size_t size);
 
     /// Writes the bytes of stack one shader of group takes, for
@@ -6187,9 +6177,8 @@ public:
     [[nodiscard]] Expected<std::uint64_t> accelerationStructureReference();
 
     /// Writes what bfr_acceleration_structure_desc.replay takes to make a structure again at this
-    /// one's reference, of one made with capture_replay. Fails with error_unsupported where
-    /// bfr_caps_features.acceleration_structure_capture_replay is false, error_invalid_argument for
-    /// one made without capture_replay, and error_invalid_handle when it is destroyed.
+    /// one's reference, of one made with capture_replay; all zero for one made without. Fails with
+    /// error_invalid_handle when it is destroyed.
     [[nodiscard]] Expected<AccelerationStructureCapture> capture();
 
 private:

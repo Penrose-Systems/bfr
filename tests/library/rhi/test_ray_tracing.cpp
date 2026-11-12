@@ -1069,13 +1069,6 @@ TEST_CASE("Device refuses ray tracing pipeline work it can't pass on", "[rhi][ag
         if (made.caps.features.rayTracingPipeline && !made.caps.features.clusterAccelerationStructure) {
             CHECK(code(device.createRayTracingPipeline({.allowClusters = true})) == ErrorCode::RhiUnsupported);
         }
-        if (!made.caps.features.rayTracingCaptureReplay) {
-            std::vector<std::byte> out(1);
-            CHECK(code(device.captureReplayIdentifiers({}, 0, 1, out)) == ErrorCode::RhiUnsupported);
-            if (made.caps.features.rayTracingPipeline) {
-                CHECK(code(device.createRayTracingPipeline({.captureReplay = true})) == ErrorCode::RhiUnsupported);
-            }
-        }
         // An address only of a buffer with a usage that has one.
         CHECK(code(device.bufferAddress(readback)) ==
               (made.caps.features.bufferAddress ? ErrorCode::RhiInvalidCall : ErrorCode::RhiUnsupported));
@@ -1085,10 +1078,6 @@ TEST_CASE("Device refuses ray tracing pipeline work it can't pass on", "[rhi][ag
             std::vector<std::byte> out(made.caps.rayTracing.identifierSize);
             CHECK(device.shaderIdentifiers(tracing.pipeline, 0, 1, out).has_value());
             CHECK(code(device.shaderIdentifiers(tracing.pipeline, 0, 2, out)) == ErrorCode::RhiInvalidCall);
-            const RayQuery query{device};
-            CHECK(code(device.shaderIdentifiers(query.pipeline, 0, 1, out)) == ErrorCode::RhiInvalidCall);
-            CHECK(code(device.rayTracingStackSize(query.pipeline, 0, RayTracingGroupShader::General)) ==
-                  ErrorCode::RhiInvalidCall);
             if (made.caps.features.rayTracingCaptureReplay) {
                 // Replay identifiers BFR would read past.
                 const std::array<RayTracingGroup, 2> groups{};
@@ -1096,7 +1085,6 @@ TEST_CASE("Device refuses ray tracing pipeline work it can't pass on", "[rhi][ag
                 CHECK(code(device.createRayTracingPipeline(
                           {.groups = groups, .captureReplay = true, .replayIdentifiers = tooFew})) ==
                       ErrorCode::RhiInvalidCall);
-                CHECK(code(device.captureReplayIdentifiers(query.pipeline, 0, 1, out)) == ErrorCode::RhiInvalidCall);
             }
             // An enum value BFR doesn't have.
             const RayTracingShader unknown{.stage = static_cast<RayTracingStage>(0xFF)};
@@ -1938,9 +1926,6 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
             return result.has_value() ? ErrorCode{} : result.error().code;
         };
         CHECK(device.destroyAccelerationStructure(AccelerationStructureHandle{}).has_value());
-        if (!made.caps.features.accelerationStructureIndirectBuild) {
-            CHECK(code(device.buildAccelerationStructureIndirect(*list, {}, {}, 0, 0)) == ErrorCode::RhiUnsupported);
-        }
         if (made.caps.features.accelerationStructure && !made.caps.features.rayTracingMotion) {
             std::array<std::byte, 1> out{};
             CHECK(code(device.createAccelerationStructure({.size = kSmall, .motionKeyframes = 2})) ==
@@ -1976,23 +1961,6 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
             CHECK(code(device.buildClusters(*list, {.inputs = {.mode = static_cast<ClusterMode>(kNoSuchValue)}})) ==
                   ErrorCode::RhiInvalidCall);
         }
-        if (made.caps.features.accelerationStructure && !made.caps.features.accelerationStructureCaptureReplay) {
-            CHECK(code(device.createAccelerationStructure({.size = kSmall, .captureReplay = true})) ==
-                  ErrorCode::RhiUnsupported);
-            CHECK(code(device.captureAccelerationStructure({})) == ErrorCode::RhiUnsupported);
-        }
-        if (made.caps.features.accelerationStructure) {
-            // A replay is of a structure that may be captured.
-            CHECK(code(device.createAccelerationStructure({.size = kSmall, .replay = {.words = {1, 0, 0}}})) ==
-                  ErrorCode::RhiInvalidCall);
-            // An instance names its bottom structure one way.
-            const AccelerationStructureHandle bottom = created(device, {.type = AccelerationStructureType::Bottom,
-                                                                        .size = kSmall});
-            std::vector<std::byte> out(made.caps.rayTracing.instanceSize);
-            const AccelerationStructureInstance both{.bottomStructure = bottom, .bottomReference = 1};
-            CHECK(code(device.writeInstances(std::span{&both, 1}, out)) == ErrorCode::RhiInvalidCall);
-            CHECK(device.destroyAccelerationStructure(bottom).has_value());
-        }
         if (!made.caps.features.partitionedTop) {
             const auto refused = made.instance->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& desc) {
                                                                  desc.maxBindlessPartitionedTops = 1;
@@ -2015,7 +1983,6 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
                                             .vertexStride = kVertexFloats * sizeof(float),
                                             .vertexCount = kTriangleVertices,
                                             .triangleCount = 1};
-            const BoxGeometry box{.boxes = vertices, .stride = kBoxFloats * sizeof(float), .count = 1};
             std::array<TriangleGeometry, kGeometries + 1> tooMany{};
             tooMany.fill(triangle);
             const AccelerationStructureHandle bottom = created(device, {.type = AccelerationStructureType::Bottom,
@@ -2023,51 +1990,28 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
             const AccelerationStructureHandle top = created(device,
                                                             {.type = AccelerationStructureType::Top, .size = kSmall});
 
-            // A bottom structure holds triangles or boxes, not both, and a
-            // build at most maxBuildGeometries.
-            CHECK(code(device.accelerationStructureSizes({.triangles = std::span{&triangle, 1},
-                                                          .boxes = std::span{&box, 1}})) == ErrorCode::RhiInvalidCall);
+            // A build of at most maxBuildGeometries, which BFR holds room for.
             CHECK(code(device.accelerationStructureSizes({.triangles = tooMany})) == ErrorCode::RhiLimitReached);
-            CHECK(code(device.createAccelerationStructure({.size = 0})) == ErrorCode::RhiInvalidCall);
             // Only top structures are in the table.
             CHECK(code(device.accelerationStructureSlot(bottom)) == ErrorCode::RhiInvalidCall);
             CHECK(device.accelerationStructureSlot(top).has_value() ==
                   (made.caps.bindless.maxAccelerationStructures != 0));
-            // A build's inputs are of its structure's type.
-            CHECK(code(device.buildAccelerationStructure(*list, {.dst = top,
-                                                                 .inputs = {.triangles = std::span{&triangle, 1}}})) ==
-                  ErrorCode::RhiInvalidCall);
-
-            // An index or offset of 24 bits at most, room for every record,
-            // and instances of bottom structures only.
+            // Room for every record BFR writes.
             std::vector<std::byte> out(made.caps.rayTracing.instanceSize);
-            const AccelerationStructureInstance fits{.customIndex = kInstanceIndexLimit - 1,
-                                                     .hitGroupOffset = kInstanceIndexLimit - 1,
-                                                     .bottomStructure = bottom};
-            CHECK(device.writeInstances(std::span{&fits, 1}, out).has_value());
-            AccelerationStructureInstance wide = fits;
-            wide.customIndex = kInstanceIndexLimit;
-            CHECK(code(device.writeInstances(std::span{&wide, 1}, out)) == ErrorCode::RhiInvalidCall);
-            wide = fits;
-            wide.hitGroupOffset = kInstanceIndexLimit;
-            CHECK(code(device.writeInstances(std::span{&wide, 1}, out)) == ErrorCode::RhiInvalidCall);
-            const std::array<AccelerationStructureInstance, 2> two{fits, fits};
+            const AccelerationStructureInstance one{.bottomStructure = bottom};
+            CHECK(device.writeInstances(std::span{&one, 1}, out).has_value());
+            const std::array<AccelerationStructureInstance, 2> two{one, one};
             CHECK(code(device.writeInstances(two, out)) == ErrorCode::RhiInvalidCall);
-            AccelerationStructureInstance ofTop = fits;
-            ofTop.bottomStructure = top;
-            CHECK(code(device.writeInstances(std::span{&ofTop, 1}, out)) == ErrorCode::RhiInvalidCall);
 
-            if (made.caps.features.accelerationStructureCaptureReplay) {
-                // Only a structure made to be captured is.
-                CHECK(code(device.captureAccelerationStructure(bottom)) == ErrorCode::RhiInvalidCall);
-            }
+            // A structure made without captureReplay has no capture.
+            const auto none = device.captureAccelerationStructure(bottom);
+            REQUIRE(none.has_value());
+            CHECK(none->words == AccelerationStructureCapture{}.words);
             for (const AccelerationStructureHandle structure : {bottom, top}) {
                 CHECK(device.destroyAccelerationStructure(structure).has_value());
             }
             CHECK(code(device.accelerationStructureReference(top)) == ErrorCode::RhiInvalidHandle);
-            if (made.caps.features.accelerationStructureCaptureReplay) {
-                CHECK(code(device.captureAccelerationStructure(top)) == ErrorCode::RhiInvalidHandle);
-            }
+            CHECK(code(device.captureAccelerationStructure(top)) == ErrorCode::RhiInvalidHandle);
             // A property the device writes, and no more structures than its
             // pool holds.
             const auto pool = device.createAccelerationStructurePropertyPool(
@@ -2117,45 +2061,6 @@ TEST_CASE("Device refuses a top structure past its table, and slots from an adap
                                                            {.type = AccelerationStructureType::Bottom, .size = kSmall});
         CHECK(device.destroyAccelerationStructure(first).has_value());
         CHECK(device.destroyAccelerationStructure(bottom).has_value());
-    }
-    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
-}
-
-TEST_CASE("Device refuses acceleration structure work on a copy queue", "[rhi][agnostic]") {
-    const TestBackend backend = GENERATE(eachBackend());
-    std::vector<std::string> messages;
-    {
-        auto created = createInstance(recordingInto(backend, messages), kValidation);
-        REQUIRE(created.has_value());
-        const std::unique_ptr<Instance> instance = std::move(*created);
-        const Caps& caps = instance->adapters()[0].caps;
-        if (!caps.features.accelerationStructure || caps.queues.copy == 0) {
-            SKIP("the adapter has no acceleration structures or no copy queue");
-        }
-        auto made = instance->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& desc) {
-                                               desc.copy = std::span{kTestQueues}.first(1);
-                                               desc.maxBuildGeometries = kGeometries;
-                                           }));
-        INFO(failureOf(made));
-        REQUIRE(made.has_value());
-        Device& device = **made;
-        const auto pool = device.createCommandPool({.queue = 1, .listCount = kPoolLists});
-        REQUIRE(pool.has_value());
-        const auto list = device.beginCommands(*pool);
-        REQUIRE(list.has_value());
-        const auto structure = device.createAccelerationStructure({.size = kSmall});
-        REQUIRE(structure.has_value());
-        const auto built = device.buildAccelerationStructure(*list, {.dst = *structure});
-        const auto copied = device.copyAccelerationStructure(*list, *structure, *structure);
-        // A trace, where the device has them, as builds.
-        const auto traced = caps.features.rayTracingPipeline ? device.traceRays(*list, {}) : copied;
-        for (const auto* result : {&built, &copied, &traced}) {
-            REQUIRE_FALSE(result->has_value());
-            CHECK(result->error().code == ErrorCode::RhiUnsupported);
-        }
-        CHECK(device.destroyAccelerationStructure(*structure).has_value());
-        CHECK(device.destroyCommandList(*list).has_value());
-        CHECK(device.destroyCommandPool(*pool).has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

@@ -409,7 +409,7 @@ core::Result<void> D3D12Device::shaderIdentifiers(PipelineHandle /*pipeline*/, s
 
 core::Result<void> D3D12Device::captureReplayIdentifiers(PipelineHandle /*pipeline*/, std::uint32_t /*first*/,
                                                          std::uint32_t /*count*/, std::span<std::byte> /*out*/) {
-    return checkCaptureReplay(features_.rayTracingCaptureReplay);
+    return checkRayTracingPipelines(features_.rayTracingPipeline);
 }
 
 core::Result<void> D3D12Device::writeMotionInstances(std::span<const AccelerationStructureMotionInstance> /*instances*/,

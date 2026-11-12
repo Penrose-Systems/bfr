@@ -564,8 +564,7 @@ public:
     /// opacity micromaps, their flags or triangles that take their opacity
     /// from one where Features::opacityMicromap is, partitioned top ones where
     /// Features::partitionedTop is, or motion where Features::rayTracingMotion
-    /// is, RhiInvalidCall for a bottom structure of both triangles and boxes,
-    /// an enum value BFR doesn't have, triangles naming a structure other than
+    /// is, RhiInvalidCall for an enum value BFR doesn't have, triangles naming a structure other than
     /// an opacity micromap as theirs or usages past micromapUsages, or motion
     /// keyframes other than the backend takes (Vulkan, two) or on an opacity
     /// micromap or partitioned top structure where the backend's has none
@@ -576,25 +575,21 @@ public:
 
     /// An empty structure of desc.size bytes, which a build fills. Cold: it
     /// frees structures the GPU is done with. Fails with RhiUnsupported where
-    /// Features::accelerationStructure is false, RhiInvalidCall for a size of
-    /// 0 or an enum value BFR doesn't have, RhiUnsupported for
+    /// Features::accelerationStructure is false, RhiInvalidCall for an enum
+    /// value BFR doesn't have, RhiUnsupported for
     /// motionKeyframes where Features::rayTracingMotion is false, for an
     /// opacity micromap where Features::opacityMicromap is, or for a
     /// partitioned top structure where Features::partitionedTop is,
     /// RhiInvalidCall for motionKeyframes other than the backend takes
     /// (Vulkan, two) or on an opacity micromap or partitioned top structure
-    /// where the backend's has none (Vulkan), RhiUnsupported for
-    /// captureReplay where Features::accelerationStructureCaptureReplay is
-    /// false, RhiInvalidCall for a replay without captureReplay or
-    /// captureReplay on an opacity micromap where the backend gives it no
-    /// reference (Vulkan), RhiLimitReached at the device's
-    /// maximum or, for a top or partitioned top structure on a device with
-    /// slots in its table, when they are all held,
-    /// RhiOutOfMemory when the API says memory ran out, and RhiDeviceFailed
-    /// when it refuses or, with captureReplay, places a partitioned top
-    /// structure at an address its builds cannot take (Vulkan, a multiple of
-    /// 256); a replay at a reference the backend cannot give fails with
-    /// RhiOutOfMemory or RhiDeviceFailed, as its API says.
+    /// where the backend's has none (Vulkan), or captureReplay on an opacity
+    /// micromap where the backend gives it no reference (Vulkan),
+    /// RhiLimitReached at the device's maximum or, for a top or partitioned
+    /// top structure on a device with slots in its table, when they are all
+    /// held, RhiOutOfMemory when the API says memory ran out, and
+    /// RhiDeviceFailed when it refuses; a replay at a reference the backend
+    /// cannot give fails with RhiOutOfMemory or RhiDeviceFailed, as its API
+    /// says.
     [[nodiscard]] virtual core::Result<AccelerationStructureHandle> createAccelerationStructure(
         const AccelerationStructureDesc& desc) = 0;
 
@@ -615,10 +610,8 @@ public:
         AccelerationStructureHandle structure) = 0;
 
     /// What AccelerationStructureDesc::replay takes to make a structure again
-    /// at this one's reference, of one made with captureReplay. Fails with
-    /// RhiUnsupported where Features::accelerationStructureCaptureReplay is
-    /// false, RhiInvalidCall for one made without captureReplay, and
-    /// RhiInvalidHandle when it is destroyed.
+    /// at this one's reference, of one made with captureReplay; all zero for
+    /// one made without. Fails with RhiInvalidHandle when it is destroyed.
     [[nodiscard]] virtual core::Result<AccelerationStructureCapture> captureAccelerationStructure(
         AccelerationStructureHandle structure) = 0;
 
@@ -632,12 +625,11 @@ public:
     /// Writes instances to out as the records a top structure is built from,
     /// RayTracingLimits::instanceSize bytes each, on the CPU. Fails with
     /// RhiUnsupported where Features::accelerationStructure is false,
-    /// RhiInvalidCall when out is too small, an index or offset is
-    /// kInstanceIndexLimit or above, an enum value BFR doesn't have, an
-    /// instance names a structure other than a bottom one, or both a
-    /// bottomStructure and a bottomReference, and
-    /// RhiInvalidHandle for a structure
-    /// that is gone.
+    /// RhiInvalidCall when out is too small, for an enum value BFR doesn't
+    /// have, or an instance naming an opacity micromap where the backend
+    /// gives it no reference (Vulkan), and RhiInvalidHandle for a structure
+    /// that is gone. An index or offset keeps its low 24 bits, and a
+    /// bottomStructure is named where it is not null, else bottomReference.
     [[nodiscard]] virtual core::Result<void> writeInstances(std::span<const AccelerationStructureInstance> instances,
                                                             std::span<std::byte> out) = 0;
 
@@ -656,12 +648,10 @@ public:
     /// Records build, outside rendering, on a queue whose kind runs compute.
     /// A barrier orders the work that wrote its inputs before it, and its
     /// readers and any reuse of its scratch after. Fails with RhiUnsupported
-    /// where Features::accelerationStructure is false or on a copy queue,
-    /// RhiInvalidCall for inputs Device::accelerationStructureSizes refuses,
-    /// of a type or motion unlike its structure's, an opacity micromap updated
-    /// where the backend builds one only whole (Vulkan), or a partitioned top
-    /// one updated from a structure of another type or another from a
-    /// partitioned top one, or a buffer with no address, RhiLimitReached past
+    /// where Features::accelerationStructure is false, RhiInvalidCall for
+    /// inputs Device::accelerationStructureSizes refuses, an opacity micromap
+    /// updated where the backend builds one only whole (Vulkan), or a buffer
+    /// with no address, RhiLimitReached past
     /// DeviceDesc::maxBuildGeometries, and RhiInvalidHandle for a list,
     /// structure or buffer that is gone.
     [[nodiscard]] virtual core::Result<void> buildAccelerationStructure(CommandListHandle commandList,
@@ -672,8 +662,8 @@ public:
     /// AccelerationStructureBuildRange per geometry of build.inputs, in
     /// order, stride bytes apart from offset in ranges, which has indirect
     /// usage; offset and stride are multiples of 4. build.inputs' counts are
-    /// the most a range names. Fails with RhiUnsupported where
-    /// Features::accelerationStructureIndirectBuild is false, RhiInvalidCall
+    /// the most a range names. Fails with RhiUnsupported where the backend has
+    /// no indirect builds (D3D12, Metal, until they resume), RhiInvalidCall
     /// for an opacity micromap where the backend builds none so (Vulkan) or a
     /// partitioned top one, whose counts the GPU reads in every build, and as
     /// buildAccelerationStructure does.
@@ -699,7 +689,7 @@ public:
     /// structures it reads before it, and their readers and any reuse of its
     /// scratch after. Traces reach the cluster bottom structures it builds
     /// only through pipelines made with allowClusters. Fails with
-    /// RhiUnsupported as clusterSizes does or on a copy queue, RhiInvalidCall
+    /// RhiUnsupported as clusterSizes does, RhiInvalidCall
     /// for inputs clusterSizes refuses or a buffer with no address, and
     /// RhiInvalidHandle for a list or buffer that is gone.
     [[nodiscard]] virtual core::Result<void> buildClusters(CommandListHandle commandList,
@@ -737,8 +727,8 @@ public:
     /// Records a reset of count entries from first, which a backend that
     /// needs one before an entry is written, the first time too, is given;
     /// the others record nothing. Outside rendering, on a queue whose kind
-    /// runs compute. Fails with RhiUnsupported on a copy queue, and
-    /// RhiInvalidHandle for a list or pool that is gone.
+    /// runs compute. Fails with RhiInvalidHandle for a list or pool that is
+    /// gone.
     [[nodiscard]] virtual core::Result<void> resetAccelerationStructureProperties(
         CommandListHandle commandList, AccelerationStructurePropertyPoolHandle pool, std::uint32_t first,
         std::uint32_t count) = 0;
@@ -747,10 +737,8 @@ public:
     /// first, in order, outside rendering, on a queue whose kind runs
     /// compute. A barrier orders their builds before it. A CompactedSize is of
     /// structures built with allowCompaction, a SerializedBottomCount of top
-    /// ones. Fails with RhiUnsupported on a copy queue, RhiInvalidCall for
-    /// more structures than the pool holds from first, for opacity
-    /// micromaps in a pool of other structures' properties or the reverse,
-    /// or for a partitioned top structure where the backend writes none of
+    /// ones. Fails with RhiInvalidCall for more structures than the pool
+    /// holds from first, or for a partitioned top structure where the backend writes none of
     /// its properties (Vulkan), and RhiInvalidHandle
     /// for a list, pool or structure that is gone.
     [[nodiscard]] virtual core::Result<void> writeAccelerationStructureProperties(
@@ -760,8 +748,8 @@ public:
     /// Records a copy of count entries from first into buffer at offset, a
     /// multiple of 8, as RayTracingLimits::propertyEntryBytes each, once the
     /// GPU has written them. buffer has copyDst usage. Outside rendering, on a
-    /// queue whose kind runs compute. Fails with RhiUnsupported on a copy
-    /// queue, and RhiInvalidHandle for a list, pool or buffer that is gone.
+    /// queue whose kind runs compute. Fails with RhiInvalidHandle for a list,
+    /// pool or buffer that is gone.
     [[nodiscard]] virtual core::Result<void> resolveAccelerationStructureProperties(
         CommandListHandle commandList, AccelerationStructurePropertyPoolHandle pool, std::uint32_t first,
         std::uint32_t count, BufferHandle buffer, std::uint64_t offset) = 0;
@@ -780,10 +768,8 @@ public:
     /// accelerationStructureReference before deserializing it on another
     /// device. buffer has accelerationStructureData usage. As builds are
     /// recorded. Fails with RhiUnsupported where
-    /// Features::accelerationStructureSerialization is false or on a copy
-    /// queue, RhiInvalidCall for a partitioned top structure where the backend
-    /// serializes none (Vulkan), and RhiInvalidHandle for a list, structure or
-    /// buffer that is gone.
+    /// Features::accelerationStructureSerialization is false, RhiInvalidCall for a partitioned top structure where the
+    /// backend serializes none (Vulkan), and RhiInvalidHandle for a list, structure or buffer that is gone.
     [[nodiscard]] virtual core::Result<void> serializeAccelerationStructure(CommandListHandle commandList,
                                                                             AccelerationStructureHandle src,
                                                                             BufferHandle buffer,
@@ -808,8 +794,8 @@ public:
 
     /// The bytes of stack one shader of group takes, for
     /// RayTracingPipelineDesc::stackSize. The group has that shader. Fails
-    /// with RhiInvalidCall for a pipeline that is not a ray tracing one or an
-    /// enum value BFR doesn't have, and RhiInvalidHandle when it is gone.
+    /// with RhiInvalidCall for an enum value BFR doesn't have, and
+    /// RhiInvalidHandle when it is gone.
     [[nodiscard]] virtual core::Result<std::uint64_t> rayTracingStackSize(PipelineHandle pipeline, std::uint32_t group,
                                                                           RayTracingGroupShader shader) = 0;
 
@@ -829,8 +815,7 @@ public:
     /// from desc.cache. Cold, as createComputePipeline is. Fails with
     /// RhiUnsupported where Features::rayTracingPipeline is false, or for
     /// library or libraries where Features::rayTracingPipelineLibrary is
-    /// false, captureReplay where Features::rayTracingCaptureReplay is false,
-    /// allowOpacityMicromaps where Features::opacityMicromap is false, or
+    /// false, allowOpacityMicromaps where Features::opacityMicromap is false, or
     /// allowMotion where Features::rayTracingMotion is false,
     /// RhiInvalidCall for an enum value BFR doesn't have, a stackSize past 32
     /// bits on Vulkan, which takes no more, or replayIdentifiers neither empty
@@ -842,8 +827,8 @@ public:
 
     /// Writes count groups' identifiers from first, RayTracingLimits::
     /// identifierSize bytes each, into out, for binding table records. Fails
-    /// with RhiInvalidCall when out is too small or the pipeline is not a ray
-    /// tracing one, and RhiInvalidHandle when it is gone.
+    /// with RhiInvalidCall when out is too small, and RhiInvalidHandle when it
+    /// is gone.
     [[nodiscard]] virtual core::Result<void> shaderIdentifiers(PipelineHandle pipeline, std::uint32_t first,
                                                                std::uint32_t count, std::span<std::byte> out) = 0;
 
@@ -852,8 +837,7 @@ public:
     /// a pipeline made with captureReplay, for RayTracingPipelineDesc::
     /// replayIdentifiers; of a library, where
     /// Features::pipelineLibraryIdentifiers. Fails with RhiUnsupported where
-    /// Features::rayTracingCaptureReplay is false, and as shaderIdentifiers
-    /// does.
+    /// Features::rayTracingPipeline is false, and as shaderIdentifiers does.
     [[nodiscard]] virtual core::Result<void> captureReplayIdentifiers(PipelineHandle pipeline, std::uint32_t first,
                                                                       std::uint32_t count,
                                                                       std::span<std::byte> out) = 0;
@@ -861,16 +845,15 @@ public:
     /// Records a trace of desc's rays with the bound ray tracing pipeline,
     /// outside rendering, on a queue whose kind runs compute; commands after
     /// a barrier see what it wrote. Fails with RhiUnsupported where
-    /// Features::rayTracingPipeline is false or on a copy queue,
-    /// RhiInvalidCall for a table buffer with no address, and
+    /// Features::rayTracingPipeline is false, RhiInvalidCall for a table
+    /// buffer with no address, and
     /// RhiInvalidHandle for a list or buffer that is gone.
     [[nodiscard]] virtual core::Result<void> traceRays(CommandListHandle commandList, const TraceRaysDesc& desc) = 0;
 
     /// Records a trace as traceRays does, of the TraceRaysIndirectArgs
     /// buffer holds at offset, a multiple of 4; buffer has indirect usage.
     /// Fails with RhiUnsupported where Features::traceRaysIndirect is false,
-    /// or with a pipeline made with allowMotion bound where
-    /// Features::rayTracingMotionIndirect is, and as traceRays does.
+    /// and as traceRays does.
     [[nodiscard]] virtual core::Result<void> traceRaysIndirect(CommandListHandle commandList, BufferHandle buffer,
                                                                std::uint64_t offset) = 0;
 

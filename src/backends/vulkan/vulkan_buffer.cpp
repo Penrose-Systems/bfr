@@ -214,9 +214,11 @@ core::Result<VulkanBuffer> placeVulkanBuffer(const VolkDeviceTable& table, VkDev
     return VulkanBuffer{allocator, buffer, made, memory, mapped, slot, address, size};
 }
 
-core::Result<VulkanReplayableBuffer> placeReplayableVulkanBuffer(
-    const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator, VkDeviceSize size, VkBufferUsageFlags usage,
-    std::span<const std::uint32_t> families, VkDeviceSize alignment, const VulkanBufferReplay& replay) {
+core::Result<VulkanReplayableBuffer> placeReplayableVulkanBuffer(const VolkDeviceTable& table, VkDevice device,
+                                                                 VmaAllocator allocator, VkDeviceSize size,
+                                                                 VkBufferUsageFlags usage,
+                                                                 std::span<const std::uint32_t> families,
+                                                                 const VulkanBufferReplay& replay) {
     VkBufferOpaqueCaptureAddressCreateInfo bufferAt{};
     bufferAt.sType = VK_STRUCTURE_TYPE_BUFFER_OPAQUE_CAPTURE_ADDRESS_CREATE_INFO;
     bufferAt.opaqueCaptureAddress = replay.buffer;
@@ -279,10 +281,6 @@ core::Result<VulkanReplayableBuffer> placeReplayableVulkanBuffer(
             VulkanBuffer{allocator, buffer, made, BufferMemory::Device, {}, core::SlotChains::kEnd, address, size},
         .made = {.buffer = table.vkGetBufferOpaqueCaptureAddress(device, &named),
                  .memory = table.vkGetDeviceMemoryOpaqueCaptureAddress(device, &memory)}};
-    if (alignment != 0 && address % alignment != 0) {
-        return core::failure(core::ErrorCode::RhiDeviceFailed,
-                             "Vulkan placed a replayable buffer at {:#x}, not a multiple of {}", address, alignment);
-    }
     return replayable;
 }
 

@@ -116,11 +116,10 @@ struct VulkanReplayableBuffer {
 /// were read from had. allocator adds no VkMemoryAllocateFlagsInfo of its
 /// own, so the memory takes the capture-replay flag. Fails with
 /// RhiDeviceFailed when VMA or the API refuses, as for addresses it cannot
-/// give or an address that is not a multiple of alignment, and
-/// RhiOutOfMemory, as codeFor says, when memory runs out.
+/// give, and RhiOutOfMemory, as codeFor says, when memory runs out.
 [[nodiscard]] core::Result<VulkanReplayableBuffer> placeReplayableVulkanBuffer(
     const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator, VkDeviceSize size, VkBufferUsageFlags usage,
-    std::span<const std::uint32_t> families, VkDeviceSize alignment, const VulkanBufferReplay& replay);
+    std::span<const std::uint32_t> families, const VulkanBufferReplay& replay);
 
 /// A buffer as desc says, addressed and aligned as its usage takes, with
 /// no memory when it is sparse, shared by the

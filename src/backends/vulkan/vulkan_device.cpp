@@ -167,7 +167,7 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
         return std::unexpected(std::move(allocator.error()));
     }
     made->allocator_ = *allocator;
-    if (setup.features.accelerationStructureCaptureReplay) {
+    if (setup.deviceAddresses) {
         auto replaying = createAllocator(rhi.handle(), adapter, device, std::min(setup.apiVersion, kNewestForVma),
                                          false);
         if (!replaying) {
@@ -646,12 +646,8 @@ core::Result<CommandListHandle> VulkanDevice::beginCommands(CommandPoolHandle co
     }
     // A new handle for each recording, so last frame's handle never names
     // this one. The list pool was made at its maximum, so this never grows.
-    const CommandListHandle commandList = commandLists_.emplace(VulkanCommandList{.buffer = buffer,
-                                                                                  .pool = commandPool,
-                                                                                  .slot = slot,
-                                                                                  .presenting = {},
-                                                                                  .rendered = core::SlotChains::kEnd,
-                                                                                  .motionPipeline = false});
+    const CommandListHandle commandList = commandLists_.emplace(VulkanCommandList{
+        .buffer = buffer, .pool = commandPool, .slot = slot, .presenting = {}, .rendered = core::SlotChains::kEnd});
     if (commandList.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command lists",
                              desc_.maxCommandLists);

@@ -520,7 +520,7 @@ core::Result<void> MetalDevice::shaderIdentifiers(PipelineHandle /*pipeline*/, s
 
 core::Result<void> MetalDevice::captureReplayIdentifiers(PipelineHandle /*pipeline*/, std::uint32_t /*first*/,
                                                          std::uint32_t /*count*/, std::span<std::byte> /*out*/) {
-    return checkCaptureReplay(features_.rayTracingCaptureReplay);
+    return checkRayTracingPipelines(features_.rayTracingPipeline);
 }
 
 core::Result<void> MetalDevice::writeMotionInstances(std::span<const AccelerationStructureMotionInstance> /*instances*/,

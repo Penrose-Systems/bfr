@@ -39,7 +39,6 @@ VulkanAccelerationStructure::VulkanAccelerationStructure(const VolkDeviceTable& 
       structure_(structure),
       micromap_(micromap),
       type_(desc.type),
-      motion_(desc.motionKeyframes != 0),
       size_(desc.size),
       slot_(slot),
       reference_(reference),
@@ -52,7 +51,6 @@ VulkanAccelerationStructure::VulkanAccelerationStructure(VulkanAccelerationStruc
       structure_(std::exchange(other.structure_, VK_NULL_HANDLE)),
       micromap_(std::exchange(other.micromap_, VK_NULL_HANDLE)),
       type_(other.type_),
-      motion_(other.motion_),
       size_(other.size_),
       slot_(other.slot_),
       reference_(other.reference_),
@@ -618,18 +616,6 @@ core::Result<VkMicromapEXT> VulkanDevice::micromapOf(AccelerationStructureHandle
     return (*found)->micromap();
 }
 
-core::Result<void> VulkanDevice::checkRunsCompute(const VulkanCommandList& list) {
-    const VulkanCommandPool* pool = commandPools_.find(list.pool);
-    if (pool == nullptr) {
-        return core::failure(core::ErrorCode::RhiInvalidHandle, "the list's pool is gone");
-    }
-    if (!queues_[pool->queue]->compute) {
-        return core::failure(core::ErrorCode::RhiUnsupported,
-                             "the list's queue runs no compute, which acceleration structure work needs");
-    }
-    return {};
-}
-
 core::Result<VkDeviceAddress> VulkanDevice::addressOf(BufferHandle buffer, std::uint64_t offset) {
     if (buffer.isNull()) {
         return VkDeviceAddress{0};
@@ -734,14 +720,8 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     if (auto checked = checkVulkanMotion(features_.rayTracingMotion, desc.type, desc.motionKeyframes); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    if (auto checked = checkStructureCaptureReplay(features_.accelerationStructureCaptureReplay, desc); !checked) {
-        return std::unexpected(std::move(checked.error()));
-    }
     if (desc.captureReplay && desc.type == AccelerationStructureType::OpacityMicromap) {
         return micromapHasNoReference();
-    }
-    if (desc.size == 0) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "the acceleration structure has no bytes");
     }
     // Cold, so structures the GPU is done with are freed here.
     collectBuffers();
@@ -761,7 +741,6 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
                                      alignment, core::SlotChains::kEnd);
         }
         auto replayable = placeReplayableVulkanBuffer(table_, device_, replayAllocator_, desc.size, usage, families_,
-                                                      alignment,
                                                       {.buffer = desc.replay.words[kBufferWord],
                                                        .memory = desc.replay.words[kMemoryWord]});
         if (!replayable) {
@@ -896,16 +875,9 @@ core::Result<std::uint64_t> VulkanDevice::accelerationStructureReference(Acceler
 
 core::Result<AccelerationStructureCapture> VulkanDevice::captureAccelerationStructure(
     AccelerationStructureHandle structure) {
-    if (auto checked = checkStructureCaptureReplay(features_.accelerationStructureCaptureReplay); !checked) {
-        return std::unexpected(std::move(checked.error()));
-    }
     auto found = accelerationStructureFor(structure);
     if (!found) {
         return std::unexpected(std::move(found.error()));
-    }
-    if ((*found)->captured().words == AccelerationStructureCapture{}.words) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "the acceleration structure was made without captureReplay");
     }
     return (*found)->captured();
 }
@@ -936,7 +908,7 @@ core::Result<void> VulkanDevice::writeInstances(std::span<const AccelerationStru
         return checked;
     }
     for (std::size_t i = 0; i < instances.size(); ++i) {
-        const auto record = instanceRecord(instances[i], i);
+        const auto record = instanceRecord(instances[i]);
         if (!record) {
             return std::unexpected(record.error());
         }
@@ -946,17 +918,15 @@ core::Result<void> VulkanDevice::writeInstances(std::span<const AccelerationStru
 }
 
 core::Result<VkAccelerationStructureInstanceKHR> VulkanDevice::instanceRecord(
-    const AccelerationStructureInstance& instance, std::size_t index) {
+    const AccelerationStructureInstance& instance) {
     VkDeviceAddress reference = instance.bottomReference;
     if (!instance.bottomStructure.isNull()) {
         auto found = accelerationStructureFor(instance.bottomStructure);
         if (!found) {
             return std::unexpected(std::move(found.error()));
         }
-        if ((*found)->type() != AccelerationStructureType::Bottom) {
-            return core::failure(core::ErrorCode::RhiInvalidCall,
-                                 "instance {} names a structure that is not a bottom one; instances are of bottom ones",
-                                 index);
+        if ((*found)->isMicromap()) {
+            return micromapHasNoReference();
         }
         reference = (*found)->reference();
     }
@@ -1028,7 +998,7 @@ core::Result<void> VulkanDevice::writeMotionInstances(std::span<const Accelerati
                                  "motion instance {} has {} keyframes; Vulkan's record holds {}", i,
                                  moving.keyframeCount, kVulkanMotionKeyframes);
         }
-        const auto record = instanceRecord(moving.instance, i);
+        const auto record = instanceRecord(moving.instance);
         if (!record) {
             return std::unexpected(record.error());
         }
@@ -1077,9 +1047,6 @@ core::Result<void> VulkanDevice::buildAccelerationStructureIndirect(CommandListH
                                                                     const AccelerationStructureBuild& build,
                                                                     BufferHandle ranges, std::uint64_t offset,
                                                                     std::uint32_t stride) {
-    if (auto checked = checkIndirectBuilds(features_.accelerationStructureIndirectBuild); !checked) {
-        return checked;
-    }
     auto found = bufferFor(ranges);
     if (!found) {
         return std::unexpected(std::move(found.error()));
@@ -1118,22 +1085,9 @@ core::Result<void> VulkanDevice::recordBuild(CommandListHandle commandList, cons
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (auto checked = checkRunsCompute(**list); !checked) {
-        return checked;
-    }
     auto dst = accelerationStructureFor(build.dst);
     if (!dst) {
         return std::unexpected(std::move(dst.error()));
-    }
-    if ((*dst)->type() != build.inputs.type) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "a build's inputs are of another type than the structure it builds");
-    }
-    // A structure made with motion is built with it, and one made without,
-    // without (VUID-VkAccelerationStructureBuildGeometryInfoKHR-dstAccelerationStructure-04927, -flags-04928).
-    if ((*dst)->motion() != (build.inputs.motionKeyframes != 0)) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "a build's inputs have motion unlike the structure it builds");
     }
     const VulkanAccelerationStructure* from = nullptr;
     if (build.update) {
@@ -1142,14 +1096,6 @@ core::Result<void> VulkanDevice::recordBuild(CommandListHandle commandList, cons
             return std::unexpected(std::move(found.error()));
         }
         from = *found;
-        // An update starts from a structure Vulkan names as dst's kind is
-        // named: a partitioned top one by address, the others by object.
-        if ((from->type() == AccelerationStructureType::PartitionedTop) !=
-            (build.inputs.type == AccelerationStructureType::PartitionedTop)) {
-            return core::failure(core::ErrorCode::RhiInvalidCall,
-                                 "a partitioned top structure updates only from a partitioned top one, and only it "
-                                 "from one");
-        }
     }
     const auto scratch = addressOf(build.scratch, build.scratchOffset);
     if (!scratch) {
@@ -1253,9 +1199,6 @@ core::Result<void> VulkanDevice::buildClusters(CommandListHandle commandList, co
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (auto checked = checkRunsCompute(**list); !checked) {
-        return checked;
-    }
     const auto destination = addressOf(build.destination, build.destinationOffset);
     const auto scratch = addressOf(build.scratch, build.scratchOffset);
     const auto count = addressOf(build.count, build.countOffset);
@@ -1296,9 +1239,6 @@ core::Result<void> VulkanDevice::copyStructure(CommandListHandle commandList, Ac
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
-    }
-    if (auto checked = checkRunsCompute(**list); !checked) {
-        return checked;
     }
     auto to = accelerationStructureFor(dst);
     if (!to) {
@@ -1468,11 +1408,6 @@ core::Result<std::pair<VulkanCommandList*, VulkanPropertyPool*>> VulkanDevice::p
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    // Reset, write and resolve take a graphics or compute queue (vkdocs
-    // xml/vk.xml:15872, 15886, 17426), which a compute-capable one is.
-    if (auto checked = checkRunsCompute(**list); !checked) {
-        return std::unexpected(std::move(checked.error()));
-    }
     VulkanPropertyPool* found = propertyPools_.find(pool);
     if (found == nullptr) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the property pool handle is stale");
@@ -1512,12 +1447,6 @@ core::Result<void> VulkanDevice::writeAccelerationStructureProperties(
         }
         if (auto checked = checkNotPartitioned((*named)->type(), "writes properties of"); !checked) {
             return checked;
-        }
-        // A query pool is of one query type, a micromap's or a structure's.
-        if ((*named)->isMicromap() != found.micromaps()) {
-            return core::failure(core::ErrorCode::RhiInvalidCall,
-                                 found.micromaps() ? "a pool of opacity micromaps' properties names another structure"
-                                                   : "a pool of structures' properties names an opacity micromap");
         }
         if (found.micromaps()) {
             std::ignore = found.micromapList().push((*named)->micromap());
@@ -1568,9 +1497,6 @@ core::Result<void> VulkanDevice::serializeAccelerationStructure(CommandListHandl
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (auto checked = checkRunsCompute(**list); !checked) {
-        return checked;
-    }
     auto from = accelerationStructureFor(src);
     if (!from) {
         return std::unexpected(std::move(from.error()));
@@ -1609,9 +1535,6 @@ core::Result<void> VulkanDevice::deserializeAccelerationStructure(CommandListHan
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
-    }
-    if (auto checked = checkRunsCompute(**list); !checked) {
-        return checked;
     }
     auto to = accelerationStructureFor(dst);
     if (!to) {

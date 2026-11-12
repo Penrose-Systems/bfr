@@ -527,15 +527,13 @@ void VulkanBindlessLayout::destroy() {
 }
 
 VulkanPipeline::VulkanPipeline(const VolkDeviceTable& table, VkDevice device, VkPipeline pipeline,
-                               VkPipelineBindPoint bindPoint, VkPrimitiveTopology topology, std::uint64_t stackSize,
-                               bool allowMotion)
+                               VkPipelineBindPoint bindPoint, VkPrimitiveTopology topology, std::uint64_t stackSize)
     : table_(&table),
       device_(device),
       pipeline_(pipeline),
       bindPoint_(bindPoint),
       topology_(topology),
-      stackSize_(stackSize),
-      allowMotion_(allowMotion) {}
+      stackSize_(stackSize) {}
 
 VulkanPipeline::VulkanPipeline(VulkanPipeline&& other) noexcept
     : table_(other.table_),
@@ -543,8 +541,7 @@ VulkanPipeline::VulkanPipeline(VulkanPipeline&& other) noexcept
       pipeline_(std::exchange(other.pipeline_, VK_NULL_HANDLE)),
       bindPoint_(other.bindPoint_),
       topology_(other.topology_),
-      stackSize_(other.stackSize_),
-      allowMotion_(other.allowMotion_) {}
+      stackSize_(other.stackSize_) {}
 
 VulkanPipeline::~VulkanPipeline() {
     if (pipeline_ != VK_NULL_HANDLE) {
@@ -840,13 +837,9 @@ core::Result<VulkanPipeline> createVulkanRayTracingPipeline(const VolkDeviceTabl
     if (result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateRayTracingPipelinesKHR", .result = result});
     }
-    return VulkanPipeline{table,
-                          device,
-                          pipeline,
-                          VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-                          VK_PRIMITIVE_TOPOLOGY_MAX_ENUM,
-                          desc.stackSize,
-                          desc.allowMotion};
+    return VulkanPipeline{
+        table,         device, pipeline, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, VK_PRIMITIVE_TOPOLOGY_MAX_ENUM,
+        desc.stackSize};
 }
 
 // The device's pipeline calls, beside the pipelines they make.
@@ -1004,8 +997,7 @@ core::Result<void> VulkanDevice::shaderIdentifiers(PipelineHandle pipeline, std:
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    const bool rayTracing = (*found)->bindPoint() == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
-    if (auto checked = checkIdentifiers(rayTracing, count, out, rayTracing_.identifierSize); !checked) {
+    if (auto checked = checkIdentifiers(count, out, rayTracing_.identifierSize); !checked) {
         return checked;
     }
     const std::size_t bytes = std::size_t{count} * rayTracing_.identifierSize;
@@ -1020,15 +1012,11 @@ core::Result<void> VulkanDevice::shaderIdentifiers(PipelineHandle pipeline, std:
 
 core::Result<void> VulkanDevice::captureReplayIdentifiers(PipelineHandle pipeline, std::uint32_t first,
                                                           std::uint32_t count, std::span<std::byte> out) {
-    if (auto checked = checkCaptureReplay(features_.rayTracingCaptureReplay); !checked) {
-        return checked;
-    }
     auto found = pipelineFor(pipeline);
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    const bool rayTracing = (*found)->bindPoint() == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
-    if (auto checked = checkIdentifiers(rayTracing, count, out, rayTracing_.captureReplayIdentifierSize); !checked) {
+    if (auto checked = checkIdentifiers(count, out, rayTracing_.captureReplayIdentifierSize); !checked) {
         return checked;
     }
     const std::size_t bytes = std::size_t{count} * rayTracing_.captureReplayIdentifierSize;
@@ -1068,9 +1056,6 @@ core::Result<std::uint64_t> VulkanDevice::rayTracingStackSize(PipelineHandle pip
     auto found = pipelineFor(pipeline);
     if (!found) {
         return std::unexpected(std::move(found.error()));
-    }
-    if ((*found)->bindPoint() != VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "the pipeline is not a ray tracing one");
     }
     return table_.vkGetRayTracingShaderGroupStackSizeKHR(device_, (*found)->pipeline(), group, groupShaderFor(shader));
 }

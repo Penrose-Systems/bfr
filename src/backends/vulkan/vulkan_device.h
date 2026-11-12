@@ -152,8 +152,6 @@ struct VulkanCommandList {
     std::uint32_t slot = 0;
     std::optional<SwapchainHandle> presenting;
     std::uint32_t rendered = core::SlotChains::kEnd;
-    /// Whether the ray tracing pipeline bound last was made with allowMotion.
-    bool motionPipeline = false;
 };
 
 class VulkanDevice final : public Device {
@@ -418,17 +416,16 @@ private:
     // RhiInvalidCall for a structure that is not an opacity micromap, and
     // RhiInvalidHandle for one that is gone.
     [[nodiscard]] core::Result<VkMicromapEXT> micromapOf(AccelerationStructureHandle structure);
-    // instance's record, the index-th written; fails as writeInstances does
-    // for a structure that is gone or not a bottom one.
+    // instance's record; fails as writeInstances does for a structure that
+    // is gone or an opacity micromap, which has no reference.
     [[nodiscard]] core::Result<VkAccelerationStructureInstanceKHR> instanceRecord(
-        const AccelerationStructureInstance& instance, std::size_t index);
-    // A copy of src into dst in mode, on a queue that runs compute.
+        const AccelerationStructureInstance& instance);
+    // A copy of src into dst in mode.
     [[nodiscard]] core::Result<void> copyStructure(CommandListHandle commandList, AccelerationStructureHandle dst,
                                                    AccelerationStructureHandle src,
                                                    VkCopyAccelerationStructureModeKHR mode);
     // Fails with RhiUnsupported when list's queue runs no compute, which
     // builds and traces need, and RhiInvalidHandle when its pool is gone.
-    [[nodiscard]] core::Result<void> checkRunsCompute(const VulkanCommandList& list);
     // buffer's device address, offset bytes in; 0 for a null buffer. Fails
     // with RhiInvalidHandle when the buffer is gone, and RhiInvalidCall when
     // it has no address.
@@ -486,7 +483,7 @@ private:
     std::vector<std::uint32_t> families_;
     core::Submissions submissions_;
     VmaAllocator allocator_ = VK_NULL_HANDLE;
-    // Where Features::accelerationStructureCaptureReplay: one that adds no
+    // Where the device gives buffer addresses: one that adds no
     // VkMemoryAllocateFlagsInfo of its own (vk_mem_alloc.h:14118-14135), so
     // a replayable structure's memory takes BFR's, with the capture-replay
     // flag and its opaque address.

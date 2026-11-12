@@ -94,31 +94,6 @@ namespace bfr::rhi {
     return {};
 }
 
-/// Fails with RhiUnsupported where
-/// Features::accelerationStructureCaptureReplay is false.
-[[nodiscard]] inline core::Result<void> checkStructureCaptureReplay(bool accelerationStructureCaptureReplay) {
-    if (!accelerationStructureCaptureReplay) {
-        return core::failure(core::ErrorCode::RhiUnsupported,
-                             "the device captures and replays no acceleration structure references "
-                             "(Features::accelerationStructureCaptureReplay)");
-    }
-    return {};
-}
-
-/// Fails as checkStructureCaptureReplay for captureReplay, and with RhiInvalidCall
-/// for a replay without captureReplay.
-[[nodiscard]] inline core::Result<void> checkStructureCaptureReplay(bool accelerationStructureCaptureReplay,
-                                                                    const AccelerationStructureDesc& desc) {
-    if (desc.captureReplay) {
-        return checkStructureCaptureReplay(accelerationStructureCaptureReplay);
-    }
-    if (desc.replay.words != AccelerationStructureCapture{}.words) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "an acceleration structure with a replay is made with captureReplay");
-    }
-    return {};
-}
-
 /// Fails with RhiUnsupported where Features::clusterAccelerationStructure is
 /// false.
 [[nodiscard]] inline core::Result<void> checkClusters(bool clusterAccelerationStructure) {
@@ -155,9 +130,9 @@ namespace bfr::rhi {
     return !triangles.opacityMicromap.micromap.isNull() || !triangles.opacityMicromap.indices.isNull();
 }
 
-/// Fails with RhiInvalidCall when inputs hold an enum value BFR doesn't have,
-/// a bottom structure of both triangles and boxes, or triangles naming
-/// micromap usages past micromapUsages, which BFR reads; and with
+/// Fails with RhiInvalidCall when inputs hold an enum value BFR doesn't have
+/// or triangles naming micromap usages past micromapUsages, which BFR reads;
+/// and with
 /// RhiUnsupported for opacity micromaps or partitioned top structures where
 /// features say the device has none.
 [[nodiscard]] inline core::Result<void> checkInputs(const AccelerationStructureInputs& inputs,
@@ -168,10 +143,6 @@ namespace bfr::rhi {
     }
     if (auto checked = checkPartitionedTops(features.partitionedTop, inputs.type); !checked) {
         return checked;
-    }
-    if (inputs.type == AccelerationStructureType::Bottom && !inputs.triangles.empty() && !inputs.boxes.empty()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "a bottom acceleration structure holds triangles or boxes, not both");
     }
     if (auto checked = checkOpacityMicromaps(opacityMicromap,
                                              inputs.type == AccelerationStructureType::OpacityMicromap);
@@ -226,25 +197,15 @@ namespace bfr::rhi {
     return {};
 }
 
-/// Fails with RhiInvalidCall when an instance has an index or offset
-/// kInstanceIndexLimit or above or an opacity BFR doesn't have, and
-/// RhiUnsupported for its opacity micromap flags where
+/// Fails with RhiInvalidCall when an instance has an opacity BFR doesn't
+/// have, and RhiUnsupported for its opacity micromap flags where
 /// Features::opacityMicromap is false.
 [[nodiscard]] inline core::Result<void> checkInstance(const AccelerationStructureInstance& instance,
                                                       bool opacityMicromap) {
-    if (instance.customIndex >= kInstanceIndexLimit || instance.hitGroupOffset >= kInstanceIndexLimit) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "an instance's custom index {} and hit group offset {} are below {}", instance.customIndex,
-                             instance.hitGroupOffset, kInstanceIndexLimit);
-    }
     if (auto checked = checkOpacityMicromaps(opacityMicromap,
                                              instance.forceOpacityMicromap2State || instance.disableOpacityMicromaps);
         !checked) {
         return checked;
-    }
-    if (!instance.bottomStructure.isNull() && instance.bottomReference != 0) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "an instance names its bottom structure by a handle or by a reference, not both");
     }
     return checkKnown(instance.opacity, "instance opacity");
 }
