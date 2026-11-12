@@ -287,10 +287,6 @@ core::Result<VulkanReplayableBuffer> placeReplayableVulkanBuffer(const VolkDevic
 core::Result<VulkanBuffer> createVulkanBuffer(const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator,
                                               const BufferDesc& desc, std::span<const std::uint32_t> families,
                                               const BufferAddressing& addressing, std::uint32_t slot) {
-    if (desc.sparse && desc.memory != BufferMemory::Device) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "a sparse buffer's memory is the sparse memory mapped into it, so it is device");
-    }
     if (desc.sparse && desc.tileBytes != 0) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "Vulkan sets a sparse buffer's tile size itself; tileBytes is 0");
@@ -465,12 +461,6 @@ core::Result<void> VulkanDevice::addBufferBinds(VulkanQueue& queue, const TileMa
         return std::unexpected(std::move(found.error()));
     }
     const VulkanBuffer& buffer = **found;
-    if (!buffer.sparse()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "the buffer is not sparse");
-    }
-    if (memory != nullptr && (buffer.memoryTypes() & (1U << memory->type())) == 0) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "the memory's type is not one the buffer takes");
-    }
     for (const BufferTileRegion& region : desc.bufferRegions) {
         if (auto checked = checkKnown(region.mapping, "tile mapping"); !checked) {
             return checked;

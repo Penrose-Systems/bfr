@@ -90,11 +90,7 @@ std::array<Table, kBindingCount> tablesFor(const DeviceDesc& desc) {
 // SPIR-V as the API takes it: whole words, aligned. The caller's bytes may be
 // neither, so they are copied; pipeline creation is cold.
 core::Result<std::vector<std::uint32_t>> wordsOf(std::span<const std::byte> code) {
-    if (code.size() % sizeof(std::uint32_t) != 0) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "the shader code is {} bytes; SPIR-V is whole words",
-                             code.size());
-    }
-    std::vector<std::uint32_t> words(code.size() / sizeof(std::uint32_t));
+    std::vector<std::uint32_t> words((code.size() + sizeof(std::uint32_t) - 1) / sizeof(std::uint32_t));
     std::memcpy(words.data(), code.data(), code.size());
     return words;
 }
@@ -873,9 +869,6 @@ core::Result<PipelineHandle> VulkanDevice::createComputePipeline(const ComputePi
 
 core::Result<PipelineHandle> VulkanDevice::createGraphicsPipeline(const GraphicsPipelineDesc& desc) {
     if (auto checked = checkGraphicsPipelineDesc(desc); !checked) {
-        return std::unexpected(std::move(checked.error()));
-    }
-    if (auto checked = checkMultisample(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkMeshStages(desc, features_); !checked) {

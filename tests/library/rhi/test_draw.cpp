@@ -465,6 +465,9 @@ TEST_CASE("Device hands work across queues: compute writes and copy reads it, co
         auto instance = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(instance.has_value());
         const Caps& caps = (*instance)->adapters()[0].caps;
+        if (caps.queues.compute == 0 || caps.queues.copy == 0) {
+            SKIP("the adapter has no compute or no copy queue");
+        }
         // Queue 0 is graphics, 1 compute and 2 copy, as DeviceDesc numbers them.
         constexpr std::uint32_t kGraphics = 0;
         constexpr std::uint32_t kCompute = 1;
@@ -473,9 +476,6 @@ TEST_CASE("Device hands work across queues: compute writes and copy reads it, co
                                                     desc.compute = std::span{kTestQueues}.first(1);
                                                     desc.copy = std::span{kTestQueues}.first(1);
                                                 }));
-        if (!opened && opened.error().code == ErrorCode::RhiUnsupported) {
-            SKIP(failureOf(opened));
-        }
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
         Device& device = **opened;
@@ -1071,11 +1071,8 @@ TEST_CASE("Device refuses push constants and renderings it can't pass on with Rh
         const Viewport whole{.x = 0, .y = 0, .width = kSide, .height = kSide, .minDepth = 0, .maxDepth = 1};
         const Rect all{.x = 0, .y = 0, .width = kSide, .height = kSide};
 
-        // Push constants are whole 32-bit values, as many bytes as the caps
-        // report and no more, and at most the pool's updates.
-        constexpr std::uint32_t kOddBytes = 6;
-        CHECK(device.pushConstants(*list, std::array<std::byte, kOddBytes>{}).error().code ==
-              ErrorCode::RhiInvalidCall);
+        // Push constants are as many bytes as the layout BFR made holds and
+        // no more, and at most the pool's updates.
         const std::uint32_t pushSize = made.instance->adapters()[0].caps.limits.maxPushConstantsSize;
         const std::vector<std::byte> pushed(pushSize + sizeof(std::uint32_t));
         CHECK(device.pushConstants(*list, pushed).error().code == ErrorCode::RhiInvalidCall);
@@ -1702,68 +1699,6 @@ TEST_CASE("Device samples a depth attachment it tests read-only", "[rhi][agnosti
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Device refuses multisampling it can't pass on", "[rhi][agnostic]") {
-    const TestBackend backend = GENERATE(eachBackend());
-    if (!takesSpirv(backend)) {
-        SKIP("no " << backend.name << " bytecode is checked in");
-    }
-    std::vector<std::string> messages;
-    {
-        const DrawDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const Features& features = made.instance->adapters()[0].caps.features;
-        // Refused where the feature is missing, made where it is there.
-        const auto made_as = [&](const GraphicsPipelineDesc& desc, bool feature) {
-            const auto pipeline = device.createGraphicsPipeline(desc);
-            INFO(failureOf(pipeline));
-            if (feature) {
-                REQUIRE(pipeline.has_value());
-                CHECK(device.destroyPipeline(*pipeline).has_value());
-            }
-            else {
-                REQUIRE_FALSE(pipeline.has_value());
-                CHECK(pipeline.error().code == ErrorCode::RhiUnsupported);
-            }
-        };
-        GraphicsPipelineDesc alphaToOne = colorPipeline();
-        alphaToOne.alphaToOne = true;
-        made_as(alphaToOne, features.alphaToOne);
-        GraphicsPipelineDesc shaded = colorPipeline();
-        shaded.minSampleShading = 1;
-        made_as(shaded, features.sampleRateShading);
-        GraphicsPipelineDesc masked = colorPipeline();
-        masked.sampleMask = 0;
-        made_as(masked, features.sampleMask);
-        GraphicsPipelineDesc outside = colorPipeline();
-        outside.minSampleShading = 2;
-        const auto refused = device.createGraphicsPipeline(outside);
-        REQUIRE_FALSE(refused.has_value());
-        CHECK(refused.error().code == ErrorCode::RhiInvalidCall);
-
-        const TextureHandle depth = created(device, depthTexture(Format::D32Float, 1, {.depthStencil = true}));
-        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
-        REQUIRE(pool.has_value());
-        auto list = device.beginCommands(*pool);
-        REQUIRE(list.has_value());
-        const RenderingDesc clearsReadOnly{.colorAttachmentCount = 0,
-                                           .colorAttachments = {},
-                                           .depthStencil = {.texture = depth,
-                                                            .depthLoadOp = LoadOp::Clear,
-                                                            .readOnly = true}};
-        const auto begun = device.beginRendering(*list, {}, clearsReadOnly);
-        REQUIRE_FALSE(begun.has_value());
-        CHECK(begun.error().code == ErrorCode::RhiInvalidCall);
-        RenderingDesc resolvesNothing{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
-        resolvesNothing.colorAttachments[0] = {.texture = {}, .resolveTexture = depth};
-        const auto unnamed = device.beginRendering(*list, {}, resolvesNothing);
-        REQUIRE_FALSE(unnamed.has_value());
-        CHECK(unnamed.error().code == ErrorCode::RhiInvalidCall);
-        CHECK(device.destroyTexture(depth).has_value());
-        CHECK(device.destroyCommandPool(*pool).has_value());
-    }
-    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
-}
-
 TEST_CASE("Device draws with mesh shaders, directly and indirectly, and with a task shader, where it has them",
           "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
@@ -1776,18 +1711,6 @@ TEST_CASE("Device draws with mesh shaders, directly and indirectly, and with a t
         meshDesc.vertex = {};
         meshDesc.mesh = spirv(bfr::test::spirv::kTriangleMesh);
         meshDesc.meshWorkgroupSize = {1, 1, 1};
-        // A pipeline takes a vertex or a mesh shader, and a task shader only
-        // beside a mesh shader, whatever the device has.
-        GraphicsPipelineDesc both = meshDesc;
-        both.vertex = colorPipeline().vertex;
-        const auto bothMade = device.createGraphicsPipeline(both);
-        REQUIRE_FALSE(bothMade.has_value());
-        CHECK(bothMade.error().code == ErrorCode::RhiInvalidCall);
-        GraphicsPipelineDesc taskAlone = colorPipeline();
-        taskAlone.task = spirv(bfr::test::spirv::kTriangleTask);
-        const auto taskMade = device.createGraphicsPipeline(taskAlone);
-        REQUIRE_FALSE(taskMade.has_value());
-        CHECK(taskMade.error().code == ErrorCode::RhiInvalidCall);
         if (!caps.features.meshShader) {
             const auto refused = device.createGraphicsPipeline(meshDesc);
             REQUIRE_FALSE(refused.has_value());

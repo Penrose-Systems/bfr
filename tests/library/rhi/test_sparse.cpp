@@ -299,22 +299,6 @@ TEST_CASE("Device refuses sparse calls on resources that are not sparse, and map
             {.size = kSparseBufferBytes, .memory = BufferMemory::Device, .usage = {.copyDst = true}});
         REQUIRE(plain.has_value());
         CHECK(device.bufferTiling(*plain).error().code == ErrorCode::RhiInvalidCall);
-        CHECK(device.createSparseMemory({.size = kSparseBufferBytes, .tileBytes = 0, .texture = {}, .buffer = *plain})
-                  .error()
-                  .code == ErrorCode::RhiInvalidCall);
-        CHECK(device.createSparseMemory({.size = 0, .tileBytes = 0, .texture = {}, .buffer = *plain}).error().code ==
-              ErrorCode::RhiInvalidCall);
-        const std::array unmapped{BufferTileRegion{.mapping = TileMapping::Unmap, .tile = 0, .tiles = 1}};
-        CHECK(device
-                  .updateTileMappings({.queue = 0,
-                                       .waits = {},
-                                       .memory = {},
-                                       .texture = {},
-                                       .textureRegions = {},
-                                       .buffer = *plain,
-                                       .bufferRegions = unmapped})
-                  .error()
-                  .code == ErrorCode::RhiInvalidCall);
         CHECK(device
                   .updateTileMappings({.queue = 1,
                                        .waits = {},

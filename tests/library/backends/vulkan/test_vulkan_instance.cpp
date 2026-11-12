@@ -424,16 +424,11 @@ TEST_CASE("Vulkan without VK_EXT_mesh_shader reports no mesh shaders, and refuse
         const auto drawn = device.drawMesh(*list, 1, 1, 1);
         const auto indirect = device.drawMeshIndirect(*list, BufferHandle{}, 0, 1, 0);
         const auto counted = device.drawMeshIndirectCount(*list, BufferHandle{}, 0, BufferHandle{}, 0, 1, 0);
-        const auto timestamps = device.createTimestampPool({.queue = 0, .count = 1});
-        REQUIRE(timestamps.has_value());
-        const auto timed = device.writeTimestamp(*list, *timestamps, 0, TimestampStage::Mesh,
-                                                 TimestampGranularity::Relaxed);
 
-        for (const auto* result : {&drawn, &indirect, &counted, &timed}) {
+        for (const auto* result : {&drawn, &indirect, &counted}) {
             REQUIRE_FALSE(result->has_value());
             CHECK(result->error().code == bfr::core::ErrorCode::RhiUnsupported);
         }
-        CHECK(device.destroyTimestampPool(*timestamps).has_value());
         CHECK(device.destroyCommandList(*list).has_value());
         CHECK(device.destroyCommandPool(*pool).has_value());
     }
@@ -478,18 +473,13 @@ TEST_CASE("Vulkan without VK_KHR_acceleration_structure reports none, and refuse
         const auto written = device.writeInstances({}, out);
         const auto built = device.buildAccelerationStructure(*list, {});
         const auto copied = device.copyAccelerationStructure(*list, {}, {});
-        const auto timestamps = device.createTimestampPool({.queue = 0, .count = 1});
-        REQUIRE(timestamps.has_value());
-        const auto timed = device.writeTimestamp(*list, *timestamps, 0, TimestampStage::AccelerationStructureBuild,
-                                                 TimestampGranularity::Relaxed);
 
         CHECK(sized.error().code == bfr::core::ErrorCode::RhiUnsupported);
         CHECK(structure.error().code == bfr::core::ErrorCode::RhiUnsupported);
-        for (const auto* result : {&written, &built, &copied, &timed}) {
+        for (const auto* result : {&written, &built, &copied}) {
             REQUIRE_FALSE(result->has_value());
             CHECK(result->error().code == bfr::core::ErrorCode::RhiUnsupported);
         }
-        CHECK(device.destroyTimestampPool(*timestamps).has_value());
         CHECK(device.destroyCommandList(*list).has_value());
         CHECK(device.destroyCommandPool(*pool).has_value());
     }
@@ -525,17 +515,12 @@ TEST_CASE("Vulkan without VK_KHR_ray_tracing_pipeline reports none, and refuses 
         const auto pipeline = device.createRayTracingPipeline({});
         const auto traced = device.traceRays(*list, {});
         const auto indirect = device.traceRaysIndirect(*list, BufferHandle{}, 0);
-        const auto timestamps = device.createTimestampPool({.queue = 0, .count = 1});
-        REQUIRE(timestamps.has_value());
-        const auto timed = device.writeTimestamp(*list, *timestamps, 0, TimestampStage::RayTracing,
-                                                 TimestampGranularity::Relaxed);
 
         CHECK(pipeline.error().code == bfr::core::ErrorCode::RhiUnsupported);
-        for (const auto* result : {&traced, &indirect, &timed}) {
+        for (const auto* result : {&traced, &indirect}) {
             REQUIRE_FALSE(result->has_value());
             CHECK(result->error().code == bfr::core::ErrorCode::RhiUnsupported);
         }
-        CHECK(device.destroyTimestampPool(*timestamps).has_value());
         CHECK(device.destroyCommandList(*list).has_value());
         CHECK(device.destroyCommandPool(*pool).has_value());
     }
@@ -978,8 +963,7 @@ TEST_CASE("Vulkan with acceleration structures but no table updated after bind h
     CHECK(device.destroyAccelerationStructure(*top).has_value());
 }
 
-TEST_CASE("Vulkan with mesh shaders but no task shaders refuses a task pipeline and a task timestamp",
-          "[vulkan][gpu]") {
+TEST_CASE("Vulkan with mesh shaders but no task shaders refuses a task pipeline", "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv hidden("BFR_ADAPTER_NO_FEATURE", "taskShader");
     auto created = Instance::create(vulkanDesc(), {});
@@ -1020,13 +1004,6 @@ TEST_CASE("Vulkan with mesh shaders but no task shaders refuses a task pipeline 
     REQUIRE(pool.has_value());
     const auto list = device.beginCommands(*pool);
     REQUIRE(list.has_value());
-    const auto timestamps = device.createTimestampPool({.queue = 0, .count = 1});
-    REQUIRE(timestamps.has_value());
-    const auto timed = device.writeTimestamp(*list, *timestamps, 0, TimestampStage::Task,
-                                             TimestampGranularity::Relaxed);
-    REQUIRE_FALSE(timed.has_value());
-    CHECK(timed.error().code == bfr::core::ErrorCode::RhiUnsupported);
-    CHECK(device.destroyTimestampPool(*timestamps).has_value());
     CHECK(device.destroyCommandList(*list).has_value());
     CHECK(device.destroyCommandPool(*pool).has_value());
 }
@@ -1129,7 +1106,6 @@ TEST_CASE("Vulkan lists an adapter with no graphics family and opens its compute
     const auto device = (*rhi)->createDevice(adapter, kNoWindow, computeOnly);
     INFO(failureOf(device));
     CHECK(device.has_value());
-    CHECK(((*rhi)->createDevice(adapter, kNoWindow, kTestDevice).error().code == bfr::core::ErrorCode::RhiUnsupported));
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 

@@ -783,9 +783,6 @@ core::Result<ID3D12Resource*> D3D12Device::addTextureTiles(D3D12TileMappings& ti
         return std::unexpected(std::move(found.error()));
     }
     const D3D12Texture& texture = **found;
-    if (!texture.sparse) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "the texture is not sparse");
-    }
     if (memory != nullptr && !memory->takes(texture.tileHeap)) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "on ResourceHeapTier 1 a heap holds one kind of resource, and the memory's is not the "

@@ -525,11 +525,6 @@ core::Result<void> MetalDevice::resetCommandPool(CommandPoolHandle commandPool) 
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "{} lists from the pool are still recording; submit or destroy them", (*pool)->recording);
     }
-    if (queues_[(*pool)->queue]->event->signaledValue() < (*pool)->lastSubmit) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "the GPU has not passed the pool's last submit, token {}; wait on it first",
-                             (*pool)->lastSubmit);
-    }
     // Only the lists handed out since the last reset recorded into their
     // allocators.
     for (std::uint32_t slot = (*pool)->first; slot != (*pool)->next; slot = listSlots_.next(slot)) {
@@ -643,10 +638,6 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
                 return std::unexpected(std::move(found.error()));
             }
             chain = *found;
-            if (chain->submitted()) {
-                return core::failure(core::ErrorCode::RhiInvalidCall,
-                                     "the acquired image was already submitted; present it first");
-            }
             CA::MetalDrawable* drawable = chain->drawable();
             if (drawable == nullptr) {
                 return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
@@ -842,11 +833,6 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
         if (!list) {
             return std::unexpected(std::move(list.error()));
         }
-        if (const MetalCommandPool* pool = commandPools_.find((*list)->pool);
-            pool != nullptr && pool->queue != desc.queue) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "the list was recorded for queue {}, not {}",
-                                 pool->queue, desc.queue);
-        }
         for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
             auto chain = swapchainFor(renders_[slot]);
             if (!chain) {
@@ -854,10 +840,6 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
             }
             if ((*chain)->drawable() == nullptr) {
                 return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
-            }
-            if ((*chain)->submitted()) {
-                return core::failure(core::ErrorCode::RhiInvalidCall,
-                                     "the acquired image was already submitted; present it first");
             }
             if (std::ranges::find(queue.chains, *chain) == queue.chains.end()) {
                 std::ignore = queue.chains.push(*chain);

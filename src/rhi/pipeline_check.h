@@ -12,10 +12,8 @@
 namespace bfr::rhi {
 
 /// Fails with RhiInvalidCall when desc holds what BFR can't pass on: an enum
-/// value or format BFR doesn't have, more than kMaxColorTargets targets, a
-/// minSampleShading outside 0 to 1, both a vertex and a mesh shader
-/// (VUID-VkGraphicsPipelineCreateInfo-pStages-02095), or a task shader
-/// without a mesh shader.
+/// value or format BFR doesn't have, or more than kMaxColorTargets targets,
+/// which its descs hold.
 /// A color target of format Undefined is an unused one. Each backend's
 /// createGraphicsPipeline calls it first.
 [[nodiscard]] inline core::Result<void> checkGraphicsPipelineDesc(const GraphicsPipelineDesc& desc) {
@@ -25,17 +23,6 @@ namespace bfr::rhi {
     if (desc.colorTargetCount > kMaxColorTargets) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "{} color targets; a pipeline renders to at most {}",
                              desc.colorTargetCount, kMaxColorTargets);
-    }
-    if (!(desc.minSampleShading >= 0 && desc.minSampleShading <= 1)) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "minSampleShading {} is not 0 to 1",
-                             desc.minSampleShading);
-    }
-    // A pipeline is fed by vertices or by mesh shaders, not both.
-    if (!desc.mesh.code.empty() && !desc.vertex.code.empty()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "a pipeline takes a vertex shader or a mesh shader");
-    }
-    if (desc.mesh.code.empty() && !desc.task.code.empty()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "a task shader needs a mesh shader");
     }
     return {};
 }

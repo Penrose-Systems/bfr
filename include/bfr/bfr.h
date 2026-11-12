@@ -3499,8 +3499,7 @@ BFR_API bfr_result bfr_create_command_pool(
 
 // Gives every list the pool made back to it, so bfr_begin_commands may use their memory again. A
 // list from the pool still recording ends with it on Vulkan; on D3D12 and Metal it fails with
-// error_invalid_argument. Fails with error_invalid_argument while the GPU has not passed the token
-// of the pool's last submit; bfr_wait on it first.
+// error_invalid_argument.
 BFR_API bfr_result bfr_reset_command_pool(bfr_device* device, bfr_command_pool command_pool);
 
 // Destroys a command pool and every list it made, once the GPU has finished with them; the handles
@@ -3521,10 +3520,9 @@ BFR_API bfr_result bfr_begin_commands(
 // direct and indirect, and the state they take, are recorded until bfr_end_rendering, which
 // resolves the attachments that name a resolve texture. Fails with error_invalid_argument when no
 // attachment is given, when a color attachment but the swapchain's names no texture, with a
-// swapchain when there is no color attachment or attachment 0 names a resolve texture, when a
-// resolve texture is named with no texture, and when a read-only depth-stencil attachment clears or
-// drops an aspect; error_unsupported for a depth or stencil resolve mode, or a pair of them,
-// bfr_caps_resolve doesn't have.
+// swapchain when there is no color attachment or attachment 0 names a resolve texture, and when a
+// resolve texture is named with no texture; error_unsupported for a depth or stencil resolve mode,
+// or a pair of them, bfr_caps_resolve doesn't have, on D3D12 and Metal.
 BFR_API bfr_result bfr_begin_rendering(
     bfr_device* device,
     bfr_command_list command_list,
@@ -3587,8 +3585,8 @@ BFR_API bfr_result bfr_set_topology(
     bfr_topology topology);
 
 // Sets the first size bytes of the push constants every shader reads, as bfr_pipeline states, for
-// the draws and dispatches after it. size is a multiple of 4 and at most the caps'
-// max_push_constants_size, else error_invalid_argument. Fails with error_limit_reached past the
+// the draws and dispatches after it. size is at most the caps' max_push_constants_size, which the
+// layout BFR makes holds, else error_invalid_argument. Fails with error_limit_reached past the
 // pool's push_constant_updates.
 // data: An array of size elements.
 BFR_API bfr_result bfr_push_constants(
@@ -3846,8 +3844,8 @@ BFR_API bfr_result bfr_poll(bfr_device* device, const bfr_token* token, bfr_bool
 BFR_API void bfr_destroy_command_list(bfr_device* device, bfr_command_list command_list);
 
 // Creates a buffer, as desc says. Not for the frame path: it frees buffers the GPU is done with.
-// Fails with error_invalid_argument for a desc of no bytes or no usage, error_out_of_memory when
-// the backend says the memory ran out, error_limit_reached at the device's maximum of buffers, and
+// Fails with error_invalid_argument for memory BFR doesn't have, error_out_of_memory when the
+// backend says the memory ran out, error_limit_reached at the device's maximum of buffers, and
 // error_device_failed when the backend refuses the desc or gives no buffer.
 BFR_API bfr_result bfr_create_buffer(
     bfr_device* device,
@@ -3921,11 +3919,11 @@ BFR_API bfr_result bfr_create_compute_pipeline(
 // Creates a graphics pipeline, as desc says, before returning. Not for the frame path, as
 // bfr_create_compute_pipeline is not. A desc.cache is used as there. A target of format undefined
 // is an unused one. Fails with error_invalid_argument for a desc with more than max_color_targets
-// targets or a min_sample_shading outside 0 to 1, error_unsupported for a topology the backend has
-// no form for (Metal's fan) and for an alpha_to_one, min_sample_shading or sample_mask whose
-// feature the device lacks, error_invalid_handle when desc.cache is gone, error_limit_reached at
-// the device's maximum of pipelines, and error_device_failed when the backend refuses the code, the
-// desc or the cache; the message carries what it said.
+// targets, error_unsupported for a topology the backend has no form for (Metal's fan) and, on D3D12
+// and Metal, for an alpha_to_one, min_sample_shading or sample_mask whose feature the device lacks,
+// error_invalid_handle when desc.cache is gone, error_limit_reached at the device's maximum of
+// pipelines, and error_device_failed when the backend refuses the code, the desc or the cache; the
+// message carries what it said.
 BFR_API bfr_result bfr_create_graphics_pipeline(
     bfr_device* device,
     const bfr_graphics_pipeline_desc* desc,
@@ -3975,8 +3973,7 @@ BFR_API bfr_result bfr_create_timestamp_pool(
 BFR_API void bfr_destroy_timestamp_pool(bfr_device* device, bfr_timestamp_pool pool);
 
 // Records a reset of count timestamps from first, which a backend that needs one before a timestamp
-// is written again is given; the others record nothing. Outside rendering. Fails with
-// error_unsupported on a kind of queue whose reset flag in bfr_caps_timestamps is false.
+// is written again is given; the others record nothing. Outside rendering.
 BFR_API bfr_result bfr_reset_timestamps(
     bfr_device* device,
     bfr_command_list command_list,
@@ -3986,8 +3983,8 @@ BFR_API bfr_result bfr_reset_timestamps(
 
 // Records the GPU's timestamp at stage into the pool's timestamp index, with granularity where the
 // backend takes one. Fails with error_invalid_argument for a stage or granularity BFR does not
-// have, and error_unsupported for a stage the backend has no setting for where the list is, as
-// bfr_caps_timestamps says.
+// have, and error_unsupported for a stage the backend has no setting for where the list is (D3D12,
+// Metal).
 BFR_API bfr_result bfr_write_timestamp(
     bfr_device* device,
     bfr_command_list command_list,
@@ -4027,10 +4024,10 @@ BFR_API bfr_result bfr_calibrate_timestamps(
     bfr_calibrated_timestamps* timestamps);
 
 // Creates desc's size bytes of device memory for the tiles of the sparse resources desc names. Not
-// for the frame path. Fails with error_invalid_argument for a resource that is not sparse or a size
-// of 0, error_unsupported for a tile_bytes the backend doesn't take or resources the backend can't
-// hold in one memory, error_limit_reached at the device's max_sparse_memories, error_out_of_memory
-// when the backend says memory ran out, and error_device_failed when it refuses.
+// for the frame path. Fails with error_invalid_argument for no resource, error_unsupported for a
+// tile_bytes the backend doesn't take or resources the backend can't hold in one memory,
+// error_limit_reached at the device's max_sparse_memories, error_out_of_memory when the backend
+// says memory ran out, and error_device_failed when it refuses.
 BFR_API bfr_result bfr_create_sparse_memory(
     bfr_device* device,
     const bfr_sparse_memory_desc* desc,
@@ -4068,11 +4065,9 @@ BFR_API bfr_result bfr_get_sparse_format(
 // Maps desc's regions of its sparse texture and buffer to its memory, or unmaps them, on desc's
 // queue once the GPU has passed the waits, and writes the token the mappings' completion signals;
 // work that uses them waits on it. Calls on one queue must not overlap, bfr_submit included. Fails
-// with error_invalid_argument for a queue the device does not have, a resource that is not sparse,
-// a region that maps with no memory, or more than max_tile_mappings regions of either kind,
-// error_unsupported for a queue whose kind bfr_caps_queues says maps no tiles, memory the resource
-// can't be mapped to, or a region the backend has no form for, and error_device_failed when the
-// backend refuses.
+// with error_invalid_argument for a queue the device does not have, a region that maps with no
+// memory, or more than max_tile_mappings regions of either kind, error_unsupported for a region the
+// backend has no form for, and error_device_failed when the backend refuses.
 // token: May be null.
 BFR_API bfr_result bfr_update_tile_mappings(
     bfr_device* device,
@@ -4251,10 +4246,9 @@ BFR_API bfr_result bfr_copy_acceleration_structure(
     bfr_acceleration_structure src);
 
 // Creates a shader from code, compiled once, for the ray tracing pipelines made from it. Not for
-// the frame path. Fails with error_invalid_argument when the code is not what the backend takes in
-// whole units (SPIR-V's words), error_unsupported where the backend has no shader objects yet
-// (D3D12, Metal), error_limit_reached at the device's maximum, and error_device_failed when the
-// backend refuses the code.
+// the frame path. Fails with error_unsupported where the backend has no shader objects yet (D3D12,
+// Metal), error_limit_reached at the device's maximum, and error_device_failed when the backend
+// refuses the code.
 BFR_API bfr_result bfr_create_shader(
     bfr_device* device,
     const bfr_shader_code* code,

@@ -415,19 +415,6 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
         return std::unexpected(presenting.error());
     }
     const auto families = chooseQueueFamilies(properties, *presenting);
-    const QueueCounts has = countQueues(families, properties);
-    if (has.graphics < wanted.graphics.size()) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "{} has {} graphics queues; {} were asked for",
-                             listed.name, has.graphics, wanted.graphics.size());
-    }
-    if (has.compute < wanted.compute.size()) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "{} has {} compute queues; {} were asked for",
-                             listed.name, has.compute, wanted.compute.size());
-    }
-    if (has.copy < wanted.copy.size()) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "{} has {} copy queues; {} were asked for", listed.name,
-                             has.copy, wanted.copy.size());
-    }
     // With a window, a queue the device opens must present to it.
     const auto opens = [](std::optional<std::uint32_t> family, std::span<const QueueDesc> kind) {
         return family && !kind.empty();
@@ -467,11 +454,6 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     const auto queues = queueCreateInfos(families, wanted, hasQueueLevels(versions_[adapter], *available));
     if (!queues) {
         return std::unexpected(queues.error());
-    }
-    // VUID-VkDeviceCreateInfo-None-10778.
-    if (queues->infos.empty() && features.maintenance9.maintenance9 != VK_TRUE) {
-        return core::failure(core::ErrorCode::RhiUnsupported,
-                             "{} has no maintenance9, which Vulkan needs to open a device with no queues", listed.name);
     }
     VkDeviceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

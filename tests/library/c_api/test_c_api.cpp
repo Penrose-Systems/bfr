@@ -699,10 +699,6 @@ TEST_CASE("C API passes sparse calls through, and refuses what is not sparse or 
     REQUIRE(bfr_create_buffer(device.device, &desc, &plain) == BFR_RESULT_SUCCESS);
     bfr_buffer_tiling tiling{};
     CHECK(bfr_get_buffer_tiling(device.device, plain, &tiling) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
-    const bfr_sparse_memory_desc memoryDesc{.size = kSize, .tile_bytes = 0, .texture = {}, .buffer = plain};
-    bfr_sparse_memory memory{};
-    CHECK(bfr_create_sparse_memory(device.device, &memoryDesc, &memory) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
-    CHECK(memory.bits == 0);
     const bfr_tile_mapping_desc nullRegions{.next = nullptr,
                                             .queue = 0,
                                             .waits = nullptr,
@@ -730,6 +726,7 @@ TEST_CASE("C API passes sparse calls through, and refuses what is not sparse or 
     CHECK(tiling.tile_bytes != 0);
     // The test device holds no sparse memories.
     const bfr_sparse_memory_desc held{.size = kSize, .tile_bytes = desc.tile_bytes, .texture = {}, .buffer = sparse};
+    bfr_sparse_memory memory{};
     CHECK(bfr_create_sparse_memory(device.device, &held, &memory) == BFR_RESULT_ERROR_LIMIT_REACHED);
     bfr_destroy_buffer(device.device, sparse);
 }

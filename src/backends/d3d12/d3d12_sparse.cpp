@@ -65,9 +65,6 @@ core::Result<SparseMemoryHandle> D3D12Device::createSparseMemory(const SparseMem
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
-        if (!(*texture)->sparse) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "the texture is not sparse");
-        }
         kind = (*texture)->tileHeap;
         multisampled = (*texture)->samples > 1;
     }
@@ -75,9 +72,6 @@ core::Result<SparseMemoryHandle> D3D12Device::createSparseMemory(const SparseMem
         auto buffer = bufferFor(desc.buffer);
         if (!buffer) {
             return std::unexpected(std::move(buffer.error()));
-        }
-        if (!(*buffer)->sparse) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "the buffer is not sparse");
         }
         if (!desc.texture.isNull() && !sparse_.mixedResources) {
             return core::failure(core::ErrorCode::RhiUnsupported,

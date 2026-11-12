@@ -235,22 +235,6 @@ TEST_CASE("Device fails a copy and a barrier with RhiInvalidHandle for a list or
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Device refuses a buffer of no bytes or no usage with RhiInvalidCall", "[rhi][agnostic]") {
-    const TestBackend backend = GENERATE(eachBackend());
-    std::vector<std::string> messages;
-    {
-        const BufferDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        BufferDesc empty = kUploadBuffer;
-        empty.size = 0;
-        CHECK(device.createBuffer(empty).error().code == ErrorCode::RhiInvalidCall);
-        BufferDesc unused = kUploadBuffer;
-        unused.usage = {};
-        CHECK(device.createBuffer(unused).error().code == ErrorCode::RhiInvalidCall);
-    }
-    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
-}
-
 TEST_CASE("Device passes on what the backend says of storage in upload memory", "[rhi][agnostic]") {
     // Not every API lets shaders write memory the CPU maps, so the backend
     // decides: a buffer that is made is a buffer, and a refusal is its own.

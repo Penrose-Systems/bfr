@@ -689,13 +689,7 @@ core::Result<void> VulkanDevice::addTextureBinds(VulkanQueue& queue, const TileM
         return std::unexpected(std::move(found.error()));
     }
     const VulkanTexture& texture = **found;
-    if (!texture.sparse()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "the texture is not sparse");
-    }
     const VulkanSparseTiling& tiling = texture.tiling();
-    if (memory != nullptr && (tiling.memoryTypes & (1U << memory->type())) == 0) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "the memory's type is not one the texture takes");
-    }
     for (const TextureTileRegion& region : desc.textureRegions) {
         if (auto checked = checkKnown(region.mapping, "tile mapping"); !checked) {
             return checked;
@@ -716,10 +710,6 @@ core::Result<void> VulkanDevice::addTextureBinds(VulkanQueue& queue, const TileM
         const VkDeviceSize boundOffset = maps ? memory->offset() + region.memoryTile * tiling.tileBytes : 0;
         if (region.mipLevel >= requirements->imageMipTailFirstLod) {
             const bool single = (requirements->formatProperties.flags & VK_SPARSE_IMAGE_FORMAT_SINGLE_MIPTAIL_BIT) != 0;
-            if (single && region.layer != 0) {
-                return core::failure(core::ErrorCode::RhiUnsupported,
-                                     "every layer of the texture shares one tail, mapped at layer 0");
-            }
             const VkDeviceSize layerTail = single ? 0 : region.layer * requirements->imageMipTailStride;
             // The texture's regions are at most maxTileMappings, which the array holds.
             std::ignore = queue.tailBinds.push(VkSparseMemoryBind{.resourceOffset = requirements->imageMipTailOffset +

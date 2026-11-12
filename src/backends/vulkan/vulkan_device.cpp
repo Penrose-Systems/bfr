@@ -561,11 +561,6 @@ core::Result<void> VulkanDevice::resetCommandPool(CommandPoolHandle commandPool)
     if (!completed) {
         return std::unexpected(completed.error());
     }
-    if (*completed < (*pool)->lastSubmit) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "the GPU has not passed the pool's last submit, token {}; wait on it first",
-                             (*pool)->lastSubmit);
-    }
     if (const VkResult result = table_.vkResetCommandPool(device_, (*pool)->pool, 0); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkResetCommandPool", .result = result});
     }
@@ -667,11 +662,6 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
     if (auto checked = checkRenderingDesc(!swapchain.isNull(), desc); !checked) {
         return checked;
     }
-    if (const VulkanCommandPool* pool = commandPools_.find((*list)->pool);
-        pool != nullptr && queues_[pool->queue]->type != QueueType::Graphics) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "the list records for queue {}, which does not render",
-                             pool->queue);
-    }
     // Every handle is looked up before anything is recorded, so a bad one
     // leaves the list as it was.
     std::array<VkRenderingAttachmentInfo, kMaxColorTargets> colors{};
@@ -699,10 +689,6 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
             auto chain = swapchainFor(swapchain);
             if (!chain) {
                 return std::unexpected(std::move(chain.error()));
-            }
-            if ((*chain)->submitted()) {
-                return core::failure(core::ErrorCode::RhiInvalidCall,
-                                     "the acquired image was already submitted; present it first");
             }
             auto acquired = (*chain)->acquired();
             if (!acquired) {
@@ -756,9 +742,6 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
         stencil.loadOp = loadOpFor(depthStencil.stencilLoadOp);
         stencil.storeOp = depthStencil.readOnly ? VK_ATTACHMENT_STORE_OP_NONE : storeOpFor(depthStencil.stencilStoreOp);
         if (!depthStencil.resolveTexture.isNull()) {
-            if (auto checked = checkDepthResolve(depthStencil, (*texture)->format(), resolve_); !checked) {
-                return checked;
-            }
             auto target = textureFor(depthStencil.resolveTexture);
             if (!target) {
                 return std::unexpected(std::move(target.error()));
@@ -879,11 +862,6 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
         if (!list) {
             return std::unexpected(std::move(list.error()));
         }
-        if (const VulkanCommandPool* pool = commandPools_.find((*list)->pool);
-            pool != nullptr && pool->queue != desc.queue) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "the list was recorded for queue {}, not {}",
-                                 pool->queue, desc.queue);
-        }
         for (std::uint32_t slot = (*list)->rendered; slot != core::SlotChains::kEnd; slot = renderSlots_.next(slot)) {
             auto chain = swapchainFor(renders_[slot]);
             if (!chain) {
@@ -892,10 +870,6 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
             const auto image = (*chain)->acquired();
             if (!image) {
                 return std::unexpected(image.error());
-            }
-            if ((*chain)->submitted()) {
-                return core::failure(core::ErrorCode::RhiInvalidCall,
-                                     "the acquired image was already submitted; present it first");
             }
             if (std::ranges::find(queue.chains, *chain) != queue.chains.end()) {
                 continue;

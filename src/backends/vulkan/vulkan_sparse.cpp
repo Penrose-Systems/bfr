@@ -52,9 +52,6 @@ core::Result<VulkanSparseMemory*> VulkanDevice::sparseMemoryFor(SparseMemoryHand
 }
 
 core::Result<SparseMemoryHandle> VulkanDevice::createSparseMemory(const SparseMemoryDesc& desc) {
-    if (desc.size == 0) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "sparse memory of 0 bytes");
-    }
     if (desc.texture.isNull() && desc.buffer.isNull()) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "Vulkan takes sparse memory's type from a texture or buffer; neither was given");
@@ -71,9 +68,6 @@ core::Result<SparseMemoryHandle> VulkanDevice::createSparseMemory(const SparseMe
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
-        if (!(*texture)->sparse()) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "the texture is not sparse");
-        }
         requirements.memoryTypeBits &= (*texture)->tiling().memoryTypes;
         requirements.alignment = std::max(requirements.alignment, (*texture)->tiling().tileBytes);
     }
@@ -81,9 +75,6 @@ core::Result<SparseMemoryHandle> VulkanDevice::createSparseMemory(const SparseMe
         auto buffer = bufferFor(desc.buffer);
         if (!buffer) {
             return std::unexpected(std::move(buffer.error()));
-        }
-        if (!(*buffer)->sparse()) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "the buffer is not sparse");
         }
         requirements.memoryTypeBits &= (*buffer)->memoryTypes();
         requirements.alignment = std::max(requirements.alignment, (*buffer)->tileBytes());
@@ -140,10 +131,6 @@ core::Result<Token> VulkanDevice::updateTileMappings(const TileMappingDesc& desc
                              desc_.maxTileMappings);
     }
     VulkanQueue& queue = *queues_[desc.queue];
-    if (!queue.sparse) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "queue {}'s family does not bind sparse memory",
-                             desc.queue);
-    }
     const VulkanSparseMemory* memory = nullptr;
     if (!desc.memory.isNull()) {
         auto found = sparseMemoryFor(desc.memory);

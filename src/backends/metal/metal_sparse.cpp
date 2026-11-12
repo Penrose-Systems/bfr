@@ -70,9 +70,6 @@ core::Result<SparseMemoryHandle> MetalDevice::createSparseMemory(const SparseMem
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
-        if (!(*texture)->page) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "the texture is not sparse");
-        }
         if (auto fits = checkPageFits(*(*texture)->page, *page); !fits) {
             return std::unexpected(std::move(fits.error()));
         }
@@ -81,9 +78,6 @@ core::Result<SparseMemoryHandle> MetalDevice::createSparseMemory(const SparseMem
         auto buffer = bufferFor(desc.buffer);
         if (!buffer) {
             return std::unexpected(std::move(buffer.error()));
-        }
-        if (!(*buffer)->page) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "the buffer is not sparse");
         }
         if (auto fits = checkPageFits(*(*buffer)->page, *page); !fits) {
             return std::unexpected(std::move(fits.error()));

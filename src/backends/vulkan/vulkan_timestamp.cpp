@@ -131,12 +131,6 @@ core::Result<void> VulkanDevice::resetTimestamps(CommandListHandle commandList, 
     if (!type) {
         return std::unexpected(std::move(type.error()));
     }
-    if (!(*type == QueueType::Graphics  ? timestamps_.graphicsResets
-          : *type == QueueType::Compute ? timestamps_.computeResets
-                                        : timestamps_.copyResets)) {
-        return core::failure(core::ErrorCode::RhiUnsupported,
-                             "this kind of queue resets no timestamps (Caps::timestamps); reset them on one that does");
-    }
     const VulkanTimestampPool* found = timestampPools_.find(pool);
     if (found == nullptr) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the timestamp pool handle is stale");
@@ -163,13 +157,6 @@ core::Result<void> VulkanDevice::writeTimestamp(CommandListHandle commandList, T
     const auto type = queueTypeOf(**list);
     if (!type) {
         return std::unexpected(std::move(type.error()));
-    }
-    const TimestampStages& stages = *type == QueueType::Graphics  ? timestamps_.outsideRendering
-                                    : *type == QueueType::Compute ? timestamps_.computeStages
-                                                                  : timestamps_.copyStages;
-    if (!takes(stages, stage)) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "this kind of queue takes no timestamp at stage {}",
-                             static_cast<std::uint32_t>(stage));
     }
     const VulkanTimestampPool* found = timestampPools_.find(pool);
     if (found == nullptr) {

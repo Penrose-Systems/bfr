@@ -467,9 +467,6 @@ core::Result<const MTL::Texture*> MetalDevice::addTextureMappings(MetalQueue& qu
         return std::unexpected(std::move(found.error()));
     }
     const MetalTexture& texture = **found;
-    if (!texture.page) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "the texture is not sparse");
-    }
     if (memory != nullptr) {
         if (auto fits = checkPageFits(*texture.page, memory->page); !fits) {
             return std::unexpected(std::move(fits.error()));

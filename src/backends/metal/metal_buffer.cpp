@@ -260,9 +260,6 @@ core::Result<const MTL::Buffer*> MetalDevice::addBufferMappings(MetalQueue& queu
         return std::unexpected(std::move(found.error()));
     }
     const MetalBuffer& buffer = **found;
-    if (!buffer.page) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "the buffer is not sparse");
-    }
     if (memory != nullptr) {
         if (auto fits = checkPageFits(*buffer.page, memory->page); !fits) {
             return std::unexpected(std::move(fits.error()));

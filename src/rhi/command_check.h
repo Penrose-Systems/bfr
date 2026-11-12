@@ -19,8 +19,7 @@ namespace bfr::rhi {
 /// Fails with RhiInvalidCall when desc asks for a rendering no backend can
 /// begin: a load or store op or resolve mode BFR doesn't have, more color
 /// attachments than there are, none at all, a color attachment naming no
-/// texture, a resolve texture named with no texture, a read-only
-/// depth-stencil attachment that clears or drops an aspect, or, with a
+/// texture, a resolve texture named with no texture, or, with a
 /// swapchain, no color attachment or attachment 0 naming a resolve texture
 /// when the swapchain's image is its resolve target. Attachment 0 names no
 /// texture when the swapchain's image is it. Each backend's beginRendering
@@ -61,11 +60,6 @@ namespace bfr::rhi {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "the depth-stencil resolve texture has no texture to resolve");
     }
-    if (depth.readOnly && (depth.depthLoadOp != LoadOp::Load || depth.stencilLoadOp != LoadOp::Load ||
-                           depth.depthStoreOp != StoreOp::Store || depth.stencilStoreOp != StoreOp::Store)) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "a read-only depth-stencil attachment loads and stores both aspects; it writes neither");
-    }
     return {};
 }
 
@@ -102,15 +96,10 @@ namespace bfr::rhi {
     return {};
 }
 
-/// Fails with RhiInvalidCall when data is not whole 32-bit values or more
-/// than the size bytes the push constants hold, the size the device's caps
-/// report. Each backend's pushConstants calls it first.
+/// Fails with RhiInvalidCall when data is more than the size bytes the push
+/// constants hold, the size the device's caps report. Each backend's
+/// pushConstants calls it first.
 [[nodiscard]] inline core::Result<void> checkPushConstants(std::span<const std::byte> data, std::uint32_t size) {
-    constexpr std::size_t kValueBytes = sizeof(std::uint32_t);
-    if (data.size() % kValueBytes != 0) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes of push constants is not whole 32-bit values",
-                             data.size());
-    }
     if (data.size() > size) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes of push constants; there are {}", data.size(),
                              size);

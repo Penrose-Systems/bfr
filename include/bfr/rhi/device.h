@@ -86,9 +86,8 @@ public:
     /// Gives every list the pool made back to it, so beginCommands may hand
     /// them out and use their memory again. A list from the pool still
     /// recording ends with it on Vulkan; on D3D12 and Metal it fails with
-    /// RhiInvalidCall. Fails with RhiInvalidCall while the GPU has not passed
-    /// the token of the pool's last submit, and RhiInvalidHandle when the pool
-    /// is destroyed.
+    /// RhiInvalidCall. Fails with RhiInvalidHandle when the pool is
+    /// destroyed.
     [[nodiscard]] virtual core::Result<void> resetCommandPool(CommandPoolHandle commandPool) = 0;
 
     /// Destroys the pool and every list it made once the GPU has finished
@@ -112,11 +111,9 @@ public:
     /// is given, when a color attachment but the swapchain's names no texture,
     /// when a swapchain is given with no color attachment or with attachment 0
     /// naming a resolve texture, when a resolve texture is named with no
-    /// texture, when a read-only depth-stencil attachment clears or drops an
-    /// aspect, when no image is acquired, when it was already submitted;
-    /// RhiUnsupported for a depth or stencil resolve mode, or a pair of them,
-    /// Caps::resolve doesn't have; and RhiInvalidHandle when a texture is
-    /// gone.
+    /// texture, or when no image is acquired; RhiUnsupported for a depth or
+    /// stencil resolve mode, or a pair of them, Caps::resolve doesn't have,
+    /// on D3D12 and Metal; and RhiInvalidHandle when a texture is gone.
     [[nodiscard]] virtual core::Result<void> beginRendering(CommandListHandle commandList, SwapchainHandle swapchain,
                                                             const RenderingDesc& desc) = 0;
 
@@ -166,8 +163,8 @@ public:
 
     /// Sets the first data.size() bytes of the push constants every shader
     /// reads, for the draws and dispatches after it. Fails with RhiInvalidCall
-    /// when the size is not a multiple of 4 or is more than the caps'
-    /// limits.maxPushConstantsSize,
+    /// when the size is more than the caps' limits.maxPushConstantsSize, which
+    /// the layout BFR makes holds,
     /// RhiLimitReached past the pool's pushConstantUpdates, and
     /// RhiInvalidHandle when the list is gone.
     [[nodiscard]] virtual core::Result<void> pushConstants(CommandListHandle commandList,
@@ -324,7 +321,7 @@ public:
     /// was sent before and after the GPU passes the waits, ends the lists, and
     /// returns the token their completion signals. Calls for one queue must
     /// not overlap. Fails with RhiInvalidCall for a queue the device does not
-    /// have or a list from a pool on another queue, and RhiInvalidHandle for a
+    /// have, and RhiInvalidHandle for a
     /// list that is gone. A wait on a token
     /// no submit has returned yet waits until one does.
     [[nodiscard]] virtual core::Result<Token> submit(const SubmitDesc& desc) = 0;
@@ -347,8 +344,8 @@ public:
 
     /// A buffer as desc says, with a slot in the storage buffer table when
     /// its usage is storage. Cold: it frees buffers the GPU is done with, so
-    /// it is not for the frame path. Fails with RhiInvalidCall for a desc of
-    /// no bytes or no usage, RhiOutOfMemory when the API says the memory ran
+    /// it is not for the frame path. Fails with RhiInvalidCall for memory BFR
+    /// doesn't have, RhiOutOfMemory when the API says the memory ran
     /// out, RhiLimitReached at the device's maximum of buffers or of storage
     /// buffer slots, and RhiDeviceFailed when the API refuses the desc or
     /// gives no buffer.
@@ -443,9 +440,9 @@ public:
     /// A graphics pipeline as desc says, made before returning, or loaded
     /// from desc.cache. Cold, as createComputePipeline is. A target of format
     /// Undefined is an unused one. Fails with RhiInvalidCall for a desc with
-    /// an enum value or format BFR doesn't have, more than kMaxColorTargets
-    /// targets or a minSampleShading outside 0 to 1, RhiUnsupported for a topology the
-    /// backend has no form for (Metal's fan), and for an alphaToOne,
+    /// an enum value or format BFR doesn't have, or more than kMaxColorTargets
+    /// targets, RhiUnsupported for a topology the backend has no form for
+    /// (Metal's fan), and, on D3D12 and Metal, for an alphaToOne,
     /// minSampleShading or sampleMask whose feature the device lacks,
     /// RhiInvalidHandle when desc.cache is gone, RhiLimitReached at the
     /// device's maximum, and RhiDeviceFailed when the API refuses the code,
@@ -475,9 +472,8 @@ public:
 
     /// Records a reset of count timestamps from first, which a backend that
     /// needs one before a timestamp is written again is given; the others
-    /// record nothing. Outside rendering. Fails with RhiUnsupported on a kind
-    /// of queue whose reset flag in Caps::timestamps is false, and
-    /// RhiInvalidHandle for a list or pool that is gone.
+    /// record nothing. Outside rendering. Fails with RhiInvalidHandle for a
+    /// list or pool that is gone.
     [[nodiscard]] virtual core::Result<void> resetTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
                                                              std::uint32_t first, std::uint32_t count) = 0;
 
@@ -485,8 +481,7 @@ public:
     /// with granularity where the backend takes one. Fails with
     /// RhiInvalidHandle for a list or pool that is gone, RhiInvalidCall for a
     /// stage or granularity BFR doesn't have, and RhiUnsupported for a stage
-    /// the backend has no setting for where the list is, as Caps::timestamps
-    /// says.
+    /// the backend has no setting for where the list is (D3D12, Metal).
     [[nodiscard]] virtual core::Result<void> writeTimestamp(CommandListHandle commandList, TimestampPoolHandle pool,
                                                             std::uint32_t index, TimestampStage stage,
                                                             TimestampGranularity granularity) = 0;
@@ -514,8 +509,8 @@ public:
                                                                                  HostClock clock) const = 0;
 
     /// Device memory of desc.size bytes, for the tiles of sparse resources
-    /// like those desc names. Cold. Fails with RhiInvalidCall for a resource
-    /// that is not sparse, none, or a size of 0, RhiInvalidHandle for one that
+    /// like those desc names. Cold. Fails with RhiInvalidCall for no resource,
+    /// RhiInvalidHandle for one that
     /// is gone, RhiUnsupported for a tileBytes the backend doesn't take or
     /// resources the backend can't hold in one memory, RhiLimitReached at
     /// maxSparseMemories, RhiOutOfMemory when the API says memory ran out,
@@ -549,11 +544,10 @@ public:
     /// returns the token the mappings' completion signals; work that uses
     /// them waits on it. Calls for one queue must not overlap, submit
     /// included. Fails with RhiInvalidCall for a queue the device does not
-    /// have, a resource that is not sparse, a region that maps with no
-    /// memory, an enum value BFR doesn't have, or more than maxTileMappings
-    /// regions of either kind, RhiUnsupported for a queue whose kind
-    /// Caps::queues says maps no tiles, memory the resource can't be mapped
-    /// to, or a region the backend has no form for, as each backend says,
+    /// have, a region that maps with no memory, an enum value BFR doesn't
+    /// have, or more than maxTileMappings regions of either kind,
+    /// RhiUnsupported for a region the backend has no form for, as each
+    /// backend says,
     /// RhiInvalidHandle for a resource or memory that is gone, and
     /// RhiDeviceFailed when the API refuses.
     [[nodiscard]] virtual core::Result<Token> updateTileMappings(const TileMappingDesc& desc) = 0;
@@ -800,8 +794,7 @@ public:
                                                                           RayTracingGroupShader shader) = 0;
 
     /// Code compiled once, for the ray tracing pipelines made from it. Cold.
-    /// Fails with RhiInvalidCall when the code is not what the backend takes
-    /// in whole units (SPIR-V's words), RhiUnsupported where the backend has
+    /// Fails with RhiUnsupported where the backend has
     /// no shader objects yet (D3D12, Metal), RhiLimitReached at the device's
     /// maximum, and RhiDeviceFailed when the API refuses the code.
     [[nodiscard]] virtual core::Result<ShaderHandle> createShader(const ShaderCode& code) = 0;

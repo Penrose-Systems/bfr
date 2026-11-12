@@ -5259,9 +5259,9 @@ public:
     /// until bfr_end_rendering, which resolves the attachments that name a resolve texture. Fails
     /// with error_invalid_argument when no attachment is given, when a color attachment but the
     /// swapchain's names no texture, with a swapchain when there is no color attachment or
-    /// attachment 0 names a resolve texture, when a resolve texture is named with no texture, and
-    /// when a read-only depth-stencil attachment clears or drops an aspect; error_unsupported for a
-    /// depth or stencil resolve mode, or a pair of them, bfr_caps_resolve doesn't have.
+    /// attachment 0 names a resolve texture, and when a resolve texture is named with no texture;
+    /// error_unsupported for a depth or stencil resolve mode, or a pair of them, bfr_caps_resolve
+    /// doesn't have, on D3D12 and Metal.
     [[nodiscard]] Expected<void> beginRendering(CommandList commandList, const Swapchain& swapchain, const RenderingDesc& desc) const;
 
     /// Ends the rendering bfr_begin_rendering began; a swapchain image is then ready to present,
@@ -5300,9 +5300,9 @@ public:
     [[nodiscard]] Expected<void> setTopology(CommandList commandList, Topology topology) const;
 
     /// Sets the first size bytes of the push constants every shader reads, as bfr_pipeline states,
-    /// for the draws and dispatches after it. size is a multiple of 4 and at most the caps'
-    /// max_push_constants_size, else error_invalid_argument. Fails with error_limit_reached past
-    /// the pool's push_constant_updates.
+    /// for the draws and dispatches after it. size is at most the caps' max_push_constants_size,
+    /// which the layout BFR makes holds, else error_invalid_argument. Fails with
+    /// error_limit_reached past the pool's push_constant_updates.
     [[nodiscard]] Expected<void> pushConstants(CommandList commandList, std::span<const std::uint8_t> data) const;
 
     /// Makes buffer, which has index usage, the one bfr_draw_indexed reads indices of type from,
@@ -5421,10 +5421,9 @@ public:
     void destroyCommandList(CommandList commandList) const;
 
     /// Creates a buffer, as desc says. Not for the frame path: it frees buffers the GPU is done
-    /// with. Fails with error_invalid_argument for a desc of no bytes or no usage,
-    /// error_out_of_memory when the backend says the memory ran out, error_limit_reached at the
-    /// device's maximum of buffers, and error_device_failed when the backend refuses the desc or
-    /// gives no buffer.
+    /// with. Fails with error_invalid_argument for memory BFR doesn't have, error_out_of_memory
+    /// when the backend says the memory ran out, error_limit_reached at the device's maximum of
+    /// buffers, and error_device_failed when the backend refuses the desc or gives no buffer.
     [[nodiscard]] Expected<Buffer> createBuffer(const BufferDesc& desc) const;
 
     /// Creates a texture, as desc says. Not for the frame path: it frees textures the GPU is done
@@ -5451,12 +5450,11 @@ public:
     /// Creates a graphics pipeline, as desc says, before returning. Not for the frame path, as
     /// bfr_create_compute_pipeline is not. A desc.cache is used as there. A target of format
     /// undefined is an unused one. Fails with error_invalid_argument for a desc with more than
-    /// max_color_targets targets or a min_sample_shading outside 0 to 1, error_unsupported for a
-    /// topology the backend has no form for (Metal's fan) and for an alpha_to_one,
-    /// min_sample_shading or sample_mask whose feature the device lacks, error_invalid_handle when
-    /// desc.cache is gone, error_limit_reached at the device's maximum of pipelines, and
-    /// error_device_failed when the backend refuses the code, the desc or the cache; the message
-    /// carries what it said.
+    /// max_color_targets targets, error_unsupported for a topology the backend has no form for
+    /// (Metal's fan) and, on D3D12 and Metal, for an alpha_to_one, min_sample_shading or
+    /// sample_mask whose feature the device lacks, error_invalid_handle when desc.cache is gone,
+    /// error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
+    /// backend refuses the code, the desc or the cache; the message carries what it said.
     [[nodiscard]] Expected<Pipeline> createGraphicsPipeline(const GraphicsPipelineDesc& desc) const;
 
     /// Creates a pipeline cache that starts with desc's data. Not for the frame path. Data from
@@ -5473,14 +5471,13 @@ public:
     [[nodiscard]] Expected<TimestampPool> createTimestampPool(const TimestampPoolDesc& desc) const;
 
     /// Records a reset of count timestamps from first, which a backend that needs one before a
-    /// timestamp is written again is given; the others record nothing. Outside rendering. Fails
-    /// with error_unsupported on a kind of queue whose reset flag in bfr_caps_timestamps is false.
+    /// timestamp is written again is given; the others record nothing. Outside rendering.
     [[nodiscard]] Expected<void> resetTimestamps(CommandList commandList, const TimestampPool& pool, std::uint32_t first, std::uint32_t count) const;
 
     /// Records the GPU's timestamp at stage into the pool's timestamp index, with granularity where
     /// the backend takes one. Fails with error_invalid_argument for a stage or granularity BFR does
-    /// not have, and error_unsupported for a stage the backend has no setting for where the list
-    /// is, as bfr_caps_timestamps says.
+    /// not have, and error_unsupported for a stage the backend has no setting for where the list is
+    /// (D3D12, Metal).
     [[nodiscard]] Expected<void> writeTimestamp(CommandList commandList, const TimestampPool& pool, std::uint32_t index, TimestampStage stage, TimestampGranularity granularity) const;
 
     /// Records a copy of count timestamps from first into buffer at offset, as raw ticks of
@@ -5499,11 +5496,10 @@ public:
     [[nodiscard]] Expected<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue, HostClock clock) const;
 
     /// Creates desc's size bytes of device memory for the tiles of the sparse resources desc names.
-    /// Not for the frame path. Fails with error_invalid_argument for a resource that is not sparse
-    /// or a size of 0, error_unsupported for a tile_bytes the backend doesn't take or resources the
-    /// backend can't hold in one memory, error_limit_reached at the device's max_sparse_memories,
-    /// error_out_of_memory when the backend says memory ran out, and error_device_failed when it
-    /// refuses.
+    /// Not for the frame path. Fails with error_invalid_argument for no resource, error_unsupported
+    /// for a tile_bytes the backend doesn't take or resources the backend can't hold in one memory,
+    /// error_limit_reached at the device's max_sparse_memories, error_out_of_memory when the
+    /// backend says memory ran out, and error_device_failed when it refuses.
     [[nodiscard]] Expected<SparseMemory> createSparseMemory(const SparseMemoryDesc& desc) const;
 
     /// Writes whether a sparse texture as desc says can be made, and its tiles' shape, as the
@@ -5515,10 +5511,9 @@ public:
     /// desc's queue once the GPU has passed the waits, and writes the token the mappings'
     /// completion signals; work that uses them waits on it. Calls on one queue must not overlap,
     /// bfr_submit included. Fails with error_invalid_argument for a queue the device does not have,
-    /// a resource that is not sparse, a region that maps with no memory, or more than
-    /// max_tile_mappings regions of either kind, error_unsupported for a queue whose kind
-    /// bfr_caps_queues says maps no tiles, memory the resource can't be mapped to, or a region the
-    /// backend has no form for, and error_device_failed when the backend refuses.
+    /// a region that maps with no memory, or more than max_tile_mappings regions of either kind,
+    /// error_unsupported for a region the backend has no form for, and error_device_failed when the
+    /// backend refuses.
     [[nodiscard]] Expected<Token> updateTileMappings(const TileMappingDesc& desc) const;
 
     /// Writes the bytes an acceleration structure built from inputs takes, and the scratch bytes
@@ -5620,10 +5615,9 @@ public:
     [[nodiscard]] Expected<void> copyAccelerationStructure(CommandList commandList, const AccelerationStructure& dst, const AccelerationStructure& src) const;
 
     /// Creates a shader from code, compiled once, for the ray tracing pipelines made from it. Not
-    /// for the frame path. Fails with error_invalid_argument when the code is not what the backend
-    /// takes in whole units (SPIR-V's words), error_unsupported where the backend has no shader
-    /// objects yet (D3D12, Metal), error_limit_reached at the device's maximum, and
-    /// error_device_failed when the backend refuses the code.
+    /// for the frame path. Fails with error_unsupported where the backend has no shader objects yet
+    /// (D3D12, Metal), error_limit_reached at the device's maximum, and error_device_failed when
+    /// the backend refuses the code.
     [[nodiscard]] Expected<Shader> createShader(const ShaderCode& code) const;
 
     /// Creates a ray tracing pipeline, as desc says, before returning. Not for the frame path. A
@@ -5804,8 +5798,7 @@ public:
 
     /// Gives every list the pool made back to it, so bfr_begin_commands may use their memory again.
     /// A list from the pool still recording ends with it on Vulkan; on D3D12 and Metal it fails
-    /// with error_invalid_argument. Fails with error_invalid_argument while the GPU has not passed
-    /// the token of the pool's last submit; bfr_wait on it first.
+    /// with error_invalid_argument.
     [[nodiscard]] Expected<void> reset();
 
     /// Starts recording the pool's next list. Fails with error_limit_reached when every list it

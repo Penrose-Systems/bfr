@@ -648,39 +648,6 @@ TEST_CASE("Device fails with RhiPresentUnsupported for a window when it opens no
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Device opened for nothing holds nothing, and says so when asked for something", "[rhi][agnostic]") {
-    const TestBackend backend = GENERATE(eachBackend());
-    std::vector<std::string> messages;
-    {
-        auto created = createInstance(recordingInto(backend, messages), kValidation);
-        REQUIRE(created.has_value());
-        Instance& rhi = **created;
-        auto opened = rhi.createDevice(headlessAdapter(rhi), kNoWindow, DeviceDesc{});
-        INFO(failureOf(opened));
-        // A backend that can't open a device with no queues says so: Vulkan
-        // needs maintenance9 for one.
-        if (!opened.has_value()) {
-            CHECK(opened.error().code == bfr::core::ErrorCode::RhiUnsupported);
-        }
-        else {
-            Device& device = **opened;
-            // It opened no queue, so there is no queue 0 to record for or
-            // present from, and no room for a swapchain.
-            CHECK(device.createCommandPool({.queue = 0, .listCount = 0}).error().code ==
-                  bfr::core::ErrorCode::RhiInvalidCall);
-            CHECK_FALSE(device.createSwapchain(kHeadless, swapchainDesc(rhi)).has_value());
-            constexpr std::uint64_t kBytes = 256;
-            CHECK(device.createBuffer({.size = kBytes, .usage = {.storage = true}}).error().code ==
-                  bfr::core::ErrorCode::RhiLimitReached);
-            const auto plain = device.createBuffer({.size = kBytes, .usage = {.copyDst = true}});
-            INFO(failureOf(plain));
-            REQUIRE(plain.has_value());
-            CHECK(device.destroyBuffer(*plain).has_value());
-        }
-    }
-    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
-}
-
 TEST_CASE("Device holds the lists, pools and swapchains it was opened for, and no more", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;

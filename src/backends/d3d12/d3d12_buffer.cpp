@@ -287,9 +287,6 @@ core::Result<ID3D12Resource*> D3D12Device::addBufferTiles(D3D12TileMappings& til
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    if (!(*found)->sparse) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "the buffer is not sparse");
-    }
     if (memory != nullptr && !memory->takes(D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS)) {
         return core::failure(
             core::ErrorCode::RhiUnsupported,

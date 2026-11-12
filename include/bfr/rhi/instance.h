@@ -122,10 +122,9 @@ public:
     /// RhiInvalidCall when a maximum in desc is more than a handle names or a
     /// queue's level is not one BFR has, RhiWindowFailed as
     /// Device::createSwapchain describes, RhiPresentUnsupported when none of
-    /// its queues can present to presentTo, RhiUnsupported when the adapter
-    /// has fewer queues of a type than desc asks for, or the backend can't
-    /// set the ranks or levels asked for, and RhiDeviceFailed when the API
-    /// refuses the device.
+    /// its queues can present to presentTo, RhiUnsupported when the backend
+    /// can't set the ranks or levels asked for, and RhiDeviceFailed when the
+    /// API refuses the device.
     [[nodiscard]] virtual core::Result<std::unique_ptr<Device>> createDevice(
         std::size_t adapter, const core::window::NativeWindow& presentTo, const DeviceDesc& desc) = 0;
 
