@@ -764,6 +764,13 @@ enum class Call : std::int32_t {
     BuildClusters = BFR_CALL_BUILD_CLUSTERS,
     CaptureAccelerationStructure = BFR_CALL_CAPTURE_ACCELERATION_STRUCTURE,
     RunGarbageCollection = BFR_CALL_RUN_GARBAGE_COLLECTION,
+    CreateQueryPool = BFR_CALL_CREATE_QUERY_POOL,
+    DestroyQueryPool = BFR_CALL_DESTROY_QUERY_POOL,
+    QueryLayout = BFR_CALL_QUERY_LAYOUT,
+    ResetQueries = BFR_CALL_RESET_QUERIES,
+    BeginQuery = BFR_CALL_BEGIN_QUERY,
+    EndQuery = BFR_CALL_END_QUERY,
+    ResolveQueries = BFR_CALL_RESOLVE_QUERIES,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -878,6 +885,13 @@ enum class Call : std::int32_t {
     case Call::BuildClusters: return "build_clusters";
     case Call::CaptureAccelerationStructure: return "capture_acceleration_structure";
     case Call::RunGarbageCollection: return "run_garbage_collection";
+    case Call::CreateQueryPool: return "create_query_pool";
+    case Call::DestroyQueryPool: return "destroy_query_pool";
+    case Call::QueryLayout: return "query_layout";
+    case Call::ResetQueries: return "reset_queries";
+    case Call::BeginQuery: return "begin_query";
+    case Call::EndQuery: return "end_query";
+    case Call::ResolveQueries: return "resolve_queries";
     }
     return {};
 }
@@ -938,6 +952,66 @@ enum class TimestampGranularity : std::int32_t {
     switch (value) {
     case TimestampGranularity::Relaxed: return "relaxed";
     case TimestampGranularity::Precise: return "precise";
+    }
+    return {};
+}
+
+/// What a pool's queries count between bfr_begin_query and bfr_end_query.
+enum class QueryType : std::int32_t {
+    /// Samples that pass the depth and stencil tests: an exact count where bfr_begin_query asks for
+    /// one, else 0 for none and another value for some.
+    Occlusion = BFR_QUERY_TYPE_OCCLUSION,
+    /// The statistics bfr_query_pool_desc.statistics selects.
+    PipelineStatistics = BFR_QUERY_TYPE_PIPELINE_STATISTICS,
+    /// Primitives mesh shaders emit.
+    MeshPrimitivesGenerated = BFR_QUERY_TYPE_MESH_PRIMITIVES_GENERATED,
+};
+
+/// value's name in bfr.yaml; empty for a value QueryType doesn't have.
+[[nodiscard]] constexpr std::string_view name(QueryType value) {
+    switch (value) {
+    case QueryType::Occlusion: return "occlusion";
+    case QueryType::PipelineStatistics: return "pipeline_statistics";
+    case QueryType::MeshPrimitivesGenerated: return "mesh_primitives_generated";
+    }
+    return {};
+}
+
+/// One statistic a pipeline_statistics query counts, in Vulkan's bit order, which is D3D12's field
+/// order. Each counts what the backend counts: tessellation_control is patches on Vulkan and hull
+/// shader invocations on D3D12.
+enum class PipelineStatistic : std::int32_t {
+    InputVertices = BFR_PIPELINE_STATISTIC_INPUT_VERTICES,
+    InputPrimitives = BFR_PIPELINE_STATISTIC_INPUT_PRIMITIVES,
+    VertexInvocations = BFR_PIPELINE_STATISTIC_VERTEX_INVOCATIONS,
+    GeometryInvocations = BFR_PIPELINE_STATISTIC_GEOMETRY_INVOCATIONS,
+    GeometryPrimitives = BFR_PIPELINE_STATISTIC_GEOMETRY_PRIMITIVES,
+    ClipInvocations = BFR_PIPELINE_STATISTIC_CLIP_INVOCATIONS,
+    ClipPrimitives = BFR_PIPELINE_STATISTIC_CLIP_PRIMITIVES,
+    FragmentInvocations = BFR_PIPELINE_STATISTIC_FRAGMENT_INVOCATIONS,
+    TessellationControl = BFR_PIPELINE_STATISTIC_TESSELLATION_CONTROL,
+    TessellationEvaluationInvocations = BFR_PIPELINE_STATISTIC_TESSELLATION_EVALUATION_INVOCATIONS,
+    ComputeInvocations = BFR_PIPELINE_STATISTIC_COMPUTE_INVOCATIONS,
+    TaskInvocations = BFR_PIPELINE_STATISTIC_TASK_INVOCATIONS,
+    MeshInvocations = BFR_PIPELINE_STATISTIC_MESH_INVOCATIONS,
+};
+
+/// value's name in bfr.yaml; empty for a value PipelineStatistic doesn't have.
+[[nodiscard]] constexpr std::string_view name(PipelineStatistic value) {
+    switch (value) {
+    case PipelineStatistic::InputVertices: return "input_vertices";
+    case PipelineStatistic::InputPrimitives: return "input_primitives";
+    case PipelineStatistic::VertexInvocations: return "vertex_invocations";
+    case PipelineStatistic::GeometryInvocations: return "geometry_invocations";
+    case PipelineStatistic::GeometryPrimitives: return "geometry_primitives";
+    case PipelineStatistic::ClipInvocations: return "clip_invocations";
+    case PipelineStatistic::ClipPrimitives: return "clip_primitives";
+    case PipelineStatistic::FragmentInvocations: return "fragment_invocations";
+    case PipelineStatistic::TessellationControl: return "tessellation_control";
+    case PipelineStatistic::TessellationEvaluationInvocations: return "tessellation_evaluation_invocations";
+    case PipelineStatistic::ComputeInvocations: return "compute_invocations";
+    case PipelineStatistic::TaskInvocations: return "task_invocations";
+    case PipelineStatistic::MeshInvocations: return "mesh_invocations";
     }
     return {};
 }
@@ -1888,6 +1962,8 @@ class Sampler;
 
 class TimestampPool;
 
+class QueryPool;
+
 class SparseMemory;
 
 class AccelerationStructure;
@@ -2009,6 +2085,22 @@ private:
 };
 static_assert(sizeof(TimestampPoolRef) == sizeof(bfr_timestamp_pool) && alignof(TimestampPoolRef) == alignof(bfr_timestamp_pool) &&
               std::is_standard_layout_v<TimestampPoolRef> && std::is_trivially_copyable_v<TimestampPoolRef>);
+
+/// A borrowed QueryPool, laid out as bfr_query_pool: what a struct names one by. It owns nothing;
+/// the QueryPool outlives the call it is passed to. Null by default.
+class QueryPoolRef {
+public:
+    QueryPoolRef() = default;
+    QueryPoolRef(const QueryPool& queryPool); // NOLINT(google-explicit-constructor): a QueryPool is passed as one
+
+    [[nodiscard]] bfr_query_pool get() const { return queryPool_; }
+    [[nodiscard]] explicit operator bool() const { return queryPool_.bits != 0; }
+
+private:
+    bfr_query_pool queryPool_{};
+};
+static_assert(sizeof(QueryPoolRef) == sizeof(bfr_query_pool) && alignof(QueryPoolRef) == alignof(bfr_query_pool) &&
+              std::is_standard_layout_v<QueryPoolRef> && std::is_trivially_copyable_v<QueryPoolRef>);
 
 /// A borrowed SparseMemory, laid out as bfr_sparse_memory: what a struct names one by. It owns nothing;
 /// the SparseMemory outlives the call it is passed to. Null by default.
@@ -2210,6 +2302,9 @@ struct DeviceDesc {
     /// Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool
     /// fails with error_limit_reached.
     std::uint32_t maxTimestampPools{};
+    /// Query pools the device holds at once, 0 for none; past it, bfr_create_query_pool fails with
+    /// error_limit_reached.
+    std::uint32_t maxQueryPools{};
     /// Sparse memories the device holds at once, 0 for none; past it, bfr_create_sparse_memory
     /// fails with error_limit_reached.
     std::uint32_t maxSparseMemories{};
@@ -2378,6 +2473,10 @@ struct RenderingDesc {
     std::uint32_t colorAttachmentCount{};
     std::array<ColorAttachment, BFR_MAX_COLOR_TARGETS> colorAttachments{};
     DepthStencilAttachment depthStencil{};
+    /// The occlusion pool the queries begun in this rendering count into; null for none. Metal
+    /// binds it to the rendering; Vulkan and D3D12 take the pool at each bfr_begin_query, which
+    /// names the same one.
+    QueryPoolRef occlusionQueries{};
 };
 
 /// Where on the attachments the rendering lands, in pixels from the top left, and the depth range
@@ -2534,6 +2633,45 @@ struct TimestampPoolDesc {
 struct TimestampRate {
     float periodNs{};
     std::uint64_t frequency{};
+};
+
+/// The statistics a pipeline_statistics pool counts. Task and mesh invocations where
+/// bfr_caps_features.mesh_statistics.
+struct PipelineStatisticsMask {
+    bool inputVertices{};
+    bool inputPrimitives{};
+    bool vertexInvocations{};
+    bool geometryInvocations{};
+    bool geometryPrimitives{};
+    bool clipInvocations{};
+    bool clipPrimitives{};
+    bool fragmentInvocations{};
+    bool tessellationControl{};
+    bool tessellationEvaluationInvocations{};
+    bool computeInvocations{};
+    bool taskInvocations{};
+    bool meshInvocations{};
+};
+
+/// How to create a query pool.
+struct QueryPoolDesc {
+    /// What its queries count.
+    QueryType type{};
+    /// How many queries it holds.
+    std::uint32_t count{};
+    /// Read only for pipeline_statistics.
+    PipelineStatisticsMask statistics{};
+};
+
+/// Where a pool's results land in the buffer bfr_resolve_queries writes, as the backend lays them
+/// out: stride bytes for each query, and in each, the 64-bit value of an occlusion or
+/// mesh_primitives_generated query at value, and each statistic of a pipeline_statistics query at
+/// its offset, indexed by bfr_pipeline_statistic. BFR_NO_OFFSET where the results hold no such
+/// value.
+struct QueryLayout {
+    std::uint32_t stride{};
+    std::uint32_t value{};
+    std::array<std::uint32_t, BFR_PIPELINE_STATISTIC_COUNT> statistics{};
 };
 
 /// A GPU timestamp and a host clock's reading taken together, so GPU ticks can be placed on the
@@ -3891,6 +4029,9 @@ struct CapsFeatures {
     bool uniformBufferNonUniformIndexing{};
     /// Every graphics and compute queue writes timestamps.
     bool timestampsOnAllQueues{};
+    /// bfr_create_query_pool makes occlusion pools, and pipeline_statistics and
+    /// mesh_primitives_generated ones where pipeline_statistics and mesh_statistics say.
+    bool queries{};
     bool pipelineStatistics{};
     bool occlusionQueryPrecise{};
 };
@@ -4265,6 +4406,7 @@ inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
         .max_bindless_samplers = value.maxBindlessSamplers,
         .max_bindless_uniform_buffers = value.maxBindlessUniformBuffers,
         .max_timestamp_pools = value.maxTimestampPools,
+        .max_query_pools = value.maxQueryPools,
         .max_sparse_memories = value.maxSparseMemories,
         .max_tile_mappings = value.maxTileMappings,
         .max_bindless_acceleration_structures = value.maxBindlessAccelerationStructures,
@@ -4382,6 +4524,32 @@ inline bfr_texture_desc toC(const TextureDesc& value, const bfr_chain* next) {
 
 inline bfr_timestamp_pool_desc toC(const TimestampPoolDesc& value) {
     return {.queue = value.queue, .count = value.count};
+}
+
+inline bfr_pipeline_statistics_mask toC(const PipelineStatisticsMask& value) {
+    return {
+        .input_vertices = static_cast<bfr_bool>(value.inputVertices),
+        .input_primitives = static_cast<bfr_bool>(value.inputPrimitives),
+        .vertex_invocations = static_cast<bfr_bool>(value.vertexInvocations),
+        .geometry_invocations = static_cast<bfr_bool>(value.geometryInvocations),
+        .geometry_primitives = static_cast<bfr_bool>(value.geometryPrimitives),
+        .clip_invocations = static_cast<bfr_bool>(value.clipInvocations),
+        .clip_primitives = static_cast<bfr_bool>(value.clipPrimitives),
+        .fragment_invocations = static_cast<bfr_bool>(value.fragmentInvocations),
+        .tessellation_control = static_cast<bfr_bool>(value.tessellationControl),
+        .tessellation_evaluation_invocations = static_cast<bfr_bool>(value.tessellationEvaluationInvocations),
+        .compute_invocations = static_cast<bfr_bool>(value.computeInvocations),
+        .task_invocations = static_cast<bfr_bool>(value.taskInvocations),
+        .mesh_invocations = static_cast<bfr_bool>(value.meshInvocations),
+    };
+}
+
+inline bfr_query_pool_desc toC(const QueryPoolDesc& value) {
+    return {
+        .type = static_cast<bfr_query_type>(value.type),
+        .count = value.count,
+        .statistics = toC(value.statistics),
+    };
 }
 
 inline bfr_texture_range toC(const TextureRange& value) {
@@ -4711,6 +4879,14 @@ inline TimestampRate fromC(const bfr_timestamp_rate& value) {
     return {.periodNs = value.period_ns, .frequency = value.frequency};
 }
 
+inline QueryLayout fromC(const bfr_query_layout& value) {
+    return {
+        .stride = value.stride,
+        .value = value.value,
+        .statistics = std::to_array(value.statistics),
+    };
+}
+
 inline CalibratedTimestamps fromC(const bfr_calibrated_timestamps& value) {
     return {
         .gpu = value.gpu,
@@ -5010,6 +5186,7 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .storageTextureNonUniformIndexing = value.storage_texture_non_uniform_indexing != BFR_FALSE,
         .uniformBufferNonUniformIndexing = value.uniform_buffer_non_uniform_indexing != BFR_FALSE,
         .timestampsOnAllQueues = value.timestamps_on_all_queues != BFR_FALSE,
+        .queries = value.queries != BFR_FALSE,
         .pipelineStatistics = value.pipeline_statistics != BFR_FALSE,
         .occlusionQueryPrecise = value.occlusion_query_precise != BFR_FALSE,
     };
@@ -5315,9 +5492,9 @@ public:
     Device() = default;
     /// Destroys a device once the GPU has finished with it, with every handle it still owns. Null
     /// does nothing. A Device with AccelerationStructure or AccelerationStructurePropertyPool or
-    /// Buffer or CommandList or CommandPool or Pipeline or PipelineCache or Sampler or Shader or
-    /// SparseMemory or Swapchain or Texture or TimestampPool objects left lives on until the last
-    /// of them is destroyed, so they may be destroyed in any order.
+    /// Buffer or CommandList or CommandPool or Pipeline or PipelineCache or QueryPool or Sampler or
+    /// Shader or SparseMemory or Swapchain or Texture or TimestampPool objects left lives on until
+    /// the last of them is destroyed, so they may be destroyed in any order.
     ~Device() = default;
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
@@ -5570,8 +5747,8 @@ public:
     /// backend refuses.
     [[nodiscard]] Expected<TimestampPool> createTimestampPool(const TimestampPoolDesc& desc) const;
 
-    /// Records a reset of count timestamps from first, which a backend that needs one before a
-    /// timestamp is written again is given; the others record nothing. Outside rendering.
+    /// Records a reset of count timestamps from first, which a backend that needs one before each
+    /// write, the first too, is given; the others record nothing. Outside rendering.
     [[nodiscard]] Expected<void> resetTimestamps(CommandList commandList, const TimestampPool& pool, std::uint32_t first, std::uint32_t count) const;
 
     /// Records the GPU's timestamp at stage into the pool's timestamp index, with granularity where
@@ -5594,6 +5771,30 @@ public:
     /// error_invalid_argument when the device has no such queue or clock is not one BFR has, and
     /// error_unsupported for a clock bfr_caps_timestamps.host_clocks does not list.
     [[nodiscard]] Expected<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue, HostClock clock) const;
+
+    /// Creates a pool of desc's count queries of desc's type. Not for the frame path. Fails with
+    /// error_invalid_argument for a type BFR does not have, error_unsupported where
+    /// bfr_caps_features.queries is false, error_limit_reached at the device's max_query_pools, and
+    /// error_device_failed when the backend refuses.
+    [[nodiscard]] Expected<QueryPool> createQueryPool(const QueryPoolDesc& desc) const;
+
+    /// Records a reset of count queries from first, which a backend that needs one before each
+    /// begin, the first too, is given; the others record nothing. Outside rendering.
+    [[nodiscard]] Expected<void> resetQueries(CommandList commandList, const QueryPool& pool, std::uint32_t first, std::uint32_t count) const;
+
+    /// Records the start of counting into the pool's query index, ended by bfr_end_query on the
+    /// same list. precise asks an occlusion query for an exact count, where
+    /// bfr_caps_features.occlusion_query_precise. An occlusion query is begun inside rendering,
+    /// into the pool the rendering's bfr_rendering_desc.occlusion_queries names.
+    [[nodiscard]] Expected<void> beginQuery(CommandList commandList, const QueryPool& pool, std::uint32_t index, bool precise) const;
+
+    /// Records the end of counting into the pool's query index.
+    [[nodiscard]] Expected<void> endQuery(CommandList commandList, const QueryPool& pool, std::uint32_t index) const;
+
+    /// Records a copy of count queries' results from first into buffer at offset, laid out as
+    /// bfr_get_query_layout says, once the GPU has written them. The buffer needs copy_dst usage.
+    /// Outside rendering.
+    [[nodiscard]] Expected<void> resolveQueries(CommandList commandList, const QueryPool& pool, std::uint32_t first, std::uint32_t count, const Buffer& buffer, std::uint64_t offset) const;
 
     /// Creates desc's size bytes of device memory for the tiles of the sparse resources desc names.
     /// Not for the frame path. Fails with error_invalid_argument for no resource, error_unsupported
@@ -6192,6 +6393,44 @@ private:
     detail::KeepAlive keepAlive_;
 };
 
+/// GPU queries that command lists begin, end and resolve into a buffer.
+class QueryPool {
+public:
+    /// Owns nothing, as a moved-from QueryPool does.
+    QueryPool() = default;
+    /// Destroys a query pool once the GPU has finished with it; the handle is invalid at once. Not
+    /// for the frame path. A handle that is already destroyed does nothing.
+    ~QueryPool() { bfr_destroy_query_pool(device_, queryPool_); }
+    QueryPool(const QueryPool&) = delete;
+    QueryPool& operator=(const QueryPool&) = delete;
+    QueryPool(QueryPool&& other) noexcept : device_(std::exchange(other.device_, nullptr)), queryPool_(std::exchange(other.queryPool_, {})), keepAlive_(std::move(other.keepAlive_)) {}
+    QueryPool& operator=(QueryPool&& other) noexcept {
+        if (this != &other) {
+            bfr_destroy_query_pool(device_, queryPool_);
+            device_ = std::exchange(other.device_, nullptr);
+            queryPool_ = std::exchange(other.queryPool_, {});
+            keepAlive_ = std::move(other.keepAlive_);
+        }
+        return *this;
+    }
+
+    /// The C value, for calls bfr.hpp does not wrap; this still owns it.
+    [[nodiscard]] bfr_query_pool get() const { return queryPool_; }
+    [[nodiscard]] explicit operator bool() const { return queryPool_.bits != 0; }
+
+    /// Writes where the pool's results land in the buffer bfr_resolve_queries writes.
+    [[nodiscard]] Expected<QueryLayout> queryLayout();
+
+private:
+    QueryPool(bfr_device* device, bfr_query_pool queryPool, detail::KeepAlive keepAlive) : device_(device), queryPool_(queryPool), keepAlive_(std::move(keepAlive)) {}
+    friend class Device;
+
+    bfr_device* device_ = nullptr;
+    bfr_query_pool queryPool_{};
+    // Keeps the Device that made this alive until this is destroyed.
+    detail::KeepAlive keepAlive_;
+};
+
 /// Device memory that sparse textures' and buffers' tiles are mapped into by
 /// bfr_update_tile_mappings.
 class SparseMemory {
@@ -6413,6 +6652,8 @@ inline SamplerRef::SamplerRef(const Sampler& sampler) : sampler_(sampler.get()) 
 
 inline TimestampPoolRef::TimestampPoolRef(const TimestampPool& timestampPool) : timestampPool_(timestampPool.get()) {}
 
+inline QueryPoolRef::QueryPoolRef(const QueryPool& queryPool) : queryPool_(queryPool.get()) {}
+
 inline SparseMemoryRef::SparseMemoryRef(const SparseMemory& sparseMemory) : sparseMemory_(sparseMemory.get()) {}
 
 inline AccelerationStructureRef::AccelerationStructureRef(const AccelerationStructure& accelerationStructure) : accelerationStructure_(accelerationStructure.get()) {}
@@ -6465,6 +6706,7 @@ inline bfr_rendering_desc toC(const RenderingDesc& value, const bfr_chain* next)
         .color_attachment_count = value.colorAttachmentCount,
         .color_attachments = {toC(value.colorAttachments[0]), toC(value.colorAttachments[1]), toC(value.colorAttachments[2]), toC(value.colorAttachments[3]), toC(value.colorAttachments[4]), toC(value.colorAttachments[5]), toC(value.colorAttachments[6]), toC(value.colorAttachments[7])},
         .depth_stencil = toC(value.depthStencil),
+        .occlusion_queries = value.occlusionQueries.get(),
     };
 }
 
@@ -7283,6 +7525,43 @@ inline Expected<CalibratedTimestamps> Device::calibrateTimestamps(std::uint32_t 
     return detail::fromC(timestamps);
 }
 
+inline Expected<QueryPool> Device::createQueryPool(const QueryPoolDesc& desc) const {
+    const bfr_query_pool_desc cDesc = detail::toC(desc);
+    bfr_query_pool pool{};
+    if (const bfr_result result = bfr_create_query_pool(device_, &cDesc, &pool); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return QueryPool{device_, pool, keepAlive_};
+}
+
+inline Expected<void> Device::resetQueries(CommandList commandList, const QueryPool& pool, std::uint32_t first, std::uint32_t count) const {
+    if (const bfr_result result = bfr_reset_queries(device_, commandList.get(), pool.get(), first, count); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::beginQuery(CommandList commandList, const QueryPool& pool, std::uint32_t index, bool precise) const {
+    if (const bfr_result result = bfr_begin_query(device_, commandList.get(), pool.get(), index, static_cast<bfr_bool>(precise)); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::endQuery(CommandList commandList, const QueryPool& pool, std::uint32_t index) const {
+    if (const bfr_result result = bfr_end_query(device_, commandList.get(), pool.get(), index); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::resolveQueries(CommandList commandList, const QueryPool& pool, std::uint32_t first, std::uint32_t count, const Buffer& buffer, std::uint64_t offset) const {
+    if (const bfr_result result = bfr_resolve_queries(device_, commandList.get(), pool.get(), first, count, buffer.get(), offset); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
 inline Expected<SparseMemory> Device::createSparseMemory(const SparseMemoryDesc& desc) const {
     const bfr_sparse_memory_desc cDesc = detail::toC(desc);
     bfr_sparse_memory memory{};
@@ -7658,6 +7937,14 @@ inline Expected<std::uint32_t> Sampler::samplerSlot() {
         return std::unexpected(detail::failure(result));
     }
     return slot;
+}
+
+inline Expected<QueryLayout> QueryPool::queryLayout() {
+    bfr_query_layout layout{};
+    if (const bfr_result result = bfr_get_query_layout(device_, queryPool_, &layout); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(layout);
 }
 
 inline Expected<std::uint32_t> AccelerationStructure::accelerationStructureSlot() {

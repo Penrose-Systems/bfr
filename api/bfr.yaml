@@ -49,6 +49,8 @@ constants:
   global_partition: {value: 4294967295, doc: "The partition index that names a partitioned top structure's global partition, which holds instances apart from the others."}
   no_shader: {value: 4294967295, doc: No shader in a bfr_ray_tracing_group's slot.}
   serialized_identifier_size: {value: 32, doc: "The bytes of the identifier a serialized acceleration structure begins with, which bfr_serialized_compatible reads: two 16-byte identifiers, on every backend that serializes."}
+  pipeline_statistic_count: {value: 13, doc: The bfr_pipeline_statistic values there are.}
+  no_offset: {value: 4294967295, doc: "No offset: a value a query pool's results don't hold."}
   max_message_length: {value: 1024, doc: The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".}
 
 enums:
@@ -438,6 +440,13 @@ enums:
       build_clusters: {value: 106}
       capture_acceleration_structure: {value: 107}
       run_garbage_collection: {value: 108}
+      create_query_pool: {value: 109}
+      destroy_query_pool: {value: 110}
+      query_layout: {value: 111}
+      reset_queries: {value: 112}
+      begin_query: {value: 113}
+      end_query: {value: 114}
+      resolve_queries: {value: 115}
 
   timestamp_stage:
     doc: >-
@@ -460,6 +469,34 @@ enums:
     values:
       relaxed: {value: 0, doc: "The backend may write it later than the stage ends, costing less."}
       precise: {value: 1, doc: As close to the stage's end as the backend can.}
+
+  query_type:
+    doc: What a pool's queries count between bfr_begin_query and bfr_end_query.
+    values:
+      occlusion: {value: 0, doc: "Samples that pass the depth and stencil tests: an exact count where bfr_begin_query asks for one, else 0 for none and another value for some."}
+      pipeline_statistics: {value: 1, doc: The statistics bfr_query_pool_desc.statistics selects.}
+      mesh_primitives_generated: {value: 2, doc: Primitives mesh shaders emit.}
+
+  pipeline_statistic:
+    doc: >-
+      One statistic a pipeline_statistics query counts, in Vulkan's bit order,
+      which is D3D12's field order. Each counts what the backend counts:
+      tessellation_control is patches on Vulkan and hull shader invocations on
+      D3D12.
+    values:
+      input_vertices: {value: 0}
+      input_primitives: {value: 1}
+      vertex_invocations: {value: 2}
+      geometry_invocations: {value: 3}
+      geometry_primitives: {value: 4}
+      clip_invocations: {value: 5}
+      clip_primitives: {value: 6}
+      fragment_invocations: {value: 7}
+      tessellation_control: {value: 8}
+      tessellation_evaluation_invocations: {value: 9}
+      compute_invocations: {value: 10}
+      task_invocations: {value: 11}
+      mesh_invocations: {value: 12}
 
   host_clock:
     doc: A host clock a GPU timestamp can be read beside.
@@ -937,6 +974,11 @@ handles:
     destroy: destroy_timestamp_pool
     doc: GPU timestamps that command lists write and resolve into a buffer.
 
+  query_pool:
+    parent: device
+    destroy: destroy_query_pool
+    doc: GPU queries that command lists begin, end and resolve into a buffer.
+
   sparse_memory:
     parent: device
     destroy: destroy_sparse_memory
@@ -1139,6 +1181,9 @@ structs:
       - name: max_timestamp_pools
         type: u32
         doc: Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool fails with error_limit_reached.
+      - name: max_query_pools
+        type: u32
+        doc: Query pools the device holds at once, 0 for none; past it, bfr_create_query_pool fails with error_limit_reached.
       - name: max_sparse_memories
         type: u32
         doc: Sparse memories the device holds at once, 0 for none; past it, bfr_create_sparse_memory fails with error_limit_reached.
@@ -1308,6 +1353,12 @@ structs:
       - {name: color_attachment_count, type: u32}
       - {name: color_attachments, type: color_attachment, fixed: max_color_targets}
       - {name: depth_stencil, type: depth_stencil_attachment}
+      - name: occlusion_queries
+        type: query_pool
+        doc: >-
+          The occlusion pool the queries begun in this rendering count into;
+          null for none. Metal binds it to the rendering; Vulkan and D3D12
+          take the pool at each bfr_begin_query, which names the same one.
 
   viewport:
     doc: >-
@@ -1473,6 +1524,43 @@ structs:
     members:
       - {name: period_ns, type: f32}
       - {name: frequency, type: u64}
+
+  pipeline_statistics_mask:
+    doc: The statistics a pipeline_statistics pool counts. Task and mesh invocations where bfr_caps_features.mesh_statistics.
+    members:
+      - {name: input_vertices, type: bool}
+      - {name: input_primitives, type: bool}
+      - {name: vertex_invocations, type: bool}
+      - {name: geometry_invocations, type: bool}
+      - {name: geometry_primitives, type: bool}
+      - {name: clip_invocations, type: bool}
+      - {name: clip_primitives, type: bool}
+      - {name: fragment_invocations, type: bool}
+      - {name: tessellation_control, type: bool}
+      - {name: tessellation_evaluation_invocations, type: bool}
+      - {name: compute_invocations, type: bool}
+      - {name: task_invocations, type: bool}
+      - {name: mesh_invocations, type: bool}
+
+  query_pool_desc:
+    doc: How to create a query pool.
+    members:
+      - {name: type, type: query_type, doc: What its queries count.}
+      - {name: count, type: u32, doc: How many queries it holds.}
+      - {name: statistics, type: pipeline_statistics_mask, doc: Read only for pipeline_statistics.}
+
+  query_layout:
+    doc: >-
+      Where a pool's results land in the buffer bfr_resolve_queries writes, as
+      the backend lays them out: stride bytes for each query, and in each, the
+      64-bit value of an occlusion or mesh_primitives_generated query at
+      value, and each statistic of a pipeline_statistics query at its offset,
+      indexed by bfr_pipeline_statistic. BFR_NO_OFFSET where the results hold
+      no such value.
+    members:
+      - {name: stride, type: u32}
+      - {name: value, type: u32}
+      - {name: statistics, type: u32, fixed: pipeline_statistic_count}
 
   calibrated_timestamps:
     doc: >-
@@ -2774,6 +2862,7 @@ structs:
         type: bool
         doc: The uniform buffer table indexed by a value that differs within a shader's invocation group.
       - {name: timestamps_on_all_queues, type: bool, doc: Every graphics and compute queue writes timestamps.}
+      - {name: queries, type: bool, doc: "bfr_create_query_pool makes occlusion pools, and pipeline_statistics and mesh_primitives_generated ones where pipeline_statistics and mesh_statistics say."}
       - {name: pipeline_statistics, type: bool}
       - {name: occlusion_query_precise, type: bool}
 
@@ -3904,7 +3993,7 @@ functions:
   reset_timestamps:
     doc: >-
       Records a reset of count timestamps from first, which a backend that
-      needs one before a timestamp is written again is given; the others
+      needs one before each write, the first too, is given; the others
       record nothing. Outside rendering.
     returns: result
     params:
@@ -3969,6 +4058,89 @@ functions:
       - {name: queue, type: u32}
       - {name: clock, type: host_clock}
       - {name: timestamps, type: calibrated_timestamps, pointer: out}
+
+  create_query_pool:
+    doc: >-
+      Creates a pool of desc's count queries of desc's type. Not for the
+      frame path. Fails with error_invalid_argument for a type BFR does not
+      have, error_unsupported where bfr_caps_features.queries is false,
+      error_limit_reached at the device's max_query_pools, and
+      error_device_failed when the backend refuses.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: desc, type: query_pool_desc, pointer: in}
+      - {name: pool, type: query_pool, pointer: out}
+
+  destroy_query_pool:
+    doc: >-
+      Destroys a query pool once the GPU has finished with it; the handle is
+      invalid at once. Not for the frame path. A handle that is already
+      destroyed does nothing.
+    params:
+      - {name: device, type: device}
+      - {name: pool, type: query_pool}
+
+  get_query_layout:
+    doc: Writes where the pool's results land in the buffer bfr_resolve_queries writes.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: pool, type: query_pool}
+      - {name: layout, type: query_layout, pointer: out}
+
+  reset_queries:
+    doc: >-
+      Records a reset of count queries from first, which a backend that needs
+      one before each begin, the first too, is given; the others record
+      nothing.
+      Outside rendering.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: pool, type: query_pool}
+      - {name: first, type: u32}
+      - {name: count, type: u32}
+
+  begin_query:
+    doc: >-
+      Records the start of counting into the pool's query index, ended by
+      bfr_end_query on the same list. precise asks an occlusion query for an
+      exact count, where bfr_caps_features.occlusion_query_precise. An
+      occlusion query is begun inside rendering, into the pool the
+      rendering's bfr_rendering_desc.occlusion_queries names.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: pool, type: query_pool}
+      - {name: index, type: u32}
+      - {name: precise, type: bool}
+
+  end_query:
+    doc: Records the end of counting into the pool's query index.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: pool, type: query_pool}
+      - {name: index, type: u32}
+
+  resolve_queries:
+    doc: >-
+      Records a copy of count queries' results from first into buffer at
+      offset, laid out as bfr_get_query_layout says, once the GPU has written
+      them. The buffer needs copy_dst usage. Outside rendering.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: command_list, type: command_list}
+      - {name: pool, type: query_pool}
+      - {name: first, type: u32}
+      - {name: count, type: u32}
+      - {name: buffer, type: buffer}
+      - {name: offset, type: u64, doc: Bytes into the buffer.}
 
   create_sparse_memory:
     doc: >-

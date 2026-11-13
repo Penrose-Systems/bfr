@@ -8,6 +8,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/pipeline.h"
+#include "bfr/rhi/query.h"
 #include "bfr/rhi/sampler.h"
 #include "bfr/rhi/sparse.h"
 #include "bfr/rhi/swapchain.h"
@@ -478,7 +479,7 @@ public:
     [[nodiscard]] virtual core::Result<void> destroyTimestampPool(TimestampPoolHandle pool) = 0;
 
     /// Records a reset of count timestamps from first, which a backend that
-    /// needs one before a timestamp is written again is given; the others
+    /// needs one before each write, the first too, is given; the others
     /// record nothing. Outside rendering. Fails with RhiInvalidHandle for a
     /// list or pool that is gone.
     [[nodiscard]] virtual core::Result<void> resetTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
@@ -502,6 +503,51 @@ public:
     [[nodiscard]] virtual core::Result<void> resolveTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
                                                                std::uint32_t first, std::uint32_t count,
                                                                BufferHandle buffer, std::uint64_t offset) = 0;
+
+    /// A pool of desc.count queries of desc.type. Cold. Fails with
+    /// RhiInvalidCall for a type BFR doesn't have, RhiUnsupported where
+    /// Features::queries is false, RhiLimitReached at maxQueryPools, and
+    /// RhiDeviceFailed when the API refuses.
+    [[nodiscard]] virtual core::Result<QueryPoolHandle> createQueryPool(const QueryPoolDesc& desc) = 0;
+
+    /// Destroys the pool once the GPU has passed every submit made before the
+    /// call; the handle is invalid at once. Cold. A null handle does nothing.
+    /// Fails with RhiInvalidHandle when the pool is already destroyed.
+    [[nodiscard]] virtual core::Result<void> destroyQueryPool(QueryPoolHandle pool) = 0;
+
+    /// Where the pool's results land in the buffer resolveQueries writes, as
+    /// the backend lays them out. Fails with RhiInvalidHandle when the pool is
+    /// gone.
+    [[nodiscard]] virtual core::Result<QueryLayout> queryLayout(QueryPoolHandle pool) = 0;
+
+    /// Records a reset of count queries from first, which a backend that
+    /// needs one before each begin, the first too, is given; the others
+    /// record nothing. Outside rendering. Fails with RhiInvalidHandle for a list or
+    /// pool that is gone.
+    [[nodiscard]] virtual core::Result<void> resetQueries(CommandListHandle commandList, QueryPoolHandle pool,
+                                                          std::uint32_t first, std::uint32_t count) = 0;
+
+    /// Records the start of counting into the pool's query index, ended by
+    /// endQuery on the same list. precise asks an Occlusion query for an exact
+    /// count, where Features::occlusionQueryPrecise. An Occlusion query is
+    /// begun inside rendering, into the pool its RenderingDesc's
+    /// occlusionQueries names. Fails with RhiInvalidHandle for a list or pool
+    /// that is gone.
+    [[nodiscard]] virtual core::Result<void> beginQuery(CommandListHandle commandList, QueryPoolHandle pool,
+                                                        std::uint32_t index, bool precise) = 0;
+
+    /// Records the end of counting into the pool's query index. Fails with
+    /// RhiInvalidHandle for a list or pool that is gone.
+    [[nodiscard]] virtual core::Result<void> endQuery(CommandListHandle commandList, QueryPoolHandle pool,
+                                                      std::uint32_t index) = 0;
+
+    /// Records a copy of count queries' results from first into buffer at
+    /// offset, laid out as queryLayout says, once the GPU has written them.
+    /// The buffer needs copyDst usage. Outside rendering. Fails with
+    /// RhiInvalidHandle for a list, pool or buffer that is gone.
+    [[nodiscard]] virtual core::Result<void> resolveQueries(CommandListHandle commandList, QueryPoolHandle pool,
+                                                            std::uint32_t first, std::uint32_t count,
+                                                            BufferHandle buffer, std::uint64_t offset) = 0;
 
     /// How long a timestamp tick lasts on queue, as the backend gives it.
     /// Fails with RhiInvalidCall when the device has no such queue, and

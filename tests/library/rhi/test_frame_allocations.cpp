@@ -69,7 +69,8 @@ constexpr RenderingDesc kClear{.colorAttachmentCount = 1,
                                                       .loadOp = LoadOp::Clear,
                                                       .storeOp = StoreOp::Store,
                                                       .clearColor = {0, 0, 0, 1}}}},
-                               .depthStencil = {}};
+                               .depthStencil = {},
+                               .occlusionQueries = {}};
 
 // What one frame's calls failed with, or nothing; it holds no string, so
 // checking it allocates nothing.

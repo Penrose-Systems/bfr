@@ -307,6 +307,10 @@ struct Features {
     /// shader's invocation group.
     bool uniformBufferNonUniformIndexing = false;
     bool timestampsOnAllQueues = false;
+    /// Device::createQueryPool makes Occlusion pools, and PipelineStatistics
+    /// and MeshPrimitivesGenerated ones where pipelineStatistics and
+    /// meshStatistics say.
+    bool queries = false;
     bool pipelineStatistics = false;
     bool occlusionQueryPrecise = false;
 };

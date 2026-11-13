@@ -163,6 +163,7 @@ struct HeadlessDevice {
                                        .max_bindless_samplers = kDeviceSamplers,
                                        .max_bindless_uniform_buffers = 0,
                                        .max_timestamp_pools = 1,
+                                       .max_query_pools = 1,
                                        .max_sparse_memories = 0,
                                        .max_tile_mappings = 0,
                                        .max_bindless_acceleration_structures = 0,
@@ -362,6 +363,7 @@ TEST_CASE("C API rejects a struct chained to a device or swapchain desc", "[c_ap
                                          .max_bindless_samplers = kDeviceSamplers,
                                          .max_bindless_uniform_buffers = 0,
                                          .max_timestamp_pools = 0,
+                                         .max_query_pools = 0,
                                          .max_sparse_memories = 0,
                                          .max_tile_mappings = 0,
                                          .max_bindless_acceleration_structures = 0,
@@ -423,6 +425,7 @@ TEST_CASE("C API rejects a device desc's null queues with a count, and a queue l
                                          .max_bindless_samplers = 0,
                                          .max_bindless_uniform_buffers = 0,
                                          .max_timestamp_pools = 0,
+                                         .max_query_pools = 0,
                                          .max_sparse_memories = 0,
                                          .max_tile_mappings = 0,
                                          .max_bindless_acceleration_structures = 0,
@@ -524,7 +527,7 @@ namespace {
 
 struct Mode {
     bfr_present_mode mode;
-    bfr_bool bfr_swapchain_caps::*allowed;
+    bfr_bool bfr_swapchain_caps::* allowed;
     const char* name;
 };
 
@@ -1148,7 +1151,8 @@ TEST_CASE("C API renders to a texture with the viewport and scissor set, and ref
     bfr_rendering_desc rendering{.next = nullptr,
                                  .color_attachment_count = 1,
                                  .color_attachments = {},
-                                 .depth_stencil = {}};
+                                 .depth_stencil = {},
+                                 .occlusion_queries = {}};
     rendering.color_attachments[0] = {.texture = target,
                                       .mip_level = 0,
                                       .layer = 0,
@@ -1240,13 +1244,40 @@ TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call tim
 
     std::uint32_t count = 0;
     REQUIRE(bfr_get_call_timings(device.device, &count, nullptr) == BFR_RESULT_SUCCESS);
-    CHECK(count == BFR_CALL_RUN_GARBAGE_COLLECTION + 1);
+    CHECK(count == BFR_CALL_RESOLVE_QUERIES + 1);
     std::vector<bfr_call_timing> timings(count);
     REQUIRE(bfr_get_call_timings(device.device, &count, timings.data()) == BFR_RESULT_SUCCESS);
     CHECK(timings.at(BFR_CALL_CREATE_TIMESTAMP_POOL).count == 2);
     std::uint32_t fewer = 1;
     CHECK(bfr_get_instance_call_timings(instance.instance, &fewer, timings.data()) == BFR_RESULT_INCOMPLETE);
     bfr_destroy_timestamp_pool(device.device, pool);
+}
+
+TEST_CASE("C API makes a query pool and gives where its results land, as the device's caps allow", "[c_api][gpu]") {
+    const bfr_backend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    const Instance instance{backend, messages};
+    const HeadlessDevice device{instance.instance};
+    bfr_caps caps{};
+    REQUIRE(bfr_get_caps(instance.instance, device.adapter, &caps) == BFR_RESULT_SUCCESS);
+    const bfr_query_pool_desc desc{.type = BFR_QUERY_TYPE_OCCLUSION, .count = 2, .statistics = {}};
+    bfr_query_pool pool{};
+    if (caps.features.queries == BFR_FALSE) {
+        CHECK(bfr_create_query_pool(device.device, &desc, &pool) == BFR_RESULT_ERROR_UNSUPPORTED);
+        SKIP("the adapter makes no query pools");
+    }
+    const bfr_query_pool_desc unknown{.type = static_cast<bfr_query_type>(99), .count = 1, .statistics = {}};
+    CHECK(bfr_create_query_pool(device.device, &unknown, &pool) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    REQUIRE(bfr_create_query_pool(device.device, &desc, &pool) == BFR_RESULT_SUCCESS);
+    bfr_query_pool second{};
+    CHECK(bfr_create_query_pool(device.device, &desc, &second) == BFR_RESULT_ERROR_LIMIT_REACHED);
+    bfr_query_layout layout{};
+    REQUIRE(bfr_get_query_layout(device.device, pool, &layout) == BFR_RESULT_SUCCESS);
+    CHECK(layout.value != BFR_NO_OFFSET);
+    CHECK(layout.stride >= layout.value + sizeof(std::uint64_t));
+    CHECK(std::ranges::all_of(layout.statistics, [](std::uint32_t offset) { return offset == BFR_NO_OFFSET; }));
+    bfr_destroy_query_pool(device.device, pool);
+    CHECK(bfr_get_query_layout(device.device, pool, &layout) == BFR_RESULT_ERROR_INVALID_HANDLE);
 }
 
 TEST_CASE("C API creates and destroys swapchains on one device from many threads", "[c_api][gpu]") {
@@ -1637,7 +1668,8 @@ TEST_CASE("C API allocates and frees nothing on the heap frame after frame", "[c
                                                                .clear_integer = BFR_FALSE,
                                                                .clear_color_integer = {},
                                                                .resolve_texture = {}}},
-                                        .depth_stencil = {}};
+                                        .depth_stencil = {},
+                                        .occlusion_queries = {}};
     std::vector<std::string> messages;
     {
         const Instance instance{backend, messages, BFR_FALSE};
@@ -1803,6 +1835,7 @@ TEST_CASE("C API passes cluster inputs through, where the adapter has them", "[c
                                    .max_bindless_samplers = 0,
                                    .max_bindless_uniform_buffers = 0,
                                    .max_timestamp_pools = 0,
+                                   .max_query_pools = 0,
                                    .max_sparse_memories = 0,
                                    .max_tile_mappings = 0,
                                    .max_bindless_acceleration_structures = 0,
@@ -1879,6 +1912,7 @@ TEST_CASE("C API passes a structure's capture to a replay on another device, whe
                                    .max_bindless_samplers = 0,
                                    .max_bindless_uniform_buffers = 0,
                                    .max_timestamp_pools = 0,
+                                   .max_query_pools = 0,
                                    .max_sparse_memories = 0,
                                    .max_tile_mappings = 0,
                                    .max_bindless_acceleration_structures = 0,
@@ -1959,6 +1993,7 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
                                    .max_bindless_samplers = 0,
                                    .max_bindless_uniform_buffers = 0,
                                    .max_timestamp_pools = 0,
+                                   .max_query_pools = 0,
                                    .max_sparse_memories = 0,
                                    .max_tile_mappings = 0,
                                    .max_bindless_acceleration_structures = table ? 1U : 0U,
@@ -2171,6 +2206,7 @@ TEST_CASE("C API makes shaders and a ray tracing pipeline from them, and gives i
                                          .max_bindless_samplers = 0,
                                          .max_bindless_uniform_buffers = 0,
                                          .max_timestamp_pools = 0,
+                                         .max_query_pools = 0,
                                          .max_sparse_memories = 0,
                                          .max_tile_mappings = 0,
                                          .max_bindless_acceleration_structures = 1,

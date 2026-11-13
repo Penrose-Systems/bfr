@@ -44,6 +44,7 @@ inline constexpr std::uint32_t kTestSwapchains = 4;
 inline constexpr std::uint32_t kTestTableSlots = 256;
 inline constexpr std::uint32_t kTestSamplers = 16;
 inline constexpr std::uint32_t kTestTimestampPools = 4;
+inline constexpr std::uint32_t kTestQueryPools = 4;
 inline constexpr std::uint32_t kTestObjects = 1024;
 // Queues at rank 0 and level normal, as many as a test opens.
 inline constexpr std::array<QueueDesc, 4> kTestQueues{};
@@ -60,6 +61,7 @@ inline constexpr DeviceDesc kTestDevice{.graphics = std::span{kTestQueues}.first
                                         .maxBindlessStorageBuffers = kTestTableSlots,
                                         .maxBindlessSamplers = kTestSamplers,
                                         .maxTimestampPools = kTestTimestampPools,
+                                        .maxQueryPools = kTestQueryPools,
                                         .maxBuffers = kTestObjects,
                                         .maxTextures = kTestObjects,
                                         .maxShaders = kTestObjects,

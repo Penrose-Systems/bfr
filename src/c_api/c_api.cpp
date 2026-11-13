@@ -14,6 +14,7 @@
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/pipeline.h"
+#include "bfr/rhi/query.h"
 #include "bfr/rhi/rhi_config.h"
 #include "bfr/rhi/sampler.h"
 #include "bfr/rhi/sparse.h"
@@ -504,6 +505,14 @@ bfr::rhi::TimestampPoolHandle fromC(bfr_timestamp_pool handle) {
     return bfr::rhi::TimestampPoolHandle::fromBits(handle.bits);
 }
 
+bfr_query_pool toC(bfr::rhi::QueryPoolHandle handle) {
+    return {.bits = handle.bits};
+}
+
+bfr::rhi::QueryPoolHandle fromC(bfr_query_pool handle) {
+    return bfr::rhi::QueryPoolHandle::fromBits(handle.bits);
+}
+
 bfr_sparse_memory toC(bfr::rhi::SparseMemoryHandle handle) {
     return {.bits = handle.bits};
 }
@@ -564,7 +573,39 @@ static_assert(static_cast<int>(bfr::rhi::Call::BuildClusters) == BFR_CALL_BUILD_
 static_assert(static_cast<int>(bfr::rhi::Call::CaptureAccelerationStructure) ==
               BFR_CALL_CAPTURE_ACCELERATION_STRUCTURE);
 static_assert(static_cast<int>(bfr::rhi::Call::RunGarbageCollection) == BFR_CALL_RUN_GARBAGE_COLLECTION);
-static_assert(bfr::rhi::kCallCount == BFR_CALL_RUN_GARBAGE_COLLECTION + 1);
+static_assert(static_cast<int>(bfr::rhi::Call::CreateQueryPool) == BFR_CALL_CREATE_QUERY_POOL);
+static_assert(static_cast<int>(bfr::rhi::Call::ResolveQueries) == BFR_CALL_RESOLVE_QUERIES);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_RESOLVE_QUERIES + 1);
+static_assert(static_cast<int>(bfr::rhi::QueryType::Occlusion) == BFR_QUERY_TYPE_OCCLUSION);
+static_assert(static_cast<int>(bfr::rhi::QueryType::PipelineStatistics) == BFR_QUERY_TYPE_PIPELINE_STATISTICS);
+static_assert(static_cast<int>(bfr::rhi::QueryType::MeshPrimitivesGenerated) ==
+              BFR_QUERY_TYPE_MESH_PRIMITIVES_GENERATED);
+// Every statistic, as bfr_get_query_layout copies their offsets by position.
+static_assert(static_cast<int>(bfr::rhi::PipelineStatistic::InputVertices) == BFR_PIPELINE_STATISTIC_INPUT_VERTICES);
+static_assert(static_cast<int>(bfr::rhi::PipelineStatistic::InputPrimitives) ==
+              BFR_PIPELINE_STATISTIC_INPUT_PRIMITIVES);
+static_assert(static_cast<int>(bfr::rhi::PipelineStatistic::VertexInvocations) ==
+              BFR_PIPELINE_STATISTIC_VERTEX_INVOCATIONS);
+static_assert(static_cast<int>(bfr::rhi::PipelineStatistic::GeometryInvocations) ==
+              BFR_PIPELINE_STATISTIC_GEOMETRY_INVOCATIONS);
+static_assert(static_cast<int>(bfr::rhi::PipelineStatistic::GeometryPrimitives) ==
+              BFR_PIPELINE_STATISTIC_GEOMETRY_PRIMITIVES);
+static_assert(static_cast<int>(bfr::rhi::PipelineStatistic::ClipInvocations) ==
+              BFR_PIPELINE_STATISTIC_CLIP_INVOCATIONS);
+static_assert(static_cast<int>(bfr::rhi::PipelineStatistic::ClipPrimitives) == BFR_PIPELINE_STATISTIC_CLIP_PRIMITIVES);
+static_assert(static_cast<int>(bfr::rhi::PipelineStatistic::FragmentInvocations) ==
+              BFR_PIPELINE_STATISTIC_FRAGMENT_INVOCATIONS);
+static_assert(static_cast<int>(bfr::rhi::PipelineStatistic::TessellationControl) ==
+              BFR_PIPELINE_STATISTIC_TESSELLATION_CONTROL);
+static_assert(static_cast<int>(bfr::rhi::PipelineStatistic::TessellationEvaluationInvocations) ==
+              BFR_PIPELINE_STATISTIC_TESSELLATION_EVALUATION_INVOCATIONS);
+static_assert(static_cast<int>(bfr::rhi::PipelineStatistic::ComputeInvocations) ==
+              BFR_PIPELINE_STATISTIC_COMPUTE_INVOCATIONS);
+static_assert(static_cast<int>(bfr::rhi::PipelineStatistic::TaskInvocations) ==
+              BFR_PIPELINE_STATISTIC_TASK_INVOCATIONS);
+static_assert(static_cast<int>(bfr::rhi::PipelineStatistic::MeshInvocations) ==
+              BFR_PIPELINE_STATISTIC_MESH_INVOCATIONS);
+static_assert(bfr::rhi::kPipelineStatistics == BFR_PIPELINE_STATISTIC_MESH_INVOCATIONS + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
@@ -1124,7 +1165,8 @@ std::optional<bfr::rhi::RenderingDesc> renderingIn(const bfr_rendering_desc& des
     }
     RenderingDesc rendering{.colorAttachmentCount = desc.color_attachment_count,
                             .colorAttachments = {},
-                            .depthStencil = {}};
+                            .depthStencil = {},
+                            .occlusionQueries = fromC(desc.occlusion_queries)};
     for (std::uint32_t i = 0; i < desc.color_attachment_count; ++i) {
         const bfr_color_attachment& attachment = std::span{desc.color_attachments}[i];
         const auto loadOp = enumIn(attachment.load_op, LoadOp::DontCare, "load op", error);
@@ -1547,6 +1589,7 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .storage_texture_non_uniform_indexing = toC(features.storageTextureNonUniformIndexing),
         .uniform_buffer_non_uniform_indexing = toC(features.uniformBufferNonUniformIndexing),
         .timestamps_on_all_queues = toC(features.timestampsOnAllQueues),
+        .queries = toC(features.queries),
         .pipeline_statistics = toC(features.pipelineStatistics),
         .occlusion_query_precise = toC(features.occlusionQueryPrecise),
     };
@@ -1939,6 +1982,7 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
              .maxBindlessSamplers = desc->max_bindless_samplers,
              .maxBindlessUniformBuffers = desc->max_bindless_uniform_buffers,
              .maxTimestampPools = desc->max_timestamp_pools,
+             .maxQueryPools = desc->max_query_pools,
              .maxSparseMemories = desc->max_sparse_memories,
              .maxTileMappings = desc->max_tile_mappings,
              .maxBindlessAccelerationStructures = desc->max_bindless_acceleration_structures,
@@ -3058,6 +3102,114 @@ bfr_result bfr_resolve_timestamps(bfr_device* device, bfr_command_list command_l
         }
         const auto resolved = device->device->resolveTimestamps(fromC(command_list), fromC(pool), first, count,
                                                                 fromC(buffer), offset);
+        return resolved ? BFR_RESULT_SUCCESS : fail(resolved.error());
+    });
+}
+
+bfr_result bfr_create_query_pool(bfr_device* device, const bfr_query_pool_desc* desc, bfr_query_pool* pool) {
+    return guarded([&] {
+        if (device == nullptr || desc == nullptr || pool == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and pool must not be null");
+        }
+        *pool = {};
+        bfr::core::Message error;
+        const auto type = enumIn(desc->type, bfr::rhi::QueryType::MeshPrimitivesGenerated, "query type", error);
+        if (!type) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
+        }
+        const bfr_pipeline_statistics_mask& mask = desc->statistics;
+        const auto created = device->device->createQueryPool(
+            {.type = *type,
+             .count = desc->count,
+             .statistics = {.inputVertices = mask.input_vertices != BFR_FALSE,
+                            .inputPrimitives = mask.input_primitives != BFR_FALSE,
+                            .vertexInvocations = mask.vertex_invocations != BFR_FALSE,
+                            .geometryInvocations = mask.geometry_invocations != BFR_FALSE,
+                            .geometryPrimitives = mask.geometry_primitives != BFR_FALSE,
+                            .clipInvocations = mask.clip_invocations != BFR_FALSE,
+                            .clipPrimitives = mask.clip_primitives != BFR_FALSE,
+                            .fragmentInvocations = mask.fragment_invocations != BFR_FALSE,
+                            .tessellationControl = mask.tessellation_control != BFR_FALSE,
+                            .tessellationEvaluationInvocations = mask.tessellation_evaluation_invocations != BFR_FALSE,
+                            .computeInvocations = mask.compute_invocations != BFR_FALSE,
+                            .taskInvocations = mask.task_invocations != BFR_FALSE,
+                            .meshInvocations = mask.mesh_invocations != BFR_FALSE}});
+        if (!created) {
+            return fail(created.error());
+        }
+        *pool = toC(*created);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+void bfr_destroy_query_pool(bfr_device* device, bfr_query_pool pool) {
+    quietly([&] {
+        if (device == nullptr) {
+            return;
+        }
+        if (const auto destroyed = device->device->destroyQueryPool(fromC(pool)); !destroyed) {
+            lastError() = destroyed.error().message;
+        }
+    });
+}
+
+bfr_result bfr_get_query_layout(bfr_device* device, bfr_query_pool pool, bfr_query_layout* layout) {
+    return guarded([&] {
+        if (device == nullptr || layout == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and layout must not be null");
+        }
+        *layout = {};
+        const auto found = device->device->queryLayout(fromC(pool));
+        if (!found) {
+            return fail(found.error());
+        }
+        layout->stride = found->stride;
+        layout->value = found->value;
+        std::ranges::copy(found->statistics, std::span{layout->statistics}.begin());
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_reset_queries(bfr_device* device, bfr_command_list command_list, bfr_query_pool pool, uint32_t first,
+                             uint32_t count) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto reset = device->device->resetQueries(fromC(command_list), fromC(pool), first, count);
+        return reset ? BFR_RESULT_SUCCESS : fail(reset.error());
+    });
+}
+
+bfr_result bfr_begin_query(bfr_device* device, bfr_command_list command_list, bfr_query_pool pool, uint32_t index,
+                           bfr_bool precise) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto begun = device->device->beginQuery(fromC(command_list), fromC(pool), index, precise != BFR_FALSE);
+        return begun ? BFR_RESULT_SUCCESS : fail(begun.error());
+    });
+}
+
+bfr_result bfr_end_query(bfr_device* device, bfr_command_list command_list, bfr_query_pool pool, uint32_t index) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto ended = device->device->endQuery(fromC(command_list), fromC(pool), index);
+        return ended ? BFR_RESULT_SUCCESS : fail(ended.error());
+    });
+}
+
+bfr_result bfr_resolve_queries(bfr_device* device, bfr_command_list command_list, bfr_query_pool pool, uint32_t first,
+                               uint32_t count, bfr_buffer buffer, uint64_t offset) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto resolved = device->device->resolveQueries(fromC(command_list), fromC(pool), first, count,
+                                                             fromC(buffer), offset);
         return resolved ? BFR_RESULT_SUCCESS : fail(resolved.error());
     });
 }

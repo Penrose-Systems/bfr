@@ -47,7 +47,8 @@ constexpr RenderingDesc kClear{.colorAttachmentCount = 1,
                                                       .loadOp = LoadOp::Clear,
                                                       .storeOp = StoreOp::Store,
                                                       .clearColor = {0.2F, 0.4F, 0.6F, 1}}}},
-                               .depthStencil = {}};
+                               .depthStencil = {},
+                               .occlusionQueries = {}};
 
 bfr::core::Result<Token> submitOne(Device& device, CommandListHandle commandList, std::uint32_t queue = 0,
                                    std::span<const Token> waits = {}) {

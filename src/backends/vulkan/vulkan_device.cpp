@@ -251,6 +251,7 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       textures_("textures", desc.maxTextures, desc.maxTextures, rhi.logger()),
       samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
       timestampPools_("timestamp pools", desc.maxTimestampPools, desc.maxTimestampPools, rhi.logger()),
+      queryPools_("query pools", desc.maxQueryPools, desc.maxQueryPools, rhi.logger()),
       sparseMemories_("sparse memories", desc.maxSparseMemories, desc.maxSparseMemories, rhi.logger()),
       pipelineCaches_("pipeline caches", desc.maxPipelineCaches, desc.maxPipelineCaches, rhi.logger()),
       accelerationStructures_("acceleration structures", desc.maxAccelerationStructures, desc.maxAccelerationStructures,
@@ -1081,6 +1082,9 @@ void VulkanDevice::warnLeftovers() const {
     if (timestampPools_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} timestamp pools were left when the device went", timestampPools_.size());
     }
+    if (queryPools_.size() != 0) {
+        BFR_LOG_WARN(instance_->logger(), "{} query pools were left when the device went", queryPools_.size());
+    }
     if (pipelines_.size() != 0) {
         BFR_LOG_WARN(instance_->logger(), "{} pipelines were left when the device went", pipelines_.size());
     }
@@ -1126,6 +1130,7 @@ VulkanDevice::~VulkanDevice() {
     sparseMemories_.clear();
     samplers_.clear();
     timestampPools_.clear();
+    queryPools_.clear();
     pipelines_.clear();
     shaders_.clear();
     pipelineCaches_.clear();

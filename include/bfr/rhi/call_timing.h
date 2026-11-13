@@ -120,10 +120,17 @@ enum class Call : std::uint32_t {
     BuildClusters = 106,
     CaptureAccelerationStructure = 107,
     RunGarbageCollection = 108,
+    CreateQueryPool = 109,
+    DestroyQueryPool = 110,
+    QueryLayout = 111,
+    ResetQueries = 112,
+    BeginQuery = 113,
+    EndQuery = 114,
+    ResolveQueries = 115,
 };
 
 /// How many values Call has.
-inline constexpr std::size_t kCallCount = 109;
+inline constexpr std::size_t kCallCount = 116;
 
 /// The CPU time one kind of call has taken, read from std::chrono::steady_clock
 /// around each call: how many there were, their nanoseconds in all, and the

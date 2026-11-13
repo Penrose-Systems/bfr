@@ -6,6 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/instance.h"
+#include "bfr/rhi/query.h"
 #include "bfr/rhi/texture.h"
 
 #include <algorithm>
@@ -370,6 +371,38 @@ core::Result<void> TimedDevice::resolveTimestamps(CommandListHandle commandList,
                                                   std::uint64_t offset) {
     return counters_.time(Call::ResolveTimestamps,
                           [&] { return device_->resolveTimestamps(commandList, pool, first, count, buffer, offset); });
+}
+
+core::Result<QueryPoolHandle> TimedDevice::createQueryPool(const QueryPoolDesc& desc) {
+    return counters_.time(Call::CreateQueryPool, [&] { return device_->createQueryPool(desc); });
+}
+
+core::Result<void> TimedDevice::destroyQueryPool(QueryPoolHandle pool) {
+    return counters_.time(Call::DestroyQueryPool, [&] { return device_->destroyQueryPool(pool); });
+}
+
+core::Result<QueryLayout> TimedDevice::queryLayout(QueryPoolHandle pool) {
+    return counters_.time(Call::QueryLayout, [&] { return device_->queryLayout(pool); });
+}
+
+core::Result<void> TimedDevice::resetQueries(CommandListHandle commandList, QueryPoolHandle pool, std::uint32_t first,
+                                             std::uint32_t count) {
+    return counters_.time(Call::ResetQueries, [&] { return device_->resetQueries(commandList, pool, first, count); });
+}
+
+core::Result<void> TimedDevice::beginQuery(CommandListHandle commandList, QueryPoolHandle pool, std::uint32_t index,
+                                           bool precise) {
+    return counters_.time(Call::BeginQuery, [&] { return device_->beginQuery(commandList, pool, index, precise); });
+}
+
+core::Result<void> TimedDevice::endQuery(CommandListHandle commandList, QueryPoolHandle pool, std::uint32_t index) {
+    return counters_.time(Call::EndQuery, [&] { return device_->endQuery(commandList, pool, index); });
+}
+
+core::Result<void> TimedDevice::resolveQueries(CommandListHandle commandList, QueryPoolHandle pool, std::uint32_t first,
+                                               std::uint32_t count, BufferHandle buffer, std::uint64_t offset) {
+    return counters_.time(Call::ResolveQueries,
+                          [&] { return device_->resolveQueries(commandList, pool, first, count, buffer, offset); });
 }
 
 core::Result<TimestampRate> TimedDevice::timestampRate(std::uint32_t queue) const {

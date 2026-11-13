@@ -94,6 +94,12 @@ typedef uint8_t bfr_bool;
 // bfr_serialized_compatible reads: two 16-byte identifiers, on every backend that serializes.
 #define BFR_SERIALIZED_IDENTIFIER_SIZE 32u
 
+// The bfr_pipeline_statistic values there are.
+#define BFR_PIPELINE_STATISTIC_COUNT 13u
+
+// No offset: a value a query pool's results don't hold.
+#define BFR_NO_OFFSET 4294967295u
+
 // The most bytes bfr_get_last_error returns; a longer message is cut short and ends "...".
 #define BFR_MAX_MESSAGE_LENGTH 1024u
 
@@ -566,6 +572,13 @@ typedef enum bfr_call {
     BFR_CALL_BUILD_CLUSTERS = 106,
     BFR_CALL_CAPTURE_ACCELERATION_STRUCTURE = 107,
     BFR_CALL_RUN_GARBAGE_COLLECTION = 108,
+    BFR_CALL_CREATE_QUERY_POOL = 109,
+    BFR_CALL_DESTROY_QUERY_POOL = 110,
+    BFR_CALL_QUERY_LAYOUT = 111,
+    BFR_CALL_RESET_QUERIES = 112,
+    BFR_CALL_BEGIN_QUERY = 113,
+    BFR_CALL_END_QUERY = 114,
+    BFR_CALL_RESOLVE_QUERIES = 115,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -604,6 +617,38 @@ typedef enum bfr_timestamp_granularity {
     BFR_TIMESTAMP_GRANULARITY_PRECISE = 1,
     BFR_TIMESTAMP_GRANULARITY_FORCE32 = 0x7FFFFFFF
 } bfr_timestamp_granularity;
+
+// What a pool's queries count between bfr_begin_query and bfr_end_query.
+typedef enum bfr_query_type {
+    // Samples that pass the depth and stencil tests: an exact count where bfr_begin_query asks for
+    // one, else 0 for none and another value for some.
+    BFR_QUERY_TYPE_OCCLUSION = 0,
+    // The statistics bfr_query_pool_desc.statistics selects.
+    BFR_QUERY_TYPE_PIPELINE_STATISTICS = 1,
+    // Primitives mesh shaders emit.
+    BFR_QUERY_TYPE_MESH_PRIMITIVES_GENERATED = 2,
+    BFR_QUERY_TYPE_FORCE32 = 0x7FFFFFFF
+} bfr_query_type;
+
+// One statistic a pipeline_statistics query counts, in Vulkan's bit order, which is D3D12's field
+// order. Each counts what the backend counts: tessellation_control is patches on Vulkan and hull
+// shader invocations on D3D12.
+typedef enum bfr_pipeline_statistic {
+    BFR_PIPELINE_STATISTIC_INPUT_VERTICES = 0,
+    BFR_PIPELINE_STATISTIC_INPUT_PRIMITIVES = 1,
+    BFR_PIPELINE_STATISTIC_VERTEX_INVOCATIONS = 2,
+    BFR_PIPELINE_STATISTIC_GEOMETRY_INVOCATIONS = 3,
+    BFR_PIPELINE_STATISTIC_GEOMETRY_PRIMITIVES = 4,
+    BFR_PIPELINE_STATISTIC_CLIP_INVOCATIONS = 5,
+    BFR_PIPELINE_STATISTIC_CLIP_PRIMITIVES = 6,
+    BFR_PIPELINE_STATISTIC_FRAGMENT_INVOCATIONS = 7,
+    BFR_PIPELINE_STATISTIC_TESSELLATION_CONTROL = 8,
+    BFR_PIPELINE_STATISTIC_TESSELLATION_EVALUATION_INVOCATIONS = 9,
+    BFR_PIPELINE_STATISTIC_COMPUTE_INVOCATIONS = 10,
+    BFR_PIPELINE_STATISTIC_TASK_INVOCATIONS = 11,
+    BFR_PIPELINE_STATISTIC_MESH_INVOCATIONS = 12,
+    BFR_PIPELINE_STATISTIC_FORCE32 = 0x7FFFFFFF
+} bfr_pipeline_statistic;
 
 // A host clock a GPU timestamp can be read beside.
 typedef enum bfr_host_clock {
@@ -1197,6 +1242,12 @@ typedef struct bfr_timestamp_pool {
     uint64_t bits;
 } bfr_timestamp_pool;
 
+// GPU queries that command lists begin, end and resolve into a buffer. A generational handle; 0 is
+// never valid.
+typedef struct bfr_query_pool {
+    uint64_t bits;
+} bfr_query_pool;
+
 // Device memory that sparse textures' and buffers' tiles are mapped into by
 // bfr_update_tile_mappings. A generational handle; 0 is never valid.
 typedef struct bfr_sparse_memory {
@@ -1364,6 +1415,9 @@ typedef struct bfr_device_desc {
     // Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool
     // fails with error_limit_reached.
     uint32_t max_timestamp_pools;
+    // Query pools the device holds at once, 0 for none; past it, bfr_create_query_pool fails with
+    // error_limit_reached.
+    uint32_t max_query_pools;
     // Sparse memories the device holds at once, 0 for none; past it, bfr_create_sparse_memory fails
     // with error_limit_reached.
     uint32_t max_sparse_memories;
@@ -1535,6 +1589,10 @@ typedef struct bfr_rendering_desc {
     uint32_t color_attachment_count;
     bfr_color_attachment color_attachments[BFR_MAX_COLOR_TARGETS];
     bfr_depth_stencil_attachment depth_stencil;
+    // The occlusion pool the queries begun in this rendering count into; null for none. Metal binds
+    // it to the rendering; Vulkan and D3D12 take the pool at each bfr_begin_query, which names the
+    // same one.
+    bfr_query_pool occlusion_queries;
 } bfr_rendering_desc;
 
 // Where on the attachments the rendering lands, in pixels from the top left, and the depth range it
@@ -1715,6 +1773,45 @@ typedef struct bfr_timestamp_rate {
     float period_ns;
     uint64_t frequency;
 } bfr_timestamp_rate;
+
+// The statistics a pipeline_statistics pool counts. Task and mesh invocations where
+// bfr_caps_features.mesh_statistics.
+typedef struct bfr_pipeline_statistics_mask {
+    bfr_bool input_vertices;
+    bfr_bool input_primitives;
+    bfr_bool vertex_invocations;
+    bfr_bool geometry_invocations;
+    bfr_bool geometry_primitives;
+    bfr_bool clip_invocations;
+    bfr_bool clip_primitives;
+    bfr_bool fragment_invocations;
+    bfr_bool tessellation_control;
+    bfr_bool tessellation_evaluation_invocations;
+    bfr_bool compute_invocations;
+    bfr_bool task_invocations;
+    bfr_bool mesh_invocations;
+} bfr_pipeline_statistics_mask;
+
+// How to create a query pool.
+typedef struct bfr_query_pool_desc {
+    // What its queries count.
+    bfr_query_type type;
+    // How many queries it holds.
+    uint32_t count;
+    // Read only for pipeline_statistics.
+    bfr_pipeline_statistics_mask statistics;
+} bfr_query_pool_desc;
+
+// Where a pool's results land in the buffer bfr_resolve_queries writes, as the backend lays them
+// out: stride bytes for each query, and in each, the 64-bit value of an occlusion or
+// mesh_primitives_generated query at value, and each statistic of a pipeline_statistics query at
+// its offset, indexed by bfr_pipeline_statistic. BFR_NO_OFFSET where the results hold no such
+// value.
+typedef struct bfr_query_layout {
+    uint32_t stride;
+    uint32_t value;
+    uint32_t statistics[BFR_PIPELINE_STATISTIC_COUNT];
+} bfr_query_layout;
 
 // A GPU timestamp and a host clock's reading taken together, so GPU ticks can be placed on the
 // host's timeline.
@@ -3141,6 +3238,9 @@ typedef struct bfr_caps_features {
     bfr_bool uniform_buffer_non_uniform_indexing;
     // Every graphics and compute queue writes timestamps.
     bfr_bool timestamps_on_all_queues;
+    // bfr_create_query_pool makes occlusion pools, and pipeline_statistics and
+    // mesh_primitives_generated ones where pipeline_statistics and mesh_statistics say.
+    bfr_bool queries;
     bfr_bool pipeline_statistics;
     bfr_bool occlusion_query_precise;
 } bfr_caps_features;
@@ -4052,8 +4152,8 @@ BFR_API bfr_result bfr_create_timestamp_pool(
 // for the frame path. A handle that is already destroyed does nothing.
 BFR_API void bfr_destroy_timestamp_pool(bfr_device* device, bfr_timestamp_pool pool);
 
-// Records a reset of count timestamps from first, which a backend that needs one before a timestamp
-// is written again is given; the others record nothing. Outside rendering.
+// Records a reset of count timestamps from first, which a backend that needs one before each write,
+// the first too, is given; the others record nothing. Outside rendering.
 BFR_API bfr_result bfr_reset_timestamps(
     bfr_device* device,
     bfr_command_list command_list,
@@ -4102,6 +4202,65 @@ BFR_API bfr_result bfr_calibrate_timestamps(
     uint32_t queue,
     bfr_host_clock clock,
     bfr_calibrated_timestamps* timestamps);
+
+// Creates a pool of desc's count queries of desc's type. Not for the frame path. Fails with
+// error_invalid_argument for a type BFR does not have, error_unsupported where
+// bfr_caps_features.queries is false, error_limit_reached at the device's max_query_pools, and
+// error_device_failed when the backend refuses.
+BFR_API bfr_result bfr_create_query_pool(
+    bfr_device* device,
+    const bfr_query_pool_desc* desc,
+    bfr_query_pool* pool);
+
+// Destroys a query pool once the GPU has finished with it; the handle is invalid at once. Not for
+// the frame path. A handle that is already destroyed does nothing.
+BFR_API void bfr_destroy_query_pool(bfr_device* device, bfr_query_pool pool);
+
+// Writes where the pool's results land in the buffer bfr_resolve_queries writes.
+BFR_API bfr_result bfr_get_query_layout(
+    bfr_device* device,
+    bfr_query_pool pool,
+    bfr_query_layout* layout);
+
+// Records a reset of count queries from first, which a backend that needs one before each begin,
+// the first too, is given; the others record nothing. Outside rendering.
+BFR_API bfr_result bfr_reset_queries(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_query_pool pool,
+    uint32_t first,
+    uint32_t count);
+
+// Records the start of counting into the pool's query index, ended by bfr_end_query on the same
+// list. precise asks an occlusion query for an exact count, where
+// bfr_caps_features.occlusion_query_precise. An occlusion query is begun inside rendering, into the
+// pool the rendering's bfr_rendering_desc.occlusion_queries names.
+BFR_API bfr_result bfr_begin_query(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_query_pool pool,
+    uint32_t index,
+    bfr_bool precise);
+
+// Records the end of counting into the pool's query index.
+BFR_API bfr_result bfr_end_query(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_query_pool pool,
+    uint32_t index);
+
+// Records a copy of count queries' results from first into buffer at offset, laid out as
+// bfr_get_query_layout says, once the GPU has written them. The buffer needs copy_dst usage.
+// Outside rendering.
+// offset: Bytes into the buffer.
+BFR_API bfr_result bfr_resolve_queries(
+    bfr_device* device,
+    bfr_command_list command_list,
+    bfr_query_pool pool,
+    uint32_t first,
+    uint32_t count,
+    bfr_buffer buffer,
+    uint64_t offset);
 
 // Creates desc's size bytes of device memory for the tiles of the sparse resources desc names. Not
 // for the frame path. Fails with error_invalid_argument for no resource, error_unsupported for a

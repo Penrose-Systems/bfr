@@ -4,6 +4,7 @@
 #include "bfr/core/handle.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/pipeline.h"
+#include "bfr/rhi/query.h"
 #include "bfr/rhi/texture.h"
 
 #include <array>
@@ -93,6 +94,7 @@ struct DeviceDesc {
     /// and more than 0 fails with RhiLimitReached.
     std::uint32_t maxBindlessUniformBuffers = 0;
     std::uint32_t maxTimestampPools = 0;
+    std::uint32_t maxQueryPools = 0;
     std::uint32_t maxSparseMemories = 0;
     /// The most texture regions and the most buffer regions one
     /// updateTileMappings call takes.
@@ -337,6 +339,10 @@ struct RenderingDesc {
     std::uint32_t colorAttachmentCount = 0;
     std::array<ColorAttachment, kMaxColorTargets> colorAttachments{};
     DepthStencilAttachment depthStencil;
+    /// The occlusion pool the queries begun in this rendering count into;
+    /// null for none. Metal binds it to the rendering; Vulkan and D3D12 take
+    /// the pool at each beginQuery, which names the same one.
+    QueryPoolHandle occlusionQueries;
 };
 
 /// Where on the attachments a rendering lands, in pixels from the top left,

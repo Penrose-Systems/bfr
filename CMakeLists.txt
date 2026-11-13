@@ -138,6 +138,7 @@ if(BFR_BACKEND_VULKAN)
         src/backends/vulkan/vulkan_sparse.cpp
         src/backends/vulkan/vulkan_acceleration_structure.cpp
         src/backends/vulkan/vulkan_timestamp.cpp
+        src/backends/vulkan/vulkan_query.cpp
         src/backends/vulkan/vulkan_commands.cpp
         src/backends/vulkan/vulkan_surface.cpp
         src/backends/vulkan/vulkan_swapchain.cpp
@@ -194,6 +195,7 @@ if(BFR_BACKEND_D3D12)
         src/backends/d3d12/d3d12_sampler.cpp
         src/backends/d3d12/d3d12_sparse.cpp
         src/backends/d3d12/d3d12_timestamp.cpp
+        src/backends/d3d12/d3d12_query.cpp
         src/backends/d3d12/d3d12_texture.cpp)
     # The Windows headers define macros, min and max among them, that would
     # leak into every file that includes a backend's header.
@@ -221,6 +223,7 @@ if(BFR_BACKEND_METAL)
         src/backends/metal/metal_sampler.cpp
         src/backends/metal/metal_sparse.cpp
         src/backends/metal/metal_timestamp.cpp
+        src/backends/metal/metal_query.cpp
         src/backends/metal/metal_texture.cpp)
     target_include_directories(bfr_objects SYSTEM PRIVATE ${BFR_METAL_CPP_INCLUDE_DIR})
     target_link_libraries(bfr_objects PRIVATE "-framework Foundation" "-framework Metal" "-framework QuartzCore"

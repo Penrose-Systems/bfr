@@ -275,6 +275,18 @@ public:
     [[nodiscard]] core::Result<void> resolveTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
                                                        std::uint32_t first, std::uint32_t count, BufferHandle buffer,
                                                        std::uint64_t offset) override;
+    [[nodiscard]] core::Result<QueryPoolHandle> createQueryPool(const QueryPoolDesc& desc) override;
+    [[nodiscard]] core::Result<void> destroyQueryPool(QueryPoolHandle pool) override;
+    [[nodiscard]] core::Result<QueryLayout> queryLayout(QueryPoolHandle pool) override;
+    [[nodiscard]] core::Result<void> resetQueries(CommandListHandle commandList, QueryPoolHandle pool,
+                                                  std::uint32_t first, std::uint32_t count) override;
+    [[nodiscard]] core::Result<void> beginQuery(CommandListHandle commandList, QueryPoolHandle pool,
+                                                std::uint32_t index, bool precise) override;
+    [[nodiscard]] core::Result<void> endQuery(CommandListHandle commandList, QueryPoolHandle pool,
+                                              std::uint32_t index) override;
+    [[nodiscard]] core::Result<void> resolveQueries(CommandListHandle commandList, QueryPoolHandle pool,
+                                                    std::uint32_t first, std::uint32_t count, BufferHandle buffer,
+                                                    std::uint64_t offset) override;
     [[nodiscard]] core::Result<TimestampRate> timestampRate(std::uint32_t queue) const override;
     [[nodiscard]] core::Result<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue,
                                                                          HostClock clock) const override;

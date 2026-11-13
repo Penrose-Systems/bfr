@@ -410,6 +410,9 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
         .storageTextureNonUniformIndexing = on(features.vulkan12.shaderStorageImageArrayNonUniformIndexing),
         .uniformBufferNonUniformIndexing = on(features.vulkan12.shaderUniformBufferArrayNonUniformIndexing),
         .timestampsOnAllQueues = on(properties.core.properties.limits.timestampComputeAndGraphics),
+        // VK_QUERY_TYPE_OCCLUSION is core 1.0, with no feature
+        // (VUID-vkCmdBeginQuery-queryType-00803 asks only a graphics queue).
+        .queries = true,
         .pipelineStatistics = on(core.pipelineStatisticsQuery),
         .occlusionQueryPrecise = on(core.occlusionQueryPrecise),
     };

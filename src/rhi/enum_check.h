@@ -6,6 +6,7 @@
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/pipeline.h"
+#include "bfr/rhi/query.h"
 #include "bfr/rhi/sampler.h"
 #include "bfr/rhi/sparse.h"
 #include "bfr/rhi/swapchain.h"
@@ -101,6 +102,9 @@ constexpr std::pair<TimestampStage, TimestampStage> rangeOf(TimestampStage /*unu
 }
 constexpr std::pair<TimestampGranularity, TimestampGranularity> rangeOf(TimestampGranularity /*unused*/) {
     return {TimestampGranularity::Relaxed, TimestampGranularity::Precise};
+}
+constexpr std::pair<QueryType, QueryType> rangeOf(QueryType /*unused*/) {
+    return {QueryType::Occlusion, QueryType::MeshPrimitivesGenerated};
 }
 constexpr std::pair<HostClock, HostClock> rangeOf(HostClock /*unused*/) {
     return {HostClock::Monotonic, HostClock::PerformanceCounter};

@@ -337,6 +337,7 @@ void VulkanDevice::collectRetired() {
     textures_.collect(completed, [this](const VulkanTexture& texture) { bindless_.giveTexture(texture.slots()); });
     samplers_.collect(completed, [this](const VulkanSampler& sampler) { bindless_.giveSampler(sampler.slot()); });
     timestampPools_.collect(completed);
+    queryPools_.collect(completed);
     sparseMemories_.collect(completed);
     propertyPools_.collect(completed);
     pipelines_.collect(completed);

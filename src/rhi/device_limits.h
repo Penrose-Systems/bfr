@@ -35,6 +35,7 @@ namespace bfr::rhi {
           std::pair{"maxBindlessSamplers", desc.maxBindlessSamplers},
           std::pair{"maxBindlessUniformBuffers", desc.maxBindlessUniformBuffers},
           std::pair{"maxTimestampPools", desc.maxTimestampPools},
+          std::pair{"maxQueryPools", desc.maxQueryPools},
           std::pair{"maxSparseMemories", desc.maxSparseMemories},
           std::pair{"maxTileMappings", desc.maxTileMappings},
           std::pair{"maxBindlessAccelerationStructures", desc.maxBindlessAccelerationStructures},

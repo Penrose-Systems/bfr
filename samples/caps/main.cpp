@@ -273,6 +273,7 @@ void printFeatures(const bfr::CapsFeatures& f, const bfr::CapsSparse& sparse) {
         {.has = f.storageReadWithoutFormat, .name = "typeless storage reads"},
         {.has = f.storageWriteWithoutFormat, .name = "typeless storage writes"},
         {.has = f.timestampsOnAllQueues, .name = "timestamps on every queue"},
+        {.has = f.queries, .name = "queries"},
         {.has = f.pipelineStatistics, .name = "pipeline statistics"},
         {.has = f.occlusionQueryPrecise, .name = "precise occlusion"},
         {.has = sparse.binding, .name = "sparse binding"},
@@ -607,6 +608,7 @@ void printAllFeatures(const bfr::CapsFeatures& f) {
                        field("storageReadWithoutFormat", f.storageReadWithoutFormat),
                        field("storageWriteWithoutFormat", f.storageWriteWithoutFormat),
                        field("timestampsOnAllQueues", f.timestampsOnAllQueues),
+                       field("queries", f.queries),
                        field("pipelineStatistics", f.pipelineStatistics),
                        field("occlusionQueryPrecise", f.occlusionQueryPrecise)});
 }

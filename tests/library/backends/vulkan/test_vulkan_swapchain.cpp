@@ -191,7 +191,10 @@ TEST_CASE("Vulkan device gives VK_SUBOPTIMAL_KHR from acquire and present as Sub
             REQUIRE(acquired.has_value());
             const auto list = device.beginCommands(*pool);
             REQUIRE(list.has_value());
-            RenderingDesc clear{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+            RenderingDesc clear{.colorAttachmentCount = 1,
+                                .colorAttachments = {},
+                                .depthStencil = {},
+                                .occlusionQueries = {}};
             clear.colorAttachments[0] = {.texture = {}, .loadOp = LoadOp::Clear, .storeOp = StoreOp::Store};
             REQUIRE(device.beginRendering(*list, *swapchain, clear).has_value());
             REQUIRE(device.endRendering(*list).has_value());

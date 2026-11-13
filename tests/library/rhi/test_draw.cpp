@@ -12,6 +12,7 @@
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/pipeline.h"
+#include "bfr/rhi/query.h"
 #include "bfr/rhi/sampler.h"
 #include "bfr/rhi/texture.h"
 #include "rhi_test_support.h"
@@ -229,7 +230,8 @@ public:
                                                  .depthStoreOp = StoreOp::DontCare,
                                                  .stencilLoadOp = LoadOp::Clear,
                                                  .stencilStoreOp = StoreOp::DontCare,
-                                                 .clearDepth = 1}};
+                                                 .clearDepth = 1},
+                                .occlusionQueries = {}};
         if (!targets.readDepth.isNull()) {
             rendering.depthStencil = {.texture = targets.readDepth, .readOnly = true};
         }
@@ -402,7 +404,8 @@ TEST_CASE("Device gives a depth-stencil texture that shaders sample a slot, and 
                                                        .stencilLoadOp = LoadOp::Clear,
                                                        .stencilStoreOp = StoreOp::Store,
                                                        .clearDepth = 1,
-                                                       .clearStencil = 0}};
+                                                       .clearStencil = 0},
+                                      .occlusionQueries = {}};
         const auto begun = device.beginRendering(*list, {}, rendering);
         INFO(failureOf(begun));
         REQUIRE(begun.has_value());
@@ -738,7 +741,10 @@ TEST_CASE("Device draws a triangle pulled from a storage buffer into a texture, 
 
         CHECK(
             device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
-        RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+        RenderingDesc rendering{.colorAttachmentCount = 1,
+                                .colorAttachments = {},
+                                .depthStencil = {},
+                                .occlusionQueries = {}};
         rendering.colorAttachments[0] = {.texture = target,
                                          .loadOp = LoadOp::Clear,
                                          .storeOp = StoreOp::Store,
@@ -846,7 +852,10 @@ TEST_CASE("Device blends with the constant color setBlendConstants sets", "[rhi]
 
         CHECK(
             device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
-        RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+        RenderingDesc rendering{.colorAttachmentCount = 1,
+                                .colorAttachments = {},
+                                .depthStencil = {},
+                                .occlusionQueries = {}};
         rendering.colorAttachments[0] = {.texture = target,
                                          .loadOp = LoadOp::Clear,
                                          .storeOp = StoreOp::Store,
@@ -964,7 +973,8 @@ TEST_CASE("Device writes the stencil reference setStencilReference sets", "[rhi]
                                                  .stencilLoadOp = LoadOp::Clear,
                                                  .stencilStoreOp = StoreOp::Store,
                                                  .clearDepth = 1,
-                                                 .clearStencil = 0}};
+                                                 .clearStencil = 0},
+                                .occlusionQueries = {}};
         rendering.colorAttachments[0] = {.texture = color, .loadOp = LoadOp::Clear, .storeOp = StoreOp::Store};
         REQUIRE(device.beginRendering(*list, {}, rendering).has_value());
         viewWhole(device, *list);
@@ -1042,7 +1052,10 @@ TEST_CASE("Device clears an integer target to the integers asked for", "[rhi][ag
 
         CHECK(
             device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
-        RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+        RenderingDesc rendering{.colorAttachmentCount = 1,
+                                .colorAttachments = {},
+                                .depthStencil = {},
+                                .occlusionQueries = {}};
         rendering.colorAttachments[0] = {.texture = target,
                                          .loadOp = LoadOp::Clear,
                                          .storeOp = StoreOp::Store,
@@ -1113,7 +1126,10 @@ TEST_CASE("Device renders to the mip level and layers an attachment names", "[rh
         // Every layer of the level cleared to 0, then two of them to kCleared.
         for (const auto& [layer, count, value] :
              {std::tuple{0U, kLayers, 0U}, std::tuple{kFirst, kLayers - kFirst, kCleared}}) {
-            RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+            RenderingDesc rendering{.colorAttachmentCount = 1,
+                                    .colorAttachments = {},
+                                    .depthStencil = {},
+                                    .occlusionQueries = {}};
             rendering.colorAttachments[0] = {.texture = target,
                                              .mipLevel = kMip,
                                              .layer = layer,
@@ -1201,7 +1217,10 @@ TEST_CASE("Device renders to the depth slices of a 3D texture an attachment name
         // Every slice cleared to 0, then two of them to kCleared.
         for (const auto& [slice, count, value] :
              {std::tuple{0U, kSlices, 0U}, std::tuple{kFirst, kSlices - kFirst, kCleared}}) {
-            RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+            RenderingDesc rendering{.colorAttachmentCount = 1,
+                                    .colorAttachments = {},
+                                    .depthStencil = {},
+                                    .occlusionQueries = {}};
             rendering.colorAttachments[0] = {.texture = target,
                                              .layer = slice,
                                              .layerCount = count,
@@ -1283,7 +1302,10 @@ TEST_CASE("Device moves only the mip levels a texture barrier names, so one leve
             const TextureRange level{.mipLevel = mip, .mipCount = 1, .layer = 0, .layerCount = 1};
             CHECK(device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, level)
                       .has_value());
-            RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+            RenderingDesc rendering{.colorAttachmentCount = 1,
+                                    .colorAttachments = {},
+                                    .depthStencil = {},
+                                    .occlusionQueries = {}};
             rendering.colorAttachments[0] = {.texture = target,
                                              .mipLevel = mip,
                                              .loadOp = LoadOp::Clear,
@@ -1378,7 +1400,10 @@ TEST_CASE("Device refuses an enum value BFR doesn't have with RhiInvalidCall", "
                   .code == ErrorCode::RhiInvalidCall);
         CHECK(device.bindIndexBuffer(*list, indices, 0, static_cast<IndexType>(kPast)).error().code ==
               ErrorCode::RhiInvalidCall);
-        RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+        RenderingDesc rendering{.colorAttachmentCount = 1,
+                                .colorAttachments = {},
+                                .depthStencil = {},
+                                .occlusionQueries = {}};
         rendering.colorAttachments[0] = {.texture = target, .loadOp = static_cast<LoadOp>(kPast)};
         CHECK(device.beginRendering(*list, {}, rendering).error().code == ErrorCode::RhiInvalidCall);
         const BufferTextureCopy region{.bytesPerRow = std::uint64_t{kSide} * kTexelBytes,
@@ -1442,7 +1467,10 @@ TEST_CASE(
         // A rendering wants an attachment, and a texture where it says one.
         const RenderingDesc none{};
         CHECK(device.beginRendering(*list, {}, none).error().code == ErrorCode::RhiInvalidCall);
-        const RenderingDesc unnamed{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+        const RenderingDesc unnamed{.colorAttachmentCount = 1,
+                                    .colorAttachments = {},
+                                    .depthStencil = {},
+                                    .occlusionQueries = {}};
         CHECK(device.beginRendering(*list, {}, unnamed).error().code == ErrorCode::RhiInvalidCall);
         RenderingDesc rendering = unnamed;
         rendering.colorAttachments[0].texture = target;
@@ -1748,7 +1776,10 @@ void renderDepth(Device& device, const DepthStencilAttachment& attachment, Textu
         CHECK(device.textureBarrier(*list, resolve, TextureLayout::Undefined, TextureLayout::DepthStencilTarget, {})
                   .has_value());
     }
-    const RenderingDesc rendering{.colorAttachmentCount = 0, .colorAttachments = {}, .depthStencil = attachment};
+    const RenderingDesc rendering{.colorAttachmentCount = 0,
+                                  .colorAttachments = {},
+                                  .depthStencil = attachment,
+                                  .occlusionQueries = {}};
     const auto begun = device.beginRendering(*list, {}, rendering);
     INFO(failureOf(begun));
     REQUIRE(begun.has_value());
@@ -2157,6 +2188,422 @@ TEST_CASE("Device draws with mesh shaders, directly and indirectly, and with a t
         CHECK(device.destroyBuffer(args).has_value());
         CHECK(device.destroyBuffer(count).has_value());
         CHECK(device.destroyPipeline(mesh).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+namespace {
+
+// The 64-bit value at offset bytes into bytes.
+std::uint64_t valueAt(std::span<const std::byte> bytes, std::uint64_t offset) {
+    std::uint64_t value = 0;
+    std::memcpy(&value, bytes.subspan(offset).data(), sizeof(value));
+    return value;
+}
+
+// The top half of clip space: y from 0 up to 1, the top rows of the target.
+constexpr std::array<float, std::size_t{kVertices} * kPositionFloats> kTopHalf{-1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1};
+
+} // namespace
+
+TEST_CASE("Device counts the samples a draw passes in an occlusion query, exactly where precise, and none when depth "
+          "rejects them",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const DrawDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const Caps& caps = made.instance->adapters()[0].caps;
+        constexpr std::uint32_t kQueries = 2;
+        if (!caps.features.queries) {
+            CHECK(device.createQueryPool({.type = QueryType::Occlusion, .count = kQueries, .statistics = {}})
+                      .error()
+                      .code == ErrorCode::RhiUnsupported);
+            SKIP("the adapter makes no query pools");
+        }
+        if (!takesSpirv(backend)) {
+            SKIP("no " << backend.name << " bytecode is checked in");
+        }
+        const auto pool = device.createQueryPool({.type = QueryType::Occlusion, .count = kQueries, .statistics = {}});
+        INFO(failureOf(pool));
+        REQUIRE(pool.has_value());
+        const auto layout = device.queryLayout(*pool);
+        REQUIRE(layout.has_value());
+        REQUIRE(layout->value != kNoOffset);
+        REQUIRE(layout->stride >= layout->value + sizeof(std::uint64_t));
+        const std::uint64_t resultBytes = std::uint64_t{layout->stride} * kQueries;
+        const BufferHandle results =
+            created(device, {.size = resultBytes, .memory = BufferMemory::Readback, .usage = {.copyDst = true}});
+        const bool precise = caps.features.occlusionQueryPrecise;
+        const BufferHandle positions = uploaded(device, kTopHalf, {.storage = true});
+        const auto slot = storageSlot(device, positions);
+        REQUIRE(slot.has_value());
+        const auto depthCaps = made.instance->formatCaps(0, Format::D32Float);
+        REQUIRE(depthCaps.has_value());
+        if (!depthCaps->depthStencil) {
+            SKIP("the adapter does not render to D32Float");
+        }
+        // Over depth cleared to 0, the triangle at depth 0 passes Always and
+        // fails Less.
+        GraphicsPipelineDesc depthDesc = colorPipeline();
+        depthDesc.depthStencilFormat = Format::D32Float;
+        depthDesc.depthStencil = {.depthTest = true,
+                                  .depthWrite = false,
+                                  .depthCompare = CompareOp::Always,
+                                  .stencilTest = false,
+                                  .front = {},
+                                  .back = {}};
+        const PipelineHandle passes = created(device, depthDesc);
+        depthDesc.depthStencil.depthCompare = CompareOp::Less;
+        const PipelineHandle rejected = created(device, depthDesc);
+        const TextureHandle depth = created(device, {.dimension = TextureDimension::D2,
+                                                     .format = Format::D32Float,
+                                                     .width = kSide,
+                                                     .height = kSide,
+                                                     .depth = 1,
+                                                     .layers = 1,
+                                                     .mipLevels = 1,
+                                                     .samples = 1,
+                                                     .usage = {.depthStencil = true}});
+        const std::uint64_t bytesPerRow = alignUp(std::uint64_t{kSide} * kTexelBytes,
+                                                  std::max<std::uint64_t>(caps.limits.copyRowPitchAlignment, 1));
+        const TextureHandle target = created(device, {.dimension = TextureDimension::D2,
+                                                      .format = Format::Rgba8Unorm,
+                                                      .width = kSide,
+                                                      .height = kSide,
+                                                      .depth = 1,
+                                                      .layers = 1,
+                                                      .mipLevels = 1,
+                                                      .samples = 1,
+                                                      .usage = {.copySrc = true, .colorAttachment = true}});
+        const BufferHandle image = created(device, {.size = bytesPerRow * kSide,
+                                                    .memory = BufferMemory::Readback,
+                                                    .usage = {.copyDst = true}});
+        constexpr std::uint32_t kPushes = 2;
+        const auto commands = device.createCommandPool(
+            {.queue = 0, .listCount = kPoolLists, .pushConstantUpdates = kPushes});
+        REQUIRE(commands.has_value());
+        auto list = device.beginCommands(*commands);
+        REQUIRE(list.has_value());
+
+        CHECK(device.resetQueries(*list, *pool, 0, kQueries).has_value());
+        CHECK(
+            device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
+        CHECK(device.textureBarrier(*list, depth, TextureLayout::Undefined, TextureLayout::DepthStencilTarget, {})
+                  .has_value());
+        RenderingDesc rendering{.colorAttachmentCount = 1,
+                                .colorAttachments = {},
+                                .depthStencil = {.texture = depth,
+                                                 .depthLoadOp = LoadOp::Clear,
+                                                 .depthStoreOp = StoreOp::DontCare,
+                                                 .stencilLoadOp = LoadOp::Clear,
+                                                 .stencilStoreOp = StoreOp::DontCare,
+                                                 .clearDepth = 0},
+                                .occlusionQueries = *pool};
+        rendering.colorAttachments[0] = {.texture = target,
+                                         .loadOp = LoadOp::Clear,
+                                         .storeOp = StoreOp::Store,
+                                         .clearColor = {0, 0, 0, 1}};
+        REQUIRE(device.beginRendering(*list, {}, rendering).has_value());
+        viewWhole(device, *list);
+        // Query 0 counts the triangle depth passes; query 1 the same triangle
+        // depth rejects.
+        for (const auto& [query, pipeline] : {std::pair{0U, passes}, std::pair{1U, rejected}}) {
+            CHECK(device.bindPipeline(*list, pipeline).has_value());
+            CHECK(device.pushConstants(*list, bytesOf({.positions = *slot, .color = {1, 0, 0, 1}})).has_value());
+            CHECK(device.beginQuery(*list, *pool, query, precise).has_value());
+            CHECK(device.draw(*list, kVertices, 1, 0, 0).has_value());
+            CHECK(device.endQuery(*list, *pool, query).has_value());
+        }
+        CHECK(device.endRendering(*list).has_value());
+        CHECK(device.resolveQueries(*list, *pool, 0, kQueries, results, 0).has_value());
+        CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::CopySrc, {}).has_value());
+        const BufferTextureCopy whole{.bufferOffset = 0,
+                                      .bytesPerRow = bytesPerRow,
+                                      .rowsPerImage = kSide,
+                                      .mipLevel = 0,
+                                      .layer = 0,
+                                      .aspect = TextureAspect::Color,
+                                      .x = 0,
+                                      .y = 0,
+                                      .z = 0,
+                                      .width = kSide,
+                                      .height = kSide,
+                                      .depth = 1};
+        CHECK(device.copyTextureToBuffer(*list, target, image, std::span{&whole, 1}).has_value());
+        const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+        INFO(failureOf(sent));
+        REQUIRE(sent.has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
+
+        // One sample a pixel: the precise count is the pixels the triangle
+        // turned red.
+        const auto texels = device.mapBuffer(image);
+        REQUIRE(texels.has_value());
+        std::uint64_t red = 0;
+        for (std::uint32_t y = 0; y < kSide; ++y) {
+            for (std::uint32_t x = 0; x < kSide; ++x) {
+                std::array<std::uint8_t, kTexelBytes> rgba{};
+                std::memcpy(rgba.data(), texels->data() + (y * bytesPerRow) + (std::uint64_t{x} * kTexelBytes),
+                            kTexelBytes);
+                red += rgba == kRed ? 1U : 0U;
+            }
+        }
+        REQUIRE(red != 0);
+        const auto read = device.mapBuffer(results);
+        REQUIRE(read.has_value());
+        const std::uint64_t drawn = valueAt(*read, layout->value);
+        const std::uint64_t none = valueAt(*read, layout->stride + std::uint64_t{layout->value});
+        INFO("passed " << drawn << ", rejected " << none << ", red pixels " << red);
+        if (precise) {
+            CHECK(drawn == red);
+        }
+        else {
+            CHECK(drawn != 0);
+        }
+        CHECK(none == 0);
+
+        constexpr std::uint8_t kPast = 99;
+        CHECK(device.createQueryPool({.type = static_cast<QueryType>(kPast), .count = 1, .statistics = {}})
+                  .error()
+                  .code == ErrorCode::RhiInvalidCall);
+        CHECK(device.destroyCommandPool(*commands).has_value());
+        CHECK(device.destroyTexture(target).has_value());
+        CHECK(device.destroyBuffer(image).has_value());
+        CHECK(device.destroyBuffer(results).has_value());
+        CHECK(device.destroyBuffer(positions).has_value());
+        CHECK(device.destroyPipeline(passes).has_value());
+        CHECK(device.destroyPipeline(rejected).has_value());
+        CHECK(device.destroyTexture(depth).has_value());
+        CHECK(device.destroyQueryPool(*pool).has_value());
+        CHECK(device.destroyQueryPool(*pool).error().code == ErrorCode::RhiInvalidHandle);
+        CHECK(device.queryLayout(*pool).error().code == ErrorCode::RhiInvalidHandle);
+        CHECK(device.destroyQueryPool({}).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device counts the pipeline statistics a pool selects, a dispatch's and a draw's, where queryLayout says",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const DrawDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const Caps& caps = made.instance->adapters()[0].caps;
+        if (!caps.features.queries || !caps.features.pipelineStatistics) {
+            SKIP("the adapter counts no pipeline statistics");
+        }
+        if (!takesSpirv(backend)) {
+            SKIP("no " << backend.name << " bytecode is checked in");
+        }
+        constexpr std::uint32_t kQueries = 2;
+        const auto pool = device.createQueryPool({.type = QueryType::PipelineStatistics,
+                                                  .count = kQueries,
+                                                  .statistics = {.inputVertices = true,
+                                                                 .inputPrimitives = true,
+                                                                 .vertexInvocations = true,
+                                                                 .computeInvocations = true}});
+        INFO(failureOf(pool));
+        REQUIRE(pool.has_value());
+        const auto layout = device.queryLayout(*pool);
+        REQUIRE(layout.has_value());
+        CHECK(layout->value == kNoOffset);
+        const auto offsetOf = [&](PipelineStatistic statistic) {
+            return layout->statistics.at(static_cast<std::size_t>(statistic));
+        };
+        for (const PipelineStatistic statistic :
+             {PipelineStatistic::InputVertices, PipelineStatistic::VertexInvocations,
+              PipelineStatistic::ComputeInvocations}) {
+            INFO("statistic " << static_cast<int>(statistic));
+            REQUIRE(offsetOf(statistic) != kNoOffset);
+            REQUIRE(offsetOf(statistic) + sizeof(std::uint64_t) <= layout->stride);
+        }
+        const std::uint64_t resultBytes = std::uint64_t{layout->stride} * kQueries;
+        const BufferHandle results =
+            created(device, {.size = resultBytes, .memory = BufferMemory::Readback, .usage = {.copyDst = true}});
+        constexpr std::uint64_t kStorageBytes = std::uint64_t{kWorkgroup} * sizeof(std::uint32_t);
+        const BufferHandle storage = created(device, {.size = kStorageBytes, .usage = {.storage = true}});
+        const auto storageAt = storageSlot(device, storage);
+        REQUIRE(storageAt.has_value());
+        const PipelineHandle compute = created(device,
+                                               ComputePipelineDesc{.compute = spirv(bfr::test::spirv::kBindlessComp),
+                                                                   .workgroupSize = {kWorkgroup, 1, 1}});
+        const BufferHandle positions = uploaded(device, kTopHalf, {.storage = true});
+        const auto positionsAt = storageSlot(device, positions);
+        REQUIRE(positionsAt.has_value());
+        const PipelineHandle draw = created(device, colorPipeline());
+        const TextureHandle target = created(device, {.dimension = TextureDimension::D2,
+                                                      .format = Format::Rgba8Unorm,
+                                                      .width = kSide,
+                                                      .height = kSide,
+                                                      .depth = 1,
+                                                      .layers = 1,
+                                                      .mipLevels = 1,
+                                                      .samples = 1,
+                                                      .usage = {.colorAttachment = true}});
+        constexpr std::uint32_t kPushes = 2;
+        const auto commands = device.createCommandPool(
+            {.queue = 0, .listCount = kPoolLists, .pushConstantUpdates = kPushes});
+        REQUIRE(commands.has_value());
+        auto list = device.beginCommands(*commands);
+        REQUIRE(list.has_value());
+
+        CHECK(device.resetQueries(*list, *pool, 0, kQueries).has_value());
+        // Query 0 counts one workgroup of compute; query 1 one triangle.
+        CHECK(device.beginQuery(*list, *pool, 0, false).has_value());
+        CHECK(device.bindPipeline(*list, compute).has_value());
+        CHECK(device.pushConstants(*list, bytesOf({.positions = *storageAt})).has_value());
+        CHECK(device.dispatch(*list, 1, 1, 1).has_value());
+        CHECK(device.endQuery(*list, *pool, 0).has_value());
+        CHECK(
+            device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
+        RenderingDesc rendering{.colorAttachmentCount = 1,
+                                .colorAttachments = {},
+                                .depthStencil = {},
+                                .occlusionQueries = {}};
+        rendering.colorAttachments[0] = {.texture = target, .loadOp = LoadOp::Clear, .storeOp = StoreOp::Store};
+        REQUIRE(device.beginRendering(*list, {}, rendering).has_value());
+        viewWhole(device, *list);
+        CHECK(device.beginQuery(*list, *pool, 1, false).has_value());
+        CHECK(device.bindPipeline(*list, draw).has_value());
+        CHECK(device.pushConstants(*list, bytesOf({.positions = *positionsAt, .color = {1, 0, 0, 1}})).has_value());
+        CHECK(device.draw(*list, kVertices, 1, 0, 0).has_value());
+        CHECK(device.endQuery(*list, *pool, 1).has_value());
+        CHECK(device.endRendering(*list).has_value());
+        CHECK(device.resolveQueries(*list, *pool, 0, kQueries, results, 0).has_value());
+        const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+        INFO(failureOf(sent));
+        REQUIRE(sent.has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
+
+        const auto read = device.mapBuffer(results);
+        REQUIRE(read.has_value());
+        const auto statistic = [&](std::uint32_t query, PipelineStatistic which) {
+            return valueAt(*read, (std::uint64_t{layout->stride} * query) + offsetOf(which));
+        };
+        CHECK(statistic(0, PipelineStatistic::ComputeInvocations) == kWorkgroup);
+        CHECK(statistic(0, PipelineStatistic::InputVertices) == 0);
+        CHECK(statistic(1, PipelineStatistic::InputVertices) == kVertices);
+        CHECK(statistic(1, PipelineStatistic::InputPrimitives) == 1);
+        CHECK(statistic(1, PipelineStatistic::VertexInvocations) != 0);
+        CHECK(statistic(1, PipelineStatistic::ComputeInvocations) == 0);
+
+        CHECK(device.destroyCommandPool(*commands).has_value());
+        CHECK(device.destroyTexture(target).has_value());
+        CHECK(device.destroyBuffer(results).has_value());
+        CHECK(device.destroyBuffer(storage).has_value());
+        CHECK(device.destroyBuffer(positions).has_value());
+        CHECK(device.destroyPipeline(compute).has_value());
+        CHECK(device.destroyPipeline(draw).has_value());
+        CHECK(device.destroyQueryPool(*pool).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device counts the primitives and invocations of a mesh draw, where it has mesh statistics",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const DrawDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const Caps& caps = made.instance->adapters()[0].caps;
+        if (!caps.features.queries || !caps.features.meshShader || !caps.features.meshStatistics ||
+            !caps.features.pipelineStatistics) {
+            SKIP("the adapter counts no mesh work");
+        }
+        if (!takesSpirv(backend)) {
+            SKIP("no " << backend.name << " bytecode is checked in");
+        }
+        const auto primitives = device.createQueryPool(
+            {.type = QueryType::MeshPrimitivesGenerated, .count = 1, .statistics = {}});
+        INFO(failureOf(primitives));
+        REQUIRE(primitives.has_value());
+        const auto invocations = device.createQueryPool(
+            {.type = QueryType::PipelineStatistics, .count = 1, .statistics = {.meshInvocations = true}});
+        INFO(failureOf(invocations));
+        REQUIRE(invocations.has_value());
+        const auto primitivesLayout = device.queryLayout(*primitives);
+        const auto invocationsLayout = device.queryLayout(*invocations);
+        REQUIRE(primitivesLayout.has_value());
+        REQUIRE(invocationsLayout.has_value());
+        const std::uint32_t meshAt = invocationsLayout->statistics.at(
+            static_cast<std::size_t>(PipelineStatistic::MeshInvocations));
+        REQUIRE(primitivesLayout->value != kNoOffset);
+        REQUIRE(meshAt != kNoOffset);
+        const BufferHandle results = created(device, {.size = std::uint64_t{primitivesLayout->stride} +
+                                                              invocationsLayout->stride,
+                                                      .memory = BufferMemory::Readback,
+                                                      .usage = {.copyDst = true}});
+        // Two triangles covering clip space, one a workgroup.
+        constexpr std::uint32_t kTriangleCorners = 6;
+        constexpr std::array<float, std::size_t{kTriangleCorners} * kPositionFloats> kHalves{-1, -1, 0,  1, 1, -1,
+                                                                                             0,  1,  -1, 1, 0, 1,
+                                                                                             1,  -1, 0,  1, 1, 1,
+                                                                                             0,  1,  -1, 1, 0, 1};
+        constexpr std::uint32_t kGroups = 2;
+        const BufferHandle positions = uploaded(device, kHalves, {.storage = true});
+        const auto slot = storageSlot(device, positions);
+        REQUIRE(slot.has_value());
+        GraphicsPipelineDesc meshDesc = colorPipeline();
+        meshDesc.vertex = {};
+        meshDesc.mesh = spirv(bfr::test::spirv::kTriangleMesh);
+        meshDesc.meshWorkgroupSize = {1, 1, 1};
+        const PipelineHandle mesh = created(device, meshDesc);
+        const TextureHandle target = created(device, {.dimension = TextureDimension::D2,
+                                                      .format = Format::Rgba8Unorm,
+                                                      .width = kSide,
+                                                      .height = kSide,
+                                                      .depth = 1,
+                                                      .layers = 1,
+                                                      .mipLevels = 1,
+                                                      .samples = 1,
+                                                      .usage = {.colorAttachment = true}});
+        const auto commands = device.createCommandPool({.queue = 0, .listCount = kPoolLists, .pushConstantUpdates = 1});
+        REQUIRE(commands.has_value());
+        auto list = device.beginCommands(*commands);
+        REQUIRE(list.has_value());
+
+        CHECK(device.resetQueries(*list, *primitives, 0, 1).has_value());
+        CHECK(device.resetQueries(*list, *invocations, 0, 1).has_value());
+        CHECK(
+            device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
+        RenderingDesc rendering{.colorAttachmentCount = 1,
+                                .colorAttachments = {},
+                                .depthStencil = {},
+                                .occlusionQueries = {}};
+        rendering.colorAttachments[0] = {.texture = target, .loadOp = LoadOp::Clear, .storeOp = StoreOp::Store};
+        REQUIRE(device.beginRendering(*list, {}, rendering).has_value());
+        viewWhole(device, *list);
+        CHECK(device.bindPipeline(*list, mesh).has_value());
+        CHECK(device.pushConstants(*list, bytesOf({.positions = *slot, .color = {1, 0, 0, 1}})).has_value());
+        CHECK(device.beginQuery(*list, *primitives, 0, false).has_value());
+        CHECK(device.beginQuery(*list, *invocations, 0, false).has_value());
+        CHECK(device.drawMesh(*list, kGroups, 1, 1).has_value());
+        CHECK(device.endQuery(*list, *invocations, 0).has_value());
+        CHECK(device.endQuery(*list, *primitives, 0).has_value());
+        CHECK(device.endRendering(*list).has_value());
+        CHECK(device.resolveQueries(*list, *primitives, 0, 1, results, 0).has_value());
+        CHECK(device.resolveQueries(*list, *invocations, 0, 1, results, primitivesLayout->stride).has_value());
+        const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+        INFO(failureOf(sent));
+        REQUIRE(sent.has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
+
+        const auto read = device.mapBuffer(results);
+        REQUIRE(read.has_value());
+        CHECK(valueAt(*read, primitivesLayout->value) == kGroups);
+        CHECK(valueAt(*read, std::uint64_t{primitivesLayout->stride} + meshAt) != 0);
+
+        CHECK(device.destroyCommandPool(*commands).has_value());
+        CHECK(device.destroyTexture(target).has_value());
+        CHECK(device.destroyBuffer(results).has_value());
+        CHECK(device.destroyBuffer(positions).has_value());
+        CHECK(device.destroyPipeline(mesh).has_value());
+        CHECK(device.destroyQueryPool(*primitives).has_value());
+        CHECK(device.destroyQueryPool(*invocations).has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
