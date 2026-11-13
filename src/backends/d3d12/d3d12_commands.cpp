@@ -84,6 +84,10 @@ core::Result<void> D3D12Device::setScissor(CommandListHandle commandList, const 
     // D3D12_RECT holds the edges as LONG.
     const std::uint64_t right = std::uint64_t{scissor.x} + scissor.width;
     const std::uint64_t bottom = std::uint64_t{scissor.y} + scissor.height;
+    if (!std::in_range<LONG>(right) || !std::in_range<LONG>(bottom)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "scissor edges {}, {} are past what D3D12 takes", right,
+                             bottom);
+    }
     const D3D12_RECT rect{.left = static_cast<LONG>(scissor.x),
                           .top = static_cast<LONG>(scissor.y),
                           .right = static_cast<LONG>(right),

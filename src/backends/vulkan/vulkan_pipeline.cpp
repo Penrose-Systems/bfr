@@ -955,6 +955,11 @@ core::Result<PipelineHandle> VulkanDevice::createRayTracingPipeline(const RayTra
     if (auto checked = checkPipelineExtras(desc, features_, rayTracing_.captureReplayIdentifierSize); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    // vkCmdSetRayTracingPipelineStackSizeKHR takes 32 bits.
+    if (!std::in_range<std::uint32_t>(desc.stackSize)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "a stack size of {} bytes is past what Vulkan takes",
+                             desc.stackSize);
+    }
     collectRetired();
     const auto cache = pipelineCacheFor(desc.cache);
     if (!cache) {

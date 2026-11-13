@@ -47,6 +47,11 @@ core::Result<void> VulkanDevice::setScissor(CommandListHandle commandList, const
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
+    // VkRect2D's offset is int32_t.
+    if (!std::in_range<std::int32_t>(scissor.x) || !std::in_range<std::int32_t>(scissor.y)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "scissor offset {}, {} is past what Vulkan takes",
+                             scissor.x, scissor.y);
+    }
     const VkRect2D rect{.offset = {.x = static_cast<std::int32_t>(scissor.x),
                                    .y = static_cast<std::int32_t>(scissor.y)},
                         .extent = {.width = scissor.width, .height = scissor.height}};

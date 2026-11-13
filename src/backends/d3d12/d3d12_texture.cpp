@@ -204,6 +204,18 @@ D3D12_TEXTURE_COPY_LOCATION textureSide(const D3D12Texture& texture, UINT subres
     return location;
 }
 
+// Fails with RhiInvalidCall when a region's bytes per row has no room in the
+// footprint's UINT RowPitch, before any region is recorded.
+core::Result<void> checkRowPitches(std::span<const BufferTextureCopy> regions) {
+    for (const BufferTextureCopy& region : regions) {
+        if (!std::in_range<UINT>(region.bytesPerRow)) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes per row is more than D3D12 takes",
+                                 region.bytesPerRow);
+        }
+    }
+    return {};
+}
+
 D3D12_BOX boxOf(const FormatBlock& block, std::uint32_t x, std::uint32_t y, std::uint32_t z, std::uint32_t width,
                 std::uint32_t height, std::uint32_t depth) {
     return {.left = x,
@@ -314,6 +326,10 @@ core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3
     const DxgiFormats formats = dxgiFormatsFor(desc.format);
     const bool slices = desc.dimension == TextureDimension::D3;
     const std::uint32_t depthOrLayers = slices ? desc.depth : desc.layers;
+    if (!std::in_range<UINT16>(depthOrLayers) || !std::in_range<UINT16>(desc.mipLevels)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "{} {} and {} mip levels are more than D3D12 takes",
+                             depthOrLayers, slices ? "slices" : "layers", desc.mipLevels);
+    }
     // A depth texture shaders also read is made typeless, so its depth view
     // and its shader view are both views of it; its views name their formats.
     const bool depth = formats.depth != DXGI_FORMAT_UNKNOWN;
@@ -623,6 +639,9 @@ core::Result<void> D3D12Device::copyBufferToTexture(CommandListHandle commandLis
     if (auto checked = checkAspects(regions); !checked) {
         return checked;
     }
+    if (auto checked = checkRowPitches(regions); !checked) {
+        return checked;
+    }
     const FormatBlock& block = blockOf((*to)->desc.format);
     for (const BufferTextureCopy& region : regions) {
         const D3D12_TEXTURE_COPY_LOCATION source = bufferSide((*from)->resource.Get(), **to, region);
@@ -653,6 +672,9 @@ core::Result<void> D3D12Device::copyTextureToBuffer(CommandListHandle commandLis
         return std::unexpected(std::move(to.error()));
     }
     if (auto checked = checkAspects(regions); !checked) {
+        return checked;
+    }
+    if (auto checked = checkRowPitches(regions); !checked) {
         return checked;
     }
     const FormatBlock& block = blockOf((*from)->desc.format);
@@ -865,6 +887,11 @@ core::Result<ID3D12Resource*> D3D12Device::addTextureTiles(D3D12TileMappings& ti
         if (region.mipLevel >= firstTail) {
             // The layer's first packed mip names its tail, and X is a tile in
             // it, as Diligent maps one (D3DTileMappingHelper.hpp:90, 111-123).
+            if (!std::in_range<UINT>(region.tailTile) || !std::in_range<UINT>(region.tailTiles)) {
+                return core::failure(core::ErrorCode::RhiInvalidCall,
+                                     "{} tail tiles from tile {} are past what D3D12 takes", region.tailTiles,
+                                     region.tailTile);
+            }
             coordinate = {.X = static_cast<UINT>(region.tailTile),
                           .Y = 0,
                           .Z = 0,
@@ -875,6 +902,12 @@ core::Result<ID3D12Resource*> D3D12Device::addTextureTiles(D3D12TileMappings& ti
         else {
             // A box of tiles in the mip level, whose Height and Depth are UINT16s.
             const std::uint64_t count = std::uint64_t{region.width} * region.height * region.depth;
+            if (!std::in_range<UINT16>(region.height) || !std::in_range<UINT16>(region.depth) ||
+                !std::in_range<UINT>(count)) {
+                return core::failure(core::ErrorCode::RhiInvalidCall,
+                                     "a box of {} by {} by {} tiles is past what D3D12 takes", region.width,
+                                     region.height, region.depth);
+            }
             coordinate = {.X = region.x,
                           .Y = region.y,
                           .Z = region.z,
