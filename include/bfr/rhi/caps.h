@@ -318,6 +318,10 @@ struct Features {
     /// Device::beginQueueDebugLabel, endQueueDebugLabel and
     /// insertQueueDebugLabel.
     bool queueDebugLabels = false;
+    /// The name field of the descs of buffers, textures, pipelines, pipeline
+    /// caches, timestamp and query pools and acceleration structures; where
+    /// false, a create given a name fails with RhiUnsupported.
+    bool objectNames = false;
 };
 
 struct MemoryHeap {

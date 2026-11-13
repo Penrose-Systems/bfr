@@ -278,6 +278,7 @@ void printFeatures(const bfr::CapsFeatures& f, const bfr::CapsSparse& sparse) {
         {.has = f.occlusionQueryPrecise, .name = "precise occlusion"},
         {.has = f.debugLabels, .name = "debug labels"},
         {.has = f.queueDebugLabels, .name = "queue debug labels"},
+        {.has = f.objectNames, .name = "object names"},
         {.has = sparse.binding, .name = "sparse binding"},
         {.has = sparse.textures2d, .name = "sparse textures"},
         {.has = sparse.buffers, .name = "sparse buffers"},
@@ -614,7 +615,8 @@ void printAllFeatures(const bfr::CapsFeatures& f) {
                        field("pipelineStatistics", f.pipelineStatistics),
                        field("occlusionQueryPrecise", f.occlusionQueryPrecise),
                        field("debugLabels", f.debugLabels),
-                       field("queueDebugLabels", f.queueDebugLabels)});
+                       field("queueDebugLabels", f.queueDebugLabels),
+                       field("objectNames", f.objectNames)});
 }
 
 void printAllMemory(const bfr::Caps& caps) {

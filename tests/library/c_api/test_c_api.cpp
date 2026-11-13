@@ -734,7 +734,8 @@ TEST_CASE("C API passes sparse calls through, and refuses what is not sparse or 
                                    .acceleration_structure_storage = BFR_FALSE},
                          .sparse = BFR_FALSE,
                          .sparse_aliased = BFR_FALSE,
-                         .tile_bytes = 0};
+                         .tile_bytes = 0,
+                         .name = {}};
     bfr_buffer plain{};
     REQUIRE(bfr_create_buffer(device.device, &desc, &plain) == BFR_RESULT_SUCCESS);
     bfr_buffer_tiling tiling{};
@@ -798,7 +799,8 @@ TEST_CASE("C API creates, maps and destroys a buffer, and refuses what it can't 
                                    .acceleration_structure_storage = BFR_FALSE},
                          .sparse = BFR_FALSE,
                          .sparse_aliased = BFR_FALSE,
-                         .tile_bytes = 0};
+                         .tile_bytes = 0,
+                         .name = {}};
     bfr_buffer upload{};
     REQUIRE(bfr_create_buffer(device.device, &desc, &upload) == BFR_RESULT_SUCCESS);
     desc.memory = BFR_BUFFER_MEMORY_DEVICE;
@@ -881,7 +883,8 @@ TEST_CASE("C API creates and destroys pipelines, and refuses a state value it do
     const bfr_compute_pipeline_desc computeDesc{.next = nullptr,
                                                 .compute = code(bfr::test::spirv::kBindlessComp),
                                                 .workgroup_size = {kWorkgroup, 1, 1},
-                                                .cache = {}};
+                                                .cache = {},
+                                                .name = {}};
     bfr_pipeline compute{};
     REQUIRE(bfr_create_compute_pipeline(device.device, &computeDesc, &compute) == BFR_RESULT_SUCCESS);
 
@@ -932,7 +935,7 @@ TEST_CASE("C API writes a pipeline cache's bytes, saying when it wrote only part
     std::vector<std::string> messages;
     const Instance instance{backend, messages};
     const HeadlessDevice device{instance.instance};
-    const bfr_pipeline_cache_desc empty{.data = nullptr, .data_size = 0};
+    const bfr_pipeline_cache_desc empty{.data = nullptr, .data_size = 0, .name = {}};
     bfr_pipeline_cache cache{};
     REQUIRE(bfr_create_pipeline_cache(device.device, &empty, &cache) == BFR_RESULT_SUCCESS);
     const bfr_compute_pipeline_desc computeDesc{.next = nullptr,
@@ -940,7 +943,8 @@ TEST_CASE("C API writes a pipeline cache's bytes, saying when it wrote only part
                                                             .code_size = bfr::test::spirv::kBindlessComp.size(),
                                                             .entry_point = {.data = "main", .length = 4}},
                                                 .workgroup_size = {kWorkgroup, 1, 1},
-                                                .cache = cache};
+                                                .cache = cache,
+                                                .name = {}};
     bfr_pipeline pipeline{};
     REQUIRE(bfr_create_compute_pipeline(device.device, &computeDesc, &pipeline) == BFR_RESULT_SUCCESS);
 
@@ -956,10 +960,10 @@ TEST_CASE("C API writes a pipeline cache's bytes, saying when it wrote only part
     REQUIRE(bfr_get_pipeline_cache_data(device.device, cache, &whole, bytes.data()) == BFR_RESULT_SUCCESS);
     CHECK(whole == size);
 
-    const bfr_pipeline_cache_desc saved{.data = bytes.data(), .data_size = whole};
+    const bfr_pipeline_cache_desc saved{.data = bytes.data(), .data_size = whole, .name = {}};
     bfr_pipeline_cache again{};
     REQUIRE(bfr_create_pipeline_cache(device.device, &saved, &again) == BFR_RESULT_SUCCESS);
-    const bfr_pipeline_cache_desc stray{.data = nullptr, .data_size = 1};
+    const bfr_pipeline_cache_desc stray{.data = nullptr, .data_size = 1, .name = {}};
     bfr_pipeline_cache none{};
     CHECK(bfr_create_pipeline_cache(device.device, &stray, &none) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     CHECK(none.bits == 0);
@@ -989,7 +993,8 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, directly
                                                             .code_size = bfr::test::spirv::kBindlessComp.size(),
                                                             .entry_point = {.data = "main", .length = 4}},
                                                 .workgroup_size = {kWorkgroup, 1, 1},
-                                                .cache = {}};
+                                                .cache = {},
+                                                .name = {}};
     bfr_pipeline pipeline{};
     REQUIRE(bfr_create_compute_pipeline(device.device, &computeDesc, &pipeline) == BFR_RESULT_SUCCESS);
     bfr_buffer_desc bufferDesc{.next = nullptr,
@@ -1013,7 +1018,8 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, directly
                                          .acceleration_structure_storage = BFR_FALSE},
                                .sparse = BFR_FALSE,
                                .sparse_aliased = BFR_FALSE,
-                               .tile_bytes = 0};
+                               .tile_bytes = 0,
+                               .name = {}};
     bfr_buffer target{};
     REQUIRE(bfr_create_buffer(device.device, &bufferDesc, &target) == BFR_RESULT_SUCCESS);
     bufferDesc.memory = BFR_BUFFER_MEMORY_READBACK;
@@ -1141,7 +1147,8 @@ TEST_CASE("C API renders to a texture with the viewport and scissor set, and ref
                                                  .depth_stencil = BFR_FALSE},
                                        .sparse = BFR_FALSE,
                                        .sparse_aliased = BFR_FALSE,
-                                       .tile_bytes = 0};
+                                       .tile_bytes = 0,
+                                       .name = {}};
     bfr_texture target{};
     REQUIRE(bfr_create_texture(device.device, &textureDesc, &target) == BFR_RESULT_SUCCESS);
     const bfr_command_pool_desc poolDesc{.next = nullptr, .queue = 0, .list_count = 1, .push_constant_updates = 0};
@@ -1234,7 +1241,7 @@ TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call tim
     std::vector<std::string> messages;
     const Instance instance{backend, messages, BFR_TRUE, BFR_TRUE};
     const HeadlessDevice device{instance.instance};
-    const bfr_timestamp_pool_desc desc{.queue = 0, .count = 2};
+    const bfr_timestamp_pool_desc desc{.queue = 0, .count = 2, .name = {}};
     bfr_timestamp_pool pool{};
 
     REQUIRE(bfr_create_timestamp_pool(device.device, &desc, &pool) == BFR_RESULT_SUCCESS);
@@ -1264,13 +1271,16 @@ TEST_CASE("C API makes a query pool and gives where its results land, as the dev
     const HeadlessDevice device{instance.instance};
     bfr_caps caps{};
     REQUIRE(bfr_get_caps(instance.instance, device.adapter, &caps) == BFR_RESULT_SUCCESS);
-    const bfr_query_pool_desc desc{.type = BFR_QUERY_TYPE_OCCLUSION, .count = 2, .statistics = {}};
+    const bfr_query_pool_desc desc{.type = BFR_QUERY_TYPE_OCCLUSION, .count = 2, .statistics = {}, .name = {}};
     bfr_query_pool pool{};
     if (caps.features.queries == BFR_FALSE) {
         CHECK(bfr_create_query_pool(device.device, &desc, &pool) == BFR_RESULT_ERROR_UNSUPPORTED);
         SKIP("the adapter makes no query pools");
     }
-    const bfr_query_pool_desc unknown{.type = static_cast<bfr_query_type>(99), .count = 1, .statistics = {}};
+    const bfr_query_pool_desc unknown{.type = static_cast<bfr_query_type>(99),
+                                      .count = 1,
+                                      .statistics = {},
+                                      .name = {}};
     CHECK(bfr_create_query_pool(device.device, &unknown, &pool) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     REQUIRE(bfr_create_query_pool(device.device, &desc, &pool) == BFR_RESULT_SUCCESS);
     bfr_query_pool second{};
@@ -1284,7 +1294,7 @@ TEST_CASE("C API makes a query pool and gives where its results land, as the dev
     CHECK(bfr_get_query_layout(device.device, pool, &layout) == BFR_RESULT_ERROR_INVALID_HANDLE);
 }
 
-TEST_CASE("C API labels a list's and a queue's work as the device's caps allow, and refuses what it can't take",
+TEST_CASE("C API labels work and names objects as the device's caps allow, and refuses what it can't take",
           "[c_api][gpu]") {
     const bfr_backend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
@@ -1321,6 +1331,21 @@ TEST_CASE("C API labels a list's and a queue's work as the device's caps allow, 
         CHECK(bfr_end_queue_debug_label(device.device, 0) == BFR_RESULT_SUCCESS);
     }
     bfr_destroy_command_pool(device.device, pool);
+
+    // Object names, on a timestamp pool.
+    const bfr_timestamp_pool_desc noName{.queue = 0, .count = 1, .name = {.data = nullptr, .length = 1}};
+    const bfr_timestamp_pool_desc named{.queue = 0, .count = 1, .name = {.data = "frame", .length = 5}};
+    constexpr std::uint64_t kStale = 1;
+    bfr_timestamp_pool timestamps{.bits = kStale};
+    CHECK(bfr_create_timestamp_pool(device.device, &noName, &timestamps) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(timestamps.bits == 0);
+    if (caps.features.object_names == BFR_FALSE) {
+        CHECK(bfr_create_timestamp_pool(device.device, &named, &timestamps) == BFR_RESULT_ERROR_UNSUPPORTED);
+    }
+    else if (caps.timestamps.graphics != BFR_FALSE) {
+        CHECK(bfr_create_timestamp_pool(device.device, &named, &timestamps) == BFR_RESULT_SUCCESS);
+        bfr_destroy_timestamp_pool(device.device, timestamps);
+    }
 }
 
 TEST_CASE("C API creates and destroys swapchains on one device from many threads", "[c_api][gpu]") {
@@ -1980,7 +2005,8 @@ TEST_CASE("C API passes a structure's capture to a replay on another device, whe
                                                       .motion_keyframes = 0,
                                                       .motion_instances = 0,
                                                       .capture_replay = BFR_TRUE,
-                                                      .replay = {}};
+                                                      .replay = {},
+                                                      .name = {}};
         bfr_acceleration_structure_capture capture{};
         std::uint64_t reference = 0;
         {
@@ -2082,7 +2108,8 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
                                                    .acceleration_structure_storage = BFR_FALSE},
                                          .sparse = BFR_FALSE,
                                          .sparse_aliased = BFR_FALSE,
-                                         .tile_bytes = 0};
+                                         .tile_bytes = 0,
+                                         .name = {}};
         bfr_buffer vertices{};
         REQUIRE(bfr_create_buffer(device, &vertexDesc, &vertices) == BFR_RESULT_SUCCESS);
         const bfr_triangle_geometry triangle{.vertices = vertices,
@@ -2118,7 +2145,8 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
                                                             .motion_keyframes = 0,
                                                             .motion_instances = 0,
                                                             .capture_replay = BFR_FALSE,
-                                                            .replay = {}};
+                                                            .replay = {},
+                                                            .name = {}};
         bfr_acceleration_structure bottom{};
         REQUIRE(bfr_create_acceleration_structure(device, &structureDesc, &bottom) == BFR_RESULT_SUCCESS);
 
@@ -2322,7 +2350,8 @@ TEST_CASE("C API makes shaders and a ray tracing pipeline from them, and gives i
                                                  .replay_identifiers_size = 0,
                                                  .allow_opacity_micromaps = BFR_FALSE,
                                                  .allow_motion = BFR_FALSE,
-                                                 .allow_clusters = BFR_FALSE};
+                                                 .allow_clusters = BFR_FALSE,
+                                                 .name = {}};
         bfr_pipeline pipeline{};
         bfr_ray_tracing_pipeline_desc unnamed = desc;
         unnamed.library_count = 1;

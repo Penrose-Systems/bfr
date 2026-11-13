@@ -30,12 +30,14 @@
 #include <volk.h>
 
 #include <atomic>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -420,6 +422,16 @@ private:
     [[nodiscard]] core::Result<VulkanQueue*> labelledQueue(std::uint32_t queue);
     // The room for the label of the list in slot.
     [[nodiscard]] std::span<char> listLabel(std::uint32_t slot);
+    // Names object of type as a debugger shows it; an empty name does
+    // nothing. Callers check the name with checkObjectName first. Fails with
+    // RhiDeviceFailed when the API refuses.
+    template <class Object>
+    [[nodiscard]] core::Result<void> nameObject(VkObjectType type, Object object, std::string_view name) const {
+        return nameHandle(type, std::bit_cast<std::uint64_t>(object), name);
+    }
+    [[nodiscard]] core::Result<void> nameHandle(VkObjectType type, std::uint64_t handle, std::string_view name) const;
+    // Names texture's image and its views.
+    [[nodiscard]] core::Result<void> nameTexture(const VulkanTexture& texture, std::string_view name) const;
     [[nodiscard]] core::Result<VulkanBuffer*> bufferFor(BufferHandle buffer);
     [[nodiscard]] core::Result<VulkanTexture*> textureFor(TextureHandle texture);
     [[nodiscard]] core::Result<VulkanPipeline*> pipelineFor(PipelineHandle pipeline);

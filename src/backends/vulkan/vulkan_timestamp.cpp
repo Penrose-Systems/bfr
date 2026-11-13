@@ -4,6 +4,7 @@
 #include "bfr/rhi/timestamp.h"
 #include "rhi/command_check.h"
 #include "rhi/enum_check.h"
+#include "rhi/name_check.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_result.h"
 
@@ -81,6 +82,9 @@ core::Result<TimestampPoolHandle> VulkanDevice::createTimestampPool(const Timest
     if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
     collectRetired();
     VkQueryPoolCreateInfo info{};
@@ -91,7 +95,11 @@ core::Result<TimestampPoolHandle> VulkanDevice::createTimestampPool(const Timest
     if (const VkResult result = table_.vkCreateQueryPool(device_, &info, nullptr, &pool); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateQueryPool", .result = result});
     }
-    const TimestampPoolHandle made = timestampPools_.emplace(VulkanTimestampPool{table_, device_, pool});
+    VulkanTimestampPool held{table_, device_, pool};
+    if (auto named = nameObject(VK_OBJECT_TYPE_QUERY_POOL, pool, desc.name); !named) {
+        return std::unexpected(std::move(named.error()));
+    }
+    const TimestampPoolHandle made = timestampPools_.emplace(std::move(held));
     if (made.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} timestamp pools",
                              desc_.maxTimestampPools);

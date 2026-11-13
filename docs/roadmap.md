@@ -40,7 +40,9 @@ reference); acceleration structure capture and replay (structures made again
 at the references another device gave them); queries (occlusion, exact
 where precise, pipeline statistics and mesh primitives, resolved into a
 buffer as each pool's layout says); debug labels (named regions and points
-in a list's work and a queue's).
+in a list's work and a queue's) and object names (buffers, textures,
+pipelines, pipeline caches, timestamp and query pools, acceleration
+structures).
 
 D3D12 and Metal are paused while Vulkan takes shape (owner, 2026-11-08); they
 still type-check.

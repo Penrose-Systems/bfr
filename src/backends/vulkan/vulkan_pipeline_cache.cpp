@@ -2,6 +2,7 @@
 
 #include "bfr/core/error.h"
 #include "bfr/rhi/pipeline.h"
+#include "rhi/name_check.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_result.h"
 
@@ -68,9 +69,15 @@ core::Result<VulkanPipelineCache> createVulkanPipelineCache(const VolkDeviceTabl
 }
 
 core::Result<PipelineCacheHandle> VulkanDevice::createPipelineCache(const PipelineCacheDesc& desc) {
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     auto made = createVulkanPipelineCache(table_, device_, desc.data);
     if (!made) {
         return std::unexpected(std::move(made.error()));
+    }
+    if (auto named = nameObject(VK_OBJECT_TYPE_PIPELINE_CACHE, made->cache(), desc.name); !named) {
+        return std::unexpected(std::move(named.error()));
     }
     const PipelineCacheHandle cache = pipelineCaches_.emplace(std::move(*made));
     if (cache.isNull()) {

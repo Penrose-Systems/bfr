@@ -3,6 +3,7 @@
 #include "bfr/core/handle.h"
 
 #include <cstdint>
+#include <string_view>
 
 namespace bfr::rhi {
 
@@ -16,6 +17,12 @@ using TimestampPoolHandle = core::Handle<TimestampPool>;
 struct TimestampPoolDesc {
     std::uint32_t queue = 0;
     std::uint32_t count = 0;
+    /// What a debugger or profiler shows it as, where Features::objectNames;
+    /// read during the call only. Empty is none. The create call fails with
+    /// RhiUnsupported for a name where Features::objectNames is false,
+    /// RhiInvalidCall for one holding a '\0', which the backend reads as its
+    /// end, and RhiDeviceFailed when the backend refuses it.
+    std::string_view name{};
 };
 
 /// The point in a list's work a timestamp is written at. Which ones a backend

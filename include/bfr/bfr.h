@@ -1687,6 +1687,11 @@ typedef struct bfr_buffer_desc {
     bfr_bool sparse_aliased;
     // One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty; only when sparse.
     uint32_t tile_bytes;
+    // What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    // the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    // that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    // is false, and error_device_failed when the backend refuses it.
+    bfr_string name;
 } bfr_buffer_desc;
 
 // The arguments of one indirect draw, as a buffer holds them for bfr_draw_indirect; the layout
@@ -1766,6 +1771,11 @@ typedef struct bfr_texture_desc {
     bfr_bool sparse_aliased;
     // One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty; only when sparse.
     uint32_t tile_bytes;
+    // What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    // the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    // that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    // is false, and error_device_failed when the backend refuses it.
+    bfr_string name;
 } bfr_texture_desc;
 
 // How to create a timestamp pool.
@@ -1774,6 +1784,11 @@ typedef struct bfr_timestamp_pool_desc {
     uint32_t queue;
     // How many timestamps it holds.
     uint32_t count;
+    // What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    // the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    // that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    // is false, and error_device_failed when the backend refuses it.
+    bfr_string name;
 } bfr_timestamp_pool_desc;
 
 // How long a timestamp tick lasts, in the unit the backend gives: a period in nanoseconds or a
@@ -1809,6 +1824,11 @@ typedef struct bfr_query_pool_desc {
     uint32_t count;
     // Read only for pipeline_statistics.
     bfr_pipeline_statistics_mask statistics;
+    // What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    // the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    // that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    // is false, and error_device_failed when the backend refuses it.
+    bfr_string name;
 } bfr_query_pool_desc;
 
 // A name a debugger or profiler shows on a region of a list's or a queue's work, or on one point in
@@ -2108,6 +2128,11 @@ typedef struct bfr_ray_tracing_pipeline_desc {
     // Its traces may reach cluster bottom structures, which they must be made with to, where
     // bfr_caps_features.cluster_acceleration_structure.
     bfr_bool allow_clusters;
+    // What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    // the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    // that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    // is false, and error_device_failed when the backend refuses it.
+    bfr_string name;
 } bfr_ray_tracing_pipeline_desc;
 
 // Records in a shader binding table: size bytes from offset in buffer, which has
@@ -2163,6 +2188,11 @@ typedef struct bfr_compute_pipeline_desc {
     uint32_t workgroup_size[3];
     // Where the pipeline is looked for, and added on a miss; null is none.
     bfr_pipeline_cache cache;
+    // What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    // the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    // that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    // is false, and error_device_failed when the backend refuses it.
+    bfr_string name;
 } bfr_compute_pipeline_desc;
 
 // How to create a graphics pipeline. Vertices are pulled: the vertex shader reads them by index
@@ -2208,6 +2238,11 @@ typedef struct bfr_graphics_pipeline_desc {
     float min_sample_shading;
     // Where the pipeline is looked for, and added on a miss; null is none.
     bfr_pipeline_cache cache;
+    // What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    // the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    // that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    // is false, and error_device_failed when the backend refuses it.
+    bfr_string name;
 } bfr_graphics_pipeline_desc;
 
 // How to create a pipeline cache.
@@ -2217,6 +2252,11 @@ typedef struct bfr_pipeline_cache_desc {
     const uint8_t* data;
     // Bytes; 0 is an empty cache.
     size_t data_size;
+    // What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    // the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    // that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    // is false, and error_device_failed when the backend refuses it.
+    bfr_string name;
 } bfr_pipeline_cache_desc;
 
 // A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was submitted
@@ -2780,6 +2820,11 @@ typedef struct bfr_acceleration_structure_desc {
     bfr_bool capture_replay;
     // All zero is none.
     bfr_acceleration_structure_capture replay;
+    // What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    // the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    // that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    // is false, and error_device_failed when the backend refuses it.
+    bfr_string name;
 } bfr_acceleration_structure_desc;
 
 // One geometry's counts, as a buffer holds them for bfr_build_acceleration_structure_indirect:
@@ -3265,6 +3310,9 @@ typedef struct bfr_caps_features {
     bfr_bool debug_labels;
     // bfr_begin_queue_debug_label, bfr_end_queue_debug_label and bfr_insert_queue_debug_label.
     bfr_bool queue_debug_labels;
+    // The name member of the descs of buffers, textures, pipelines, pipeline caches, timestamp and
+    // query pools and acceleration structures.
+    bfr_bool object_names;
 } bfr_caps_features;
 
 // One pool of memory.

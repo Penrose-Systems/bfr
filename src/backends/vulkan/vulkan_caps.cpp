@@ -1173,9 +1173,10 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t v
     const DeviceFeatures features(vk, adapter, version, extensions);
     const PropertyQuery properties(vk, adapter, version, extensions);
     Features reported = featuresFrom(features, properties, extensions);
-    // VK_EXT_debug_utils labels both command buffers and queues.
+    // VK_EXT_debug_utils labels command buffers and queues, and names objects.
     reported.debugLabels = debugUtils;
     reported.queueDebugLabels = debugUtils;
+    reported.objectNames = debugUtils;
     KindFlags kinds;
     Caps caps{
         .info = infoFrom(properties),

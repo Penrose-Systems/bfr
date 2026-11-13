@@ -12,6 +12,7 @@
 #include "rhi/bindless_slots.h"
 #include "rhi/buffer_check.h"
 #include "rhi/enum_check.h"
+#include "rhi/name_check.h"
 
 #include <Metal/Metal.hpp>
 #include <Metal/MTL4CommandQueue.hpp>
@@ -142,6 +143,9 @@ core::Result<void> MetalDevice::runGarbageCollection() {
 
 core::Result<BufferHandle> MetalDevice::createBuffer(const BufferDesc& desc) {
     if (auto checked = checkBufferDesc(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     // Cold, so buffers the GPU is done with are freed here, never on the

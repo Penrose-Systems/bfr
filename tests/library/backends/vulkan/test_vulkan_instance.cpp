@@ -5,6 +5,7 @@
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
 #include "bfr/rhi/acceleration_structure.h"
+#include "bfr/rhi/buffer.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/swapchain.h"
@@ -1377,4 +1378,39 @@ TEST_CASE("Vulkan passes an end label with no begin through, and validation repo
     }
     CHECK_THAT(errors, Catch::Matchers::AnyMatch(
                            Catch::Matchers::ContainsSubstring("VUID-vkCmdEndDebugUtilsLabelEXT-commandBuffer-01912")));
+}
+
+TEST_CASE("Vulkan names a buffer as its desc says, and validation reports it by that name", "[vulkan][gpu]") {
+    std::vector<std::string> errors;
+    {
+        auto created = Instance::create(recordingErrorsInto(errors), kValidation);
+        INFO(failureOf(created));
+        REQUIRE(created.has_value());
+        const std::unique_ptr<Instance> instance = std::move(*created);
+        if (!instance->adapters()[0].caps.features.objectNames) {
+            SKIP("the instance has no VK_EXT_debug_utils");
+        }
+        auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+        INFO(failureOf(made));
+        REQUIRE(made.has_value());
+        Device& device = **made;
+        constexpr std::uint64_t kBytes = 256;
+        const auto source = device.createBuffer({.size = kBytes, .usage = {.copySrc = true}, .name = "source"});
+        REQUIRE(source.has_value());
+        // No copyDst usage, which a copy into it needs.
+        const auto target = device.createBuffer(
+            {.size = kBytes, .usage = {.copySrc = true}, .name = "bfr-named-target"});
+        REQUIRE(target.has_value());
+        const auto commands = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(commands.has_value());
+        auto list = device.beginCommands(*commands);
+        REQUIRE(list.has_value());
+        const BufferCopy region{.srcOffset = 0, .dstOffset = 0, .size = kBytes};
+
+        CHECK(device.copyBuffer(*list, *source, *target, std::span{&region, 1}).has_value());
+        CHECK(device.destroyCommandPool(*commands).has_value());
+        CHECK(device.destroyBuffer(*target).has_value());
+        CHECK(device.destroyBuffer(*source).has_value());
+    }
+    CHECK_THAT(errors, Catch::Matchers::AnyMatch(Catch::Matchers::ContainsSubstring("bfr-named-target")));
 }

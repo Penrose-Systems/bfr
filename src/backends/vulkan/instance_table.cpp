@@ -39,6 +39,7 @@ InstanceTable loadInstanceTable(VkInstance instance) {
     BFR_LOAD(vkQueueBeginDebugUtilsLabelEXT);
     BFR_LOAD(vkQueueEndDebugUtilsLabelEXT);
     BFR_LOAD(vkQueueInsertDebugUtilsLabelEXT);
+    BFR_LOAD(vkSetDebugUtilsObjectNameEXT);
     BFR_LOAD(vkGetPhysicalDeviceProperties);
     BFR_LOAD(vkGetPhysicalDeviceProperties2);
     BFR_LOAD(vkGetPhysicalDeviceFeatures2);

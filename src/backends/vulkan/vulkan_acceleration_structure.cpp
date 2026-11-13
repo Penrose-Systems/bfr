@@ -6,6 +6,7 @@
 #include "rhi/acceleration_structure_check.h"
 #include "rhi/bindless_slots.h"
 #include "rhi/enum_check.h"
+#include "rhi/name_check.h"
 #include "vulkan/vulkan_buffer.h"
 #include "vulkan/vulkan_caps.h"
 #include "vulkan/vulkan_device.h"
@@ -719,6 +720,9 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     if (desc.captureReplay && desc.type == AccelerationStructureType::OpacityMicromap) {
         return micromapHasNoReference();
     }
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Cold, so structures the GPU is done with are freed here.
     collectRetired();
     auto slot = bindless_.takeAccelerationStructure(desc.type);
@@ -757,6 +761,11 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
             giveBack();
             return std::unexpected(std::move(storage.error()));
         }
+        // Its buffer is all there is to name.
+        if (auto named = nameObject(VK_OBJECT_TYPE_BUFFER, storage->buffer(), desc.name); !named) {
+            giveBack();
+            return std::unexpected(std::move(named.error()));
+        }
         const VkDeviceAddress address = storage->address();
         if (desc.captureReplay) {
             captured.words[kReferenceWord] = address;
@@ -786,6 +795,11 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
         giveBack();
         return std::unexpected(std::move(storage.error()));
     }
+    // The structure and its buffer, by the one name.
+    if (auto named = nameObject(VK_OBJECT_TYPE_BUFFER, storage->buffer(), desc.name); !named) {
+        giveBack();
+        return std::unexpected(std::move(named.error()));
+    }
     if (micromap) {
         VkMicromapCreateInfoEXT info{};
         info.sType = VK_STRUCTURE_TYPE_MICROMAP_CREATE_INFO_EXT;
@@ -797,8 +811,13 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
             giveBack();
             return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateMicromapEXT", .result = result});
         }
-        const AccelerationStructureHandle named = accelerationStructures_.emplace(VulkanAccelerationStructure{
-            table_, device_, std::move(*storage), VK_NULL_HANDLE, made, desc, *slot, 0, {}});
+        VulkanAccelerationStructure held{table_, device_, std::move(*storage), VK_NULL_HANDLE, made, desc, *slot,
+                                         0,      {}};
+        if (auto labelled = nameObject(VK_OBJECT_TYPE_MICROMAP_EXT, made, desc.name); !labelled) {
+            giveBack();
+            return std::unexpected(std::move(labelled.error()));
+        }
+        const AccelerationStructureHandle named = accelerationStructures_.emplace(std::move(held));
         if (named.isNull()) {
             giveBack();
             return core::failure(core::ErrorCode::RhiLimitReached,
@@ -838,9 +857,13 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     if (desc.captureReplay) {
         captured.words[kReferenceWord] = reference;
     }
-    const AccelerationStructureHandle made = accelerationStructures_.emplace(
-        VulkanAccelerationStructure{table_, device_, std::move(*storage), structure, VK_NULL_HANDLE, desc, *slot,
-                                    reference, captured});
+    VulkanAccelerationStructure held{table_, device_, std::move(*storage), structure, VK_NULL_HANDLE,
+                                     desc,   *slot,   reference,           captured};
+    if (auto labelled = nameObject(VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR, structure, desc.name); !labelled) {
+        giveBack();
+        return std::unexpected(std::move(labelled.error()));
+    }
+    const AccelerationStructureHandle made = accelerationStructures_.emplace(std::move(held));
     if (made.isNull()) {
         giveBack();
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} acceleration structures",

@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace bfr::rhi {
 
@@ -76,6 +77,12 @@ struct QueryPoolDesc {
     QueryType type = QueryType::Occlusion;
     std::uint32_t count = 0;
     PipelineStatisticsMask statistics;
+    /// What a debugger or profiler shows it as, where Features::objectNames;
+    /// read during the call only. Empty is none. The create call fails with
+    /// RhiUnsupported for a name where Features::objectNames is false,
+    /// RhiInvalidCall for one holding a '\0', which the backend reads as its
+    /// end, and RhiDeviceFailed when the backend refuses it.
+    std::string_view name{};
 };
 
 /// Where a pool's results land in the buffer resolveQueries writes, as the

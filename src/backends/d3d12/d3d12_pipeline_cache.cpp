@@ -5,6 +5,7 @@
 #include "d3d12/d3d12_device.h"
 #include "d3d12/d3d12_pipeline_hash.h"
 #include "d3d12/d3d12_result.h"
+#include "rhi/name_check.h"
 
 #include <d3d12.h>
 #include <windows.h>
@@ -214,6 +215,9 @@ core::Result<ComPtr<ID3D12PipelineState>> pipelineStateFor(ID3D12Device& device,
 // The device's pipeline cache calls.
 
 core::Result<PipelineCacheHandle> D3D12Device::createPipelineCache(const PipelineCacheDesc& desc) {
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     if (device1_.Get() == nullptr) {
         return core::failure(core::ErrorCode::RhiUnsupported, "the runtime has no ID3D12Device1");
     }

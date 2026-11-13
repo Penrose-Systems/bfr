@@ -80,6 +80,15 @@ struct bfr_device {
 
 namespace {
 
+// A string that is null with a length is no string.
+bool isString(bfr_string text) {
+    return text.data != nullptr || text.length == 0;
+}
+
+std::string_view fromC(bfr_string text) {
+    return {text.data, text.length};
+}
+
 using bfr::core::ErrorCode;
 using bfr::core::Severity;
 using bfr::core::window::NativeWindow;
@@ -316,7 +325,8 @@ std::optional<bfr::rhi::BufferDesc> bufferIn(const bfr_buffer_desc& desc, bfr::c
                                 .accelerationStructureStorage = desc.usage.acceleration_structure_storage != BFR_FALSE},
                       .sparse = desc.sparse != BFR_FALSE,
                       .sparseAliased = desc.sparse_aliased != BFR_FALSE,
-                      .tileBytes = desc.tile_bytes};
+                      .tileBytes = desc.tile_bytes,
+                      .name = fromC(desc.name)};
     switch (desc.memory) {
         case BFR_BUFFER_MEMORY_DEVICE:
             buffer.memory = BufferMemory::Device;
@@ -380,7 +390,8 @@ std::optional<bfr::rhi::TextureDesc> textureIn(const bfr_texture_desc& desc, bfr
                                  .depthStencil = desc.usage.depth_stencil != BFR_FALSE},
                        .sparse = desc.sparse != BFR_FALSE,
                        .sparseAliased = desc.sparse_aliased != BFR_FALSE,
-                       .tileBytes = desc.tile_bytes};
+                       .tileBytes = desc.tile_bytes,
+                       .name = fromC(desc.name)};
 }
 
 bfr_pipeline toC(bfr::rhi::PipelineHandle handle) {
@@ -973,7 +984,8 @@ bfr::rhi::ShaderCode shaderIn(const bfr_shader_code& code) {
 bfr::rhi::ComputePipelineDesc computePipelineIn(const bfr_compute_pipeline_desc& desc) {
     return {.compute = shaderIn(desc.compute),
             .workgroupSize = std::to_array(desc.workgroup_size),
-            .cache = fromC(desc.cache)};
+            .cache = fromC(desc.cache),
+            .name = fromC(desc.name)};
 }
 
 std::optional<bfr::rhi::StencilFace> stencilFaceIn(const bfr_stencil_face& face, bfr::core::Message& error) {
@@ -1063,6 +1075,7 @@ std::optional<bfr::rhi::GraphicsPipelineDesc> graphicsPipelineIn(const bfr_graph
         .alphaToOne = desc.alpha_to_one != BFR_FALSE,
         .minSampleShading = desc.min_sample_shading,
         .cache = fromC(desc.cache),
+        .name = fromC(desc.name),
     };
     const std::span targets{desc.color_targets};
     for (std::uint32_t i = 0; i < std::min<std::uint32_t>(desc.color_target_count, kMaxColorTargets); ++i) {
@@ -1302,13 +1315,19 @@ bfr_adapter_type toC(bfr::rhi::AdapterType type) {
     return BFR_ADAPTER_TYPE_OTHER;
 }
 
-// A null label, or a null name with a length, is no label.
+// Fails for an object's name that is null with a length.
+bfr_result checkName(bfr_string name) {
+    return isString(name) ? BFR_RESULT_SUCCESS
+                          : fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "name is null but its length is not 0");
+}
+
+// A null label, or one whose name is no string, is no label.
 bool isLabel(const bfr_debug_label* label) {
-    return label != nullptr && (label->name.data != nullptr || label->name.length == 0);
+    return label != nullptr && isString(label->name);
 }
 
 bfr::rhi::DebugLabel fromC(const bfr_debug_label& label) {
-    return {.name = {label.name.data, label.name.length}, .color = std::to_array(label.color)};
+    return {.name = fromC(label.name), .color = std::to_array(label.color)};
 }
 
 bfr_string toC(const std::string& text) {
@@ -1609,6 +1628,7 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .occlusion_query_precise = toC(features.occlusionQueryPrecise),
         .debug_labels = toC(features.debugLabels),
         .queue_debug_labels = toC(features.queueDebugLabels),
+        .object_names = toC(features.objectNames),
     };
 }
 
@@ -2776,6 +2796,9 @@ bfr_result bfr_create_buffer(bfr_device* device, const bfr_buffer_desc* desc, bf
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and buffer must not be null");
         }
         *buffer = {};
+        if (const bfr_result named = checkName(desc->name); named != BFR_RESULT_SUCCESS) {
+            return named;
+        }
         if (desc->next != nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_buffer_desc takes no chained structs");
         }
@@ -2840,6 +2863,9 @@ bfr_result bfr_create_texture(bfr_device* device, const bfr_texture_desc* desc, 
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and texture must not be null");
         }
         *texture = {};
+        if (const bfr_result named = checkName(desc->name); named != BFR_RESULT_SUCCESS) {
+            return named;
+        }
         if (desc->next != nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_texture_desc takes no chained structs");
         }
@@ -2939,6 +2965,9 @@ bfr_result bfr_create_compute_pipeline(bfr_device* device, const bfr_compute_pip
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and pipeline must not be null");
         }
         *pipeline = {};
+        if (const bfr_result named = checkName(desc->name); named != BFR_RESULT_SUCCESS) {
+            return named;
+        }
         if (desc->next != nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_compute_pipeline_desc takes no chained structs");
         }
@@ -2964,6 +2993,9 @@ bfr_result bfr_create_graphics_pipeline(bfr_device* device, const bfr_graphics_p
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and pipeline must not be null");
         }
         *pipeline = {};
+        if (const bfr_result named = checkName(desc->name); named != BFR_RESULT_SUCCESS) {
+            return named;
+        }
         if (desc->next != nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_graphics_pipeline_desc takes no chained structs");
         }
@@ -3007,11 +3039,14 @@ bfr_result bfr_create_pipeline_cache(bfr_device* device, const bfr_pipeline_cach
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and cache must not be null");
         }
         *cache = {};
+        if (const bfr_result named = checkName(desc->name); named != BFR_RESULT_SUCCESS) {
+            return named;
+        }
         if (desc->data == nullptr && desc->data_size != 0) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "data is null but data_size is not 0");
         }
         const auto created = device->device->createPipelineCache(
-            {.data = std::as_bytes(std::span{desc->data, desc->data_size})});
+            {.data = std::as_bytes(std::span{desc->data, desc->data_size}), .name = fromC(desc->name)});
         if (!created) {
             return fail(created.error());
         }
@@ -3061,7 +3096,11 @@ bfr_result bfr_create_timestamp_pool(bfr_device* device, const bfr_timestamp_poo
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and pool must not be null");
         }
         *pool = {};
-        const auto created = device->device->createTimestampPool({.queue = desc->queue, .count = desc->count});
+        if (const bfr_result named = checkName(desc->name); named != BFR_RESULT_SUCCESS) {
+            return named;
+        }
+        const auto created = device->device->createTimestampPool(
+            {.queue = desc->queue, .count = desc->count, .name = fromC(desc->name)});
         if (!created) {
             return fail(created.error());
         }
@@ -3130,6 +3169,9 @@ bfr_result bfr_create_query_pool(bfr_device* device, const bfr_query_pool_desc* 
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and pool must not be null");
         }
         *pool = {};
+        if (const bfr_result named = checkName(desc->name); named != BFR_RESULT_SUCCESS) {
+            return named;
+        }
         bfr::core::Message error;
         const auto type = enumIn(desc->type, bfr::rhi::QueryType::MeshPrimitivesGenerated, "query type", error);
         if (!type) {
@@ -3151,7 +3193,8 @@ bfr_result bfr_create_query_pool(bfr_device* device, const bfr_query_pool_desc* 
                             .tessellationEvaluationInvocations = mask.tessellation_evaluation_invocations != BFR_FALSE,
                             .computeInvocations = mask.compute_invocations != BFR_FALSE,
                             .taskInvocations = mask.task_invocations != BFR_FALSE,
-                            .meshInvocations = mask.mesh_invocations != BFR_FALSE}});
+                            .meshInvocations = mask.mesh_invocations != BFR_FALSE},
+             .name = fromC(desc->name)});
         if (!created) {
             return fail(created.error());
         }
@@ -3425,7 +3468,8 @@ bfr_result bfr_get_sparse_format(bfr_device* device, const bfr_sparse_format_des
                                        .usage = desc->usage,
                                        .sparse = BFR_TRUE,
                                        .sparse_aliased = BFR_FALSE,
-                                       .tile_bytes = desc->tile_bytes};
+                                       .tile_bytes = desc->tile_bytes,
+                                       .name = {}};
         bfr::core::Message error;
         const auto wanted = textureIn(texture, error);
         if (!wanted) {
@@ -3527,6 +3571,9 @@ bfr_result bfr_create_acceleration_structure(bfr_device* device, const bfr_accel
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and structure must not be null");
         }
         *structure = {};
+        if (const bfr_result named = checkName(desc->name); named != BFR_RESULT_SUCCESS) {
+            return named;
+        }
         if (desc->next != nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_acceleration_structure_desc takes no chained structs");
         }
@@ -3542,7 +3589,8 @@ bfr_result bfr_create_acceleration_structure(bfr_device* device, const bfr_accel
              .motionKeyframes = desc->motion_keyframes,
              .motionInstances = desc->motion_instances,
              .captureReplay = desc->capture_replay != BFR_FALSE,
-             .replay = {.words = std::to_array(desc->replay.words)}});
+             .replay = {.words = std::to_array(desc->replay.words)},
+             .name = fromC(desc->name)});
         if (!made) {
             return fail(made.error());
         }
@@ -3907,6 +3955,9 @@ bfr_result bfr_create_ray_tracing_pipeline(bfr_device* device, const bfr_ray_tra
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device, desc and pipeline must not be null");
         }
         *pipeline = {};
+        if (const bfr_result named = checkName(desc->name); named != BFR_RESULT_SUCCESS) {
+            return named;
+        }
         if (desc->next != nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_ray_tracing_pipeline_desc takes no chained structs");
         }
@@ -3961,7 +4012,8 @@ bfr_result bfr_create_ray_tracing_pipeline(bfr_device* device, const bfr_ray_tra
              .replayIdentifiers = std::as_bytes(std::span{desc->replay_identifiers, desc->replay_identifiers_size}),
              .allowOpacityMicromaps = desc->allow_opacity_micromaps != BFR_FALSE,
              .allowMotion = desc->allow_motion != BFR_FALSE,
-             .allowClusters = desc->allow_clusters != BFR_FALSE});
+             .allowClusters = desc->allow_clusters != BFR_FALSE,
+             .name = fromC(desc->name)});
         if (!created) {
             return fail(created.error());
         }

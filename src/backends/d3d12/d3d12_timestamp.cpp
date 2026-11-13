@@ -5,6 +5,7 @@
 #include "d3d12/d3d12_device.h"
 #include "d3d12/d3d12_result.h"
 #include "rhi/enum_check.h"
+#include "rhi/name_check.h"
 
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -22,6 +23,9 @@ using Microsoft::WRL::ComPtr;
 // call that does what it says.
 
 core::Result<TimestampPoolHandle> D3D12Device::createTimestampPool(const TimestampPoolDesc& desc) {
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
     }

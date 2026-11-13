@@ -1461,6 +1461,7 @@ structs:
       - {name: sparse, type: bool, doc: "Made with no memory: bfr_update_tile_mappings maps sparse memory's tiles into it, as bfr_caps_sparse says. memory is device."}
       - {name: sparse_aliased, type: bool, doc: "Its tiles may be mapped to memory other sparse resources' tiles are mapped to, where bfr_caps_sparse.aliased."}
       - {name: tile_bytes, type: u32, doc: "One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty; only when sparse."}
+      - {name: name, type: string, doc: "What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during the call only. Empty is none. The create call fails with error_invalid_argument for a name that is null with a length or holds a '\\0', error_unsupported for a name where object_names is false, and error_device_failed when the backend refuses it."}
 
   draw_indirect_args:
     doc: The arguments of one indirect draw, as a buffer holds them for bfr_draw_indirect; the layout every backend reads.
@@ -1522,12 +1523,14 @@ structs:
       - {name: sparse, type: bool, doc: "Made with no memory: bfr_update_tile_mappings maps sparse memory's tiles into it, as bfr_caps_sparse and bfr_get_sparse_format say."}
       - {name: sparse_aliased, type: bool, doc: "Its tiles may be mapped to memory other sparse resources' tiles are mapped to, where bfr_caps_sparse.aliased."}
       - {name: tile_bytes, type: u32, doc: "One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty; only when sparse."}
+      - {name: name, type: string, doc: "What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during the call only. Empty is none. The create call fails with error_invalid_argument for a name that is null with a length or holds a '\\0', error_unsupported for a name where object_names is false, and error_device_failed when the backend refuses it."}
 
   timestamp_pool_desc:
     doc: How to create a timestamp pool.
     members:
       - {name: queue, type: u32, doc: "The device's queue whose lists write it, numbered as bfr_device_desc says."}
       - {name: count, type: u32, doc: How many timestamps it holds.}
+      - {name: name, type: string, doc: "What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during the call only. Empty is none. The create call fails with error_invalid_argument for a name that is null with a length or holds a '\\0', error_unsupported for a name where object_names is false, and error_device_failed when the backend refuses it."}
 
   timestamp_rate:
     doc: >-
@@ -1560,6 +1563,7 @@ structs:
       - {name: type, type: query_type, doc: What its queries count.}
       - {name: count, type: u32, doc: How many queries it holds.}
       - {name: statistics, type: pipeline_statistics_mask, doc: Read only for pipeline_statistics.}
+      - {name: name, type: string, doc: "What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during the call only. Empty is none. The create call fails with error_invalid_argument for a name that is null with a length or holds a '\\0', error_unsupported for a name where object_names is false, and error_device_failed when the backend refuses it."}
 
   debug_label:
     doc: >-
@@ -1849,6 +1853,7 @@ structs:
       - {name: allow_opacity_micromaps, type: bool, doc: "Its traces take the opacity micromaps structures hold, where bfr_caps_features.opacity_micromap."}
       - {name: allow_motion, type: bool, doc: "Its traces are at a time, of structures with motion, where bfr_caps_features.ray_tracing_motion."}
       - {name: allow_clusters, type: bool, doc: "Its traces may reach cluster bottom structures, which they must be made with to, where bfr_caps_features.cluster_acceleration_structure."}
+      - {name: name, type: string, doc: "What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during the call only. Empty is none. The create call fails with error_invalid_argument for a name that is null with a length or holds a '\\0', error_unsupported for a name where object_names is false, and error_device_failed when the backend refuses it."}
 
   shader_table_region:
     doc: >-
@@ -1909,6 +1914,7 @@ structs:
         fixed: 3
         doc: Threads in each workgroup, as the shader declares them; a dispatch counts workgroups.
       - {name: cache, type: pipeline_cache, doc: "Where the pipeline is looked for, and added on a miss; null is none."}
+      - {name: name, type: string, doc: "What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during the call only. Empty is none. The create call fails with error_invalid_argument for a name that is null with a length or holds a '\\0', error_unsupported for a name where object_names is false, and error_device_failed when the backend refuses it."}
 
   graphics_pipeline_desc:
     doc: >-
@@ -1944,12 +1950,14 @@ structs:
       - {name: alpha_to_one, type: bool, doc: "The fragment's alpha becomes 1 after coverage is taken from it, where bfr_caps_features.alpha_to_one."}
       - {name: min_sample_shading, type: f32, doc: "The fraction of samples, 0 to 1, shaded apart; above 0 shades per sample, where bfr_caps_features.sample_rate_shading."}
       - {name: cache, type: pipeline_cache, doc: "Where the pipeline is looked for, and added on a miss; null is none."}
+      - {name: name, type: string, doc: "What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during the call only. Empty is none. The create call fails with error_invalid_argument for a name that is null with a length or holds a '\\0', error_unsupported for a name where object_names is false, and error_device_failed when the backend refuses it."}
 
   pipeline_cache_desc:
     doc: How to create a pipeline cache.
     members:
       - {name: data, type: u8, array: data_size, pointer: in, doc: "Bytes bfr_get_pipeline_cache_data gave before, read during the call only."}
       - {name: data_size, type: size, doc: Bytes; 0 is an empty cache.}
+      - {name: name, type: string, doc: "What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during the call only. Empty is none. The create call fails with error_invalid_argument for a name that is null with a length or holds a '\\0', error_unsupported for a name where object_names is false, and error_device_failed when the backend refuses it."}
 
   token:
     doc: >-
@@ -2533,6 +2541,7 @@ structs:
       - {name: motion_instances, type: u32}
       - {name: capture_replay, type: bool}
       - {name: replay, type: acceleration_structure_capture, doc: All zero is none.}
+      - {name: name, type: string, doc: "What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during the call only. Empty is none. The create call fails with error_invalid_argument for a name that is null with a length or holds a '\\0', error_unsupported for a name where object_names is false, and error_device_failed when the backend refuses it."}
 
   acceleration_structure_build_range:
     doc: >-
@@ -2887,6 +2896,7 @@ structs:
       - {name: occlusion_query_precise, type: bool}
       - {name: debug_labels, type: bool, doc: "bfr_begin_debug_label, bfr_end_debug_label and bfr_insert_debug_label."}
       - {name: queue_debug_labels, type: bool, doc: "bfr_begin_queue_debug_label, bfr_end_queue_debug_label and bfr_insert_queue_debug_label."}
+      - {name: object_names, type: bool, doc: "The name member of the descs of buffers, textures, pipelines, pipeline caches, timestamp and query pools and acceleration structures."}
 
   memory_heap:
     doc: One pool of memory.

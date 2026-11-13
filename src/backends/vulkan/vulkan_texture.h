@@ -73,6 +73,7 @@ public:
     [[nodiscard]] core::Result<void> makeAttachmentViews(const TextureDesc& desc, VkFormat format, bool slices);
     /// Whether makeAttachmentViews made any.
     [[nodiscard]] bool hasAttachmentViews() const { return !attachmentViews_.empty(); }
+    [[nodiscard]] std::span<const VkImageView> attachmentViews() const { return attachmentViews_; }
 
 private:
     const VolkDeviceTable* table_;

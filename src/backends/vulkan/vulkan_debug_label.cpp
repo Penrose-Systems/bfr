@@ -1,20 +1,25 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/debug_label.h"
+#include "rhi/name_check.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_instance.h"
+#include "vulkan/vulkan_result.h"
+
+#include <volk.h>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <mutex>
 #include <span>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace bfr::rhi::vulkan {
 
 namespace {
-
-constexpr char kEnd = '\0';
 
 // label as Vulkan takes it, its name copied into room with the '\0' Vulkan
 // reads as its end (VUID-VkDebugUtilsLabelEXT-pLabelName-parameter). Fails
@@ -26,10 +31,10 @@ core::Result<VkDebugUtilsLabelEXT> labelIn(std::span<char> room, const DebugLabe
                              "the label's name is {} bytes; DeviceDesc::maxDebugLabelLength is {}", label.name.size(),
                              room.size() - 1);
     }
-    if (label.name.contains(kEnd)) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "the label's name holds a '\\0'");
+    if (auto checked = checkNameEnd(label.name); !checked) {
+        return std::unexpected(std::move(checked.error()));
     }
-    *std::ranges::copy(label.name, room.begin()).out = kEnd;
+    *std::ranges::copy(label.name, room.begin()).out = kNameEnd;
     VkDebugUtilsLabelEXT info{};
     info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
     info.pLabelName = room.data();
@@ -143,6 +148,24 @@ core::Result<void> VulkanDevice::insertQueueDebugLabel(std::uint32_t queue, cons
         return std::unexpected(std::move(info.error()));
     }
     instance_->instanceTable().vkQueueInsertDebugUtilsLabelEXT((*found)->queue, &*info);
+    return {};
+}
+
+core::Result<void> VulkanDevice::nameHandle(VkObjectType type, std::uint64_t handle, std::string_view name) const {
+    if (name.empty()) {
+        return {};
+    }
+    // Cold: objects are named as they are made.
+    const std::string terminated{name};
+    VkDebugUtilsObjectNameInfoEXT info{};
+    info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+    info.objectType = type;
+    info.objectHandle = handle;
+    info.pObjectName = terminated.c_str();
+    if (const VkResult result = instance_->instanceTable().vkSetDebugUtilsObjectNameEXT(device_, &info);
+        result != VK_SUCCESS) {
+        return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkSetDebugUtilsObjectNameEXT", .result = result});
+    }
     return {};
 }
 

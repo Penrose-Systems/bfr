@@ -5,6 +5,7 @@
 #include "metal/metal_device.h"
 #include "metal/metal_util.h"
 #include "rhi/enum_check.h"
+#include "rhi/name_check.h"
 
 #include <Foundation/NSError.hpp>
 #include <Foundation/NSRange.hpp>
@@ -31,6 +32,9 @@ MTL4::TimestampGranularity granularityFor(TimestampGranularity granularity) {
 // render encoder in rendering.
 
 core::Result<TimestampPoolHandle> MetalDevice::createTimestampPool(const TimestampPoolDesc& desc) {
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
     }

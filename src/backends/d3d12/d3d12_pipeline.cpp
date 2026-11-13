@@ -9,6 +9,7 @@
 #include "d3d12/d3d12_pipeline_cache.h"
 #include "d3d12/d3d12_pipeline_hash.h"
 #include "d3d12/d3d12_result.h"
+#include "rhi/name_check.h"
 #include "rhi/pipeline_check.h"
 
 #include <d3d12.h>
@@ -432,6 +433,9 @@ core::Result<D3D12Pipeline*> D3D12Device::pipelineFor(PipelineHandle pipeline) {
 }
 
 core::Result<PipelineHandle> D3D12Device::createComputePipeline(const ComputePipelineDesc& desc) {
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
     collectRetired();
     auto library = pipelineLibraryFor(desc.cache);
@@ -458,6 +462,9 @@ core::Result<PipelineHandle> D3D12Device::createGraphicsPipeline(const GraphicsP
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkMeshStages(desc, features_); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     // Features::meshShader and taskShader are false until BFR has D3D12

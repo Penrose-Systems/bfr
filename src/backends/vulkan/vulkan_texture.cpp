@@ -11,6 +11,7 @@
 #include "rhi/copy_check.h"
 #include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
+#include "rhi/name_check.h"
 #include "rhi/tile_extent.h"
 #include "vulkan/instance_table.h"
 #include "vulkan/vma.h"
@@ -403,8 +404,36 @@ core::Result<VulkanTexture*> VulkanDevice::textureFor(TextureHandle texture) {
     return found;
 }
 
+core::Result<void> VulkanDevice::nameTexture(const VulkanTexture& texture, std::string_view name) const {
+    // The image and each view of it, all by the one name.
+    if (auto named = nameObject(VK_OBJECT_TYPE_IMAGE, texture.image(), name); !named) {
+        return named;
+    }
+    for (VkImageView view : {texture.view(), texture.shaderView()}) {
+        if (view == VK_NULL_HANDLE) {
+            continue;
+        }
+        if (auto named = nameObject(VK_OBJECT_TYPE_IMAGE_VIEW, view, name); !named) {
+            return named;
+        }
+    }
+    // A 3D texture's deeper levels have fewer slices, so some are null.
+    for (VkImageView view : texture.attachmentViews()) {
+        if (view == VK_NULL_HANDLE) {
+            continue;
+        }
+        if (auto named = nameObject(VK_OBJECT_TYPE_IMAGE_VIEW, view, name); !named) {
+            return named;
+        }
+    }
+    return {};
+}
+
 core::Result<TextureHandle> VulkanDevice::createTexture(const TextureDesc& desc) {
     if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
@@ -417,6 +446,10 @@ core::Result<TextureHandle> VulkanDevice::createTexture(const TextureDesc& desc)
     if (!made) {
         bindless_.giveTexture(*slots);
         return std::unexpected(std::move(made.error()));
+    }
+    if (auto named = nameTexture(*made, desc.name); !named) {
+        bindless_.giveTexture(*slots);
+        return std::unexpected(std::move(named.error()));
     }
     VkImageView view = made->shaderView();
     const VkImageLayout sampled = sampledLayoutFor(made->aspects());

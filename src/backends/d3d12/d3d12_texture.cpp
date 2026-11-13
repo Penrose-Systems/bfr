@@ -16,6 +16,7 @@
 #include "rhi/copy_check.h"
 #include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
+#include "rhi/name_check.h"
 
 #include <d3d12.h>
 #include <D3D12MemAlloc.h>
@@ -566,6 +567,9 @@ core::Result<D3D12Texture*> D3D12Device::textureFor(TextureHandle texture) {
 
 core::Result<TextureHandle> D3D12Device::createTexture(const TextureDesc& desc) {
     if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     // Cold, as createBuffer is: what the GPU is done with is freed here.

@@ -7,6 +7,7 @@
 #include "metal/metal_device.h"
 #include "metal/metal_formats.h"
 #include "metal/metal_util.h"
+#include "rhi/name_check.h"
 #include "rhi/pipeline_check.h"
 
 #include <dispatch/dispatch.h>
@@ -425,6 +426,9 @@ core::Result<MetalPipeline*> MetalDevice::pipelineFor(PipelineHandle pipeline) {
 }
 
 core::Result<PipelineHandle> MetalDevice::createComputePipeline(const ComputePipelineDesc& desc) {
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     if (!desc.cache.isNull()) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline cache handle is stale");
     }
@@ -450,6 +454,9 @@ core::Result<PipelineHandle> MetalDevice::createGraphicsPipeline(const GraphicsP
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkMeshStages(desc, features_); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     // Features::meshShader and taskShader are false until BFR has Metal

@@ -6,6 +6,7 @@
 #include "bfr/rhi/pipeline.h"
 #include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
+#include "rhi/name_check.h"
 #include "rhi/pipeline_check.h"
 #include "rhi/ray_tracing_check.h"
 #include "vulkan/vulkan_caps.h"
@@ -860,6 +861,9 @@ core::Result<VulkanPipeline*> VulkanDevice::pipelineFor(PipelineHandle pipeline)
 }
 
 core::Result<PipelineHandle> VulkanDevice::createComputePipeline(const ComputePipelineDesc& desc) {
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Cold, so pipelines the GPU is done with are freed here, never on the
     // frame path.
     collectRetired();
@@ -870,6 +874,9 @@ core::Result<PipelineHandle> VulkanDevice::createComputePipeline(const ComputePi
     auto made = createVulkanComputePipeline(table_, device_, layout_.pipelineLayout(), *cache, desc);
     if (!made) {
         return std::unexpected(std::move(made.error()));
+    }
+    if (auto named = nameObject(VK_OBJECT_TYPE_PIPELINE, made->pipeline(), desc.name); !named) {
+        return std::unexpected(std::move(named.error()));
     }
     const PipelineHandle pipeline = pipelines_.emplace(std::move(*made));
     if (pipeline.isNull()) {
@@ -886,6 +893,9 @@ core::Result<PipelineHandle> VulkanDevice::createGraphicsPipeline(const Graphics
     if (auto checked = checkMeshStages(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     collectRetired();
     const auto cache = pipelineCacheFor(desc.cache);
     if (!cache) {
@@ -895,6 +905,9 @@ core::Result<PipelineHandle> VulkanDevice::createGraphicsPipeline(const Graphics
                                              features_.dynamicTopology, desc);
     if (!made) {
         return std::unexpected(std::move(made.error()));
+    }
+    if (auto named = nameObject(VK_OBJECT_TYPE_PIPELINE, made->pipeline(), desc.name); !named) {
+        return std::unexpected(std::move(named.error()));
     }
     const PipelineHandle pipeline = pipelines_.emplace(std::move(*made));
     if (pipeline.isNull()) {
@@ -960,6 +973,9 @@ core::Result<PipelineHandle> VulkanDevice::createRayTracingPipeline(const RayTra
         return core::failure(core::ErrorCode::RhiInvalidCall, "a stack size of {} bytes is past what Vulkan takes",
                              desc.stackSize);
     }
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     collectRetired();
     const auto cache = pipelineCacheFor(desc.cache);
     if (!cache) {
@@ -989,6 +1005,9 @@ core::Result<PipelineHandle> VulkanDevice::createRayTracingPipeline(const RayTra
                                                rayTracing_.captureReplayIdentifierSize, desc);
     if (!made) {
         return std::unexpected(std::move(made.error()));
+    }
+    if (auto named = nameObject(VK_OBJECT_TYPE_PIPELINE, made->pipeline(), desc.name); !named) {
+        return std::unexpected(std::move(named.error()));
     }
     const PipelineHandle pipeline = pipelines_.emplace(std::move(*made));
     if (pipeline.isNull()) {

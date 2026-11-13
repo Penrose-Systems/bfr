@@ -32,6 +32,12 @@ using PipelineCacheHandle = core::Handle<PipelineCache>;
 /// before, read during the call only. Empty is an empty cache.
 struct PipelineCacheDesc {
     std::span<const std::byte> data;
+    /// What a debugger or profiler shows it as, where Features::objectNames;
+    /// read during the call only. Empty is none. The create call fails with
+    /// RhiUnsupported for a name where Features::objectNames is false,
+    /// RhiInvalidCall for one holding a '\0', which the backend reads as its
+    /// end, and RhiDeviceFailed when the backend refuses it.
+    std::string_view name{};
 };
 
 /// What Device::pipelineCacheData wrote: how many bytes, and whether the
@@ -65,6 +71,12 @@ struct ComputePipelineDesc {
     std::array<std::uint32_t, kWorkgroupDimensions> workgroupSize{};
     /// Where the pipeline is looked for, and added on a miss; null is none.
     PipelineCacheHandle cache{};
+    /// What a debugger or profiler shows it as, where Features::objectNames;
+    /// read during the call only. Empty is none. The create call fails with
+    /// RhiUnsupported for a name where Features::objectNames is false,
+    /// RhiInvalidCall for one holding a '\0', which the backend reads as its
+    /// end, and RhiDeviceFailed when the backend refuses it.
+    std::string_view name{};
 };
 
 /// What draws assemble vertices into. Lists take each primitive's vertices
@@ -273,6 +285,12 @@ struct GraphicsPipelineDesc {
     float minSampleShading = 0;
     /// Where the pipeline is looked for, and added on a miss; null is none.
     PipelineCacheHandle cache{};
+    /// What a debugger or profiler shows it as, where Features::objectNames;
+    /// read during the call only. Empty is none. The create call fails with
+    /// RhiUnsupported for a name where Features::objectNames is false,
+    /// RhiInvalidCall for one holding a '\0', which the backend reads as its
+    /// end, and RhiDeviceFailed when the backend refuses it.
+    std::string_view name{};
 };
 
 /// The stage a ray tracing pipeline's shader runs at. The values are the C
@@ -373,6 +391,12 @@ struct RayTracingPipelineDesc {
     /// Its traces may reach cluster bottom structures, which they must be
     /// made with to, where Features::clusterAccelerationStructure.
     bool allowClusters = false;
+    /// What a debugger or profiler shows it as, where Features::objectNames;
+    /// read during the call only. Empty is none. The create call fails with
+    /// RhiUnsupported for a name where Features::objectNames is false,
+    /// RhiInvalidCall for one holding a '\0', which the backend reads as its
+    /// end, and RhiDeviceFailed when the backend refuses it.
+    std::string_view name{};
 };
 
 } // namespace bfr::rhi

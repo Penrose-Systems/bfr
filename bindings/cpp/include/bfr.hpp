@@ -2575,6 +2575,11 @@ struct BufferDesc {
     bool sparseAliased{};
     /// One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty; only when sparse.
     std::uint32_t tileBytes{};
+    /// What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    /// the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    /// that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    /// is false, and error_device_failed when the backend refuses it.
+    std::string_view name{};
 };
 
 /// One range copied from a source buffer to a destination buffer.
@@ -2633,6 +2638,11 @@ struct TextureDesc {
     bool sparseAliased{};
     /// One of bfr_caps_sparse.tile_bytes, or 0 where that list is empty; only when sparse.
     std::uint32_t tileBytes{};
+    /// What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    /// the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    /// that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    /// is false, and error_device_failed when the backend refuses it.
+    std::string_view name{};
 };
 
 /// How to create a timestamp pool.
@@ -2641,6 +2651,11 @@ struct TimestampPoolDesc {
     std::uint32_t queue{};
     /// How many timestamps it holds.
     std::uint32_t count{};
+    /// What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    /// the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    /// that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    /// is false, and error_device_failed when the backend refuses it.
+    std::string_view name{};
 };
 
 /// How long a timestamp tick lasts, in the unit the backend gives: a period in nanoseconds or a
@@ -2676,6 +2691,11 @@ struct QueryPoolDesc {
     std::uint32_t count{};
     /// Read only for pipeline_statistics.
     PipelineStatisticsMask statistics{};
+    /// What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    /// the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    /// that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    /// is false, and error_device_failed when the backend refuses it.
+    std::string_view name{};
 };
 
 /// A name a debugger or profiler shows on a region of a list's or a queue's work, or on one point
@@ -3005,6 +3025,11 @@ struct RayTracingPipelineDesc {
     /// Its traces may reach cluster bottom structures, which they must be made with to, where
     /// bfr_caps_features.cluster_acceleration_structure.
     bool allowClusters{};
+    /// What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    /// the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    /// that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    /// is false, and error_device_failed when the backend refuses it.
+    std::string_view name{};
 };
 
 /// Records in a shader binding table: size bytes from offset in buffer, which has
@@ -3038,6 +3063,11 @@ struct ComputePipelineDesc {
     std::array<std::uint32_t, 3> workgroupSize{};
     /// Where the pipeline is looked for, and added on a miss; null is none.
     PipelineCacheRef cache{};
+    /// What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    /// the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    /// that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    /// is false, and error_device_failed when the backend refuses it.
+    std::string_view name{};
 };
 
 /// How to create a graphics pipeline. Vertices are pulled: the vertex shader reads them by index
@@ -3082,12 +3112,22 @@ struct GraphicsPipelineDesc {
     float minSampleShading{};
     /// Where the pipeline is looked for, and added on a miss; null is none.
     PipelineCacheRef cache{};
+    /// What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    /// the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    /// that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    /// is false, and error_device_failed when the backend refuses it.
+    std::string_view name{};
 };
 
 /// How to create a pipeline cache.
 struct PipelineCacheDesc {
     /// Bytes bfr_get_pipeline_cache_data gave before, read during the call only.
     std::span<const std::uint8_t> data{};
+    /// What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    /// the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    /// that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    /// is false, and error_device_failed when the backend refuses it.
+    std::string_view name{};
 };
 
 /// A point on a queue's timeline, which bfr_submit writes and the GPU passes once what was
@@ -3570,6 +3610,11 @@ struct AccelerationStructureDesc {
     bool captureReplay{};
     /// All zero is none.
     AccelerationStructureCapture replay{};
+    /// What a debugger or profiler shows it as, where bfr_caps_features.object_names; read during
+    /// the call only. Empty is none. The create call fails with error_invalid_argument for a name
+    /// that is null with a length or holds a '\0', error_unsupported for a name where object_names
+    /// is false, and error_device_failed when the backend refuses it.
+    std::string_view name{};
 };
 
 /// A build of dst, of inputs' type, from inputs; or, with update, an update of src into dst (they
@@ -4062,6 +4107,9 @@ struct CapsFeatures {
     bool debugLabels{};
     /// bfr_begin_queue_debug_label, bfr_end_queue_debug_label and bfr_insert_queue_debug_label.
     bool queueDebugLabels{};
+    /// The name member of the descs of buffers, textures, pipelines, pipeline caches, timestamp and
+    /// query pools and acceleration structures.
+    bool objectNames{};
 };
 
 /// One pool of memory.
@@ -4515,6 +4563,7 @@ inline bfr_buffer_desc toC(const BufferDesc& value, const bfr_chain* next) {
         .sparse = static_cast<bfr_bool>(value.sparse),
         .sparse_aliased = static_cast<bfr_bool>(value.sparseAliased),
         .tile_bytes = value.tileBytes,
+        .name = detail::toC(value.name),
     };
 }
 
@@ -4548,11 +4597,12 @@ inline bfr_texture_desc toC(const TextureDesc& value, const bfr_chain* next) {
         .sparse = static_cast<bfr_bool>(value.sparse),
         .sparse_aliased = static_cast<bfr_bool>(value.sparseAliased),
         .tile_bytes = value.tileBytes,
+        .name = detail::toC(value.name),
     };
 }
 
 inline bfr_timestamp_pool_desc toC(const TimestampPoolDesc& value) {
-    return {.queue = value.queue, .count = value.count};
+    return {.queue = value.queue, .count = value.count, .name = detail::toC(value.name)};
 }
 
 inline bfr_pipeline_statistics_mask toC(const PipelineStatisticsMask& value) {
@@ -4578,6 +4628,7 @@ inline bfr_query_pool_desc toC(const QueryPoolDesc& value) {
         .type = static_cast<bfr_query_type>(value.type),
         .count = value.count,
         .statistics = toC(value.statistics),
+        .name = detail::toC(value.name),
     };
 }
 
@@ -4728,6 +4779,7 @@ inline bfr_pipeline_cache_desc toC(const PipelineCacheDesc& value) {
     return {
         .data = reinterpret_cast<const uint8_t*>(value.data.data()),
         .data_size = static_cast<size_t>(value.data.size()),
+        .name = detail::toC(value.name),
     };
 }
 
@@ -4859,6 +4911,7 @@ inline bfr_acceleration_structure_desc toC(const AccelerationStructureDesc& valu
         .motion_instances = value.motionInstances,
         .capture_replay = static_cast<bfr_bool>(value.captureReplay),
         .replay = toC(value.replay),
+        .name = detail::toC(value.name),
     };
 }
 
@@ -5227,6 +5280,7 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .occlusionQueryPrecise = value.occlusion_query_precise != BFR_FALSE,
         .debugLabels = value.debug_labels != BFR_FALSE,
         .queueDebugLabels = value.queue_debug_labels != BFR_FALSE,
+        .objectNames = value.object_names != BFR_FALSE,
     };
 }
 
@@ -6801,6 +6855,7 @@ inline bfr_ray_tracing_pipeline_desc toC(const RayTracingPipelineDesc& value, co
         .allow_opacity_micromaps = static_cast<bfr_bool>(value.allowOpacityMicromaps),
         .allow_motion = static_cast<bfr_bool>(value.allowMotion),
         .allow_clusters = static_cast<bfr_bool>(value.allowClusters),
+        .name = detail::toC(value.name),
     };
 }
 
@@ -6831,6 +6886,7 @@ inline bfr_compute_pipeline_desc toC(const ComputePipelineDesc& value, const bfr
         .compute = toC(value.compute),
         .workgroup_size = {value.workgroupSize[0], value.workgroupSize[1], value.workgroupSize[2]},
         .cache = value.cache.get(),
+        .name = detail::toC(value.name),
     };
 }
 
@@ -6856,6 +6912,7 @@ inline bfr_graphics_pipeline_desc toC(const GraphicsPipelineDesc& value, const b
         .alpha_to_one = static_cast<bfr_bool>(value.alphaToOne),
         .min_sample_shading = value.minSampleShading,
         .cache = value.cache.get(),
+        .name = detail::toC(value.name),
     };
 }
 

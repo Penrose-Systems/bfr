@@ -9,6 +9,7 @@
 #include "rhi/bindless_slots.h"
 #include "rhi/buffer_check.h"
 #include "rhi/enum_check.h"
+#include "rhi/name_check.h"
 #include "rhi/ray_tracing_check.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_device.h"
@@ -362,6 +363,9 @@ core::Result<BufferHandle> VulkanDevice::createBuffer(const BufferDesc& desc) {
     if (auto checked = checkBufferDesc(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Cold, so buffers the GPU is done with are freed here, never on the
     // frame path: freeing one frees the allocator's memory.
     collectRetired();
@@ -375,6 +379,10 @@ core::Result<BufferHandle> VulkanDevice::createBuffer(const BufferDesc& desc) {
         return std::unexpected(std::move(made.error()));
     }
     VkBuffer handle = made->buffer();
+    if (auto named = nameObject(VK_OBJECT_TYPE_BUFFER, handle, desc.name); !named) {
+        bindless_.giveBuffer(*slot);
+        return std::unexpected(std::move(named.error()));
+    }
     const BufferHandle buffer = buffers_.emplace(std::move(*made));
     if (buffer.isNull()) {
         bindless_.giveBuffer(*slot);

@@ -5,6 +5,7 @@
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/query.h"
 #include "rhi/enum_check.h"
+#include "rhi/name_check.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_result.h"
 
@@ -114,6 +115,9 @@ core::Result<QueryPoolHandle> VulkanDevice::createQueryPool(const QueryPoolDesc&
     if (auto checked = checkKnown(desc.type, "query type"); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkObjectName(features_, desc.name); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
     collectRetired();
     VkQueryPoolCreateInfo info{};
@@ -132,7 +136,11 @@ core::Result<QueryPoolHandle> VulkanDevice::createQueryPool(const QueryPoolDesc&
     if (const VkResult result = table_.vkCreateQueryPool(device_, &info, nullptr, &pool); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateQueryPool", .result = result});
     }
-    const QueryPoolHandle made = queryPools_.emplace(VulkanQueryPool{table_, device_, pool, layoutFor(desc)});
+    VulkanQueryPool held{table_, device_, pool, layoutFor(desc)};
+    if (auto named = nameObject(VK_OBJECT_TYPE_QUERY_POOL, pool, desc.name); !named) {
+        return std::unexpected(std::move(named.error()));
+    }
+    const QueryPoolHandle made = queryPools_.emplace(std::move(held));
     if (made.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} query pools",
                              desc_.maxQueryPools);
