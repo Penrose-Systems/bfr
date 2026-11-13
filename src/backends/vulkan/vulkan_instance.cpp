@@ -415,20 +415,6 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
         return std::unexpected(presenting.error());
     }
     const auto families = chooseQueueFamilies(properties, *presenting);
-    // With a window, a queue the device opens must present to it.
-    const auto opens = [](std::optional<std::uint32_t> family, std::span<const QueueDesc> kind) {
-        return family && !kind.empty();
-    };
-    if (!presenting->empty() && !std::ranges::any_of(std::array{std::pair{families.graphics, wanted.graphics},
-                                                                std::pair{families.compute, wanted.compute},
-                                                                std::pair{families.transfer, wanted.copy}},
-                                                     [&](const auto& kind) {
-                                                         return opens(kind.first, kind.second) &&
-                                                                (*presenting)[*kind.first] == VK_TRUE;
-                                                     })) {
-        return core::failure(core::ErrorCode::RhiPresentUnsupported,
-                             "no queue the device opens on {} presents to the window", listed.name);
-    }
     const std::vector<VkExtensionProperties>* available = &adapterExtensions_[adapter];
     // Presenting needs it; a device without it computes and renders offscreen.
     const bool swapchains = lists(*available, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
@@ -481,14 +467,12 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
                                       .pushConstantsSize = listed.caps.limits.maxPushConstantsSize,
                                       .timestampPeriod = adapterProperties.limits.timestampPeriod,
                                       .timestamps = listed.caps.timestamps,
-                                      .multiDrawIndirect = listed.caps.features.multiDrawIndirect,
-                                      .drawIndirectCount = listed.caps.features.drawIndirectCount,
                                       .features = listed.caps.features,
                                       .resolve = listed.caps.resolve,
                                       .rayTracing = listed.caps.rayTracing,
                                       .deviceAddresses = features.vulkan12.bufferDeviceAddress == VK_TRUE,
-                                      .accelerationStructureTable = listed.caps.bindless.maxAccelerationStructures !=
-                                                                    0});
+                                      .accelerationStructureTable = listed.caps.bindless.maxAccelerationStructures != 0,
+                                      .uniformBufferTable = listed.caps.bindless.maxUniformBuffers != 0});
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }

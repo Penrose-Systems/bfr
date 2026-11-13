@@ -13,7 +13,8 @@ namespace bfr::rhi {
 
 /// Fails with RhiInvalidCall when aspect is not one BFR has, or one format has
 /// none of: Color of a depth or stencil format, or Depth or Stencil of one
-/// without it.
+/// without it. D3D12's and Metal's tiling queries call it: an aspect the
+/// format lacks has no tiling to report.
 [[nodiscard]] inline core::Result<void> checkAspect(Format format, TextureAspect aspect) {
     if (auto checked = checkKnown(aspect, "texture aspect"); !checked) {
         return checked;
@@ -29,12 +30,11 @@ namespace bfr::rhi {
     return {};
 }
 
-/// checkAspect of each region's aspect. Each backend's buffer-texture copies
-/// call it before recording, so none copies an aspect other than the one
-/// asked for.
-[[nodiscard]] inline core::Result<void> checkAspects(Format format, std::span<const BufferTextureCopy> regions) {
+/// Fails with RhiInvalidCall when a region's aspect is not one BFR has. Each
+/// backend's buffer-texture copies call it before recording.
+[[nodiscard]] inline core::Result<void> checkAspects(std::span<const BufferTextureCopy> regions) {
     for (const BufferTextureCopy& region : regions) {
-        if (auto checked = checkAspect(format, region.aspect); !checked) {
+        if (auto checked = checkKnown(region.aspect, "texture aspect"); !checked) {
             return checked;
         }
     }

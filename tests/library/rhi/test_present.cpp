@@ -155,7 +155,7 @@ TEST_CASE("Device resolves a multisampled texture into a swapchain's image and p
         REQUIRE(acquired.has_value());
         const auto commands = device.beginCommands(headless.pool);
         REQUIRE(commands.has_value());
-        CHECK(device.textureBarrier(*commands, *texture, TextureLayout::Undefined, TextureLayout::ColorTarget)
+        CHECK(device.textureBarrier(*commands, *texture, TextureLayout::Undefined, TextureLayout::ColorTarget, {})
                   .has_value());
         RenderingDesc resolving = kClear;
         resolving.colorAttachments[0].texture = *texture;
@@ -628,22 +628,6 @@ TEST_CASE("Device fails with RhiInvalidCall for a swapchain on a queue it lacks"
 
         REQUIRE_FALSE(swapchain.has_value());
         CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiInvalidCall);
-    }
-    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
-}
-
-TEST_CASE("Device fails with RhiPresentUnsupported for a window when it opens no queue", "[rhi][agnostic]") {
-    const TestBackend backend = GENERATE(eachBackend());
-    std::vector<std::string> messages;
-    {
-        auto created = createInstance(recordingInto(backend, messages), kValidation);
-        REQUIRE(created.has_value());
-        Instance& rhi = **created;
-
-        const auto opened = rhi.createDevice(headlessAdapter(rhi), kHeadless, DeviceDesc{});
-
-        REQUIRE_FALSE(opened.has_value());
-        CHECK(opened.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

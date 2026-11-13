@@ -15,10 +15,11 @@ namespace bfr::rhi::d3d12 {
 /// A texture resource and the memory D3D12MA placed it in, both released when
 /// it goes: before the allocator is. dxgi is the resource's DXGI format, and
 /// the rest what its subresources are numbered by and its views are made as.
-/// target is its render target or depth-stencil view, in a heap of its own,
-/// when its usage has rendering write it; a depth texture's heap also holds
-/// readOnlyTarget, the depth-stencil view a read-only attachment is drawn
-/// with, which writes neither aspect. The slots are its places in the
+/// targets is the first of its render target or depth-stencil views, in a
+/// heap of its own, when its usage has rendering write it: one for each mip
+/// level and layer, from that layer to the last, targetStride bytes apart; a
+/// depth texture's come in pairs, the second the view a read-only attachment
+/// is drawn with, which writes neither aspect. The slots are its places in the
 /// tables, kEnd in a table its usage does not set; the device gives them back
 /// when the texture is collected. A sparse one is a reserved resource with no
 /// allocation: tileShape and packedMips are what GetResourceTiling said when
@@ -29,8 +30,8 @@ struct D3D12Texture {
     Microsoft::WRL::ComPtr<D3D12MA::Allocation> allocation;
     Microsoft::WRL::ComPtr<ID3D12Resource> resource;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> targetHeap;
-    D3D12_CPU_DESCRIPTOR_HANDLE target{};
-    D3D12_CPU_DESCRIPTOR_HANDLE readOnlyTarget{};
+    D3D12_CPU_DESCRIPTOR_HANDLE targets{};
+    UINT targetStride = 0;
     TextureDesc desc;
     DXGI_FORMAT dxgi = DXGI_FORMAT_UNKNOWN;
     std::uint32_t mipLevels = 0;
@@ -43,9 +44,9 @@ struct D3D12Texture {
     D3D12_HEAP_FLAGS tileHeap = D3D12_HEAP_FLAG_NONE;
 };
 
-/// What a rendering's attachment covers of a resource: mip 0 of each of its
-/// layers, in planeCount of its planes from firstPlane. A swapchain's image
-/// has one of each.
+/// What a rendering's attachment covers of a resource: mipLevel of
+/// layerCount of its layers from firstLayer, in planeCount of its planes from
+/// firstPlane. A swapchain's image has one of each.
 struct D3D12Target {
     ID3D12Resource* resource = nullptr;
     std::uint32_t mipLevels = 1;
@@ -53,17 +54,27 @@ struct D3D12Target {
     std::uint32_t planes = 1;
     std::uint32_t firstPlane = 0;
     std::uint32_t planeCount = 1;
+    std::uint32_t mipLevel = 0;
+    std::uint32_t firstLayer = 0;
+    std::uint32_t layerCount = 1;
 };
 
-/// What an attachment of texture covers.
-[[nodiscard]] D3D12Target targetOf(const D3D12Texture& texture);
+/// What an attachment of texture at mipLevel covers, from layer, layerCount
+/// layers.
+[[nodiscard]] D3D12Target targetOf(const D3D12Texture& texture, std::uint32_t mipLevel, std::uint32_t layer,
+                                   std::uint32_t layerCount);
 
-/// What an attachment of texture covers of its depth plane, when depth, and
-/// its stencil plane, when stencil: an op of a depth-stencil attachment on
-/// those aspects. planeCount is 0 when the format has neither.
-[[nodiscard]] D3D12Target aspectsOf(const D3D12Texture& texture, bool depth, bool stencil);
+/// What target covers of texture's depth plane, when depth, and its stencil
+/// plane, when stencil: an op of a depth-stencil attachment on those aspects.
+/// planeCount is 0 when the format has neither.
+[[nodiscard]] D3D12Target aspectsOf(const D3D12Texture& texture, const D3D12Target& target, bool depth, bool stencil);
 
-/// Records on list the discard of what target covers, and nothing of its other mips.
+/// texture's view of mipLevel from layer, its read-only depth-stencil view
+/// when readOnly; ptr 0 past its levels or layers, or when it has no views.
+[[nodiscard]] D3D12_CPU_DESCRIPTOR_HANDLE targetAt(const D3D12Texture& texture, std::uint32_t mipLevel,
+                                                   std::uint32_t layer, bool readOnly);
+
+/// Records on list the discard of what target covers, and nothing else.
 void discardTarget(ID3D12GraphicsCommandList* list, const D3D12Target& target);
 
 /// A texture as desc says, in the default heap, or a reserved resource with

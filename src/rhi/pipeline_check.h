@@ -48,8 +48,9 @@ namespace bfr::rhi {
 
 /// Fails with RhiUnsupported when desc asks for multisampling the device's
 /// features lack: alphaToOne, sample shading, or a sampleMask leaving one of
-/// the pipeline's samples out. Each backend's createGraphicsPipeline calls it
-/// after checkGraphicsPipelineDesc.
+/// the pipeline's samples out. D3D12's and Metal's createGraphicsPipeline
+/// call it after checkGraphicsPipelineDesc, for the forms they lack; Vulkan
+/// passes them through.
 [[nodiscard]] inline core::Result<void> checkMultisample(const GraphicsPipelineDesc& desc, const Features& features) {
     if (desc.alphaToOne && !features.alphaToOne) {
         return core::failure(core::ErrorCode::RhiUnsupported, "the device has no alpha to one (Features::alphaToOne)");

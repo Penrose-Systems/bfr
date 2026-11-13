@@ -53,9 +53,9 @@ namespace {
 constexpr std::uint32_t kSampleMaskBits = std::numeric_limits<VkSampleMask>::digits;
 
 constexpr std::uint32_t kBindlessSet = 0;
-// The four tables every device has, the acceleration structure table and the
-// partitioned top structure table.
-constexpr std::uint32_t kBindingCount = 6;
+// The four tables every device has, the acceleration structure table, the
+// partitioned top structure table and the uniform buffer table.
+constexpr std::uint32_t kBindingCount = 7;
 constexpr VkDescriptorBindingFlags kTableFlags = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
                                                  VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
 
@@ -84,12 +84,15 @@ std::array<Table, kBindingCount> tablesFor(const DeviceDesc& desc) {
         {.binding = kPartitionedTopBinding,
          .type = VK_DESCRIPTOR_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_NV,
          .count = desc.maxBindlessPartitionedTops},
+        {.binding = kUniformBufferBinding,
+         .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+         .count = desc.maxBindlessUniformBuffers},
     }};
 }
 
 // SPIR-V as the API takes it: whole words, aligned. The caller's bytes may be
 // neither, so they are copied; pipeline creation is cold.
-core::Result<std::vector<std::uint32_t>> wordsOf(std::span<const std::byte> code) {
+std::vector<std::uint32_t> wordsOf(std::span<const std::byte> code) {
     std::vector<std::uint32_t> words((code.size() + sizeof(std::uint32_t) - 1) / sizeof(std::uint32_t));
     std::memcpy(words.data(), code.data(), code.size());
     return words;
@@ -99,14 +102,11 @@ core::Result<std::vector<std::uint32_t>> wordsOf(std::span<const std::byte> code
 // made: a pipeline keeps what it needs of it.
 core::Result<VkShaderModule> createModule(const VolkDeviceTable& table, VkDevice device,
                                           std::span<const std::byte> code) {
-    auto words = wordsOf(code);
-    if (!words) {
-        return std::unexpected(std::move(words.error()));
-    }
+    const auto words = wordsOf(code);
     VkShaderModuleCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     info.codeSize = code.size();
-    info.pCode = words->data();
+    info.pCode = words.data();
     VkShaderModule module = VK_NULL_HANDLE;
     if (const VkResult result = table.vkCreateShaderModule(device, &info, nullptr, &module); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateShaderModule", .result = result});
@@ -312,10 +312,13 @@ VkPipelineColorBlendAttachmentState blendFor(const BlendState& blend) {
 
 core::Result<VulkanBindlessLayout> VulkanBindlessLayout::create(const VolkDeviceTable& table, VkDevice device,
                                                                 const DeviceDesc& desc, std::uint32_t pushConstantsSize,
-                                                                bool accelerationStructures, bool partitionedTops) {
+                                                                bool accelerationStructures, bool partitionedTops,
+                                                                bool uniformBuffers) {
     // The acceleration structure tables' types exist only with their
-    // extensions, and the first's update after bind only with its feature, so
-    // a device without them has no such binding; checkTables refused slots
+    // extensions, and the first's update after bind only with its feature, as
+    // the uniform buffer table's does
+    // (VUID-VkDescriptorSetLayoutBindingFlagsCreateInfo-descriptorBindingUniformBufferUpdateAfterBind-03005),
+    // so a device without them has no such binding; checkTables refused slots
     // for it.
     const std::array<Table, kBindingCount> tables = tablesFor(desc);
     std::array<VkDescriptorSetLayoutBinding, kBindingCount> bindings{};
@@ -325,7 +328,8 @@ core::Result<VulkanBindlessLayout> VulkanBindlessLayout::create(const VolkDevice
     std::uint32_t sizeCount = 0;
     for (const Table& held : tables) {
         if ((held.binding == kAccelerationStructureBinding && !accelerationStructures) ||
-            (held.binding == kPartitionedTopBinding && !partitionedTops)) {
+            (held.binding == kPartitionedTopBinding && !partitionedTops) ||
+            (held.binding == kUniformBufferBinding && !uniformBuffers)) {
             continue;
         }
         bindings.at(bindingCount) = {.binding = held.binding,
@@ -430,6 +434,13 @@ VkWriteDescriptorSet writeFor(VkDescriptorSet set, std::uint32_t binding, std::u
 void VulkanBindlessLayout::writeStorageBuffer(std::uint32_t slot, VkBuffer buffer) const {
     const VkDescriptorBufferInfo info{.buffer = buffer, .offset = 0, .range = VK_WHOLE_SIZE};
     VkWriteDescriptorSet write = writeFor(set_, kStorageBufferBinding, slot, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    write.pBufferInfo = &info;
+    table_->vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+}
+
+void VulkanBindlessLayout::writeUniformBuffer(std::uint32_t slot, VkBuffer buffer) const {
+    const VkDescriptorBufferInfo info{.buffer = buffer, .offset = 0, .range = VK_WHOLE_SIZE};
+    VkWriteDescriptorSet write = writeFor(set_, kUniformBufferBinding, slot, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
     write.pBufferInfo = &info;
     table_->vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
 }
@@ -851,7 +862,7 @@ core::Result<VulkanPipeline*> VulkanDevice::pipelineFor(PipelineHandle pipeline)
 core::Result<PipelineHandle> VulkanDevice::createComputePipeline(const ComputePipelineDesc& desc) {
     // Cold, so pipelines the GPU is done with are freed here, never on the
     // frame path.
-    collectBuffers();
+    collectRetired();
     const auto cache = pipelineCacheFor(desc.cache);
     if (!cache) {
         return std::unexpected(std::move(cache.error()));
@@ -862,7 +873,8 @@ core::Result<PipelineHandle> VulkanDevice::createComputePipeline(const ComputePi
     }
     const PipelineHandle pipeline = pipelines_.emplace(std::move(*made));
     if (pipeline.isNull()) {
-        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines", kBufferLimit);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines",
+                             desc_.maxPipelines);
     }
     return pipeline;
 }
@@ -874,7 +886,7 @@ core::Result<PipelineHandle> VulkanDevice::createGraphicsPipeline(const Graphics
     if (auto checked = checkMeshStages(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    collectBuffers();
+    collectRetired();
     const auto cache = pipelineCacheFor(desc.cache);
     if (!cache) {
         return std::unexpected(std::move(cache.error()));
@@ -886,7 +898,8 @@ core::Result<PipelineHandle> VulkanDevice::createGraphicsPipeline(const Graphics
     }
     const PipelineHandle pipeline = pipelines_.emplace(std::move(*made));
     if (pipeline.isNull()) {
-        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines", kBufferLimit);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines",
+                             desc_.maxPipelines);
     }
     return pipeline;
 }
@@ -905,7 +918,7 @@ core::Result<void> VulkanDevice::destroyPipeline(PipelineHandle pipeline) {
     if (!pipelines_.retire(pipeline, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 
@@ -916,7 +929,7 @@ core::Result<ShaderHandle> VulkanDevice::createShader(const ShaderCode& code) {
     }
     const ShaderHandle shader = shaders_.emplace(std::move(*made));
     if (shader.isNull()) {
-        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} shaders", kBufferLimit);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} shaders", desc_.maxShaders);
     }
     return shader;
 }
@@ -942,12 +955,7 @@ core::Result<PipelineHandle> VulkanDevice::createRayTracingPipeline(const RayTra
     if (auto checked = checkPipelineExtras(desc, features_, rayTracing_.captureReplayIdentifierSize); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // vkCmdSetRayTracingPipelineStackSizeKHR takes 32 bits.
-    if (!std::in_range<std::uint32_t>(desc.stackSize)) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "a stack size of {} bytes is past what Vulkan takes",
-                             desc.stackSize);
-    }
-    collectBuffers();
+    collectRetired();
     const auto cache = pipelineCacheFor(desc.cache);
     if (!cache) {
         return std::unexpected(std::move(cache.error()));
@@ -979,13 +987,17 @@ core::Result<PipelineHandle> VulkanDevice::createRayTracingPipeline(const RayTra
     }
     const PipelineHandle pipeline = pipelines_.emplace(std::move(*made));
     if (pipeline.isNull()) {
-        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines", kBufferLimit);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines",
+                             desc_.maxPipelines);
     }
     return pipeline;
 }
 
 core::Result<void> VulkanDevice::shaderIdentifiers(PipelineHandle pipeline, std::uint32_t first, std::uint32_t count,
                                                    std::span<std::byte> out) {
+    if (auto checked = checkRayTracingPipelines(features_.rayTracingPipeline); !checked) {
+        return checked;
+    }
     auto found = pipelineFor(pipeline);
     if (!found) {
         return std::unexpected(std::move(found.error()));
@@ -1005,6 +1017,9 @@ core::Result<void> VulkanDevice::shaderIdentifiers(PipelineHandle pipeline, std:
 
 core::Result<void> VulkanDevice::captureReplayIdentifiers(PipelineHandle pipeline, std::uint32_t first,
                                                           std::uint32_t count, std::span<std::byte> out) {
+    if (auto checked = checkRayTracingPipelines(features_.rayTracingPipeline); !checked) {
+        return checked;
+    }
     auto found = pipelineFor(pipeline);
     if (!found) {
         return std::unexpected(std::move(found.error()));
@@ -1043,6 +1058,9 @@ VkShaderGroupShaderKHR groupShaderFor(RayTracingGroupShader shader) {
 
 core::Result<std::uint64_t> VulkanDevice::rayTracingStackSize(PipelineHandle pipeline, std::uint32_t group,
                                                               RayTracingGroupShader shader) {
+    if (auto checked = checkRayTracingPipelines(features_.rayTracingPipeline); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     if (auto checked = checkKnown(shader, "ray tracing group shader"); !checked) {
         return std::unexpected(std::move(checked.error()));
     }

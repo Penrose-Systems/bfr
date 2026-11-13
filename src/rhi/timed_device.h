@@ -124,7 +124,8 @@ public:
                                                 std::span<const BufferCopy> regions) override;
     [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<void> textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                                    TextureLayout before, TextureLayout after) override;
+                                                    TextureLayout before, TextureLayout after,
+                                                    const TextureRange& range) override;
     [[nodiscard]] core::Result<void> copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,
                                                          TextureHandle texture,
                                                          std::span<const BufferTextureCopy> regions) override;
@@ -140,9 +141,10 @@ public:
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
     [[nodiscard]] core::Result<void> wait(Token token, std::uint64_t timeoutNs) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
+    [[nodiscard]] core::Result<void> runGarbageCollection() override;
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
-    [[nodiscard]] core::Result<std::uint32_t> bufferSlot(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<BufferSlots> bufferSlots(BufferHandle buffer) override;
     [[nodiscard]] core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;

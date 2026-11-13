@@ -258,6 +258,8 @@ Features featuresOf(ID3D12Device* device, const SamplerFeatures& sampler) {
     addBasicFeatures(device, features);
     addAdvancedFeatures(device, features);
     addSamplerFeatures(device, sampler, features);
+    // D3D12_TEX3D_RTV names a 3D texture's slices.
+    features.volumeColorTargets = true;
     // d3d12.h has no caps bit for a storage texture indexed by a value that
     // varies within a wave, so storageTextureNonUniformIndexing stays false.
     addMinimumFeatures(features);

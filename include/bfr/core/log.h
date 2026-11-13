@@ -4,7 +4,6 @@
 
 #include <cstdint>
 #include <format>
-#include <functional>
 #include <string_view>
 #include <utility>
 
@@ -22,15 +21,20 @@ enum class Severity : std::uint8_t {
     Error,
 };
 
-/// Where BFR's messages go: a callback, and the least severe message it
-/// wants. Without a callback nothing is sent. It may be called on any thread.
+/// Where BFR's messages go: a callback, the caller's userData it is given,
+/// and the least severe message it wants. Without a callback nothing is
+/// sent. It may be called on any thread; userData is the caller's, borrowed
+/// for as long as anything logs to it.
 class Logger {
 public:
-    using Callback = std::function<void(Severity severity, std::string_view message)>;
+    /// A plain function, as NVRHI's IMessageCallback is a plain interface: no
+    /// std::function, which the frame path, which logs, would call through.
+    using Callback = void (*)(Severity severity, std::string_view message, void* userData);
 
     /// Sends nothing.
     Logger() = default;
-    Logger(Callback callback, Severity least) : callback_(std::move(callback)), least_(least) {}
+    Logger(Callback callback, void* userData, Severity least)
+        : callback_(callback), userData_(userData), least_(least) {}
 
     /// One that sends nothing, for code that has no logger to hand.
     [[nodiscard]] static const Logger& none() {
@@ -38,17 +42,18 @@ public:
         return logger;
     }
 
-    [[nodiscard]] bool wants(Severity severity) const { return callback_ && severity >= least_; }
+    [[nodiscard]] bool wants(Severity severity) const { return callback_ != nullptr && severity >= least_; }
 
     /// Sends message if severity is wanted.
     void send(Severity severity, std::string_view message) const {
         if (wants(severity)) {
-            callback_(severity, message);
+            callback_(severity, message, userData_);
         }
     }
 
 private:
-    Callback callback_;
+    Callback callback_ = nullptr;
+    void* userData_ = nullptr;
     Severity least_ = Severity::Warning;
 };
 

@@ -64,9 +64,6 @@ struct VulkanDeviceSetup {
     /// vkGetCalibratedTimestampsKHR reads, none when the device has no
     /// calibrated timestamps extension enabled.
     Timestamps timestamps;
-    /// Features::multiDrawIndirect and drawIndirectCount.
-    bool multiDrawIndirect = false;
-    bool drawIndirectCount = false;
     /// The features createGraphicsPipeline checks a desc against, and how
     /// depth-stencil attachments resolve.
     Features features{};
@@ -78,13 +75,14 @@ struct VulkanDeviceSetup {
     /// The device has an acceleration structure table: the adapter's
     /// BindlessLimits::maxAccelerationStructures is not 0.
     bool accelerationStructureTable = false;
+    /// BindlessLimits::maxUniformBuffers is not 0: the device has a uniform
+    /// buffer table.
+    bool uniformBufferTable = false;
 };
 
 struct VulkanCommandPool {
     VkCommandPool pool = VK_NULL_HANDLE;
     std::uint32_t queue = 0;
-    std::uint32_t pushConstantUpdates = 0;
-    std::uint32_t pushed = 0;
     std::uint32_t first = core::SlotChains::kEnd;
     std::uint32_t next = core::SlotChains::kEnd;
     std::uint32_t recording = 0;
@@ -244,7 +242,8 @@ public:
                                                 std::span<const BufferCopy> regions) override;
     [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<void> textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                                    TextureLayout before, TextureLayout after) override;
+                                                    TextureLayout before, TextureLayout after,
+                                                    const TextureRange& range) override;
     [[nodiscard]] core::Result<void> copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,
                                                          TextureHandle texture,
                                                          std::span<const BufferTextureCopy> regions) override;
@@ -260,10 +259,11 @@ public:
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
     [[nodiscard]] core::Result<void> wait(Token token, std::uint64_t timeoutNs) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
+    [[nodiscard]] core::Result<void> runGarbageCollection() override;
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
     [[nodiscard]] core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) override;
-    [[nodiscard]] core::Result<std::uint32_t> bufferSlot(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<BufferSlots> bufferSlots(BufferHandle buffer) override;
     [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
     [[nodiscard]] core::Result<TextureSlots> textureSlots(TextureHandle texture) override;
@@ -376,9 +376,10 @@ private:
     // Ends a list that was submitted or discarded; its slot waits for the
     // pool's reset.
     void end(CommandListHandle commandList);
-    // Destroys the buffers, textures, samplers and pipelines retired under submission
-    // IDs every queue has passed.
-    void collectBuffers();
+    // Destroys the buffers, textures, samplers, timestamp pools, sparse
+    // memories, property pools, pipelines and acceleration structures retired
+    // under submission IDs every queue has passed.
+    void collectRetired();
     // Warns of each kind of object the caller left when the device goes.
     void warnLeftovers() const;
     // Waits for everything the device has submitted.
@@ -427,8 +428,8 @@ private:
     // Fails with RhiUnsupported when list's queue runs no compute, which
     // builds and traces need, and RhiInvalidHandle when its pool is gone.
     // buffer's device address, offset bytes in; 0 for a null buffer. Fails
-    // with RhiInvalidHandle when the buffer is gone, and RhiInvalidCall when
-    // it has no address.
+    // with RhiInvalidHandle when the buffer is gone. Every caller is behind a
+    // feature that needs bufferDeviceAddress, so every buffer has one.
     [[nodiscard]] core::Result<VkDeviceAddress> addressOf(BufferHandle buffer, std::uint64_t offset);
     // The bytes of buffer from offset, stride apart, by address; none for a
     // null buffer. Fails as addressOf does.
@@ -453,11 +454,8 @@ private:
     VolkDeviceTable table_{};
     bool hasBudget_;
     bool hasSwapchain_;
-    std::uint32_t pushConstantsSize_;
     float timestampPeriod_;
     Timestamps timestamps_;
-    bool multiDrawIndirect_;
-    bool drawIndirectCount_;
     Features features_;
     ResolveCaps resolve_;
     RayTracingLimits rayTracing_;
@@ -488,8 +486,6 @@ private:
     // a replayable structure's memory takes BFR's, with the capture-replay
     // flag and its opaque address.
     VmaAllocator replayAllocator_ = VK_NULL_HANDLE;
-    static constexpr std::uint32_t kBufferCapacity = 256;
-    static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<VulkanBuffer, Buffer> buffers_;
     core::Pool<VulkanTexture, Texture> textures_;
     // Every sampler holds a slot, so the pool is made at the table's size.

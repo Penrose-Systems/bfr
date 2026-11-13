@@ -687,7 +687,7 @@ enum class Call : std::int32_t {
     Poll = BFR_CALL_POLL,
     DestroyCommandList = BFR_CALL_DESTROY_COMMAND_LIST,
     CreateBuffer = BFR_CALL_CREATE_BUFFER,
-    BufferSlot = BFR_CALL_BUFFER_SLOT,
+    BufferSlots = BFR_CALL_BUFFER_SLOTS,
     MapBuffer = BFR_CALL_MAP_BUFFER,
     DestroyBuffer = BFR_CALL_DESTROY_BUFFER,
     CreateTexture = BFR_CALL_CREATE_TEXTURE,
@@ -763,6 +763,7 @@ enum class Call : std::int32_t {
     ClusterSizes = BFR_CALL_CLUSTER_SIZES,
     BuildClusters = BFR_CALL_BUILD_CLUSTERS,
     CaptureAccelerationStructure = BFR_CALL_CAPTURE_ACCELERATION_STRUCTURE,
+    RunGarbageCollection = BFR_CALL_RUN_GARBAGE_COLLECTION,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -800,7 +801,7 @@ enum class Call : std::int32_t {
     case Call::Poll: return "poll";
     case Call::DestroyCommandList: return "destroy_command_list";
     case Call::CreateBuffer: return "create_buffer";
-    case Call::BufferSlot: return "buffer_slot";
+    case Call::BufferSlots: return "buffer_slots";
     case Call::MapBuffer: return "map_buffer";
     case Call::DestroyBuffer: return "destroy_buffer";
     case Call::CreateTexture: return "create_texture";
@@ -876,6 +877,7 @@ enum class Call : std::int32_t {
     case Call::ClusterSizes: return "cluster_sizes";
     case Call::BuildClusters: return "build_clusters";
     case Call::CaptureAccelerationStructure: return "capture_acceleration_structure";
+    case Call::RunGarbageCollection: return "run_garbage_collection";
     }
     return {};
 }
@@ -1864,7 +1866,7 @@ using Expected = std::expected<T, Error>;
 /// including threads BFR or the driver owns, until the instance and every device made from it are
 /// destroyed. May be called on several threads at once.
 /// message: Valid only during the call.
-using MessageCallback = std::function<void(MessageSeverity severity, std::string_view message)>;
+using MessageCallback = void (*)(MessageSeverity severity, std::string_view message, void* userData);
 
 class Instance;
 
@@ -2103,6 +2105,9 @@ struct InstanceDesc {
     MessageCallback messageCallback{};
     /// The least severe message to send.
     MessageSeverity minSeverity{};
+    /// Passed to message_callback, which may still be called after bfr_destroy_instance while a
+    /// device lives.
+    void* messageUserData{};
     /// The application's name, passed to the backend where it takes one; read during the call only.
     /// Empty is none.
     std::string_view applicationName{};
@@ -2198,6 +2203,10 @@ struct DeviceDesc {
     /// Slots in the sampler table, passed as max_bindless_textures is;
     /// bfr_caps_bindless.max_samplers says how many the adapter holds.
     std::uint32_t maxBindlessSamplers{};
+    /// Slots in the uniform buffer table, passed as max_bindless_textures is. Where
+    /// bfr_caps_bindless.max_uniform_buffers is 0 the adapter has no such table, and more than 0
+    /// fails with error_limit_reached.
+    std::uint32_t maxBindlessUniformBuffers{};
     /// Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool
     /// fails with error_limit_reached.
     std::uint32_t maxTimestampPools{};
@@ -2226,6 +2235,25 @@ struct DeviceDesc {
     /// Property pools the device holds at once, 0 for none; past it,
     /// bfr_create_acceleration_structure_property_pool fails with error_limit_reached.
     std::uint32_t maxAccelerationStructurePropertyPools{};
+    /// Buffers the device holds at once, 0 for none; past it, bfr_create_buffer fails with
+    /// error_limit_reached.
+    std::uint32_t maxBuffers{};
+    /// Textures the device holds at once, 0 for none; past it, bfr_create_texture fails with
+    /// error_limit_reached.
+    std::uint32_t maxTextures{};
+    /// Shaders the device holds at once, 0 for none; past it, bfr_create_shader fails with
+    /// error_limit_reached.
+    std::uint32_t maxShaders{};
+    /// Pipelines the device holds at once, 0 for none; past it, bfr_create_compute_pipeline,
+    /// bfr_create_graphics_pipeline and bfr_create_ray_tracing_pipeline fails with
+    /// error_limit_reached.
+    std::uint32_t maxPipelines{};
+    /// Pipeline caches the device holds at once, 0 for none; past it, bfr_create_pipeline_cache
+    /// fails with error_limit_reached.
+    std::uint32_t maxPipelineCaches{};
+    /// Acceleration structures the device holds at once, 0 for none; past it,
+    /// bfr_create_acceleration_structure fails with error_limit_reached.
+    std::uint32_t maxAccelerationStructures{};
     /// The strides, in bytes, the device's indirect draws take, read during the call only. D3D12
     /// fixes a stride in the command signature it makes for them, so it makes one for each here and
     /// fails an indirect draw of any other with error_unsupported; Vulkan and Metal take any
@@ -2238,8 +2266,7 @@ struct SwapchainDesc {
     /// The window to present to.
     Window window{};
     /// The device's queue that presents its images; one the device lacks fails with
-    /// error_invalid_argument. Fails with error_present_unsupported when it can't present to the
-    /// window.
+    /// error_invalid_argument.
     std::uint32_t queue{};
     /// Images to request, passed to the backend as given. bfr_swapchain_images says how many it
     /// made.
@@ -2277,6 +2304,15 @@ struct SwapchainImages {
 struct ColorAttachment {
     /// Null for the swapchain's image.
     TextureRef texture{};
+    /// The mip level drawn to.
+    std::uint32_t mipLevel{};
+    /// The first layer drawn to; a cube's faces are its layers, and a 3D texture's depth slices are
+    /// where bfr_caps_features.volume_color_targets.
+    std::uint32_t layer{};
+    /// The layers drawn to from layer. Vulkan and Metal draw one count of layers in a rendering:
+    /// the depth-stencil attachment's where there is one, else color attachment 0's. On Vulkan each
+    /// level and layer of a texture with an attachment usage is a view made with it.
+    std::uint32_t layerCount = BFR_ONE_LAYER;
     /// What it holds at the start; 0 is load.
     LoadOp loadOp{};
     /// What becomes of it at the end; 0 is store.
@@ -2293,7 +2329,7 @@ struct ColorAttachment {
     /// color_target, that texture's samples are resolved into as rendering ends; null for none, and
     /// null for the attachment the swapchain's image is resolved into. Non-integer formats average
     /// and integer ones take sample zero, as the backend resolves; bfr_format_caps.resolve says
-    /// which formats resolve.
+    /// which formats resolve. It is resolved into at its mip level 0, from layer 0.
     TextureRef resolveTexture{};
 };
 
@@ -2303,6 +2339,12 @@ struct ColorAttachment {
 struct DepthStencilAttachment {
     /// Null for no depth-stencil target.
     TextureRef texture{};
+    /// The mip level drawn to.
+    std::uint32_t mipLevel{};
+    /// The first layer drawn to.
+    std::uint32_t layer{};
+    /// The layers drawn to from layer, as bfr_color_attachment's are.
+    std::uint32_t layerCount = BFR_ONE_LAYER;
     /// 0 is load.
     LoadOp depthLoadOp{};
     /// 0 is store.
@@ -2321,7 +2363,7 @@ struct DepthStencilAttachment {
     bool readOnly{};
     /// A single-sample texture of texture's format and size, with depth_stencil usage, in layout
     /// depth_stencil_target, that the samples are resolved into as rendering ends, by depth_resolve
-    /// and stencil_resolve; null for none.
+    /// and stencil_resolve, at its mip level 0, from layer 0; null for none.
     TextureRef resolveTexture{};
     /// 0 is none.
     ResolveMode depthResolve{};
@@ -2366,8 +2408,7 @@ struct CommandPoolDesc {
     /// hands them out in turn until bfr_reset_command_pool gives them back.
     std::uint32_t listCount{};
     /// Most bfr_push_constants calls the pool's lists record between resets, which a backend that
-    /// copies push constants into memory makes room for with the pool; 0 is none. Every backend
-    /// counts them alike.
+    /// copies push constants into memory (Metal) makes room for with the pool; 0 is none.
     std::uint32_t pushConstantUpdates{};
 };
 
@@ -2375,7 +2416,8 @@ struct CommandPoolDesc {
 struct BufferUsage {
     bool copySrc{};
     bool copyDst{};
-    /// Shaders read it as constants.
+    /// Shaders read it as constants, through its slot in the uniform buffer table. The table views
+    /// the whole buffer, so its size is at most bfr_caps_limits.max_uniform_buffer_range.
     bool uniform{};
     /// Shaders read and write it. D3D12 views it in 32-bit values, so there its size must be a
     /// multiple of 4.
@@ -2513,6 +2555,16 @@ struct CallTiming {
     std::uint64_t maxNs{};
 };
 
+/// Where a buffer is in the bindless tables bfr_pipeline states, from creation to destruction: the
+/// index shaders use. A table the buffer's usage does not set has no slot for it, and reads
+/// BFR_NO_SLOT.
+struct BufferSlots {
+    /// Its index in the storage buffer table; only with storage usage.
+    std::uint32_t storage{};
+    /// Its index in the uniform buffer table; only with uniform usage.
+    std::uint32_t uniform{};
+};
+
 /// Where a texture is in the bindless tables bfr_pipeline states, from creation to destruction: the
 /// index shaders use. A table the texture's usage does not set has no slot for it, and reads
 /// BFR_NO_SLOT.
@@ -2521,6 +2573,16 @@ struct TextureSlots {
     std::uint32_t sampled{};
     /// Its index in the storage texture table; only with storage usage.
     std::uint32_t storage{};
+};
+
+/// The mip levels and layers of a texture a barrier moves: mip_count levels from mip_level, and
+/// layer_count layers from layer, in every plane. Counts pass through as given; 0 is no count
+/// Vulkan takes. A 3D texture has one layer, so a barrier moves every depth slice of its levels.
+struct TextureRange {
+    std::uint32_t mipLevel{};
+    std::uint32_t mipCount = BFR_REMAINING;
+    std::uint32_t layer{};
+    std::uint32_t layerCount = BFR_REMAINING;
 };
 
 /// One region copied between a buffer and one layer and mip level of a single-sampled texture.
@@ -3241,11 +3303,10 @@ struct ClusterIndirection {
 /// is a multiple of bfr_caps_ray_tracing.cluster_alignment for clusters, cluster_template_alignment
 /// for templates and cluster_bottom_alignment for bottom structures. addresses holds 8-byte
 /// addresses address_stride bytes apart, at least 8, and has storage usage; sizes holds 4-byte
-/// sizes size_stride bytes apart, at least 4. Every buffer here has a usage bfr_get_buffer_address
-/// gives an address for, and each of addresses, sizes and records is read or written within its
-/// buffer, from its offset. Scratch is scratch_offset bytes into scratch, which has
-/// acceleration_structure_scratch usage, at least the size query's build_scratch bytes, a multiple
-/// of bfr_caps_ray_tracing.cluster_scratch_alignment, and overlaps no destination.
+/// sizes size_stride bytes apart, at least 4. Each of addresses, sizes and records is read or
+/// written within its buffer, from its offset. Scratch is scratch_offset bytes into scratch, which
+/// has acceleration_structure_scratch usage, at least the size query's build_scratch bytes, a
+/// multiple of bfr_caps_ray_tracing.cluster_scratch_alignment, and overlaps no destination.
 struct ClusterBuild {
     ClusterInputs inputs{};
     BufferRef destination{};
@@ -3792,6 +3853,9 @@ struct CapsFeatures {
     /// A border colour for textures that hold integers.
     bool samplerIntegerBorderColor{};
     bool samplerUnnormalizedCoordinates{};
+    /// A 3D texture with color_attachment usage is drawn to by depth slice, which a
+    /// bfr_color_attachment's layer and layer_count name. Not for a sparse one on Vulkan.
+    bool volumeColorTargets{};
     /// A lod_bias other than 0.
     bool samplerLodBias{};
     bool samplerLodAverage{};
@@ -3823,6 +3887,8 @@ struct CapsFeatures {
     bool storageWriteWithoutFormat{};
     /// A storage texture table indexed by a value that differs within a shader's invocation group.
     bool storageTextureNonUniformIndexing{};
+    /// The uniform buffer table indexed by a value that differs within a shader's invocation group.
+    bool uniformBufferNonUniformIndexing{};
     /// Every graphics and compute queue writes timestamps.
     bool timestampsOnAllQueues{};
     bool pipelineStatistics{};
@@ -4137,12 +4203,19 @@ inline Error tooMany(std::string_view what) {
     return {.code = Result::ErrorInvalidArgument, .message = Message{what}};
 }
 
-/// Calls the MessageCallback user_data points at; nothing it throws reaches C.
+/// A MessageCallback and the caller's pointer it is given, which C's user_data points at.
+struct MessageCallbackState {
+    MessageCallback callback = nullptr;
+    void* userData = nullptr;
+};
+
+/// Calls the MessageCallbackState user_data points at; nothing it throws reaches C.
 inline void messageCallbackTrampoline(bfr_message_severity severity, bfr_string message, void* user_data) noexcept {
-    callQuietly([&] { (*static_cast<const MessageCallback*>(user_data))(static_cast<MessageSeverity>(severity), text(message)); });
+    const auto& state = *static_cast<const MessageCallbackState*>(user_data);
+    callQuietly([&] { state.callback(static_cast<MessageSeverity>(severity), text(message), state.userData); });
 }
 
-inline bfr_instance_desc toC(const InstanceDesc& value, const bfr_chain* next, MessageCallback* messageCallback) {
+inline bfr_instance_desc toC(const InstanceDesc& value, const bfr_chain* next, MessageCallbackState* messageCallback) {
     return {
         .next = next,
         .backend = static_cast<bfr_backend>(value.backend),
@@ -4190,6 +4263,7 @@ inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
         .max_bindless_storage_textures = value.maxBindlessStorageTextures,
         .max_bindless_storage_buffers = value.maxBindlessStorageBuffers,
         .max_bindless_samplers = value.maxBindlessSamplers,
+        .max_bindless_uniform_buffers = value.maxBindlessUniformBuffers,
         .max_timestamp_pools = value.maxTimestampPools,
         .max_sparse_memories = value.maxSparseMemories,
         .max_tile_mappings = value.maxTileMappings,
@@ -4197,6 +4271,12 @@ inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
         .max_bindless_partitioned_tops = value.maxBindlessPartitionedTops,
         .max_build_geometries = value.maxBuildGeometries,
         .max_acceleration_structure_property_pools = value.maxAccelerationStructurePropertyPools,
+        .max_buffers = value.maxBuffers,
+        .max_textures = value.maxTextures,
+        .max_shaders = value.maxShaders,
+        .max_pipelines = value.maxPipelines,
+        .max_pipeline_caches = value.maxPipelineCaches,
+        .max_acceleration_structures = value.maxAccelerationStructures,
         .indirect_strides = reinterpret_cast<const uint32_t*>(value.indirectStrides.data()),
         .indirect_stride_count = static_cast<uint32_t>(value.indirectStrides.size()),
     };
@@ -4302,6 +4382,15 @@ inline bfr_texture_desc toC(const TextureDesc& value, const bfr_chain* next) {
 
 inline bfr_timestamp_pool_desc toC(const TimestampPoolDesc& value) {
     return {.queue = value.queue, .count = value.count};
+}
+
+inline bfr_texture_range toC(const TextureRange& value) {
+    return {
+        .mip_level = value.mipLevel,
+        .mip_count = value.mipCount,
+        .layer = value.layer,
+        .layer_count = value.layerCount,
+    };
 }
 
 inline bfr_buffer_texture_copy toC(const BufferTextureCopy& value) {
@@ -4635,6 +4724,10 @@ inline CallTiming fromC(const bfr_call_timing& value) {
     return {.count = value.count, .totalNs = value.total_ns, .maxNs = value.max_ns};
 }
 
+inline BufferSlots fromC(const bfr_buffer_slots& value) {
+    return {.storage = value.storage, .uniform = value.uniform};
+}
+
 inline TextureSlots fromC(const bfr_texture_slots& value) {
     return {.sampled = value.sampled, .storage = value.storage};
 }
@@ -4894,6 +4987,7 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .samplerCustomBorderColor = value.sampler_custom_border_color != BFR_FALSE,
         .samplerIntegerBorderColor = value.sampler_integer_border_color != BFR_FALSE,
         .samplerUnnormalizedCoordinates = value.sampler_unnormalized_coordinates != BFR_FALSE,
+        .volumeColorTargets = value.volume_color_targets != BFR_FALSE,
         .samplerLodBias = value.sampler_lod_bias != BFR_FALSE,
         .samplerLodAverage = value.sampler_lod_average != BFR_FALSE,
         .compressionBc = value.compression_bc != BFR_FALSE,
@@ -4914,6 +5008,7 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .storageReadWithoutFormat = value.storage_read_without_format != BFR_FALSE,
         .storageWriteWithoutFormat = value.storage_write_without_format != BFR_FALSE,
         .storageTextureNonUniformIndexing = value.storage_texture_non_uniform_indexing != BFR_FALSE,
+        .uniformBufferNonUniformIndexing = value.uniform_buffer_non_uniform_indexing != BFR_FALSE,
         .timestampsOnAllQueues = value.timestamps_on_all_queues != BFR_FALSE,
         .pipelineStatistics = value.pipeline_statistics != BFR_FALSE,
         .occlusionQueryPrecise = value.occlusion_query_precise != BFR_FALSE,
@@ -5194,8 +5289,8 @@ public:
     /// the order the window system gives.
     [[nodiscard]] Expected<std::vector<SwapchainFormat>> swapchainFormats(std::uint32_t adapter, const SwapchainQuery& desc) const;
 
-    /// Opens an adapter with the queues desc asks for. With a window in desc, fails with
-    /// error_present_unsupported unless one of them can present to it.
+    /// Opens an adapter with the queues desc asks for, preferring queue families that present to
+    /// the window in desc, if any.
     [[nodiscard]] Expected<Device> createDevice(const DeviceDesc& desc) const;
 
     /// Lists the CPU time spent in each of the instance's own calls since it was made, indexed by
@@ -5254,14 +5349,13 @@ public:
 
     /// Begins rendering to desc's attachments, with the image bfr_acquire took from swapchain as
     /// color attachment 0 when swapchain is not null, or as the image attachment 0's texture
-    /// resolves into when it names one. Sets the viewport and scissor to the whole of the
-    /// attachments. Only the draws, direct and indirect, and the state they take, are recorded
-    /// until bfr_end_rendering, which resolves the attachments that name a resolve texture. Fails
-    /// with error_invalid_argument when no attachment is given, when a color attachment but the
-    /// swapchain's names no texture, with a swapchain when there is no color attachment or
-    /// attachment 0 names a resolve texture, and when a resolve texture is named with no texture;
-    /// error_unsupported for a depth or stencil resolve mode, or a pair of them, bfr_caps_resolve
-    /// doesn't have, on D3D12 and Metal.
+    /// resolves into when it names one. Only the draws, direct and indirect, and the state they
+    /// take, are recorded until bfr_end_rendering, which resolves the attachments that name a
+    /// resolve texture. Fails with error_invalid_argument when no attachment is given, when a color
+    /// attachment but the swapchain's names no texture, with a swapchain when there is no color
+    /// attachment or attachment 0 names a resolve texture, and when a resolve texture is named with
+    /// no texture; error_unsupported for a depth or stencil resolve mode, or a pair of them,
+    /// bfr_caps_resolve doesn't have, on D3D12 and Metal.
     [[nodiscard]] Expected<void> beginRendering(CommandList commandList, const Swapchain& swapchain, const RenderingDesc& desc) const;
 
     /// Ends the rendering bfr_begin_rendering began; a swapchain image is then ready to present,
@@ -5301,8 +5395,9 @@ public:
 
     /// Sets the first size bytes of the push constants every shader reads, as bfr_pipeline states,
     /// for the draws and dispatches after it. size is at most the caps' max_push_constants_size,
-    /// which the layout BFR makes holds, else error_invalid_argument. Fails with
-    /// error_limit_reached past the pool's push_constant_updates.
+    /// which the layout BFR makes holds. On Metal, which copies the bytes into the pool's ring,
+    /// fails with error_invalid_argument past that size and error_limit_reached past the pool's
+    /// push_constant_updates.
     [[nodiscard]] Expected<void> pushConstants(CommandList commandList, std::span<const std::uint8_t> data) const;
 
     /// Makes buffer, which has index usage, the one bfr_draw_indexed reads indices of type from,
@@ -5327,8 +5422,8 @@ public:
 
     /// Records draw_count draws as bfr_draw does, each with the bfr_draw_indirect_args buffer holds
     /// from offset, stride bytes apart. buffer has indirect usage; work that wrote the arguments is
-    /// ordered before by a bfr_barrier. Fails with error_unsupported for draw_count above 1 where
-    /// bfr_caps_features.multi_draw_indirect is false and, on D3D12, a stride not in the device's
+    /// ordered before by a bfr_barrier. Fails with error_unsupported for draw_count above 1 on
+    /// Metal, whose indirect draw has no count, and, on D3D12, a stride not in the device's
     /// indirect_strides; and as bfr_draw does.
     [[nodiscard]] Expected<void> drawIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset, std::uint32_t drawCount, std::uint32_t stride) const;
 
@@ -5339,8 +5434,7 @@ public:
 
     /// Records bfr_draw_indirect's draws, as many as the 32-bit count count_buffer holds at
     /// count_offset when the GPU runs it, at most max_draw_count. count_buffer has indirect usage.
-    /// Fails with error_unsupported where bfr_caps_features.draw_indirect_count is false, and as
-    /// bfr_draw_indirect does.
+    /// Fails with error_unsupported on Metal, which has none, and as bfr_draw_indirect does.
     [[nodiscard]] Expected<void> drawIndirectCount(CommandList commandList, const Buffer& buffer, std::uint64_t offset, const Buffer& countBuffer, std::uint64_t countOffset, std::uint32_t maxDrawCount, std::uint32_t stride) const;
 
     /// Records bfr_draw_indexed_indirect's draws, as many as count_buffer holds, as
@@ -5375,9 +5469,9 @@ public:
     /// those before it have finished, and see what they wrote.
     [[nodiscard]] Expected<void> barrier(CommandList commandList) const;
 
-    /// Records a barrier, as bfr_barrier does, that also moves every layer and mip level of texture
-    /// from layout before to layout after. Outside rendering.
-    [[nodiscard]] Expected<void> textureBarrier(CommandList commandList, const Texture& texture, TextureLayout before, TextureLayout after) const;
+    /// Records a barrier, as bfr_barrier does, that also moves range's mip levels and layers of
+    /// texture from layout before to layout after; the rest stay as they are. Outside rendering.
+    [[nodiscard]] Expected<void> textureBarrier(CommandList commandList, const Texture& texture, TextureLayout before, TextureLayout after, const TextureRange& range) const;
 
     /// Records copies of regions from buffer to texture, which is in layout copy_dst, outside
     /// rendering. buffer has copy_src usage and texture copy_dst. What was copied is seen as
@@ -5415,6 +5509,12 @@ public:
 
     /// Writes whether the GPU has passed token, without blocking.
     [[nodiscard]] Expected<bool> poll(const Token& token) const;
+
+    /// Frees the objects destroy calls retired whose submits the GPU has passed, and gives their
+    /// slots back to the tables, as each create call also does first. Not for the frame path: it
+    /// frees memory. Fails with error_device_failed when the backend cannot say what the GPU has
+    /// passed.
+    [[nodiscard]] Expected<void> runGarbageCollection() const;
 
     /// Discards a command list that was not submitted; the pool hands it out again after its next
     /// reset. A handle that is already submitted or destroyed does nothing.
@@ -5869,20 +5969,17 @@ public:
     /// error_invalid_handle when the buffer is destroyed.
     [[nodiscard]] Expected<void*> map();
 
-    /// Writes the buffer's index in the storage buffer table bfr_pipeline states, held from
-    /// creation to destruction. Fails with error_invalid_argument when the buffer has no storage
-    /// usage.
-    [[nodiscard]] Expected<std::uint32_t> bufferSlot();
+    /// Writes the buffer's indices in the storage and uniform buffer tables bfr_pipeline states,
+    /// held from creation to destruction; BFR_NO_SLOT in a table its usage does not set.
+    [[nodiscard]] Expected<BufferSlots> bufferSlots();
 
     /// Writes how a sparse buffer is cut into tiles. Fails with error_invalid_argument when it is
     /// not sparse.
     [[nodiscard]] Expected<BufferTiling> bufferTiling();
 
     /// Writes the buffer's GPU address, for the addresses bfr_trace_rays_indirect_args, cluster
-    /// records and shaders read. The buffer has indirect, shader_binding_table,
-    /// acceleration_structure_input, acceleration_structure_data or acceleration_structure_storage
-    /// usage. Fails with error_unsupported where bfr_caps_features.buffer_address is false, and
-    /// error_invalid_argument for a buffer of none of those usages.
+    /// records and shaders read; every buffer has one where bfr_caps_features.buffer_address. Fails
+    /// with error_unsupported where it is false.
     [[nodiscard]] Expected<std::uint64_t> bufferAddress();
 
 private:
@@ -5941,7 +6038,7 @@ private:
 
 /// A compute or graphics pipeline: shaders with the fixed state they run under. Every pipeline
 /// shares one resource layout, which its shaders declare as follows. Four unbounded tables, each
-/// indexed by the slot a resource is given when it is created, which bfr_get_buffer_slot,
+/// indexed by the slot a resource is given when it is created, which bfr_get_buffer_slots,
 /// bfr_get_texture_slots and bfr_get_sampler_slot report and which is the same number on every
 /// backend, and one block of the caps' max_push_constants_size bytes of push constants that every
 /// stage reads, set by bfr_push_constants. On Vulkan the tables are the bindings of descriptor set
@@ -5960,8 +6057,10 @@ private:
 /// the others are. Where bfr_caps_features.partitioned_top there is a partitioned top table, with
 /// or without the fifth, of partitioned top structures by their slots: on Vulkan binding 5,
 /// partitioned acceleration structures, which shaders declare as acceleration structures. D3D12 and
-/// Metal have neither yet. Uniform buffers have no table: not every backend's minimum has them. A
-/// pipeline's shaders are bytecode for the backend the device runs on.
+/// Metal have neither yet. Where bfr_caps_bindless.max_uniform_buffers is not 0 there is a uniform
+/// buffer table, by the uniform slot bfr_get_buffer_slots reports: on Vulkan binding 6, uniform
+/// buffers, as the others are, each the whole buffer. D3D12 and Metal have none yet. A pipeline's
+/// shaders are bytecode for the backend the device runs on.
 class Pipeline {
 public:
     /// Owns nothing, as a moved-from Pipeline does.
@@ -5988,8 +6087,9 @@ public:
     [[nodiscard]] explicit operator bool() const { return pipeline_.bits != 0; }
 
     /// Writes count groups' identifiers from first, bfr_caps_ray_tracing.identifier_size bytes
-    /// each, into data, for binding table records. Fails with error_invalid_argument when size is
-    /// too small.
+    /// each, into data, for binding table records. Fails with error_unsupported where
+    /// bfr_caps_features.ray_tracing_pipeline is false, and error_invalid_argument when size is too
+    /// small.
     [[nodiscard]] Expected<void> shaderIdentifiers(std::uint32_t first, std::uint32_t count, void* data, std::size_t size);
 
     /// Writes count groups' capture-replay identifiers from first,
@@ -6002,6 +6102,7 @@ public:
 
     /// Writes the bytes of stack one shader of group takes, for
     /// bfr_ray_tracing_pipeline_desc.stack_size. The group has that shader. Fails with
+    /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false, and
     /// error_invalid_argument for a pipeline that is not a ray tracing one or an enum value BFR
     /// doesn't have.
     [[nodiscard]] Expected<std::uint64_t> rayTracingStackSize(std::uint32_t group, RayTracingGroupShader shader);
@@ -6327,6 +6428,9 @@ namespace detail {
 inline bfr_color_attachment toC(const ColorAttachment& value) {
     return {
         .texture = value.texture.get(),
+        .mip_level = value.mipLevel,
+        .layer = value.layer,
+        .layer_count = value.layerCount,
         .load_op = static_cast<bfr_load_op>(value.loadOp),
         .store_op = static_cast<bfr_store_op>(value.storeOp),
         .clear_color = {value.clearColor[0], value.clearColor[1], value.clearColor[2], value.clearColor[3]},
@@ -6339,6 +6443,9 @@ inline bfr_color_attachment toC(const ColorAttachment& value) {
 inline bfr_depth_stencil_attachment toC(const DepthStencilAttachment& value) {
     return {
         .texture = value.texture.get(),
+        .mip_level = value.mipLevel,
+        .layer = value.layer,
+        .layer_count = value.layerCount,
         .depth_load_op = static_cast<bfr_load_op>(value.depthLoadOp),
         .depth_store_op = static_cast<bfr_store_op>(value.depthStoreOp),
         .stencil_load_op = static_cast<bfr_load_op>(value.stencilLoadOp),
@@ -6624,7 +6731,7 @@ inline bfr_acceleration_structure_motion_instance toC(const AccelerationStructur
 } // namespace detail
 
 inline Expected<Instance> Instance::create(const InstanceDesc& desc) {
-    auto messageCallback = desc.messageCallback ? std::make_shared<MessageCallback>(desc.messageCallback) : nullptr;
+    auto messageCallback = desc.messageCallback != nullptr ? std::make_shared<detail::MessageCallbackState>(detail::MessageCallbackState{desc.messageCallback, desc.messageUserData}) : nullptr;
     const bfr_instance_desc cDesc = detail::toC(desc, nullptr, messageCallback.get());
     bfr_instance* instance = nullptr;
     if (const bfr_result result = bfr_create_instance(&cDesc, &instance); result < 0) {
@@ -6988,8 +7095,9 @@ inline Expected<void> Device::barrier(CommandList commandList) const {
     return {};
 }
 
-inline Expected<void> Device::textureBarrier(CommandList commandList, const Texture& texture, TextureLayout before, TextureLayout after) const {
-    if (const bfr_result result = bfr_texture_barrier(device_, commandList.get(), texture.get(), static_cast<bfr_texture_layout>(before), static_cast<bfr_texture_layout>(after)); result < 0) {
+inline Expected<void> Device::textureBarrier(CommandList commandList, const Texture& texture, TextureLayout before, TextureLayout after, const TextureRange& range) const {
+    const bfr_texture_range cRange = detail::toC(range);
+    if (const bfr_result result = bfr_texture_barrier(device_, commandList.get(), texture.get(), static_cast<bfr_texture_layout>(before), static_cast<bfr_texture_layout>(after), &cRange); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return {};
@@ -7062,6 +7170,13 @@ inline Expected<bool> Device::poll(const Token& token) const {
         return std::unexpected(detail::failure(result));
     }
     return complete != BFR_FALSE;
+}
+
+inline Expected<void> Device::runGarbageCollection() const {
+    if (const bfr_result result = bfr_run_garbage_collection(device_); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
 }
 
 inline void Device::destroyCommandList(CommandList commandList) const {
@@ -7475,12 +7590,12 @@ inline Expected<void*> Buffer::map() {
     return data;
 }
 
-inline Expected<std::uint32_t> Buffer::bufferSlot() {
-    uint32_t slot{};
-    if (const bfr_result result = bfr_get_buffer_slot(device_, buffer_, &slot); result < 0) {
+inline Expected<BufferSlots> Buffer::bufferSlots() {
+    bfr_buffer_slots slots{};
+    if (const bfr_result result = bfr_get_buffer_slots(device_, buffer_, &slots); result < 0) {
         return std::unexpected(detail::failure(result));
     }
-    return slot;
+    return detail::fromC(slots);
 }
 
 inline Expected<BufferTiling> Buffer::bufferTiling() {

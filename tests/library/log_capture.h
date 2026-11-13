@@ -10,10 +10,10 @@
 // output outlives whatever logs to it.
 inline bfr::core::Logger loggingInto(std::ostringstream& output,
                                      bfr::core::Severity least = bfr::core::Severity::Trace) {
-    return {[&output](bfr::core::Severity /*severity*/, std::string_view message) {
+    return {[](bfr::core::Severity /*severity*/, std::string_view message, void* userData) {
                 static std::mutex mutex;
                 const std::scoped_lock lock{mutex};
-                output << message << '\n';
+                *static_cast<std::ostringstream*>(userData) << message << '\n';
             },
-            least};
+            &output, least};
 }

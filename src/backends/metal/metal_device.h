@@ -227,7 +227,8 @@ public:
                                                 std::span<const BufferCopy> regions) override;
     [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<void> textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                                    TextureLayout before, TextureLayout after) override;
+                                                    TextureLayout before, TextureLayout after,
+                                                    const TextureRange& range) override;
     [[nodiscard]] core::Result<void> copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,
                                                          TextureHandle texture,
                                                          std::span<const BufferTextureCopy> regions) override;
@@ -243,10 +244,11 @@ public:
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
     [[nodiscard]] core::Result<void> wait(Token token, std::uint64_t timeoutNs) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
+    [[nodiscard]] core::Result<void> runGarbageCollection() override;
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
     [[nodiscard]] core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) override;
-    [[nodiscard]] core::Result<std::uint32_t> bufferSlot(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<BufferSlots> bufferSlots(BufferHandle buffer) override;
     [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
     [[nodiscard]] core::Result<TextureSlots> textureSlots(TextureHandle texture) override;
@@ -363,7 +365,7 @@ private:
     void end(CommandListHandle commandList);
     // Destroys the buffers, textures, samplers, timestamp pools, sparse memories
     // and pipelines retired under submission IDs every queue has passed.
-    void collectBuffers();
+    void collectRetired();
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
     static void discard(MetalCommandList& list);
@@ -415,8 +417,6 @@ private:
     // thread-safe.
     Ref<MTL::ResidencySet> residency_;
     std::mutex residencyLock_;
-    static constexpr std::uint32_t kBufferCapacity = 256;
-    static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<MetalBuffer, Buffer> buffers_;
     core::Pool<MetalTexture, Texture> textures_;
     // Every sampler holds a slot, so the pool is made at the table's size.

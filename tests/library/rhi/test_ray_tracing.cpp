@@ -300,7 +300,7 @@ std::array<std::uint32_t, kRays> traced(Device& device, AccelerationStructureHan
     const auto slot = device.accelerationStructureSlot(structure);
     INFO(failureOf(slot));
     REQUIRE(slot.has_value());
-    const auto resultSlot = device.bufferSlot(results);
+    const auto resultSlot = storageSlot(device, results);
     REQUIRE(resultSlot.has_value());
     const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists, .pushConstantUpdates = 1});
     REQUIRE(pool.has_value());
@@ -962,7 +962,7 @@ TEST_CASE("Device allocates nothing tracing rays frame after frame", "[rhi][agno
         const BufferHandle results = created(device,
                                              {.size = sizeof(std::uint32_t) * kRays, .usage = {.storage = true}});
         const auto slot = device.accelerationStructureSlot(scene.top.structure);
-        const auto resultSlot = device.bufferSlot(results);
+        const auto resultSlot = storageSlot(device, results);
         REQUIRE(slot.has_value());
         REQUIRE(resultSlot.has_value());
         const std::array<std::uint32_t, 2> push{*slot, *resultSlot};
@@ -1053,6 +1053,9 @@ TEST_CASE("Device refuses ray tracing pipeline work it can't pass on", "[rhi][ag
         if (!made.caps.features.rayTracingPipeline) {
             CHECK(code(device.createRayTracingPipeline({})) == ErrorCode::RhiUnsupported);
             CHECK(code(device.traceRays(*list, {})) == ErrorCode::RhiUnsupported);
+            std::vector<std::byte> none;
+            CHECK(code(device.shaderIdentifiers(PipelineHandle{}, 0, 0, none)) == ErrorCode::RhiUnsupported);
+            CHECK(code(device.captureReplayIdentifiers(PipelineHandle{}, 0, 0, none)) == ErrorCode::RhiUnsupported);
         }
         if (!made.caps.features.traceRaysIndirect) {
             CHECK(code(device.traceRaysIndirect(*list, {}, 0)) == ErrorCode::RhiUnsupported);
@@ -1069,9 +1072,16 @@ TEST_CASE("Device refuses ray tracing pipeline work it can't pass on", "[rhi][ag
         if (made.caps.features.rayTracingPipeline && !made.caps.features.clusterAccelerationStructure) {
             CHECK(code(device.createRayTracingPipeline({.allowClusters = true})) == ErrorCode::RhiUnsupported);
         }
-        // An address only of a buffer with a usage that has one.
-        CHECK(code(device.bufferAddress(readback)) ==
-              (made.caps.features.bufferAddress ? ErrorCode::RhiInvalidCall : ErrorCode::RhiUnsupported));
+        // Every buffer has an address where the device gives them, whatever its usage.
+        const auto address = device.bufferAddress(readback);
+        if (made.caps.features.bufferAddress) {
+            INFO(failureOf(address));
+            REQUIRE(address.has_value());
+            CHECK(*address != 0);
+        }
+        else {
+            CHECK(code(address) == ErrorCode::RhiUnsupported);
+        }
         if (made.caps.features.rayTracingPipeline && takesSpirv(backend)) {
             const RayTracing tracing{device, made.caps};
             // Room for every identifier, of a ray tracing pipeline.

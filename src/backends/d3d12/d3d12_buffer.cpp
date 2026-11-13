@@ -67,7 +67,7 @@ core::Result<ComPtr<D3D12MA::Allocator>> createAllocator(ID3D12Device* device, I
 }
 
 core::Result<D3D12Buffer> createD3D12Buffer(D3D12MA::Allocator& allocator, ID3D12Device& device, const BufferDesc& desc,
-                                            std::uint32_t slot) {
+                                            const BufferSlotsHeld& slots) {
     if (desc.sparse && desc.memory != BufferMemory::Device) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "a sparse buffer's memory is the heaps mapped into it, so it is device");
@@ -94,7 +94,7 @@ core::Result<D3D12Buffer> createD3D12Buffer(D3D12MA::Allocator& allocator, ID3D1
                        .memory = desc.memory,
                        .size = desc.size,
                        .mapped = {},
-                       .slot = slot,
+                       .slots = slots,
                        .sparse = desc.sparse};
     if (desc.sparse) {
         // Heaps' tiles are mapped into it, so no memory is placed now.
@@ -140,17 +140,22 @@ core::Result<D3D12Buffer*> D3D12Device::bufferFor(BufferHandle buffer) {
     return found;
 }
 
-void D3D12Device::collectBuffers() {
+void D3D12Device::collectRetired() {
     const std::uint64_t completed = submissions_.completed(
         [this](std::uint32_t queue) { return queues_[queue]->fence->GetCompletedValue(); });
     // A collected resource's slots go back to their tables, so no pending work
     // can see a slot reused.
-    buffers_.collect(completed, [this](const D3D12Buffer& buffer) { bindless_.giveBuffer(buffer.slot); });
+    buffers_.collect(completed, [this](const D3D12Buffer& buffer) { bindless_.giveBuffer(buffer.slots); });
     textures_.collect(completed, [this](const D3D12Texture& texture) { bindless_.giveTexture(texture.slots); });
     samplers_.collect(completed, [this](const D3D12Sampler& sampler) { bindless_.giveSampler(sampler.slot); });
     timestampPools_.collect(completed);
     sparseMemories_.collect(completed);
     pipelines_.collect(completed);
+}
+
+core::Result<void> D3D12Device::runGarbageCollection() {
+    collectRetired();
+    return {};
 }
 
 core::Result<BufferHandle> D3D12Device::createBuffer(const BufferDesc& desc) {
@@ -169,7 +174,7 @@ core::Result<BufferHandle> D3D12Device::createBuffer(const BufferDesc& desc) {
     }
     // Cold, so buffers the GPU is done with are freed here, never on the
     // frame path: freeing one frees the allocator's memory.
-    collectBuffers();
+    collectRetired();
     auto slot = bindless_.takeBuffer(desc);
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
@@ -183,9 +188,9 @@ core::Result<BufferHandle> D3D12Device::createBuffer(const BufferDesc& desc) {
     const BufferHandle buffer = buffers_.emplace(std::move(*made));
     if (buffer.isNull()) {
         bindless_.giveBuffer(*slot);
-        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} buffers", kBufferLimit);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} buffers", desc_.maxBuffers);
     }
-    if (*slot != core::SlotChains::kEnd) {
+    if (slot->storage != core::SlotChains::kEnd) {
         // A raw view of the whole buffer, as api/bfr.yaml states under
         // bfr_pipeline: the shader declares a ByteAddressBuffer.
         const D3D12_UNORDERED_ACCESS_VIEW_DESC view{.Format = DXGI_FORMAT_R32_TYPELESS,
@@ -197,17 +202,17 @@ core::Result<BufferHandle> D3D12Device::createBuffer(const BufferDesc& desc) {
                                                                .CounterOffsetInBytes = 0,
                                                                .Flags = D3D12_BUFFER_UAV_FLAG_RAW}};
         device_->CreateUnorderedAccessView(resource, nullptr, &view,
-                                           layout_.resourceAt(layout_.storageBuffers + *slot));
+                                           layout_.resourceAt(layout_.storageBuffers + slot->storage));
     }
     return buffer;
 }
 
-core::Result<std::uint32_t> D3D12Device::bufferSlot(BufferHandle buffer) {
+core::Result<BufferSlots> D3D12Device::bufferSlots(BufferHandle buffer) {
     auto found = bufferFor(buffer);
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    return BindlessSlots::reported((*found)->slot);
+    return BindlessSlots::reported((*found)->slots);
 }
 
 core::Result<std::span<std::byte>> D3D12Device::mapBuffer(BufferHandle buffer) {
@@ -257,7 +262,7 @@ core::Result<void> D3D12Device::destroyBuffer(BufferHandle buffer) {
     if (!buffers_.retire(buffer, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the buffer handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 

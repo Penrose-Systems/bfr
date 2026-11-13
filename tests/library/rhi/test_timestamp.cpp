@@ -131,7 +131,8 @@ TEST_CASE("Device writes a timestamp at each stage the caps list, in rendering a
             INFO("outside rendering, stage " << static_cast<int>(stage));
             CHECK(device.writeTimestamp(*list, *pool, index++, stage, TimestampGranularity::Relaxed).has_value());
         }
-        CHECK(device.textureBarrier(*list, *target, TextureLayout::Undefined, TextureLayout::ColorTarget).has_value());
+        CHECK(device.textureBarrier(*list, *target, TextureLayout::Undefined, TextureLayout::ColorTarget, {})
+                  .has_value());
         RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
         rendering.colorAttachments[0] = {.texture = *target, .loadOp = LoadOp::Clear, .storeOp = StoreOp::Store};
         REQUIRE(device.beginRendering(*list, {}, rendering).has_value());

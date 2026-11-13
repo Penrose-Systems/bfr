@@ -1,4 +1,5 @@
 #include "bfr.hpp"
+#include "bfr/bfr.h"
 #include "shaders/spirv.h"
 #include "test_backends.h"
 
@@ -41,6 +42,7 @@ constexpr std::uint32_t kDevicePools = 16;
 constexpr std::uint32_t kDeviceSwapchains = 4;
 constexpr std::uint32_t kDeviceTableSlots = 256;
 constexpr std::uint32_t kDeviceSamplers = 16;
+constexpr std::uint32_t kDeviceObjects = 256;
 // One queue at rank 0 and level normal.
 constexpr std::array<bfr::QueueDesc, 1> kOneQueue{};
 
@@ -54,18 +56,24 @@ bfr::DeviceDesc testDevice(std::uint32_t adapter) {
             .maxBindlessTextures = kDeviceTableSlots,
             .maxBindlessStorageTextures = kDeviceTableSlots,
             .maxBindlessStorageBuffers = kDeviceTableSlots,
-            .maxBindlessSamplers = kDeviceSamplers};
+            .maxBindlessSamplers = kDeviceSamplers,
+            .maxBuffers = kDeviceObjects,
+            .maxTextures = kDeviceObjects,
+            .maxShaders = kDeviceObjects,
+            .maxPipelines = kDeviceObjects,
+            .maxPipelineCaches = kDeviceObjects,
+            .maxAccelerationStructures = kDeviceObjects};
 }
 
 // Records every message an instance reports, from whichever thread reports it.
 // It outlives the instance and devices it records for.
 class Messages {
 public:
-    [[nodiscard]] bfr::MessageCallback callback() {
-        return [this](bfr::MessageSeverity /*severity*/, std::string_view message) {
-            const std::scoped_lock lock{mutex_};
-            recorded_.emplace_back(message);
-        };
+    // A MessageCallback whose user data is a Messages.
+    static void record(bfr::MessageSeverity /*severity*/, std::string_view message, void* userData) {
+        auto& messages = *static_cast<Messages*>(userData);
+        const std::scoped_lock lock{messages.mutex_};
+        messages.recorded_.emplace_back(message);
     }
 
     [[nodiscard]] std::vector<std::string> recorded() {
@@ -103,7 +111,8 @@ bfr::InstanceDesc describe(bfr::Backend backend) {
 bfr::Instance validatedInstance(bfr::Backend backend, Messages& messages) {
     bfr::InstanceDesc desc = describe(backend);
     desc.validation = true;
-    desc.messageCallback = messages.callback();
+    desc.messageCallback = &Messages::record;
+    desc.messageUserData = &messages;
     desc.minSeverity = bfr::MessageSeverity::Warning;
     auto instance = bfr::Instance::create(desc);
     INFO(bfr::name(backend) << ' ' << failureOf(instance));
@@ -138,18 +147,10 @@ std::uint32_t fewestImages(const bfr::Instance& instance) {
 
 // A device on the first adapter that presents headless.
 bfr::Device headlessDevice(const bfr::Instance& instance) {
-    const auto adapters = instance.adapters();
-    REQUIRE(adapters.has_value());
-    for (std::uint32_t adapter = 0; adapter < adapters->size(); ++adapter) {
-        auto device = instance.createDevice(testDevice(adapter));
-        if (device.has_value()) {
-            return std::move(*device);
-        }
-        INFO(device.error().message.text());
-        REQUIRE(device.error().code == bfr::Result::ErrorPresentUnsupported);
-    }
-    FAIL("no adapter presents headless");
-    return {};
+    auto device = instance.createDevice(testDevice(headlessAdapter(instance)));
+    INFO((device.has_value() ? std::string{} : std::string{device.error().message.text()}));
+    REQUIRE(device.has_value());
+    return std::move(*device);
 }
 
 } // namespace
@@ -369,25 +370,18 @@ TEST_CASE("C++ API presents as the mode asked for", "[cpp_api][gpu]") {
     CHECK_THAT(messages.recorded(), Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("C++ API keeps the message callback alive while a device lives", "[cpp_api][gpu]") {
+TEST_CASE("C++ API gives the message callback the user data it was given", "[cpp_api][gpu]") {
     const bfr::Backend backend = GENERATE(eachBackend());
-    auto state = std::make_shared<int>(0);
-    const std::weak_ptr<int> watched = state;
+    Messages messages;
     bfr::InstanceDesc desc = describe(backend);
-    desc.messageCallback = [state](bfr::MessageSeverity /*severity*/, std::string_view /*message*/) {
-    };
-    desc.minSeverity = bfr::MessageSeverity::Warning;
+    desc.messageCallback = &Messages::record;
+    desc.messageUserData = &messages;
+    desc.minSeverity = bfr::MessageSeverity::Info;
     auto instance = bfr::Instance::create(desc);
-    desc.messageCallback = {};
-    state.reset();
     REQUIRE(instance.has_value());
-    bfr::Device device = headlessDevice(*instance);
-
-    *instance = bfr::Instance{};
-    CHECK_FALSE(watched.expired());
-
-    device = bfr::Device{};
-    CHECK(watched.expired());
+    // Making a device logs at Info, into messages.
+    const bfr::Device device = headlessDevice(*instance);
+    CHECK_FALSE(messages.recorded().empty());
 }
 
 TEST_CASE("C++ API reports when a device holds all the swapchains it can", "[cpp_api][gpu]") {
@@ -571,9 +565,11 @@ TEST_CASE("C++ API dispatches a compute pipeline through a buffer's slot", "[cpp
         auto readback = device.createBuffer(
             {.size = kBytes, .memory = bfr::BufferMemory::Readback, .usage = {.copyDst = true}});
         REQUIRE(readback.has_value());
-        const auto slot = target->bufferSlot();
-        REQUIRE(slot.has_value());
-        CHECK(readback->bufferSlot().error().code == bfr::Result::ErrorInvalidArgument);
+        const auto slots = target->bufferSlots();
+        REQUIRE(slots.has_value());
+        const auto readbackSlots = readback->bufferSlots();
+        REQUIRE(readbackSlots.has_value());
+        CHECK(readbackSlots->storage == BFR_NO_SLOT);
 
         auto pool = device.createCommandPool({.queue = 0, .listCount = 1, .pushConstantUpdates = 1});
         REQUIRE(pool.has_value());
@@ -581,7 +577,7 @@ TEST_CASE("C++ API dispatches a compute pipeline through a buffer's slot", "[cpp
         REQUIRE(commands.has_value());
         CHECK(device.bindPipeline(*commands, *pipeline).has_value());
         // The shader reads the slot from the first push constant.
-        const auto bytes = std::bit_cast<std::array<std::uint8_t, sizeof(std::uint32_t)>>(*slot);
+        const auto bytes = std::bit_cast<std::array<std::uint8_t, sizeof(std::uint32_t)>>(slots->storage);
         CHECK(device.pushConstants(*commands, bytes).has_value());
         CHECK(device.dispatch(*commands, 1, 1, 1).has_value());
         CHECK(device.barrier(*commands).has_value());
@@ -625,7 +621,8 @@ TEST_CASE("C++ API renders to a texture it names by a borrowed pointer", "[cpp_a
         auto commands = pool->beginCommands();
         REQUIRE(commands.has_value());
         REQUIRE(
-            device.textureBarrier(*commands, *target, bfr::TextureLayout::Undefined, bfr::TextureLayout::ColorTarget)
+            device
+                .textureBarrier(*commands, *target, bfr::TextureLayout::Undefined, bfr::TextureLayout::ColorTarget, {})
                 .has_value());
         bfr::RenderingDesc rendering{.colorAttachmentCount = 1};
         rendering.colorAttachments[0] = {.texture = *target, .loadOp = bfr::LoadOp::Clear, .clearColor = {0, 0, 0, 1}};

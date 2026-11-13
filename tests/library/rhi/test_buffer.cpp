@@ -271,3 +271,70 @@ TEST_CASE("Device destroys the buffers left when it goes, and says so", "[rhi][a
         CHECK_THAT(message, Catch::Matchers::ContainsSubstring("1 buffers were left when the device went"));
     }
 }
+
+TEST_CASE("Device collects garbage of buffers destroyed after a submit the GPU has passed", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const BufferDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const BufferHandle buffer = created(device, kDeviceBuffer);
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto commands = device.beginCommands(*pool);
+        REQUIRE(commands.has_value());
+        const CommandListHandle list = *commands;
+        const auto token = device.submit({.queue = 0, .commandLists = std::span{&list, 1}, .waits = {}});
+        REQUIRE(token.has_value());
+        REQUIRE(device.destroyBuffer(buffer).has_value());
+
+        const auto pending = device.runGarbageCollection();
+        INFO(failureOf(pending));
+        CHECK(pending.has_value());
+        REQUIRE(device.wait(*token, kTestWait).has_value());
+        const auto passed = device.runGarbageCollection();
+        INFO(failureOf(passed));
+        CHECK(passed.has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device holds as many buffers as its desc's maxBuffers, and fails with RhiLimitReached past it",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        auto instance = createInstance(recordingInto(backend, messages), kValidation);
+        INFO(failureOf(instance));
+        REQUIRE(instance.has_value());
+        auto made = (*instance)->createDevice(0, kNoWindow,
+                                              testDeviceWith([](DeviceDesc& desc) { desc.maxBuffers = 1; }));
+        INFO(failureOf(made));
+        REQUIRE(made.has_value());
+        Device& device = **made;
+        const BufferHandle buffer = created(device, kUploadBuffer);
+        CHECK(device.createBuffer(kUploadBuffer).error().code == ErrorCode::RhiLimitReached);
+        CHECK(device.destroyBuffer(buffer).has_value());
+        const auto again = device.createBuffer(kUploadBuffer);
+        INFO(failureOf(again));
+        REQUIRE(again.has_value());
+        CHECK(device.destroyBuffer(*again).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device fails a uniform buffer with RhiLimitReached when it holds no uniform buffer slots",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const BufferDevice made{recordingInto(backend, messages)};
+        REQUIRE(kTestDevice.maxBindlessUniformBuffers == 0);
+        const auto uniform = made.device->createBuffer(
+            {.size = kSize, .memory = BufferMemory::Upload, .usage = {.uniform = true}});
+        REQUIRE_FALSE(uniform.has_value());
+        CHECK(uniform.error().code == ErrorCode::RhiLimitReached);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}

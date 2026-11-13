@@ -23,6 +23,7 @@
 #include <windows.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <expected>
@@ -86,40 +87,68 @@ UINT subresourceOf(const D3D12Texture& texture, std::uint32_t mip, std::uint32_t
     return mip + (layer * texture.mipLevels) + (plane * texture.mipLevels * texture.layers);
 }
 
+// The layers a texture's targets are made for: a 3D texture's depth slices at
+// its first level, any other's layers.
+std::uint32_t targetLayers(const D3D12Texture& texture) {
+    return texture.desc.dimension == TextureDimension::D3 ? texture.desc.depth : texture.layers;
+}
+
+// The layers a texture's mipLevel has targets for: a 3D texture's slices at
+// that level, any other's layers.
+std::uint32_t targetLayersAt(const D3D12Texture& texture, std::uint32_t mipLevel) {
+    if (texture.desc.dimension != TextureDimension::D3) {
+        return texture.layers;
+    }
+    return std::max(mipLevel < std::numeric_limits<std::uint32_t>::digits ? texture.desc.depth >> mipLevel : 0U, 1U);
+}
+
 } // namespace
 
-D3D12Target targetOf(const D3D12Texture& texture) {
+D3D12Target targetOf(const D3D12Texture& texture, std::uint32_t mipLevel, std::uint32_t layer,
+                     std::uint32_t layerCount) {
     constexpr std::uint32_t kDepthAndStencil = 2;
     const std::uint32_t planes = planar(blockOf(texture.desc.format)) ? kDepthAndStencil : 1;
+    // A 3D texture's level is one subresource of every slice, so it is
+    // covered only when every slice is drawn to; else nothing is.
+    if (texture.desc.dimension == TextureDimension::D3) {
+        const std::uint32_t slices = targetLayersAt(texture, mipLevel);
+        layerCount = layer == 0 && layerCount >= slices ? 1 : 0;
+        layer = 0;
+    }
     return {.resource = texture.resource.Get(),
             .mipLevels = texture.mipLevels,
             .layers = texture.layers,
             .planes = planes,
             .firstPlane = 0,
-            .planeCount = planes};
+            .planeCount = planes,
+            .mipLevel = mipLevel,
+            .firstLayer = layer,
+            .layerCount = layerCount};
 }
 
-D3D12Target aspectsOf(const D3D12Texture& texture, bool depth, bool stencil) {
+D3D12Target aspectsOf(const D3D12Texture& texture, const D3D12Target& covered, bool depth, bool stencil) {
     const FormatBlock& block = blockOf(texture.desc.format);
     const bool depthPlane = depth && block.depthBytes != 0;
     const bool stencilPlane = stencil && block.stencilBytes != 0;
-    D3D12Target target = targetOf(texture);
+    D3D12Target target = covered;
     target.firstPlane = planeOf(block, depthPlane ? TextureAspect::Depth : TextureAspect::Stencil);
     target.planeCount = (depthPlane ? 1U : 0U) + (stencilPlane ? 1U : 0U);
     return target;
 }
 
 void discardTarget(ID3D12GraphicsCommandList* list, const D3D12Target& target) {
-    // With one mip and every plane, every subresource is covered.
-    if (target.mipLevels == 1 && target.planeCount == target.planes) {
+    // With one mip, every layer and every plane, every subresource is covered.
+    if (target.mipLevels == 1 && target.firstLayer == 0 && target.layerCount >= target.layers &&
+        target.planeCount == target.planes) {
         list->DiscardResource(target.resource, nullptr);
         return;
     }
+    const std::uint32_t lastLayer = std::min(target.firstLayer + target.layerCount, target.layers);
     for (std::uint32_t plane = target.firstPlane; plane < target.firstPlane + target.planeCount; ++plane) {
-        for (std::uint32_t layer = 0; layer < target.layers; ++layer) {
+        for (std::uint32_t layer = target.firstLayer; layer < lastLayer; ++layer) {
             const D3D12_DISCARD_REGION region{.NumRects = 0,
                                               .pRects = nullptr,
-                                              .FirstSubresource = (layer * target.mipLevels) +
+                                              .FirstSubresource = target.mipLevel + (layer * target.mipLevels) +
                                                                   (plane * target.mipLevels * target.layers),
                                               .NumSubresources = 1};
             list->DiscardResource(target.resource, &region);
@@ -167,18 +196,6 @@ D3D12_TEXTURE_COPY_LOCATION bufferSide(ID3D12Resource* buffer, const D3D12Textur
     return location;
 }
 
-// Fails with RhiInvalidCall when a region's bytes per row has no room in the
-// footprint's UINT RowPitch, before any region is recorded.
-core::Result<void> checkRowPitches(std::span<const BufferTextureCopy> regions) {
-    for (const BufferTextureCopy& region : regions) {
-        if (!std::in_range<UINT>(region.bytesPerRow)) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes per row is more than D3D12 takes",
-                                 region.bytesPerRow);
-        }
-    }
-    return {};
-}
-
 D3D12_TEXTURE_COPY_LOCATION textureSide(const D3D12Texture& texture, UINT subresource) {
     D3D12_TEXTURE_COPY_LOCATION location{};
     location.pResource = texture.resource.Get();
@@ -201,10 +218,37 @@ D3D12_BOX boxOf(const FormatBlock& block, std::uint32_t x, std::uint32_t y, std:
 
 namespace {
 
-// A color texture's heap holds its render target view; a depth texture's its
-// writable depth-stencil view and its read-only one.
+// A color texture's heap holds a render target view for each level and
+// layer; a depth texture's a writable depth-stencil view and a read-only one.
 constexpr UINT kColorTargetViews = 1;
 constexpr UINT kDepthTargetViews = 2;
+// Every depth slice from the first, as D3D12_TEX3D_RTV.WSize takes it.
+constexpr UINT kAllSlices = std::numeric_limits<UINT>::max();
+
+// A render target view of texture's mipLevel from layer to its last layer,
+// a 3D texture's depth slice.
+D3D12_RENDER_TARGET_VIEW_DESC colorViewFor(const D3D12Texture& texture, std::uint32_t mipLevel, std::uint32_t layer) {
+    D3D12_RENDER_TARGET_VIEW_DESC view{};
+    view.Format = texture.dxgi;
+    const UINT layers = texture.layers - layer;
+    if (texture.desc.dimension == TextureDimension::D3) {
+        view.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE3D;
+        view.Texture3D = {.MipSlice = mipLevel, .FirstWSlice = layer, .WSize = kAllSlices};
+    }
+    else if (texture.desc.dimension == TextureDimension::D1) {
+        view.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE1DARRAY;
+        view.Texture1DArray = {.MipSlice = mipLevel, .FirstArraySlice = layer, .ArraySize = layers};
+    }
+    else if (texture.samples > 1) {
+        view.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY;
+        view.Texture2DMSArray = {.FirstArraySlice = layer, .ArraySize = layers};
+    }
+    else {
+        view.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2DARRAY;
+        view.Texture2DArray = {.MipSlice = mipLevel, .FirstArraySlice = layer, .ArraySize = layers, .PlaneSlice = 0};
+    }
+    return view;
+}
 
 // The heap of count descriptors a texture's render target or depth-stencil
 // views live in: made with the texture, so a rendering allocates nothing.
@@ -222,30 +266,26 @@ core::Result<ComPtr<ID3D12DescriptorHeap>> createTargetHeap(ID3D12Device& device
     return heap;
 }
 
-// The whole first mip level of a depth texture as a depth-stencil view of
-// format, every layer, with flags; a resource made typeless needs the format
-// named.
-D3D12_DEPTH_STENCIL_VIEW_DESC depthViewFor(const D3D12Texture& texture, DXGI_FORMAT format, D3D12_DSV_FLAGS flags) {
+// A depth texture's mipLevel from layer to its last layer as a
+// depth-stencil view of format, with flags; a resource made typeless needs
+// the format named.
+D3D12_DEPTH_STENCIL_VIEW_DESC depthViewFor(const D3D12Texture& texture, DXGI_FORMAT format, D3D12_DSV_FLAGS flags,
+                                           std::uint32_t mipLevel, std::uint32_t layer) {
     D3D12_DEPTH_STENCIL_VIEW_DESC view{};
     view.Format = format;
     view.Flags = flags;
-    const bool array = texture.layers > 1;
-    if (texture.samples > 1) {
-        if (array) {
-            view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY;
-            view.Texture2DMSArray = {.FirstArraySlice = 0, .ArraySize = texture.layers};
-        }
-        else {
-            view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DMS;
-        }
+    const UINT layers = texture.layers - layer;
+    if (texture.desc.dimension == TextureDimension::D1) {
+        view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE1DARRAY;
+        view.Texture1DArray = {.MipSlice = mipLevel, .FirstArraySlice = layer, .ArraySize = layers};
     }
-    else if (array) {
-        view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
-        view.Texture2DArray = {.MipSlice = 0, .FirstArraySlice = 0, .ArraySize = texture.layers};
+    else if (texture.samples > 1) {
+        view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY;
+        view.Texture2DMSArray = {.FirstArraySlice = layer, .ArraySize = layers};
     }
     else {
-        view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-        view.Texture2D = {.MipSlice = 0};
+        view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+        view.Texture2DArray = {.MipSlice = mipLevel, .FirstArraySlice = layer, .ArraySize = layers};
     }
     return view;
 }
@@ -274,10 +314,6 @@ core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3
     const DxgiFormats formats = dxgiFormatsFor(desc.format);
     const bool slices = desc.dimension == TextureDimension::D3;
     const std::uint32_t depthOrLayers = slices ? desc.depth : desc.layers;
-    if (!std::in_range<UINT16>(depthOrLayers) || !std::in_range<UINT16>(desc.mipLevels)) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "{} {} and {} mip levels are more than D3D12 takes",
-                             depthOrLayers, slices ? "slices" : "layers", desc.mipLevels);
-    }
     // A depth texture shaders also read is made typeless, so its depth view
     // and its shader view are both views of it; its views name their formats.
     const bool depth = formats.depth != DXGI_FORMAT_UNKNOWN;
@@ -285,8 +321,8 @@ core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3
     D3D12Texture texture{.allocation = {},
                          .resource = {},
                          .targetHeap = {},
-                         .target = {},
-                         .readOnlyTarget = {},
+                         .targets = {},
+                         .targetStride = 0,
                          .desc = desc,
                          .dxgi = depth ? (readToo ? formats.typeless : formats.depth) : formats.texture,
                          .mipLevels = desc.mipLevels,
@@ -339,30 +375,50 @@ core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3
     // MipLevels 0 asks D3D12 for the whole chain, so its subresources are
     // numbered by the levels it made.
     texture.mipLevels = texture.resource->GetDesc().MipLevels;
-    // The whole texture as a target, with the API's default view of it.
+    // A target for each level and layer, made now so a rendering makes none.
     if (desc.usage.colorAttachment || desc.usage.depthStencil) {
-        auto heap = desc.usage.depthStencil
-                        ? createTargetHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kDepthTargetViews)
-                        : createTargetHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kColorTargetViews);
+        const D3D12_DESCRIPTOR_HEAP_TYPE type = desc.usage.depthStencil ? D3D12_DESCRIPTOR_HEAP_TYPE_DSV
+                                                                        : D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        const UINT perLayer = desc.usage.depthStencil ? kDepthTargetViews : kColorTargetViews;
+        auto heap = createTargetHeap(device, type, texture.mipLevels * targetLayers(texture) * perLayer);
         if (!heap) {
             return std::unexpected(std::move(heap.error()));
         }
         texture.targetHeap = std::move(*heap);
-        texture.target = texture.targetHeap->GetCPUDescriptorHandleForHeapStart();
-        if (desc.usage.depthStencil) {
-            const D3D12_DEPTH_STENCIL_VIEW_DESC view = depthViewFor(texture, formats.depth, D3D12_DSV_FLAG_NONE);
-            device.CreateDepthStencilView(texture.resource.Get(), &view, texture.target);
-            texture.readOnlyTarget = {.ptr = texture.target.ptr +
-                                             device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV)};
-            const D3D12_DEPTH_STENCIL_VIEW_DESC readOnly = depthViewFor(texture, formats.depth,
-                                                                        readOnlyFlagsFor(desc.format));
-            device.CreateDepthStencilView(texture.resource.Get(), &readOnly, texture.readOnlyTarget);
-        }
-        else {
-            device.CreateRenderTargetView(texture.resource.Get(), nullptr, texture.target);
+        texture.targets = texture.targetHeap->GetCPUDescriptorHandleForHeapStart();
+        texture.targetStride = device.GetDescriptorHandleIncrementSize(type);
+        for (std::uint32_t mip = 0; mip < texture.mipLevels; ++mip) {
+            for (std::uint32_t layer = 0; layer < targetLayersAt(texture, mip); ++layer) {
+                if (desc.usage.depthStencil) {
+                    const D3D12_DEPTH_STENCIL_VIEW_DESC view = depthViewFor(texture, formats.depth, D3D12_DSV_FLAG_NONE,
+                                                                            mip, layer);
+                    device.CreateDepthStencilView(texture.resource.Get(), &view, targetAt(texture, mip, layer, false));
+                    const D3D12_DEPTH_STENCIL_VIEW_DESC readOnly = depthViewFor(texture, formats.depth,
+                                                                                readOnlyFlagsFor(desc.format), mip,
+                                                                                layer);
+                    device.CreateDepthStencilView(texture.resource.Get(), &readOnly,
+                                                  targetAt(texture, mip, layer, true));
+                }
+                else {
+                    const D3D12_RENDER_TARGET_VIEW_DESC view = colorViewFor(texture, mip, layer);
+                    device.CreateRenderTargetView(texture.resource.Get(), &view, targetAt(texture, mip, layer, false));
+                }
+            }
         }
     }
     return texture;
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE targetAt(const D3D12Texture& texture, std::uint32_t mipLevel, std::uint32_t layer,
+                                     bool readOnly) {
+    if (texture.targets.ptr == 0 || mipLevel >= texture.mipLevels || layer >= targetLayersAt(texture, mipLevel)) {
+        return {};
+    }
+    const bool depth = texture.desc.usage.depthStencil;
+    const std::size_t perLayer = depth ? kDepthTargetViews : kColorTargetViews;
+    const std::size_t index = ((std::size_t{mipLevel} * targetLayers(texture) + layer) * perLayer) +
+                              (depth && readOnly ? 1U : 0U);
+    return {.ptr = texture.targets.ptr + (index * texture.targetStride)};
 }
 
 namespace {
@@ -497,7 +553,7 @@ core::Result<TextureHandle> D3D12Device::createTexture(const TextureDesc& desc) 
         return std::unexpected(std::move(checked.error()));
     }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectBuffers();
+    collectRetired();
     auto slots = bindless_.takeTexture(desc);
     if (!slots) {
         return std::unexpected(std::move(slots.error()));
@@ -519,7 +575,8 @@ core::Result<TextureHandle> D3D12Device::createTexture(const TextureDesc& desc) 
     const TextureHandle texture = textures_.emplace(std::move(*made));
     if (texture.isNull()) {
         bindless_.giveTexture(*slots);
-        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} textures", kBufferLimit);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} textures",
+                             desc_.maxTextures);
     }
     return texture;
 }
@@ -545,7 +602,7 @@ core::Result<void> D3D12Device::destroyTexture(TextureHandle texture) {
     if (!textures_.retire(texture, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the texture handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 
@@ -563,10 +620,7 @@ core::Result<void> D3D12Device::copyBufferToTexture(CommandListHandle commandLis
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    if (auto checked = checkAspects((*to)->desc.format, regions); !checked) {
-        return checked;
-    }
-    if (auto checked = checkRowPitches(regions); !checked) {
+    if (auto checked = checkAspects(regions); !checked) {
         return checked;
     }
     const FormatBlock& block = blockOf((*to)->desc.format);
@@ -598,10 +652,7 @@ core::Result<void> D3D12Device::copyTextureToBuffer(CommandListHandle commandLis
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    if (auto checked = checkAspects((*from)->desc.format, regions); !checked) {
-        return checked;
-    }
-    if (auto checked = checkRowPitches(regions); !checked) {
+    if (auto checked = checkAspects(regions); !checked) {
         return checked;
     }
     const FormatBlock& block = blockOf((*from)->desc.format);
@@ -814,11 +865,6 @@ core::Result<ID3D12Resource*> D3D12Device::addTextureTiles(D3D12TileMappings& ti
         if (region.mipLevel >= firstTail) {
             // The layer's first packed mip names its tail, and X is a tile in
             // it, as Diligent maps one (D3DTileMappingHelper.hpp:90, 111-123).
-            if (!std::in_range<UINT>(region.tailTile) || !std::in_range<UINT>(region.tailTiles)) {
-                return core::failure(core::ErrorCode::RhiInvalidCall,
-                                     "{} tail tiles from tile {} are past what D3D12 takes", region.tailTiles,
-                                     region.tailTile);
-            }
             coordinate = {.X = static_cast<UINT>(region.tailTile),
                           .Y = 0,
                           .Z = 0,
@@ -829,12 +875,6 @@ core::Result<ID3D12Resource*> D3D12Device::addTextureTiles(D3D12TileMappings& ti
         else {
             // A box of tiles in the mip level, whose Height and Depth are UINT16s.
             const std::uint64_t count = std::uint64_t{region.width} * region.height * region.depth;
-            if (!std::in_range<UINT16>(region.height) || !std::in_range<UINT16>(region.depth) ||
-                !std::in_range<UINT>(count)) {
-                return core::failure(core::ErrorCode::RhiInvalidCall,
-                                     "a box of {} by {} by {} tiles is past what D3D12 takes", region.width,
-                                     region.height, region.depth);
-            }
             coordinate = {.X = region.x,
                           .Y = region.y,
                           .Z = region.z,

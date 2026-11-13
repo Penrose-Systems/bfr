@@ -116,13 +116,13 @@ public:
     [[nodiscard]] virtual std::span<const Adapter> adapters() const = 0;
 
     /// A device on adapters()[adapter] with the queues desc asks for,
-    /// destroyed before this Instance. With a window in presentTo, one of
-    /// those queues must be able to present to it. Fails with
+    /// destroyed before this Instance. With a window in presentTo, a backend
+    /// that picks queue families picks ones that present to it where it can.
+    /// Fails with
     /// RhiAdapterOutOfRange when adapter is not an index into adapters(),
     /// RhiInvalidCall when a maximum in desc is more than a handle names or a
     /// queue's level is not one BFR has, RhiWindowFailed as
-    /// Device::createSwapchain describes, RhiPresentUnsupported when none of
-    /// its queues can present to presentTo, RhiUnsupported when the backend
+    /// Device::createSwapchain describes, RhiUnsupported when the backend
     /// can't set the ranks or levels asked for, and RhiDeviceFailed when the
     /// API refuses the device.
     [[nodiscard]] virtual core::Result<std::unique_ptr<Device>> createDevice(

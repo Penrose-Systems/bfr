@@ -6,6 +6,7 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/instance.h"
+#include "bfr/rhi/texture.h"
 
 #include <algorithm>
 #include <array>
@@ -221,9 +222,9 @@ core::Result<void> TimedDevice::barrier(CommandListHandle commandList) {
 }
 
 core::Result<void> TimedDevice::textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                               TextureLayout before, TextureLayout after) {
+                                               TextureLayout before, TextureLayout after, const TextureRange& range) {
     return counters_.time(Call::TextureBarrier,
-                          [&] { return device_->textureBarrier(commandList, texture, before, after); });
+                          [&] { return device_->textureBarrier(commandList, texture, before, after, range); });
 }
 
 core::Result<void> TimedDevice::copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,
@@ -263,6 +264,10 @@ core::Result<bool> TimedDevice::poll(Token token) {
     return counters_.time(Call::Poll, [&] { return device_->poll(token); });
 }
 
+core::Result<void> TimedDevice::runGarbageCollection() {
+    return counters_.time(Call::RunGarbageCollection, [&] { return device_->runGarbageCollection(); });
+}
+
 core::Result<void> TimedDevice::destroyCommandList(CommandListHandle commandList) {
     return counters_.time(Call::DestroyCommandList, [&] { return device_->destroyCommandList(commandList); });
 }
@@ -271,8 +276,8 @@ core::Result<BufferHandle> TimedDevice::createBuffer(const BufferDesc& desc) {
     return counters_.time(Call::CreateBuffer, [&] { return device_->createBuffer(desc); });
 }
 
-core::Result<std::uint32_t> TimedDevice::bufferSlot(BufferHandle buffer) {
-    return counters_.time(Call::BufferSlot, [&] { return device_->bufferSlot(buffer); });
+core::Result<BufferSlots> TimedDevice::bufferSlots(BufferHandle buffer) {
+    return counters_.time(Call::BufferSlots, [&] { return device_->bufferSlots(buffer); });
 }
 
 core::Result<std::span<std::byte>> TimedDevice::mapBuffer(BufferHandle buffer) {

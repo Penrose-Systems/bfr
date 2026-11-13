@@ -153,7 +153,7 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
                         check("copyBuffer", device->copyBuffer(*commands, *source, *target, std::span{&kCopy, 1}));
                         check("barrier", device->barrier(*commands));
                         check("textureBarrier", device->textureBarrier(*commands, *texture, TextureLayout::Undefined,
-                                                                       TextureLayout::CopyDst));
+                                                                       TextureLayout::CopyDst, {}));
                         check("copyBufferToTexture",
                               device->copyBufferToTexture(*commands, *source, *texture, std::span{&kTextureCopy, 1}));
                     }

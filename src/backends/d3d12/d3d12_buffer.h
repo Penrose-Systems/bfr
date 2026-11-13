@@ -2,6 +2,7 @@
 
 #include "bfr/core/error.h"
 #include "bfr/rhi/buffer.h"
+#include "rhi/bindless_slots.h"
 
 #include <d3d12.h>
 #include <D3D12MemAlloc.h>
@@ -32,17 +33,17 @@ struct D3D12Buffer {
     BufferMemory memory = BufferMemory::Device;
     std::uint64_t size = 0;
     std::span<std::byte> mapped;
-    std::uint32_t slot = 0;
+    BufferSlotsHeld slots;
     bool sparse = false;
 };
 
 /// A buffer as desc says, mapped for good when it is upload or readback
 /// memory, or a reserved resource on device with no memory when it is sparse,
-/// holding slot. Fails with RhiInvalidCall for a sparse buffer not in device
+/// holding slots. Fails with RhiInvalidCall for a sparse buffer not in device
 /// memory, RhiUnsupported for a sparse tileBytes other than D3D12's tile
 /// size, RhiOutOfMemory when memory runs out and RhiDeviceFailed when D3D12MA
 /// or D3D12 refuses.
 [[nodiscard]] core::Result<D3D12Buffer> createD3D12Buffer(D3D12MA::Allocator& allocator, ID3D12Device& device,
-                                                          const BufferDesc& desc, std::uint32_t slot);
+                                                          const BufferDesc& desc, const BufferSlotsHeld& slots);
 
 } // namespace bfr::rhi::d3d12

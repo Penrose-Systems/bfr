@@ -594,9 +594,8 @@ struct ClusterIndirection {
 /// clusterTemplateAlignment for templates and clusterBottomAlignment for
 /// bottom structures. addresses holds 8-byte addresses addressStride bytes
 /// apart, at least 8, and has storage usage; sizes holds 4-byte sizes
-/// sizeStride bytes apart, at least 4. Every buffer here has a usage
-/// Device::bufferAddress gives an address for, and each of addresses, sizes
-/// and records is read or written within its buffer, from its offset.
+/// sizeStride bytes apart, at least 4. Each of addresses, sizes and records
+/// is read or written within its buffer, from its offset.
 /// Scratch is scratchOffset bytes into scratch, which has
 /// accelerationStructureScratch usage, at least the size query's
 /// buildScratch bytes, a multiple of

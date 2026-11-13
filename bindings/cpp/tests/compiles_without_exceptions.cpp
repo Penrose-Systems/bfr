@@ -21,7 +21,7 @@ namespace {
                                            .apiMajor = kMajor,
                                            .apiMinor = kMinor,
                                            .validation = false,
-                                           .messageCallback = [](bfr::MessageSeverity, std::string_view) {
+                                           .messageCallback = [](bfr::MessageSeverity, std::string_view, void*) {
                                            }});
     if (!instance) {
         return false;

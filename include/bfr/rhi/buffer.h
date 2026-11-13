@@ -25,7 +25,10 @@ enum class BufferMemory : std::uint8_t {
 struct BufferUsage {
     bool copySrc = false;
     bool copyDst = false;
-    /// Shaders read it as constants.
+    /// Shaders read it as constants, through its slot in the uniform buffer
+    /// table: one where BindlessLimits::maxUniformBuffers is not 0. The table
+    /// views the whole buffer, so its size is at most
+    /// Limits::maxUniformBufferRange.
     bool uniform = false;
     /// Shaders read and write it. D3D12 views it in 32-bit values, so there
     /// its size must be a multiple of 4.

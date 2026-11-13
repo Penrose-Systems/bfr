@@ -429,14 +429,15 @@ core::Result<PipelineHandle> MetalDevice::createComputePipeline(const ComputePip
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline cache handle is stale");
     }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectBuffers();
+    collectRetired();
     auto made = createMetalComputePipeline(*device_.get(), *compiler_.get(), desc);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }
     const PipelineHandle pipeline = pipelines_.emplace(std::move(*made));
     if (pipeline.isNull()) {
-        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines", kBufferLimit);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines",
+                             desc_.maxPipelines);
     }
     return pipeline;
 }
@@ -456,14 +457,15 @@ core::Result<PipelineHandle> MetalDevice::createGraphicsPipeline(const GraphicsP
     if (!desc.cache.isNull()) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline cache handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     auto made = createMetalGraphicsPipeline(*device_.get(), *compiler_.get(), desc);
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }
     const PipelineHandle pipeline = pipelines_.emplace(std::move(*made));
     if (pipeline.isNull()) {
-        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines", kBufferLimit);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines",
+                             desc_.maxPipelines);
     }
     return pipeline;
 }
@@ -481,7 +483,7 @@ core::Result<void> MetalDevice::destroyPipeline(PipelineHandle pipeline) {
     if (!pipelines_.retire(pipeline, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 

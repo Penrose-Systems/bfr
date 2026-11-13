@@ -26,17 +26,27 @@ namespace bfr::rhi {
 [[nodiscard]] inline core::Result<void> checkLimits(const DeviceDesc& desc) {
     constexpr std::uint32_t kMost = core::Handle<void>::kMaxIndices;
     for (const auto& [name, value] :
-         {std::pair{"maxCommandLists", desc.maxCommandLists}, std::pair{"maxCommandPools", desc.maxCommandPools},
-          std::pair{"maxSwapchains", desc.maxSwapchains}, std::pair{"maxBindlessTextures", desc.maxBindlessTextures},
+         {std::pair{"maxCommandLists", desc.maxCommandLists},
+          std::pair{"maxCommandPools", desc.maxCommandPools},
+          std::pair{"maxSwapchains", desc.maxSwapchains},
+          std::pair{"maxBindlessTextures", desc.maxBindlessTextures},
           std::pair{"maxBindlessStorageTextures", desc.maxBindlessStorageTextures},
           std::pair{"maxBindlessStorageBuffers", desc.maxBindlessStorageBuffers},
           std::pair{"maxBindlessSamplers", desc.maxBindlessSamplers},
+          std::pair{"maxBindlessUniformBuffers", desc.maxBindlessUniformBuffers},
           std::pair{"maxTimestampPools", desc.maxTimestampPools},
-          std::pair{"maxSparseMemories", desc.maxSparseMemories}, std::pair{"maxTileMappings", desc.maxTileMappings},
+          std::pair{"maxSparseMemories", desc.maxSparseMemories},
+          std::pair{"maxTileMappings", desc.maxTileMappings},
           std::pair{"maxBindlessAccelerationStructures", desc.maxBindlessAccelerationStructures},
           std::pair{"maxBindlessPartitionedTops", desc.maxBindlessPartitionedTops},
           std::pair{"maxBuildGeometries", desc.maxBuildGeometries},
-          std::pair{"maxAccelerationStructurePropertyPools", desc.maxAccelerationStructurePropertyPools}}) {
+          std::pair{"maxAccelerationStructurePropertyPools", desc.maxAccelerationStructurePropertyPools},
+          std::pair{"maxBuffers", desc.maxBuffers},
+          std::pair{"maxTextures", desc.maxTextures},
+          std::pair{"maxShaders", desc.maxShaders},
+          std::pair{"maxPipelines", desc.maxPipelines},
+          std::pair{"maxPipelineCaches", desc.maxPipelineCaches},
+          std::pair{"maxAccelerationStructures", desc.maxAccelerationStructures}}) {
         if (value > kMost) {
             return core::failure(core::ErrorCode::RhiInvalidCall, "{} is {}; it is at most {}", name, value, kMost);
         }
@@ -57,8 +67,9 @@ namespace bfr::rhi {
     return {};
 }
 
-/// Fails with RhiLimitReached when desc asks for acceleration structure or
-/// partitioned top structure slots on an adapter with no such table, as caps
+/// Fails with RhiLimitReached when desc asks for acceleration structure,
+/// uniform buffer or partitioned top structure slots on an adapter with no
+/// such table, as caps
 /// say: the backend has nothing to pass them to. Each backend's createDevice
 /// calls it.
 [[nodiscard]] inline core::Result<void> checkTables(const DeviceDesc& desc, const Caps& caps) {
@@ -67,6 +78,12 @@ namespace bfr::rhi {
                              "the adapter holds no acceleration structure table (BindlessLimits::"
                              "maxAccelerationStructures is 0); {} slots were asked for",
                              desc.maxBindlessAccelerationStructures);
+    }
+    if (desc.maxBindlessUniformBuffers != 0 && caps.bindless.maxUniformBuffers == 0) {
+        return core::failure(core::ErrorCode::RhiLimitReached,
+                             "the adapter holds no uniform buffer table (BindlessLimits::maxUniformBuffers is 0); {} "
+                             "slots were asked for",
+                             desc.maxBindlessUniformBuffers);
     }
     if (desc.maxBindlessPartitionedTops != 0 && !caps.features.partitionedTop) {
         return core::failure(core::ErrorCode::RhiLimitReached,
@@ -90,18 +107,6 @@ namespace bfr::rhi {
     desc.copy = {};
     desc.indirectStrides = {};
     return desc;
-}
-
-/// Fails with RhiPresentUnsupported when presentTo is a window and a device
-/// opens no queue to present to it from, for a backend with no window query:
-/// presenting is how many of its queues are of a kind that presents.
-[[nodiscard]] inline core::Result<void> checkPresentQueue(const core::window::NativeWindow& presentTo,
-                                                          std::size_t presenting) {
-    if (!std::holds_alternative<std::monostate>(presentTo) && presenting == 0) {
-        return core::failure(core::ErrorCode::RhiPresentUnsupported,
-                             "the device opens no queue to present to the window from");
-    }
-    return {};
 }
 
 /// Fails with RhiUnsupported, naming backend, when desc's queues have

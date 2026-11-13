@@ -88,6 +88,10 @@ struct DeviceDesc {
     std::uint32_t maxBindlessStorageTextures = 0;
     std::uint32_t maxBindlessStorageBuffers = 0;
     std::uint32_t maxBindlessSamplers = 0;
+    /// The slots of the uniform buffer table. Where
+    /// BindlessLimits::maxUniformBuffers is 0 the adapter has no such table,
+    /// and more than 0 fails with RhiLimitReached.
+    std::uint32_t maxBindlessUniformBuffers = 0;
     std::uint32_t maxTimestampPools = 0;
     std::uint32_t maxSparseMemories = 0;
     /// The most texture regions and the most buffer regions one
@@ -110,6 +114,15 @@ struct DeviceDesc {
     /// and the size query; a top structure's instances are one geometry.
     std::uint32_t maxBuildGeometries = 0;
     std::uint32_t maxAccelerationStructurePropertyPools = 0;
+    /// Each kind of object the device holds at once, 0 for none; past it,
+    /// its create call fails with RhiLimitReached. Room for them all is made
+    /// with the device.
+    std::uint32_t maxBuffers = 0;
+    std::uint32_t maxTextures = 0;
+    std::uint32_t maxShaders = 0;
+    std::uint32_t maxPipelines = 0;
+    std::uint32_t maxPipelineCaches = 0;
+    std::uint32_t maxAccelerationStructures = 0;
     /// The strides, in bytes, the device's indirect draws take, read during
     /// createDevice only: D3D12 fixes a stride in the command signature it
     /// makes for them, so it makes one for each here and fails an indirect
@@ -121,7 +134,7 @@ struct DeviceDesc {
 /// How to create a command pool: the queue its lists record for, how many
 /// lists it holds, all made with it, and the most pushConstants calls its
 /// lists record between resets, which a backend that copies push constants
-/// into memory makes room for with the pool; 0 is none. beginCommands hands the lists out
+/// into memory (Metal) makes room for with the pool; 0 is none. beginCommands hands the lists out
 /// in turn until resetCommandPool gives them back.
 struct CommandPoolDesc {
     std::uint32_t queue = 0;
@@ -255,6 +268,15 @@ enum class ResolveMode : std::uint8_t {
 /// swapchain's format, which is then resolved into the acquired image.
 struct ColorAttachment {
     TextureHandle texture;
+    /// The mip level drawn to, and the layers from layer, layerCount of them;
+    /// a cube's faces are its layers, and a 3D texture's depth slices are,
+    /// where Features::volumeColorTargets. Vulkan and Metal draw one count of
+    /// layers in a rendering: the depth-stencil attachment's where there is
+    /// one, else color attachment 0's. On Vulkan each level and layer of a
+    /// texture with an attachment usage is a view made with it.
+    std::uint32_t mipLevel = 0;
+    std::uint32_t layer = 0;
+    std::uint32_t layerCount = 1;
     LoadOp loadOp = LoadOp::Load;
     StoreOp storeOp = StoreOp::Store;
     /// Red, green, blue and alpha, 0 to 1, when loadOp is Clear.
@@ -271,7 +293,8 @@ struct ColorAttachment {
     /// are resolved into as rendering ends; null for none, and null for the
     /// attachment the swapchain's image is resolved into. Non-integer formats
     /// average and integer ones take sample zero, as the backend resolves;
-    /// FormatCaps::resolve says which formats resolve.
+    /// FormatCaps::resolve says which formats resolve. It is resolved into at
+    /// its mip level 0, from layer 0.
     TextureHandle resolveTexture{};
 };
 
@@ -281,6 +304,10 @@ struct ColorAttachment {
 /// ops say; an op of an aspect the format lacks is ignored.
 struct DepthStencilAttachment {
     TextureHandle texture;
+    /// The mip level and layers drawn to, as ColorAttachment's are.
+    std::uint32_t mipLevel = 0;
+    std::uint32_t layer = 0;
+    std::uint32_t layerCount = 1;
     LoadOp depthLoadOp = LoadOp::Load;
     StoreOp depthStoreOp = StoreOp::Store;
     LoadOp stencilLoadOp = LoadOp::Load;
@@ -295,8 +322,8 @@ struct DepthStencilAttachment {
     bool readOnly = false;
     /// A single-sample texture of texture's format and size, with
     /// depthStencil usage, in layout DepthStencilTarget, that the samples are
-    /// resolved into as rendering ends, by depthResolve and stencilResolve;
-    /// null for none.
+    /// resolved into as rendering ends, by depthResolve and stencilResolve,
+    /// at its mip level 0, from layer 0; null for none.
     TextureHandle resolveTexture{};
     ResolveMode depthResolve = ResolveMode::None;
     ResolveMode stencilResolve = ResolveMode::None;

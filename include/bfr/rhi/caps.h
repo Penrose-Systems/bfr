@@ -268,6 +268,11 @@ struct Features {
     bool samplerCustomBorderColor = false;
     bool samplerIntegerBorderColor = false;
     bool samplerUnnormalizedCoordinates = false;
+    /// A 3D texture with colorAttachment usage is drawn to by depth slice:
+    /// a ColorAttachment's layer and layerCount name its slices. Not for a
+    /// sparse one on Vulkan, which draws to slices only through 2D views of
+    /// an image made for them, which sparse images may not be.
+    bool volumeColorTargets = false;
     bool samplerLodBias = false;
     bool samplerLodAverage = false;
     bool compressionBc = false;
@@ -298,6 +303,9 @@ struct Features {
     /// A storage texture table indexed by a value that differs within a
     /// shader's invocation group.
     bool storageTextureNonUniformIndexing = false;
+    /// The uniform buffer table indexed by a value that differs within a
+    /// shader's invocation group.
+    bool uniformBufferNonUniformIndexing = false;
     bool timestampsOnAllQueues = false;
     bool pipelineStatistics = false;
     bool occlusionQueryPrecise = false;

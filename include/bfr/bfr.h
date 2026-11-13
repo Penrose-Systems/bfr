@@ -41,7 +41,7 @@ typedef uint8_t bfr_bool;
 // Every bit of a 32-bit mask set.
 #define BFR_MASK_ALL 4294967295u
 
-// A bindless slot a texture doesn't have, in a table its usage doesn't set; no table has a slot
+// A bindless slot a resource doesn't have, in a table its usage doesn't set; no table has a slot
 // this high.
 #define BFR_NO_SLOT 4294967295u
 
@@ -54,6 +54,13 @@ typedef uint8_t bfr_bool;
 
 // The floats of a box: min xyz, then max xyz.
 #define BFR_BOX_FLOATS 6u
+
+// Every mip level, or every layer, from the first one a bfr_texture_range names.
+#define BFR_REMAINING 4294967295u
+
+// The layers an attachment covers in the C++ wrapper unless it says otherwise; C passes layer_count
+// as given.
+#define BFR_ONE_LAYER 1u
 
 // The bit a cluster geometry word's bfr_cluster_geometry_flag bits start at; the geometry index is
 // its low 24 bits.
@@ -482,7 +489,7 @@ typedef enum bfr_call {
     BFR_CALL_POLL = 29,
     BFR_CALL_DESTROY_COMMAND_LIST = 30,
     BFR_CALL_CREATE_BUFFER = 31,
-    BFR_CALL_BUFFER_SLOT = 32,
+    BFR_CALL_BUFFER_SLOTS = 32,
     BFR_CALL_MAP_BUFFER = 33,
     BFR_CALL_DESTROY_BUFFER = 34,
     BFR_CALL_CREATE_TEXTURE = 35,
@@ -558,6 +565,7 @@ typedef enum bfr_call {
     BFR_CALL_CLUSTER_SIZES = 105,
     BFR_CALL_BUILD_CLUSTERS = 106,
     BFR_CALL_CAPTURE_ACCELERATION_STRUCTURE = 107,
+    BFR_CALL_RUN_GARBAGE_COLLECTION = 108,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -1150,7 +1158,7 @@ typedef struct bfr_texture {
 
 // A compute or graphics pipeline: shaders with the fixed state they run under. Every pipeline
 // shares one resource layout, which its shaders declare as follows. Four unbounded tables, each
-// indexed by the slot a resource is given when it is created, which bfr_get_buffer_slot,
+// indexed by the slot a resource is given when it is created, which bfr_get_buffer_slots,
 // bfr_get_texture_slots and bfr_get_sampler_slot report and which is the same number on every
 // backend, and one block of the caps' max_push_constants_size bytes of push constants that every
 // stage reads, set by bfr_push_constants. On Vulkan the tables are the bindings of descriptor set
@@ -1169,8 +1177,10 @@ typedef struct bfr_texture {
 // others are. Where bfr_caps_features.partitioned_top there is a partitioned top table, with or
 // without the fifth, of partitioned top structures by their slots: on Vulkan binding 5, partitioned
 // acceleration structures, which shaders declare as acceleration structures. D3D12 and Metal have
-// neither yet. Uniform buffers have no table: not every backend's minimum has them. A pipeline's
-// shaders are bytecode for the backend the device runs on. A generational handle; 0 is never valid.
+// neither yet. Where bfr_caps_bindless.max_uniform_buffers is not 0 there is a uniform buffer
+// table, by the uniform slot bfr_get_buffer_slots reports: on Vulkan binding 6, uniform buffers, as
+// the others are, each the whole buffer. D3D12 and Metal have none yet. A pipeline's shaders are
+// bytecode for the backend the device runs on. A generational handle; 0 is never valid.
 typedef struct bfr_pipeline {
     uint64_t bits;
 } bfr_pipeline;
@@ -1347,6 +1357,10 @@ typedef struct bfr_device_desc {
     // Slots in the sampler table, passed as max_bindless_textures is;
     // bfr_caps_bindless.max_samplers says how many the adapter holds.
     uint32_t max_bindless_samplers;
+    // Slots in the uniform buffer table, passed as max_bindless_textures is. Where
+    // bfr_caps_bindless.max_uniform_buffers is 0 the adapter has no such table, and more than 0
+    // fails with error_limit_reached.
+    uint32_t max_bindless_uniform_buffers;
     // Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool
     // fails with error_limit_reached.
     uint32_t max_timestamp_pools;
@@ -1375,6 +1389,25 @@ typedef struct bfr_device_desc {
     // Property pools the device holds at once, 0 for none; past it,
     // bfr_create_acceleration_structure_property_pool fails with error_limit_reached.
     uint32_t max_acceleration_structure_property_pools;
+    // Buffers the device holds at once, 0 for none; past it, bfr_create_buffer fails with
+    // error_limit_reached.
+    uint32_t max_buffers;
+    // Textures the device holds at once, 0 for none; past it, bfr_create_texture fails with
+    // error_limit_reached.
+    uint32_t max_textures;
+    // Shaders the device holds at once, 0 for none; past it, bfr_create_shader fails with
+    // error_limit_reached.
+    uint32_t max_shaders;
+    // Pipelines the device holds at once, 0 for none; past it, bfr_create_compute_pipeline,
+    // bfr_create_graphics_pipeline and bfr_create_ray_tracing_pipeline fails with
+    // error_limit_reached.
+    uint32_t max_pipelines;
+    // Pipeline caches the device holds at once, 0 for none; past it, bfr_create_pipeline_cache
+    // fails with error_limit_reached.
+    uint32_t max_pipeline_caches;
+    // Acceleration structures the device holds at once, 0 for none; past it,
+    // bfr_create_acceleration_structure fails with error_limit_reached.
+    uint32_t max_acceleration_structures;
     // The strides, in bytes, the device's indirect draws take, read during the call only. D3D12
     // fixes a stride in the command signature it makes for them, so it makes one for each here and
     // fails an indirect draw of any other with error_unsupported; Vulkan and Metal take any stride.
@@ -1389,8 +1422,7 @@ typedef struct bfr_swapchain_desc {
     // The window to present to.
     bfr_window window;
     // The device's queue that presents its images; one the device lacks fails with
-    // error_invalid_argument. Fails with error_present_unsupported when it can't present to the
-    // window.
+    // error_invalid_argument.
     uint32_t queue;
     // Images to request, passed to the backend as given. bfr_swapchain_images says how many it
     // made.
@@ -1428,6 +1460,15 @@ typedef struct bfr_swapchain_images {
 typedef struct bfr_color_attachment {
     // Null for the swapchain's image.
     bfr_texture texture;
+    // The mip level drawn to.
+    uint32_t mip_level;
+    // The first layer drawn to; a cube's faces are its layers, and a 3D texture's depth slices are
+    // where bfr_caps_features.volume_color_targets.
+    uint32_t layer;
+    // The layers drawn to from layer. Vulkan and Metal draw one count of layers in a rendering: the
+    // depth-stencil attachment's where there is one, else color attachment 0's. On Vulkan each
+    // level and layer of a texture with an attachment usage is a view made with it.
+    uint32_t layer_count;
     // What it holds at the start; 0 is load.
     bfr_load_op load_op;
     // What becomes of it at the end; 0 is store.
@@ -1444,7 +1485,7 @@ typedef struct bfr_color_attachment {
     // color_target, that texture's samples are resolved into as rendering ends; null for none, and
     // null for the attachment the swapchain's image is resolved into. Non-integer formats average
     // and integer ones take sample zero, as the backend resolves; bfr_format_caps.resolve says
-    // which formats resolve.
+    // which formats resolve. It is resolved into at its mip level 0, from layer 0.
     bfr_texture resolve_texture;
 } bfr_color_attachment;
 
@@ -1454,6 +1495,12 @@ typedef struct bfr_color_attachment {
 typedef struct bfr_depth_stencil_attachment {
     // Null for no depth-stencil target.
     bfr_texture texture;
+    // The mip level drawn to.
+    uint32_t mip_level;
+    // The first layer drawn to.
+    uint32_t layer;
+    // The layers drawn to from layer, as bfr_color_attachment's are.
+    uint32_t layer_count;
     // 0 is load.
     bfr_load_op depth_load_op;
     // 0 is store.
@@ -1472,7 +1519,7 @@ typedef struct bfr_depth_stencil_attachment {
     bfr_bool read_only;
     // A single-sample texture of texture's format and size, with depth_stencil usage, in layout
     // depth_stencil_target, that the samples are resolved into as rendering ends, by depth_resolve
-    // and stencil_resolve; null for none.
+    // and stencil_resolve, at its mip level 0, from layer 0; null for none.
     bfr_texture resolve_texture;
     // 0 is none.
     bfr_resolve_mode depth_resolve;
@@ -1519,8 +1566,7 @@ typedef struct bfr_command_pool_desc {
     // hands them out in turn until bfr_reset_command_pool gives them back.
     uint32_t list_count;
     // Most bfr_push_constants calls the pool's lists record between resets, which a backend that
-    // copies push constants into memory makes room for with the pool; 0 is none. Every backend
-    // counts them alike.
+    // copies push constants into memory (Metal) makes room for with the pool; 0 is none.
     uint32_t push_constant_updates;
 } bfr_command_pool_desc;
 
@@ -1528,7 +1574,8 @@ typedef struct bfr_command_pool_desc {
 typedef struct bfr_buffer_usage {
     bfr_bool copy_src;
     bfr_bool copy_dst;
-    // Shaders read it as constants.
+    // Shaders read it as constants, through its slot in the uniform buffer table. The table views
+    // the whole buffer, so its size is at most bfr_caps_limits.max_uniform_buffer_range.
     bfr_bool uniform;
     // Shaders read and write it. D3D12 views it in 32-bit values, so there its size must be a
     // multiple of 4.
@@ -1688,6 +1735,16 @@ typedef struct bfr_call_timing {
     uint64_t max_ns;
 } bfr_call_timing;
 
+// Where a buffer is in the bindless tables bfr_pipeline states, from creation to destruction: the
+// index shaders use. A table the buffer's usage does not set has no slot for it, and reads
+// BFR_NO_SLOT.
+typedef struct bfr_buffer_slots {
+    // Its index in the storage buffer table; only with storage usage.
+    uint32_t storage;
+    // Its index in the uniform buffer table; only with uniform usage.
+    uint32_t uniform;
+} bfr_buffer_slots;
+
 // Where a texture is in the bindless tables bfr_pipeline states, from creation to destruction: the
 // index shaders use. A table the texture's usage does not set has no slot for it, and reads
 // BFR_NO_SLOT.
@@ -1697,6 +1754,16 @@ typedef struct bfr_texture_slots {
     // Its index in the storage texture table; only with storage usage.
     uint32_t storage;
 } bfr_texture_slots;
+
+// The mip levels and layers of a texture a barrier moves: mip_count levels from mip_level, and
+// layer_count layers from layer, in every plane. Counts pass through as given; 0 is no count Vulkan
+// takes. A 3D texture has one layer, so a barrier moves every depth slice of its levels.
+typedef struct bfr_texture_range {
+    uint32_t mip_level;
+    uint32_t mip_count;
+    uint32_t layer;
+    uint32_t layer_count;
+} bfr_texture_range;
 
 // One region copied between a buffer and one layer and mip level of a single-sampled texture.
 // bytes_per_row is a multiple of the format's block bytes and, when it is not 0, of
@@ -2423,9 +2490,8 @@ typedef struct bfr_cluster_indirection {
 // a multiple of bfr_caps_ray_tracing.cluster_alignment for clusters, cluster_template_alignment for
 // templates and cluster_bottom_alignment for bottom structures. addresses holds 8-byte addresses
 // address_stride bytes apart, at least 8, and has storage usage; sizes holds 4-byte sizes
-// size_stride bytes apart, at least 4. Every buffer here has a usage bfr_get_buffer_address gives
-// an address for, and each of addresses, sizes and records is read or written within its buffer,
-// from its offset. Scratch is scratch_offset bytes into scratch, which has
+// size_stride bytes apart, at least 4. Each of addresses, sizes and records is read or written
+// within its buffer, from its offset. Scratch is scratch_offset bytes into scratch, which has
 // acceleration_structure_scratch usage, at least the size query's build_scratch bytes, a multiple
 // of bfr_caps_ray_tracing.cluster_scratch_alignment, and overlaps no destination.
 typedef struct bfr_cluster_build {
@@ -3037,6 +3103,9 @@ typedef struct bfr_caps_features {
     // A border colour for textures that hold integers.
     bfr_bool sampler_integer_border_color;
     bfr_bool sampler_unnormalized_coordinates;
+    // A 3D texture with color_attachment usage is drawn to by depth slice, which a
+    // bfr_color_attachment's layer and layer_count name. Not for a sparse one on Vulkan.
+    bfr_bool volume_color_targets;
     // A lod_bias other than 0.
     bfr_bool sampler_lod_bias;
     bfr_bool sampler_lod_average;
@@ -3068,6 +3137,8 @@ typedef struct bfr_caps_features {
     bfr_bool storage_write_without_format;
     // A storage texture table indexed by a value that differs within a shader's invocation group.
     bfr_bool storage_texture_non_uniform_indexing;
+    // The uniform buffer table indexed by a value that differs within a shader's invocation group.
+    bfr_bool uniform_buffer_non_uniform_indexing;
     // Every graphics and compute queue writes timestamps.
     bfr_bool timestamps_on_all_queues;
     bfr_bool pipeline_statistics;
@@ -3435,8 +3506,8 @@ BFR_API bfr_result bfr_get_swapchain_formats(
 // driver cannot say.
 BFR_API bfr_result bfr_get_budget(bfr_device* device, bfr_memory_budget* budget);
 
-// Opens an adapter with the queues desc asks for. With a window in desc, fails with
-// error_present_unsupported unless one of them can present to it.
+// Opens an adapter with the queues desc asks for, preferring queue families that present to the
+// window in desc, if any.
 BFR_API bfr_result bfr_create_device(
     bfr_instance* instance,
     const bfr_device_desc* desc,
@@ -3516,13 +3587,13 @@ BFR_API bfr_result bfr_begin_commands(
 
 // Begins rendering to desc's attachments, with the image bfr_acquire took from swapchain as color
 // attachment 0 when swapchain is not null, or as the image attachment 0's texture resolves into
-// when it names one. Sets the viewport and scissor to the whole of the attachments. Only the draws,
-// direct and indirect, and the state they take, are recorded until bfr_end_rendering, which
-// resolves the attachments that name a resolve texture. Fails with error_invalid_argument when no
-// attachment is given, when a color attachment but the swapchain's names no texture, with a
-// swapchain when there is no color attachment or attachment 0 names a resolve texture, and when a
-// resolve texture is named with no texture; error_unsupported for a depth or stencil resolve mode,
-// or a pair of them, bfr_caps_resolve doesn't have, on D3D12 and Metal.
+// when it names one. Only the draws, direct and indirect, and the state they take, are recorded
+// until bfr_end_rendering, which resolves the attachments that name a resolve texture. Fails with
+// error_invalid_argument when no attachment is given, when a color attachment but the swapchain's
+// names no texture, with a swapchain when there is no color attachment or attachment 0 names a
+// resolve texture, and when a resolve texture is named with no texture; error_unsupported for a
+// depth or stencil resolve mode, or a pair of them, bfr_caps_resolve doesn't have, on D3D12 and
+// Metal.
 BFR_API bfr_result bfr_begin_rendering(
     bfr_device* device,
     bfr_command_list command_list,
@@ -3586,8 +3657,9 @@ BFR_API bfr_result bfr_set_topology(
 
 // Sets the first size bytes of the push constants every shader reads, as bfr_pipeline states, for
 // the draws and dispatches after it. size is at most the caps' max_push_constants_size, which the
-// layout BFR makes holds, else error_invalid_argument. Fails with error_limit_reached past the
-// pool's push_constant_updates.
+// layout BFR makes holds. On Metal, which copies the bytes into the pool's ring, fails with
+// error_invalid_argument past that size and error_limit_reached past the pool's
+// push_constant_updates.
 // data: An array of size elements.
 BFR_API bfr_result bfr_push_constants(
     bfr_device* device,
@@ -3641,9 +3713,9 @@ BFR_API bfr_result bfr_dispatch(
 
 // Records draw_count draws as bfr_draw does, each with the bfr_draw_indirect_args buffer holds from
 // offset, stride bytes apart. buffer has indirect usage; work that wrote the arguments is ordered
-// before by a bfr_barrier. Fails with error_unsupported for draw_count above 1 where
-// bfr_caps_features.multi_draw_indirect is false and, on D3D12, a stride not in the device's
-// indirect_strides; and as bfr_draw does.
+// before by a bfr_barrier. Fails with error_unsupported for draw_count above 1 on Metal, whose
+// indirect draw has no count, and, on D3D12, a stride not in the device's indirect_strides; and as
+// bfr_draw does.
 // offset: Bytes into the buffer.
 // stride: Bytes between two draws' arguments.
 BFR_API bfr_result bfr_draw_indirect(
@@ -3668,8 +3740,7 @@ BFR_API bfr_result bfr_draw_indexed_indirect(
 
 // Records bfr_draw_indirect's draws, as many as the 32-bit count count_buffer holds at count_offset
 // when the GPU runs it, at most max_draw_count. count_buffer has indirect usage. Fails with
-// error_unsupported where bfr_caps_features.draw_indirect_count is false, and as bfr_draw_indirect
-// does.
+// error_unsupported on Metal, which has none, and as bfr_draw_indirect does.
 // offset: Bytes into the buffer.
 // count_offset: Bytes into count_buffer.
 // stride: Bytes between two draws' arguments.
@@ -3761,14 +3832,15 @@ BFR_API bfr_result bfr_copy_buffer(
 // before it have finished, and see what they wrote.
 BFR_API bfr_result bfr_barrier(bfr_device* device, bfr_command_list command_list);
 
-// Records a barrier, as bfr_barrier does, that also moves every layer and mip level of texture from
-// layout before to layout after. Outside rendering.
+// Records a barrier, as bfr_barrier does, that also moves range's mip levels and layers of texture
+// from layout before to layout after; the rest stay as they are. Outside rendering.
 BFR_API bfr_result bfr_texture_barrier(
     bfr_device* device,
     bfr_command_list command_list,
     bfr_texture texture,
     bfr_texture_layout before,
-    bfr_texture_layout after);
+    bfr_texture_layout after,
+    const bfr_texture_range* range);
 
 // Records copies of regions from buffer to texture, which is in layout copy_dst, outside rendering.
 // buffer has copy_src usage and texture copy_dst. What was copied is seen as bfr_copy_buffer says.
@@ -3839,6 +3911,11 @@ BFR_API bfr_result bfr_wait(bfr_device* device, const bfr_token* token, uint64_t
 // Writes whether the GPU has passed token, without blocking.
 BFR_API bfr_result bfr_poll(bfr_device* device, const bfr_token* token, bfr_bool* complete);
 
+// Frees the objects destroy calls retired whose submits the GPU has passed, and gives their slots
+// back to the tables, as each create call also does first. Not for the frame path: it frees memory.
+// Fails with error_device_failed when the backend cannot say what the GPU has passed.
+BFR_API bfr_result bfr_run_garbage_collection(bfr_device* device);
+
 // Discards a command list that was not submitted; the pool hands it out again after its next reset.
 // A handle that is already submitted or destroyed does nothing.
 BFR_API void bfr_destroy_command_list(bfr_device* device, bfr_command_list command_list);
@@ -3858,9 +3935,12 @@ BFR_API bfr_result bfr_create_buffer(
 // error_invalid_handle when the buffer is destroyed.
 BFR_API bfr_result bfr_map_buffer(bfr_device* device, bfr_buffer buffer, void** data);
 
-// Writes the buffer's index in the storage buffer table bfr_pipeline states, held from creation to
-// destruction. Fails with error_invalid_argument when the buffer has no storage usage.
-BFR_API bfr_result bfr_get_buffer_slot(bfr_device* device, bfr_buffer buffer, uint32_t* slot);
+// Writes the buffer's indices in the storage and uniform buffer tables bfr_pipeline states, held
+// from creation to destruction; BFR_NO_SLOT in a table its usage does not set.
+BFR_API bfr_result bfr_get_buffer_slots(
+    bfr_device* device,
+    bfr_buffer buffer,
+    bfr_buffer_slots* slots);
 
 // Destroys a buffer once the GPU has finished with it; the handle is invalid at once. Not for the
 // frame path: it records the point the buffer waits for and frees what the GPU is done with. A
@@ -4275,7 +4355,9 @@ BFR_API bfr_result bfr_create_ray_tracing_pipeline(
     bfr_pipeline* pipeline);
 
 // Writes count groups' identifiers from first, bfr_caps_ray_tracing.identifier_size bytes each,
-// into data, for binding table records. Fails with error_invalid_argument when size is too small.
+// into data, for binding table records. Fails with error_unsupported where
+// bfr_caps_features.ray_tracing_pipeline is false, and error_invalid_argument when size is too
+// small.
 // data: Where the identifiers go.
 // size: Bytes of data.
 BFR_API bfr_result bfr_get_shader_identifiers(
@@ -4321,10 +4403,8 @@ BFR_API bfr_result bfr_trace_rays_indirect(
     uint64_t offset);
 
 // Writes the buffer's GPU address, for the addresses bfr_trace_rays_indirect_args, cluster records
-// and shaders read. The buffer has indirect, shader_binding_table, acceleration_structure_input,
-// acceleration_structure_data or acceleration_structure_storage usage. Fails with error_unsupported
-// where bfr_caps_features.buffer_address is false, and error_invalid_argument for a buffer of none
-// of those usages.
+// and shaders read; every buffer has one where bfr_caps_features.buffer_address. Fails with
+// error_unsupported where it is false.
 BFR_API bfr_result bfr_get_buffer_address(bfr_device* device, bfr_buffer buffer, uint64_t* address);
 
 // Creates a pool of desc's count entries of its property. Not for the frame path. Fails with
@@ -4429,9 +4509,9 @@ BFR_API bfr_result bfr_serialized_compatible(
     bfr_bool* compatible);
 
 // Writes the bytes of stack one shader of group takes, for
-// bfr_ray_tracing_pipeline_desc.stack_size. The group has that shader. Fails with
-// error_invalid_argument for a pipeline that is not a ray tracing one or an enum value BFR doesn't
-// have.
+// bfr_ray_tracing_pipeline_desc.stack_size. The group has that shader. Fails with error_unsupported
+// where bfr_caps_features.ray_tracing_pipeline is false, and error_invalid_argument for a pipeline
+// that is not a ray tracing one or an enum value BFR doesn't have.
 BFR_API bfr_result bfr_get_ray_tracing_stack_size(
     bfr_device* device,
     bfr_pipeline pipeline,

@@ -2,6 +2,7 @@
 
 #include "bfr/core/error.h"
 #include "bfr/rhi/buffer.h"
+#include "rhi/bindless_slots.h"
 #include "vulkan/vma.h"
 
 #include <volk.h>
@@ -20,12 +21,13 @@ namespace bfr::rhi::vulkan {
 [[nodiscard]] core::Result<VmaAllocator> createAllocator(VkInstance instance, VkPhysicalDevice adapter, VkDevice device,
                                                          std::uint32_t apiVersion, bool deviceAddresses);
 
-/// How a device's buffers are addressed: whether an indirect buffer gets a
-/// device address (the device has bufferDeviceAddress), and the address
+/// How a device's buffers are addressed: whether they get a device address
+/// (the device has bufferDeviceAddress), and the address
 /// alignment a buffer of each usage starts at, beyond what its memory
 /// requirements give; 0 where the device has none of that usage.
 struct BufferAddressing {
-    bool indirectAddresses = false;
+    /// The device gives buffer addresses: every buffer has one.
+    bool addresses = false;
     /// RayTracingLimits::scratchAlignment, kPartitionedAlignment where the
     /// device has partitioned top structures, and clusterScratchAlignment
     /// where it has clusters.
@@ -44,17 +46,17 @@ struct BufferAddressing {
 
 /// A VkBuffer and the memory VMA placed it in, which it frees when it goes:
 /// before the allocator does. mapped is where the CPU reaches upload and
-/// readback memory, empty for device memory. slot is its place in the storage
-/// buffer table, kEnd without storage usage; the device gives it back when
-/// the buffer is collected. address is its device address, 0 for a buffer
+/// readback memory, empty for device memory. slots are its places in the
+/// storage and uniform buffer tables, kEnd in a table its usage does not set;
+/// the device gives them back when the buffer is collected. address is its device address, 0 for a buffer
 /// made without one; size is its bytes. A sparse one has no allocation; tileBytes and
 /// memoryTypes are its memory requirements' alignment and memoryTypeBits.
 class VulkanBuffer {
 public:
     VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, VmaAllocation allocation, BufferMemory memory,
-                 std::span<std::byte> mapped, std::uint32_t slot, VkDeviceAddress address, VkDeviceSize size);
-    VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, std::uint32_t slot, const VkMemoryRequirements& sparse,
-                 VkDeviceSize size);
+                 std::span<std::byte> mapped, BufferSlotsHeld slots, VkDeviceAddress address, VkDeviceSize size);
+    VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, BufferSlotsHeld slots, const VkMemoryRequirements& sparse,
+                 VkDeviceAddress address, VkDeviceSize size);
     ~VulkanBuffer();
     VulkanBuffer(const VulkanBuffer&) = delete;
     VulkanBuffer& operator=(const VulkanBuffer&) = delete;
@@ -64,7 +66,7 @@ public:
     [[nodiscard]] VkBuffer buffer() const { return buffer_; }
     [[nodiscard]] BufferMemory memory() const { return memory_; }
     [[nodiscard]] std::span<std::byte> mapped() const { return mapped_; }
-    [[nodiscard]] std::uint32_t slot() const { return slot_; }
+    [[nodiscard]] const BufferSlotsHeld& slots() const { return slots_; }
     [[nodiscard]] bool sparse() const { return sparse_; }
     [[nodiscard]] VkDeviceSize tileBytes() const { return tileBytes_; }
     [[nodiscard]] std::uint32_t memoryTypes() const { return memoryTypes_; }
@@ -77,7 +79,7 @@ private:
     VmaAllocation allocation_;
     BufferMemory memory_;
     std::span<std::byte> mapped_;
-    std::uint32_t slot_;
+    BufferSlotsHeld slots_;
     bool sparse_ = false;
     VkDeviceSize tileBytes_ = 0;
     std::uint32_t memoryTypes_ = 0;
@@ -94,7 +96,7 @@ private:
                                                            VmaAllocator allocator, VkDeviceSize size,
                                                            VkBufferUsageFlags usage, BufferMemory memory,
                                                            std::span<const std::uint32_t> families,
-                                                           VkDeviceSize alignment, std::uint32_t slot);
+                                                           VkDeviceSize alignment, BufferSlotsHeld slots);
 
 /// The opaque addresses a replayable buffer and its memory are made at
 /// (Vulkan's buffer device address capture and replay); 0 is anywhere.
@@ -132,6 +134,6 @@ struct VulkanReplayableBuffer {
 [[nodiscard]] core::Result<VulkanBuffer> createVulkanBuffer(const VolkDeviceTable& table, VkDevice device,
                                                             VmaAllocator allocator, const BufferDesc& desc,
                                                             std::span<const std::uint32_t> families,
-                                                            const BufferAddressing& addressing, std::uint32_t slot);
+                                                            const BufferAddressing& addressing, BufferSlotsHeld slots);
 
 } // namespace bfr::rhi::vulkan

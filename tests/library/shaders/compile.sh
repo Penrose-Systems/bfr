@@ -25,7 +25,7 @@ cd "$(dirname "$0")"
         echo "};"
         rm "$name.spv"
     }
-    for shader in bindless.comp bindless.vert bindless.frag color.frag sample.comp triangle.mesh triangle.task ray_query.comp ray_query_any.comp ray_positions.comp trace.rgen trace_motion.rgen trace.rmiss trace.rchit box.rint; do
+    for shader in bindless.comp bindless.vert bindless.frag color.frag sample.comp triangle.mesh triangle.task ray_query.comp ray_query_any.comp ray_positions.comp uniform.comp trace.rgen trace_motion.rgen trace.rmiss trace.rchit box.rint; do
         emit "$(echo "$shader" | sed 's/[._]\(.\)/\U\1/g; s/^./\U&/')" "$shader"
     done
     emit RayQueryPartitionedComp ray_query.comp -DPARTITIONED

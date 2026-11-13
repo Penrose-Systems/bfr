@@ -160,13 +160,17 @@ inline std::array<float, 4> colorAt(double t) {
 inline int show(bfr::Backend backend, const bfr::Window& window, const std::function<bool()>& poll,
                 const std::function<Size()>& size) {
     // Two frames in flight, each recording one list from a pool of its own,
-    // which sets the push constants once; one swapchain, and one storage buffer
-    // the vertex shader reads. The device holds exactly that.
+    // which sets the push constants once; one swapchain, one storage buffer the
+    // vertex shader reads, and a pipeline for the swapchain's format, with the
+    // one it replaces until the GPU is done with it. The device holds exactly
+    // that.
     constexpr std::uint32_t kFramesInFlight = 2;
     constexpr std::uint32_t kListsPerFrame = 1;
     constexpr std::uint32_t kPushesPerFrame = 1;
     constexpr std::uint32_t kSwapchains = 1;
     constexpr std::uint32_t kStorageBuffers = 1;
+    constexpr std::uint32_t kBuffers = 1;
+    constexpr std::uint32_t kPipelines = 2;
     // One graphics queue, at rank 0 and level normal.
     constexpr std::array<bfr::QueueDesc, 1> kOneQueue{};
     detail::row("Backend", {std::string{bfr::name(backend)}});
@@ -176,8 +180,8 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
          .apiMajor = version.major,
          .apiMinor = version.minor,
          .validation = true,
-         .messageCallback = [](bfr::MessageSeverity /*severity*/,
-                               std::string_view message) { std::cerr << message << "\n"; },
+         .messageCallback = [](bfr::MessageSeverity /*severity*/, std::string_view message,
+                               void* /*userData*/) { std::cerr << message << "\n"; },
          .minSeverity = bfr::MessageSeverity::Warning});
     if (!instance) {
         return detail::fail("can't create an instance", instance.error());
@@ -187,27 +191,36 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
         return detail::fail("can't list adapters", adapters.error());
     }
 
-    bfr::Device device;
+    // The first adapter that presents to the window, as its swapchain caps say.
     std::uint32_t adapter = 0;
     for (; adapter < adapters->size(); ++adapter) {
+        const auto caps = instance->swapchainCaps(adapter, {.window = window});
+        if (caps) {
+            break;
+        }
+        if (caps.error().code != bfr::Result::ErrorPresentUnsupported) {
+            return detail::fail("can't ask " + adapters->at(adapter).name + " about presenting", caps.error());
+        }
+    }
+    if (adapter == adapters->size()) {
+        std::cerr << "no adapter presents to this window\n";
+        return 1;
+    }
+    bfr::Device device;
+    {
         auto opened = instance->createDevice({.adapter = adapter,
                                               .window = window,
                                               .graphicsQueues = kOneQueue,
                                               .maxCommandLists = kFramesInFlight * kListsPerFrame,
                                               .maxCommandPools = kFramesInFlight,
                                               .maxSwapchains = kSwapchains,
-                                              .maxBindlessStorageBuffers = kStorageBuffers});
-        if (opened) {
-            device = std::move(*opened);
-            break;
-        }
-        if (opened.error().code != bfr::Result::ErrorPresentUnsupported) {
+                                              .maxBindlessStorageBuffers = kStorageBuffers,
+                                              .maxBuffers = kBuffers,
+                                              .maxPipelines = kPipelines});
+        if (!opened) {
             return detail::fail("can't open " + adapters->at(adapter).name, opened.error());
         }
-    }
-    if (!device) {
-        std::cerr << "no adapter presents to this window\n";
-        return 1;
+        device = std::move(*opened);
     }
     detail::row("Adapter", {adapters->at(adapter).name});
 
@@ -222,9 +235,9 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
         return detail::fail("can't map the vertex buffer", mapped.error());
     }
     std::memcpy(*mapped, detail::kTriangle.data(), sizeof(detail::kTriangle));
-    const auto vertexSlot = vertices->bufferSlot();
-    if (!vertexSlot) {
-        return detail::fail("can't get the vertex buffer's slot", vertexSlot.error());
+    const auto vertexSlots = vertices->bufferSlots();
+    if (!vertexSlots) {
+        return detail::fail("can't get the vertex buffer's slot", vertexSlots.error());
     }
     const std::optional<detail::Shaders> shaders = detail::shadersFor(backend);
     if (!shaders) {
@@ -272,6 +285,8 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     std::size_t frame = 0;
     const auto started = std::chrono::steady_clock::now();
     Size last;
+    // The swapchain's images, which the viewport and scissor cover.
+    Size area;
     bool resize = true;
     // With nothing to present, the loop waits instead of spinning.
     constexpr std::chrono::milliseconds kIdle{10};
@@ -288,6 +303,7 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
                 return detail::fail("can't resize the swapchain", images.error());
             }
             last = now;
+            area = {.width = images->width, .height = images->height};
             resize = false;
             detail::row("Swapchain", {std::format("{}x{}, {} images", images->width, images->height, images->count),
                                       std::format("{} {}", bfr::name(images->format), bfr::name(images->colorSpace)),
@@ -341,10 +357,19 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
             return detail::fail("can't begin rendering", begun.error());
         }
         if (pipeline) {
+            const bfr::Viewport viewport{.width = static_cast<float>(area.width),
+                                         .height = static_cast<float>(area.height),
+                                         .maxDepth = 1};
+            if (const auto set = device.setViewport(*commands, viewport); !set) {
+                return detail::fail("can't set the viewport", set.error());
+            }
+            if (const auto set = device.setScissor(*commands, {.width = area.width, .height = area.height}); !set) {
+                return detail::fail("can't set the scissor", set.error());
+            }
             if (const auto bound = device.bindPipeline(*commands, pipeline); !bound) {
                 return detail::fail("can't bind the pipeline", bound.error());
             }
-            const detail::Push push{.positions = *vertexSlot, .color = detail::colorAt(elapsed.count())};
+            const detail::Push push{.positions = vertexSlots->storage, .color = detail::colorAt(elapsed.count())};
             const auto bytes = std::bit_cast<std::array<std::uint8_t, sizeof(push)>>(push);
             if (const auto pushed = device.pushConstants(*commands, bytes); !pushed) {
                 return detail::fail("can't set the push constants", pushed.error());

@@ -4,7 +4,9 @@
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/sparse.h"
+#include "bfr/rhi/texture.h"
 #include "core/slot_chains.h"
+#include "rhi/bindless_slots.h"
 #include "rhi/buffer_check.h"
 #include "rhi/enum_check.h"
 #include "rhi/ray_tracing_check.h"
@@ -54,12 +56,10 @@ VkBufferUsageFlags usageFor(const BufferUsage& usage, const BufferAddressing& ad
            // Traces read binding tables, and indirect traces their
            // arguments, by address (VUID-vkCmdTraceRaysIndirect2KHR-indirectDeviceAddress-03633).
            flag(usage.shaderBindingTable, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR) |
-           // Serialized structures are copied to and from by address
-           // (VUID-vkCmdCopyAccelerationStructureToMemoryKHR-pInfo-03739).
-           flag(usage.accelerationStructureInput || usage.accelerationStructureScratch || usage.shaderBindingTable ||
-                    usage.accelerationStructureData || usage.accelerationStructureStorage ||
-                    (usage.indirect && addressing.indirectAddresses),
-                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+           // Every buffer has an address where the device gives them, as
+           // NVRHI's do (vulkan-buffer.cpp:81-82): builds, traces, cluster
+           // records and shaders read by it.
+           flag(addressing.addresses, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
 }
 
 VkDeviceSize alignmentFor(const BufferUsage& usage, const BufferAddressing& addressing) {
@@ -119,6 +119,13 @@ VkDeviceAddress deviceAddressOf(const VolkDeviceTable& table, VkDevice device, V
     return table.vkGetBufferDeviceAddress(device, &named);
 }
 
+// buffer's device address, 0 for one made without the usage that gives it
+// one. A sparse buffer has one before any memory is bound
+// (VUID-VkBufferDeviceAddressInfo-buffer-02600 asks only non-sparse ones).
+VkDeviceAddress addressFor(const VolkDeviceTable& table, VkDevice device, VkBuffer buffer, VkBufferUsageFlags usage) {
+    return (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0 ? deviceAddressOf(table, device, buffer) : 0;
+}
+
 } // namespace
 
 core::Result<VmaAllocator> createAllocator(VkInstance instance, VkPhysicalDevice adapter, VkDevice device,
@@ -143,26 +150,28 @@ core::Result<VmaAllocator> createAllocator(VkInstance instance, VkPhysicalDevice
 }
 
 VulkanBuffer::VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, VmaAllocation allocation, BufferMemory memory,
-                           std::span<std::byte> mapped, std::uint32_t slot, VkDeviceAddress address, VkDeviceSize size)
+                           std::span<std::byte> mapped, BufferSlotsHeld slots, VkDeviceAddress address,
+                           VkDeviceSize size)
     : allocator_(allocator),
       buffer_(buffer),
       allocation_(allocation),
       memory_(memory),
       mapped_(mapped),
-      slot_(slot),
+      slots_(slots),
       address_(address),
       size_(size) {}
 
-VulkanBuffer::VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, std::uint32_t slot,
-                           const VkMemoryRequirements& sparse, VkDeviceSize size)
+VulkanBuffer::VulkanBuffer(VmaAllocator allocator, VkBuffer buffer, BufferSlotsHeld slots,
+                           const VkMemoryRequirements& sparse, VkDeviceAddress address, VkDeviceSize size)
     : allocator_(allocator),
       buffer_(buffer),
       allocation_(VK_NULL_HANDLE),
       memory_(BufferMemory::Device),
-      slot_(slot),
+      slots_(slots),
       sparse_(true),
       tileBytes_(sparse.alignment),
       memoryTypes_(sparse.memoryTypeBits),
+      address_(address),
       size_(size) {}
 
 VulkanBuffer::VulkanBuffer(VulkanBuffer&& other) noexcept
@@ -171,7 +180,7 @@ VulkanBuffer::VulkanBuffer(VulkanBuffer&& other) noexcept
       allocation_(std::exchange(other.allocation_, VK_NULL_HANDLE)),
       memory_(other.memory_),
       mapped_(std::exchange(other.mapped_, {})),
-      slot_(other.slot_),
+      slots_(other.slots_),
       sparse_(other.sparse_),
       tileBytes_(other.tileBytes_),
       memoryTypes_(other.memoryTypes_),
@@ -187,7 +196,7 @@ VulkanBuffer::~VulkanBuffer() {
 core::Result<VulkanBuffer> placeVulkanBuffer(const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator,
                                              VkDeviceSize size, VkBufferUsageFlags usage, BufferMemory memory,
                                              std::span<const std::uint32_t> families, VkDeviceSize alignment,
-                                             std::uint32_t slot) {
+                                             BufferSlotsHeld slots) {
     VkBufferCreateInfo info = bufferInfo(size, usage, families);
     VmaAllocationCreateInfo allocation{};
     const MemoryProperties properties = propertiesFor(memory);
@@ -208,10 +217,7 @@ core::Result<VulkanBuffer> placeVulkanBuffer(const VolkDeviceTable& table, VkDev
     if (placed.pMappedData != nullptr) {
         mapped = {static_cast<std::byte*>(placed.pMappedData), static_cast<std::size_t>(size)};
     }
-    const VkDeviceAddress address = (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0
-                                        ? deviceAddressOf(table, device, buffer)
-                                        : 0;
-    return VulkanBuffer{allocator, buffer, made, memory, mapped, slot, address, size};
+    return VulkanBuffer{allocator, buffer, made, memory, mapped, slots, addressFor(table, device, buffer, usage), size};
 }
 
 core::Result<VulkanReplayableBuffer> placeReplayableVulkanBuffer(const VolkDeviceTable& table, VkDevice device,
@@ -277,8 +283,7 @@ core::Result<VulkanReplayableBuffer> placeReplayableVulkanBuffer(const VolkDevic
     memory.sType = VK_STRUCTURE_TYPE_DEVICE_MEMORY_OPAQUE_CAPTURE_ADDRESS_INFO;
     memory.memory = placed.deviceMemory;
     VulkanReplayableBuffer replayable{
-        .buffer =
-            VulkanBuffer{allocator, buffer, made, BufferMemory::Device, {}, core::SlotChains::kEnd, address, size},
+        .buffer = VulkanBuffer{allocator, buffer, made, BufferMemory::Device, {}, {}, address, size},
         .made = {.buffer = table.vkGetBufferOpaqueCaptureAddress(device, &named),
                  .memory = table.vkGetDeviceMemoryOpaqueCaptureAddress(device, &memory)}};
     return replayable;
@@ -286,14 +291,14 @@ core::Result<VulkanReplayableBuffer> placeReplayableVulkanBuffer(const VolkDevic
 
 core::Result<VulkanBuffer> createVulkanBuffer(const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator,
                                               const BufferDesc& desc, std::span<const std::uint32_t> families,
-                                              const BufferAddressing& addressing, std::uint32_t slot) {
+                                              const BufferAddressing& addressing, BufferSlotsHeld slots) {
     if (desc.sparse && desc.tileBytes != 0) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "Vulkan sets a sparse buffer's tile size itself; tileBytes is 0");
     }
     if (!desc.sparse) {
         return placeVulkanBuffer(table, device, allocator, desc.size, usageFor(desc.usage, addressing), desc.memory,
-                                 families, alignmentFor(desc.usage, addressing), slot);
+                                 families, alignmentFor(desc.usage, addressing), slots);
     }
     // Bound tile by tile, partly resident, and aliased where asked; no
     // memory is placed now.
@@ -306,7 +311,8 @@ core::Result<VulkanBuffer> createVulkanBuffer(const VolkDeviceTable& table, VkDe
     }
     VkMemoryRequirements requirements{};
     table.vkGetBufferMemoryRequirements(device, buffer, &requirements);
-    return VulkanBuffer{allocator, buffer, slot, requirements, desc.size};
+    return VulkanBuffer{allocator, buffer, slots, requirements, addressFor(table, device, buffer, info.usage),
+                        desc.size};
 }
 
 // The device's buffer calls, beside the buffers they make.
@@ -319,7 +325,7 @@ core::Result<VulkanBuffer*> VulkanDevice::bufferFor(BufferHandle buffer) {
     return found;
 }
 
-void VulkanDevice::collectBuffers() {
+void VulkanDevice::collectRetired() {
     const std::uint64_t completed = submissions_.completed([this](std::uint32_t queue) {
         // A queue that can't say what it passed has passed nothing yet.
         const auto passed = completedValue(*queues_[queue]);
@@ -327,7 +333,7 @@ void VulkanDevice::collectBuffers() {
     });
     // A collected resource's slots go back to their tables, so no pending work
     // can see a slot reused.
-    buffers_.collect(completed, [this](const VulkanBuffer& buffer) { bindless_.giveBuffer(buffer.slot()); });
+    buffers_.collect(completed, [this](const VulkanBuffer& buffer) { bindless_.giveBuffer(buffer.slots()); });
     textures_.collect(completed, [this](const VulkanTexture& texture) { bindless_.giveTexture(texture.slots()); });
     samplers_.collect(completed, [this](const VulkanSampler& sampler) { bindless_.giveSampler(sampler.slot()); });
     timestampPools_.collect(completed);
@@ -339,13 +345,25 @@ void VulkanDevice::collectBuffers() {
     });
 }
 
+core::Result<void> VulkanDevice::runGarbageCollection() {
+    // collectRetired takes a queue that cannot say what it passed as having
+    // passed nothing; here the caller hears of it.
+    for (const auto& queue : queues_) {
+        if (auto completed = completedValue(*queue); !completed) {
+            return std::unexpected(std::move(completed.error()));
+        }
+    }
+    collectRetired();
+    return {};
+}
+
 core::Result<BufferHandle> VulkanDevice::createBuffer(const BufferDesc& desc) {
     if (auto checked = checkBufferDesc(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     // Cold, so buffers the GPU is done with are freed here, never on the
     // frame path: freeing one frees the allocator's memory.
-    collectBuffers();
+    collectRetired();
     auto slot = bindless_.takeBuffer(desc);
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
@@ -359,20 +377,23 @@ core::Result<BufferHandle> VulkanDevice::createBuffer(const BufferDesc& desc) {
     const BufferHandle buffer = buffers_.emplace(std::move(*made));
     if (buffer.isNull()) {
         bindless_.giveBuffer(*slot);
-        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} buffers", kBufferLimit);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} buffers", desc_.maxBuffers);
     }
-    if (*slot != core::SlotChains::kEnd) {
-        layout_.writeStorageBuffer(*slot, handle);
+    if (slot->storage != core::SlotChains::kEnd) {
+        layout_.writeStorageBuffer(slot->storage, handle);
+    }
+    if (slot->uniform != core::SlotChains::kEnd) {
+        layout_.writeUniformBuffer(slot->uniform, handle);
     }
     return buffer;
 }
 
-core::Result<std::uint32_t> VulkanDevice::bufferSlot(BufferHandle buffer) {
+core::Result<BufferSlots> VulkanDevice::bufferSlots(BufferHandle buffer) {
     auto found = bufferFor(buffer);
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    return BindlessSlots::reported((*found)->slot());
+    return BindlessSlots::reported((*found)->slots());
 }
 
 core::Result<std::span<std::byte>> VulkanDevice::mapBuffer(BufferHandle buffer) {
@@ -413,7 +434,7 @@ core::Result<std::uint64_t> VulkanDevice::bufferAddress(BufferHandle buffer) {
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    if (auto checked = checkBufferAddress(features_.bufferAddress, (*found)->address() != 0); !checked) {
+    if (auto checked = checkBufferAddress(features_.bufferAddress); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     return (*found)->address();
@@ -433,7 +454,7 @@ core::Result<void> VulkanDevice::destroyBuffer(BufferHandle buffer) {
     if (!buffers_.retire(buffer, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the buffer handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 

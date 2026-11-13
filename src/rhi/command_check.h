@@ -65,8 +65,9 @@ namespace bfr::rhi {
 
 /// Fails with RhiUnsupported when a depth-stencil attachment's resolve modes,
 /// for the aspects format has, are not ones resolve has, alone or together.
-/// Each backend's beginRendering calls it once it knows the texture's format,
-/// when the attachment names a resolve texture.
+/// D3D12's and Metal's beginRendering call it once they know the texture's
+/// format, when the attachment names a resolve texture: neither has a form
+/// for a mode resolve leaves out. Vulkan passes the modes through.
 [[nodiscard]] inline core::Result<void> checkDepthResolve(const DepthStencilAttachment& attachment, Format format,
                                                           const ResolveCaps& resolve) {
     const FormatBlock& block = blockOf(format);
@@ -97,8 +98,8 @@ namespace bfr::rhi {
 }
 
 /// Fails with RhiInvalidCall when data is more than the size bytes the push
-/// constants hold, the size the device's caps report. Each backend's
-/// pushConstants calls it first.
+/// constants hold. Metal's pushConstants calls it first, since it copies
+/// data into an entry of that size in its pool's ring.
 [[nodiscard]] inline core::Result<void> checkPushConstants(std::span<const std::byte> data, std::uint32_t size) {
     if (data.size() > size) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes of push constants; there are {}", data.size(),
@@ -124,6 +125,8 @@ struct RecordState {
 
 /// Counts a pushConstants call in pushed, the pool's count since its reset,
 /// against the pool's pushConstantUpdates; fails with RhiLimitReached at it.
+/// Metal's ring has that many entries; Vulkan and D3D12 have no storage to
+/// count.
 [[nodiscard]] inline core::Result<void> countPushConstants(std::uint32_t& pushed, std::uint32_t pushConstantUpdates) {
     if (pushed >= pushConstantUpdates) {
         return core::failure(core::ErrorCode::RhiLimitReached, "the pool holds at most {} push constant updates",
@@ -134,8 +137,8 @@ struct RecordState {
 }
 
 /// Fails with RhiUnsupported for more than one indirect draw in a call where
-/// the device's Features::multiDrawIndirect is false. Each backend's
-/// indirect draws call it first.
+/// the device's Features::multiDrawIndirect is false. Metal's indirect draws
+/// call it first, since Metal's indirect draw has no count.
 [[nodiscard]] inline core::Result<void> checkDrawCount(std::uint32_t drawCount, bool multiDrawIndirect) {
     if (drawCount > 1 && !multiDrawIndirect) {
         return core::failure(core::ErrorCode::RhiUnsupported,
@@ -146,7 +149,7 @@ struct RecordState {
 }
 
 /// Fails with RhiUnsupported where the device's Features::drawIndirectCount
-/// is false. Each backend's count draws call it first.
+/// is false. Metal's count draws return it, since Metal has none.
 [[nodiscard]] inline core::Result<void> checkCountDraws(bool drawIndirectCount) {
     if (!drawIndirectCount) {
         return core::failure(core::ErrorCode::RhiUnsupported,

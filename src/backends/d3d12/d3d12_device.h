@@ -51,8 +51,6 @@ class D3D12Instance;
 /// the slots' objects once the GPU is done with them.
 struct D3D12CommandPool {
     std::uint32_t queue = 0;
-    std::uint32_t pushConstantUpdates = 0;
-    std::uint32_t pushed = 0;
     std::uint32_t first = core::SlotChains::kEnd;
     std::uint32_t next = core::SlotChains::kEnd;
     std::uint32_t recording = 0;
@@ -105,11 +103,18 @@ struct D3D12Queue {
 };
 
 /// A multisampled color attachment and the texture, or swapchain image, a
-/// rendering resolves it into as it ends, in format.
+/// rendering resolves it into as it ends, in format: layers layers of
+/// source from sourceLayer at sourceMip, into target's mip 0 from layer 0.
+/// sourceMips and targetMips are each resource's mip levels.
 struct D3D12Resolve {
     ID3D12Resource* source = nullptr;
     ID3D12Resource* target = nullptr;
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+    std::uint32_t sourceMip = 0;
+    std::uint32_t sourceLayer = 0;
+    std::uint32_t sourceMips = 1;
+    std::uint32_t targetMips = 1;
+    std::uint32_t layers = 1;
 };
 
 /// Commands recorded on one list: the list, which its slot owns, the pool and
@@ -235,7 +240,8 @@ public:
                                                 std::span<const BufferCopy> regions) override;
     [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<void> textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                                    TextureLayout before, TextureLayout after) override;
+                                                    TextureLayout before, TextureLayout after,
+                                                    const TextureRange& range) override;
     [[nodiscard]] core::Result<void> copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,
                                                          TextureHandle texture,
                                                          std::span<const BufferTextureCopy> regions) override;
@@ -251,10 +257,11 @@ public:
     [[nodiscard]] core::Result<Token> submit(const SubmitDesc& desc) override;
     [[nodiscard]] core::Result<void> wait(Token token, std::uint64_t timeoutNs) override;
     [[nodiscard]] core::Result<bool> poll(Token token) override;
+    [[nodiscard]] core::Result<void> runGarbageCollection() override;
     [[nodiscard]] core::Result<void> destroyCommandList(CommandListHandle commandList) override;
     [[nodiscard]] core::Result<BufferHandle> createBuffer(const BufferDesc& desc) override;
     [[nodiscard]] core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) override;
-    [[nodiscard]] core::Result<std::uint32_t> bufferSlot(BufferHandle buffer) override;
+    [[nodiscard]] core::Result<BufferSlots> bufferSlots(BufferHandle buffer) override;
     [[nodiscard]] core::Result<void> destroyBuffer(BufferHandle buffer) override;
     [[nodiscard]] core::Result<TextureHandle> createTexture(const TextureDesc& desc) override;
     [[nodiscard]] core::Result<TextureSlots> textureSlots(TextureHandle texture) override;
@@ -377,7 +384,7 @@ private:
     // Destroys the buffers, textures, samplers, timestamp pools, sparse
     // memories and pipelines retired under submission IDs every queue has
     // passed.
-    void collectBuffers();
+    void collectRetired();
     // Waits for everything the device has submitted.
     [[nodiscard]] core::Result<void> waitIdle();
     void discard(ID3D12GraphicsCommandList7* list);
@@ -420,10 +427,6 @@ private:
     DeviceDesc desc_;
     // The adapter's sparse caps, which mapping and heaps follow.
     Sparse sparse_;
-    // Features::multiDrawIndirect and drawIndirectCount, which indirect draws
-    // check.
-    bool multiDrawIndirect_ = false;
-    bool drawIndirectCount_ = false;
     // The features createGraphicsPipeline checks a desc against, and how
     // depth-stencil attachments resolve.
     Features features_;
@@ -448,8 +451,6 @@ private:
 
     core::Submissions submissions_;
     Microsoft::WRL::ComPtr<D3D12MA::Allocator> allocator_;
-    static constexpr std::uint32_t kBufferCapacity = 256;
-    static constexpr std::uint32_t kBufferLimit = 1U << 20U;
     core::Pool<D3D12Buffer, Buffer> buffers_;
     core::Pool<D3D12Texture, Texture> textures_;
     // Every sampler holds a slot, so the pool is made at the table's size.

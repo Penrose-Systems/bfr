@@ -103,7 +103,7 @@ core::Result<MetalBuffer> createMetalBuffer(MTL::Device& device, const BufferDes
     return MetalBuffer{.buffer = std::move(buffer),
                        .memory = desc.memory,
                        .mapped = mapped,
-                       .slot = core::SlotChains::kEnd,
+                       .slots = {},
                        .page = page,
                        .tileBytes = tileBytes,
                        .resident = std::move(resident)};
@@ -119,14 +119,14 @@ core::Result<MetalBuffer*> MetalDevice::bufferFor(BufferHandle buffer) {
     return found;
 }
 
-void MetalDevice::collectBuffers() {
+void MetalDevice::collectRetired() {
     // The buffers collected leave the residency set, which is not thread-safe.
     const std::scoped_lock lock{residencyLock_};
     const std::uint64_t completed = submissions_.completed(
         [this](std::uint32_t queue) { return queues_[queue]->event->signaledValue(); });
     // A collected resource's slots go back to their tables, so no pending work
     // can see a slot reused.
-    buffers_.collect(completed, [this](const MetalBuffer& buffer) { bindless_.giveBuffer(buffer.slot); });
+    buffers_.collect(completed, [this](const MetalBuffer& buffer) { bindless_.giveBuffer(buffer.slots); });
     textures_.collect(completed, [this](const MetalTexture& texture) { bindless_.giveTexture(texture.slots); });
     samplers_.collect(completed, [this](const MetalSampler& sampler) { bindless_.giveSampler(sampler.slot); });
     timestampPools_.collect(completed);
@@ -135,13 +135,18 @@ void MetalDevice::collectBuffers() {
     residency_->commit();
 }
 
+core::Result<void> MetalDevice::runGarbageCollection() {
+    collectRetired();
+    return {};
+}
+
 core::Result<BufferHandle> MetalDevice::createBuffer(const BufferDesc& desc) {
     if (auto checked = checkBufferDesc(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     // Cold, so buffers the GPU is done with are freed here, never on the
     // frame path: freeing one frees the allocator's memory.
-    collectBuffers();
+    collectRetired();
     // Held until made is gone, which takes it out of the set if it is not kept.
     const std::scoped_lock lock{residencyLock_};
     auto slot = bindless_.takeBuffer(desc);
@@ -153,26 +158,26 @@ core::Result<BufferHandle> MetalDevice::createBuffer(const BufferDesc& desc) {
         bindless_.giveBuffer(*slot);
         return std::unexpected(std::move(made.error()));
     }
-    made->slot = *slot;
+    made->slots = *slot;
     residency_->commit();
     const MTL::GPUAddress address = made->buffer->gpuAddress();
     const BufferHandle buffer = buffers_.emplace(std::move(*made));
     if (buffer.isNull()) {
         bindless_.giveBuffer(*slot);
-        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} buffers", kBufferLimit);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} buffers", desc_.maxBuffers);
     }
-    if (*slot != core::SlotChains::kEnd) {
-        tables().writeStorageBuffer(*slot, address);
+    if (slot->storage != core::SlotChains::kEnd) {
+        tables().writeStorageBuffer(slot->storage, address);
     }
     return buffer;
 }
 
-core::Result<std::uint32_t> MetalDevice::bufferSlot(BufferHandle buffer) {
+core::Result<BufferSlots> MetalDevice::bufferSlots(BufferHandle buffer) {
     auto found = bufferFor(buffer);
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    return BindlessSlots::reported((*found)->slot);
+    return BindlessSlots::reported((*found)->slots);
 }
 
 core::Result<void> MetalDevice::copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
@@ -230,7 +235,7 @@ core::Result<void> MetalDevice::destroyBuffer(BufferHandle buffer) {
     if (!buffers_.retire(buffer, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the buffer handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 

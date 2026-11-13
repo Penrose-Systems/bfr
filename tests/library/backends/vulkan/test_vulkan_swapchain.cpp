@@ -76,24 +76,6 @@ TEST_CASE("Vulkan device fails with RhiWindowFailed when the API refuses a swapc
                Catch::Matchers::ContainsSubstring("vkCreateHeadlessSurfaceEXT: VK_ERROR_UNKNOWN"));
 }
 
-TEST_CASE("Vulkan device fails with RhiPresentUnsupported when it can't present to the swapchain's window",
-          "[vulkan][gpu]") {
-    const AdapterOverrideLayer adapterOverride;
-    const ScopedEnv unsupported("BFR_PRESENT_UNSUPPORTED", "1");
-    const auto rhi = Instance::create(vulkanDesc(), {});
-    INFO(failureOf(rhi));
-    REQUIRE(rhi.has_value());
-    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow, kTestDevice);
-    INFO(failureOf(device));
-    REQUIRE(device.has_value());
-
-    // The desc is never used: making the swapchain fails first.
-    const auto swapchain = (*device)->createSwapchain(kHeadless, kTestSwapchain);
-
-    REQUIRE_FALSE(swapchain.has_value());
-    CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
-}
-
 // Validation sits above the failing call, so it checks what the RHI does with
 // the failure and with the junk the call leaves.
 TEST_CASE("Vulkan device reports a failed call when building a swapchain's images and leaves nothing behind",
@@ -115,30 +97,6 @@ TEST_CASE("Vulkan device reports a failed call when building a swapchain's image
         REQUIRE_FALSE(images.has_value());
         CHECK(images.error().code == bfr::core::ErrorCode::RhiSwapchainFailed);
         CHECK_THAT(images.error().message.text(), Catch::Matchers::ContainsSubstring(function + ": VK_ERROR_UNKNOWN"));
-    }
-    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
-}
-
-TEST_CASE("Vulkan device reports a failed present query as the failure it is", "[vulkan][gpu]") {
-    // The failing query leaves VK_TRUE behind, which must not be believed.
-    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
-    const ScopedEnv failing("BFR_FAIL", "vkGetPhysicalDeviceSurfaceSupportKHR");
-    std::vector<std::string> errors;
-    {
-        const auto rhi = Instance::create(recordingErrorsInto(errors), kValidation);
-        INFO(failureOf(rhi));
-        REQUIRE(rhi.has_value());
-        const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kNoWindow, kTestDevice);
-        INFO(failureOf(device));
-        REQUIRE(device.has_value());
-
-        // The desc is never used: making the swapchain fails first.
-        const auto swapchain = (*device)->createSwapchain(kHeadless, kTestSwapchain);
-
-        REQUIRE_FALSE(swapchain.has_value());
-        CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiWindowFailed);
-        CHECK_THAT(swapchain.error().message.text(),
-                   Catch::Matchers::ContainsSubstring("vkGetPhysicalDeviceSurfaceSupportKHR: VK_ERROR_UNKNOWN"));
     }
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
@@ -189,25 +147,6 @@ TEST_CASE("Vulkan device builds a swapchain once a call the API refused succeeds
         REQUIRE(images.has_value());
         CHECK(images->width == kWidth);
         CHECK(images->height == kHeight);
-    }
-    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
-}
-
-TEST_CASE("Vulkan fails with RhiPresentUnsupported when only a family it opens no queue on presents", "[vulkan][gpu]") {
-    // lavapipe also lists family 1, which does nothing but present, and is the
-    // only family that presents. No kind of queue opens on it.
-    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
-    const ScopedEnv separate("BFR_ADAPTER_SEPARATE_PRESENT", "1");
-    std::vector<std::string> errors;
-    {
-        const auto rhi = Instance::create(recordingErrorsInto(errors), kValidation);
-        INFO(failureOf(rhi));
-        REQUIRE(rhi.has_value());
-
-        const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), kHeadless, kTestDevice);
-
-        REQUIRE_FALSE(device.has_value());
-        CHECK(device.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
     }
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }

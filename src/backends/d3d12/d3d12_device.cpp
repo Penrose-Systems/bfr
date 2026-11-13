@@ -70,17 +70,19 @@ D3D12_RESOURCE_BARRIER transition(ID3D12Resource* image, D3D12_RESOURCE_STATES b
     return barrier;
 }
 
-// Mip 0xffffffff with no mip count names every subresource.
-constexpr UINT kAllSubresources = 0xffffffff;
-constexpr D3D12_BARRIER_SUBRESOURCE_RANGE kEverySubresource{.IndexOrFirstMipLevel = kAllSubresources,
-                                                            .NumMipLevels = 0,
-                                                            .FirstArraySlice = 0,
-                                                            .NumArraySlices = 0,
-                                                            .FirstPlane = 0,
-                                                            .NumPlanes = 0};
-
-// Mip 0 of layer 0, which a rendering's resolve covers.
-constexpr UINT kFirstSubresource = 0;
+// range of texture as D3D12 takes it: every plane, kRemaining the count left
+// from the first one named, and other counts as given.
+D3D12_BARRIER_SUBRESOURCE_RANGE rangeOf(const D3D12Texture& texture, const TextureRange& range) {
+    const auto left = [](std::uint32_t count, std::uint32_t total, std::uint32_t first) {
+        return count == kRemaining ? total - std::min(first, total) : count;
+    };
+    return {.IndexOrFirstMipLevel = range.mipLevel,
+            .NumMipLevels = left(range.mipCount, texture.mipLevels, range.mipLevel),
+            .FirstArraySlice = range.layer,
+            .NumArraySlices = left(range.layerCount, texture.layers, range.layer),
+            .FirstPlane = 0,
+            .NumPlanes = targetOf(texture, 0, 0, 0).planes};
+}
 
 // How a texture is used on one side of a barrier.
 struct TextureUse {
@@ -99,7 +101,8 @@ constexpr TextureUse kResolveDestUse{.sync = D3D12_BARRIER_SYNC_RESOLVE,
                                      .access = D3D12_BARRIER_ACCESS_RESOLVE_DEST,
                                      .layout = D3D12_BARRIER_LAYOUT_RESOLVE_DEST};
 
-D3D12_TEXTURE_BARRIER barrierFor(ID3D12Resource* resource, const TextureUse& before, const TextureUse& after) {
+D3D12_TEXTURE_BARRIER barrierFor(ID3D12Resource* resource, const D3D12_BARRIER_SUBRESOURCE_RANGE& subresources,
+                                 const TextureUse& before, const TextureUse& after) {
     return {.SyncBefore = before.sync,
             .SyncAfter = after.sync,
             .AccessBefore = before.access,
@@ -107,8 +110,24 @@ D3D12_TEXTURE_BARRIER barrierFor(ID3D12Resource* resource, const TextureUse& bef
             .LayoutBefore = before.layout,
             .LayoutAfter = after.layout,
             .pResource = resource,
-            .Subresources = kEverySubresource,
+            .Subresources = subresources,
             .Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE};
+}
+
+// The layers of one mip level a resolve reads or writes, in a color format's
+// one plane.
+D3D12_BARRIER_SUBRESOURCE_RANGE resolvedRange(std::uint32_t mip, std::uint32_t layer, std::uint32_t layers) {
+    return {.IndexOrFirstMipLevel = mip,
+            .NumMipLevels = 1,
+            .FirstArraySlice = layer,
+            .NumArraySlices = layers,
+            .FirstPlane = 0,
+            .NumPlanes = 1};
+}
+
+// The subresource of mip in layer of a resource with mips levels, plane 0.
+UINT subresourceAt(std::uint32_t mip, std::uint32_t layer, std::uint32_t mips) {
+    return mip + (layer * mips);
 }
 
 // A source and a target barrier for each color attachment.
@@ -127,11 +146,14 @@ void recordResolves(ID3D12GraphicsCommandList7* list, std::span<const D3D12Resol
     UINT32 count = 0;
     for (std::size_t i = 0; i < resolves.size(); ++i) {
         const D3D12Resolve& resolve = resolves[i];
-        toResolve.at(count) = barrierFor(resolve.source, kRenderTargetUse, kResolveSourceUse);
-        back.at(count++) = barrierFor(resolve.source, kResolveSourceUse, kRenderTargetUse);
+        const D3D12_BARRIER_SUBRESOURCE_RANGE read = resolvedRange(resolve.sourceMip, resolve.sourceLayer,
+                                                                   resolve.layers);
+        toResolve.at(count) = barrierFor(resolve.source, read, kRenderTargetUse, kResolveSourceUse);
+        back.at(count++) = barrierFor(resolve.source, read, kResolveSourceUse, kRenderTargetUse);
         if (i != 0 || !intoImage) {
-            toResolve.at(count) = barrierFor(resolve.target, kRenderTargetUse, kResolveDestUse);
-            back.at(count++) = barrierFor(resolve.target, kResolveDestUse, kRenderTargetUse);
+            const D3D12_BARRIER_SUBRESOURCE_RANGE written = resolvedRange(0, 0, resolve.layers);
+            toResolve.at(count) = barrierFor(resolve.target, written, kRenderTargetUse, kResolveDestUse);
+            back.at(count++) = barrierFor(resolve.target, written, kResolveDestUse, kRenderTargetUse);
         }
     }
     const D3D12_BARRIER_GROUP toGroup{.Type = D3D12_BARRIER_TYPE_TEXTURE,
@@ -144,7 +166,11 @@ void recordResolves(ID3D12GraphicsCommandList7* list, std::span<const D3D12Resol
         list->ResourceBarrier(1, &toDest);
     }
     for (const D3D12Resolve& resolve : resolves) {
-        list->ResolveSubresource(resolve.target, kFirstSubresource, resolve.source, kFirstSubresource, resolve.format);
+        for (std::uint32_t layer = 0; layer < resolve.layers; ++layer) {
+            list->ResolveSubresource(resolve.target, subresourceAt(0, layer, resolve.targetMips), resolve.source,
+                                     subresourceAt(resolve.sourceMip, resolve.sourceLayer + layer, resolve.sourceMips),
+                                     resolve.format);
+        }
     }
     const D3D12_BARRIER_GROUP backGroup{.Type = D3D12_BARRIER_TYPE_TEXTURE,
                                         .NumBarriers = count,
@@ -208,8 +234,6 @@ core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rh
     static_cast<void>(made->device_.As(&made->device11_));
     static_cast<void>(made->device_.As(&made->device1_));
     made->sparse_ = sparseOf(made->device_.Get());
-    made->multiDrawIndirect_ = features.multiDrawIndirect;
-    made->drawIndirectCount_ = features.drawIndirectCount;
     made->features_ = features;
     made->resolve_ = resolve;
     if (auto opened = made->open(desc); !opened) {
@@ -274,14 +298,14 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       renderSlots_(desc.maxCommandLists),
       renders_(desc.maxCommandLists),
       submissions_(queueCount(desc)),
-      buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
-      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      buffers_("buffers", desc.maxBuffers, desc.maxBuffers, rhi.logger()),
+      textures_("textures", desc.maxTextures, desc.maxTextures, rhi.logger()),
       samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
       timestampPools_("timestamp pools", desc.maxTimestampPools, desc.maxTimestampPools, rhi.logger()),
       sparseMemories_("sparse memories", desc.maxSparseMemories, desc.maxSparseMemories, rhi.logger()),
-      pipelineCaches_("pipeline caches", kBufferCapacity, kBufferLimit, rhi.logger()),
+      pipelineCaches_("pipeline caches", desc.maxPipelineCaches, desc.maxPipelineCaches, rhi.logger()),
       bindless_(desc),
-      pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {}
+      pipelines_("pipelines", desc.maxPipelines, desc.maxPipelines, rhi.logger()) {}
 
 core::Result<void> D3D12Device::open(const DeviceDesc& desc) {
     const auto open = [this, &desc](QueueType type, D3D12_COMMAND_LIST_TYPE listType,
@@ -533,11 +557,6 @@ core::Result<SwapchainHandle> D3D12Device::createSwapchain(const core::window::N
     if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Only direct queues present (Godot's rendering_device_driver_d3d12.cpp, command_queue_family_get).
-    if (queues_[desc.queue]->listType != D3D12_COMMAND_LIST_TYPE_DIRECT) {
-        return core::failure(core::ErrorCode::RhiPresentUnsupported,
-                             "queue {} is not a graphics queue, and only those present on D3D12", desc.queue);
-    }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, ComPtr<IDXGIFactory2>{instance_->factory()},
                                                           queues_[desc.queue]->queue, window, desc,
                                                           instance_->logger());
@@ -659,13 +678,7 @@ core::Result<CommandPoolHandle> D3D12Device::createCommandPool(const CommandPool
         }
     }
     const CommandPoolHandle commandPool = commandPools_.emplace(
-        D3D12CommandPool{.queue = desc.queue,
-                         .pushConstantUpdates = desc.pushConstantUpdates,
-                         .pushed = 0,
-                         .first = *first,
-                         .next = *first,
-                         .recording = 0,
-                         .lastSubmit = 0});
+        D3D12CommandPool{.queue = desc.queue, .first = *first, .next = *first, .recording = 0, .lastSubmit = 0});
     if (commandPool.isNull()) {
         release();
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
@@ -691,7 +704,6 @@ core::Result<void> D3D12Device::resetCommandPool(CommandPoolHandle commandPool) 
         }
     }
     (*pool)->next = (*pool)->first;
-    (*pool)->pushed = 0;
     return {};
 }
 
@@ -818,8 +830,6 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
     // begins, as the store's are as it ends.
     std::array<D3D12Target, kMaxColorTargets + 1> unloaded{};
     std::uint32_t unloadedCount = 0;
-    std::uint32_t width = 0;
-    std::uint32_t height = 0;
     D3D12Swapchain* chain = nullptr;
     for (std::uint32_t i = 0; i < desc.colorAttachmentCount; ++i) {
         const ColorAttachment& attachment = desc.colorAttachments.at(i);
@@ -842,9 +852,6 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
             if (attachment.texture.isNull()) {
                 target.resource = image;
                 colors.at(i) = chain->view();
-                const D3D12_RESOURCE_DESC imageDesc = image->GetDesc();
-                width = static_cast<std::uint32_t>(imageDesc.Width);
-                height = imageDesc.Height;
             }
             else {
                 resolveTarget = image;
@@ -856,22 +863,31 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
             if (!texture) {
                 return std::unexpected(std::move(texture.error()));
             }
-            target = targetOf(**texture);
-            colors.at(i) = (*texture)->target;
-            width = (*texture)->desc.width;
-            height = (*texture)->desc.height;
+            target = targetOf(**texture, attachment.mipLevel, attachment.layer, attachment.layerCount);
+            colors.at(i) = targetAt(**texture, attachment.mipLevel, attachment.layer, false);
+            if (colors.at(i).ptr == 0) {
+                return core::failure(core::ErrorCode::RhiInvalidCall, "the texture has no level {} or no layer {}",
+                                     attachment.mipLevel, attachment.layer);
+            }
             format = (*texture)->desc.format;
+            std::uint32_t resolveMips = 1;
             if (!attachment.resolveTexture.isNull()) {
                 auto resolved = textureFor(attachment.resolveTexture);
                 if (!resolved) {
                     return std::unexpected(std::move(resolved.error()));
                 }
                 resolveTarget = (*resolved)->resource.Get();
+                resolveMips = (*resolved)->mipLevels;
             }
             if (resolveTarget != nullptr) {
                 resolves.at(resolveCount++) = {.source = (*texture)->resource.Get(),
                                                .target = resolveTarget,
-                                               .format = (*texture)->dxgi};
+                                               .format = (*texture)->dxgi,
+                                               .sourceMip = attachment.mipLevel,
+                                               .sourceLayer = attachment.layer,
+                                               .sourceMips = (*texture)->mipLevels,
+                                               .targetMips = resolveMips,
+                                               .layers = attachment.layerCount};
             }
         }
         // D3D12 clears with floats, which hold every value clearColor does
@@ -894,14 +910,18 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
     }
     const DepthStencilAttachment& depthStencil = desc.depthStencil;
     const D3D12Texture* depth = nullptr;
+    D3D12_CPU_DESCRIPTOR_HANDLE depthView{};
     if (!depthStencil.texture.isNull()) {
         auto texture = textureFor(depthStencil.texture);
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
         depth = *texture;
-        width = depth->desc.width;
-        height = depth->desc.height;
+        depthView = targetAt(*depth, depthStencil.mipLevel, depthStencil.layer, depthStencil.readOnly);
+        if (depthView.ptr == 0) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "the texture has no level {} or no layer {}",
+                                 depthStencil.mipLevel, depthStencil.layer);
+        }
         // ResolveCaps has no mode, so only None passes, which resolves
         // nothing.
         if (!depthStencil.resolveTexture.isNull()) {
@@ -913,12 +933,14 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
             }
         }
         // The aspects an op drops, of those the format has, as one target.
-        const D3D12Target notLoaded = aspectsOf(*depth, depthStencil.depthLoadOp == LoadOp::DontCare,
+        const D3D12Target covered = targetOf(*depth, depthStencil.mipLevel, depthStencil.layer,
+                                             depthStencil.layerCount);
+        const D3D12Target notLoaded = aspectsOf(*depth, covered, depthStencil.depthLoadOp == LoadOp::DontCare,
                                                 depthStencil.stencilLoadOp == LoadOp::DontCare);
         if (notLoaded.planeCount != 0) {
             unloaded.at(unloadedCount++) = notLoaded;
         }
-        const D3D12Target notStored = aspectsOf(*depth, depthStencil.depthStoreOp == StoreOp::DontCare,
+        const D3D12Target notStored = aspectsOf(*depth, covered, depthStencil.depthStoreOp == StoreOp::DontCare,
                                                 depthStencil.stencilStoreOp == StoreOp::DontCare);
         if (notStored.planeCount != 0) {
             discards.at(discardCount++) = notStored;
@@ -951,11 +973,8 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
     for (std::uint32_t i = 0; i < unloadedCount; ++i) {
         discardTarget(recording, unloaded.at(i));
     }
-    const D3D12_CPU_DESCRIPTOR_HANDLE* depthView = nullptr;
-    if (depth != nullptr) {
-        depthView = depthStencil.readOnly ? &depth->readOnlyTarget : &depth->target;
-    }
-    recording->OMSetRenderTargets(desc.colorAttachmentCount, colors.data(), FALSE, depthView);
+    recording->OMSetRenderTargets(desc.colorAttachmentCount, colors.data(), FALSE,
+                                  depth != nullptr ? &depthView : nullptr);
     for (std::uint32_t i = 0; i < desc.colorAttachmentCount; ++i) {
         if (desc.colorAttachments.at(i).loadOp == LoadOp::Clear) {
             recording->ClearRenderTargetView(colors.at(i), clears.at(i).data(), 0, nullptr);
@@ -971,8 +990,9 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
             flags |= D3D12_CLEAR_FLAG_STENCIL;
         }
         if (flags != D3D12_CLEAR_FLAGS{}) {
-            recording->ClearDepthStencilView(depth->target, flags, depthStencil.clearDepth,
-                                             static_cast<UINT8>(depthStencil.clearStencil), 0, nullptr);
+            recording->ClearDepthStencilView(targetAt(*depth, depthStencil.mipLevel, depthStencil.layer, false), flags,
+                                             depthStencil.clearDepth, static_cast<UINT8>(depthStencil.clearStencil), 0,
+                                             nullptr);
         }
     }
     (*list)->presenting = chain != nullptr ? std::optional{swapchain} : std::nullopt;
@@ -985,17 +1005,7 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
     (*list)->resolvesIntoImage = resolvesIntoImage;
     (*list)->discards = discards;
     (*list)->discardCount = discardCount;
-    // The whole area, until the caller sets its own.
-    if (auto set = setViewport(commandList, {.x = 0,
-                                             .y = 0,
-                                             .width = static_cast<float>(width),
-                                             .height = static_cast<float>(height),
-                                             .minDepth = 0,
-                                             .maxDepth = 1});
-        !set) {
-        return set;
-    }
-    return setScissor(commandList, {.x = 0, .y = 0, .width = width, .height = height});
+    return {};
 }
 
 core::Result<void> D3D12Device::endRendering(CommandListHandle commandList) {
@@ -1142,7 +1152,7 @@ core::Result<void> D3D12Device::barrier(CommandListHandle commandList) {
 }
 
 core::Result<void> D3D12Device::textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                               TextureLayout before, TextureLayout after) {
+                                               TextureLayout before, TextureLayout after, const TextureRange& range) {
     if (auto checked = checkLayouts(before, after); !checked) {
         return checked;
     }
@@ -1159,7 +1169,8 @@ core::Result<void> D3D12Device::textureBarrier(CommandListHandle commandList, Te
         return std::unexpected(global.error());
     }
     // A texture barrier orders only the texture, so the full one goes with it.
-    // It moves every subresource; moving from UNDEFINED discards, which a
+    // It moves range in every plane; kRemaining is the count left from the
+    // first one named. Moving from UNDEFINED discards, which a
     // placed render target or depth texture needs before its first use.
     // From an undefined layout nothing was accessed, which D3D12 pairs with
     // no sync before.
@@ -1171,7 +1182,7 @@ core::Result<void> D3D12Device::textureBarrier(CommandListHandle commandList, Te
                                       .LayoutBefore = layoutFor(before),
                                       .LayoutAfter = layoutFor(after),
                                       .pResource = (*found)->resource.Get(),
-                                      .Subresources = kEverySubresource,
+                                      .Subresources = rangeOf(**found, range),
                                       .Flags = before == TextureLayout::Undefined ? D3D12_TEXTURE_BARRIER_FLAG_DISCARD
                                                                                   : D3D12_TEXTURE_BARRIER_FLAG_NONE};
     const std::array groups{

@@ -22,6 +22,7 @@ inline constexpr std::uint32_t kSamplerBinding = 3;
 inline constexpr std::uint32_t kAccelerationStructureBinding = 4;
 /// Only on a device with partitioned top structures.
 inline constexpr std::uint32_t kPartitionedTopBinding = 5;
+inline constexpr std::uint32_t kUniformBufferBinding = 6;
 
 /// The viewports, and scissors, a pipeline has and setViewport and setScissor
 /// set: one each, so the caps report that many.
@@ -51,7 +52,8 @@ public:
     [[nodiscard]] static core::Result<VulkanBindlessLayout> create(const VolkDeviceTable& table, VkDevice device,
                                                                    const DeviceDesc& desc,
                                                                    std::uint32_t pushConstantsSize,
-                                                                   bool accelerationStructures, bool partitionedTops);
+                                                                   bool accelerationStructures, bool partitionedTops,
+                                                                   bool uniformBuffers);
 
     VulkanBindlessLayout() = default;
     ~VulkanBindlessLayout();
@@ -65,6 +67,9 @@ public:
 
     /// Points slot of the storage buffer table at the whole of buffer.
     void writeStorageBuffer(std::uint32_t slot, VkBuffer buffer) const;
+    /// Writes buffer, whole, to slot of the uniform buffer table; a buffer
+    /// past VkPhysicalDeviceLimits::maxUniformBufferRange is passed as it is.
+    void writeUniformBuffer(std::uint32_t slot, VkBuffer buffer) const;
     /// Points slot of the texture table at view, read in layout.
     void writeSampledImage(std::uint32_t slot, VkImageView view, VkImageLayout layout) const;
     /// Points slot of the storage texture table at view, in layout GENERAL.
@@ -136,8 +141,8 @@ private:
     std::string entryPoint_;
 };
 
-/// A shader of code, which is SPIR-V. Fails with RhiInvalidCall when the
-/// code is not whole words, and RhiDeviceFailed when the API refuses it.
+/// A shader of code, which is SPIR-V. Fails with RhiDeviceFailed when the API
+/// refuses it.
 [[nodiscard]] core::Result<VulkanShader> createVulkanShader(const VolkDeviceTable& table, VkDevice device,
                                                             const ShaderCode& code);
 
@@ -156,8 +161,7 @@ private:
 
 /// A compute pipeline on layout as desc says, whose code is SPIR-V, looked
 /// for in cache and added to it, where cache is not VK_NULL_HANDLE. Fails with
-/// RhiInvalidCall when the code is not whole words, and RhiDeviceFailed when
-/// the API refuses the module or the pipeline.
+/// RhiDeviceFailed when the API refuses the module or the pipeline.
 [[nodiscard]] core::Result<VulkanPipeline> createVulkanComputePipeline(const VolkDeviceTable& table, VkDevice device,
                                                                        VkPipelineLayout layout, VkPipelineCache cache,
                                                                        const ComputePipelineDesc& desc);
@@ -165,9 +169,8 @@ private:
 /// A graphics pipeline on layout as desc says, whose code is SPIR-V, for
 /// dynamic rendering to desc's formats with a dynamic viewport, scissor,
 /// topology, blend constants and stencil reference, using cache as
-/// createVulkanComputePipeline does. Fails
-/// with RhiInvalidCall when code is not whole words, and RhiDeviceFailed when
-/// the API refuses a module or the pipeline.
+/// createVulkanComputePipeline does. Fails with RhiDeviceFailed when the API
+/// refuses a module or the pipeline.
 [[nodiscard]] core::Result<VulkanPipeline> createVulkanGraphicsPipeline(const VolkDeviceTable& table, VkDevice device,
                                                                         VkPipelineLayout layout, VkPipelineCache cache,
                                                                         bool dynamicTopology,

@@ -47,11 +47,6 @@ core::Result<void> VulkanDevice::setScissor(CommandListHandle commandList, const
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    // VkRect2D's offset is int32_t.
-    if (!std::in_range<std::int32_t>(scissor.x) || !std::in_range<std::int32_t>(scissor.y)) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "scissor offset {}, {} is past what Vulkan takes",
-                             scissor.x, scissor.y);
-    }
     const VkRect2D rect{.offset = {.x = static_cast<std::int32_t>(scissor.x),
                                    .y = static_cast<std::int32_t>(scissor.y)},
                         .extent = {.width = scissor.width, .height = scissor.height}};
@@ -123,16 +118,6 @@ core::Result<void> VulkanDevice::pushConstants(CommandListHandle commandList, st
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (auto checked = checkPushConstants(data, pushConstantsSize_); !checked) {
-        return checked;
-    }
-    VulkanCommandPool* pool = commandPools_.find((*list)->pool);
-    if (pool == nullptr) {
-        return core::failure(core::ErrorCode::RhiInvalidHandle, "the list's pool is gone");
-    }
-    if (auto counted = countPushConstants(pool->pushed, pool->pushConstantUpdates); !counted) {
-        return counted;
-    }
     table_.vkCmdPushConstants((*list)->buffer, layout_.pipelineLayout(), VK_SHADER_STAGE_ALL, 0,
                               static_cast<std::uint32_t>(data.size()), data.data());
     return {};
@@ -190,9 +175,6 @@ core::Result<void> VulkanDevice::dispatch(CommandListHandle commandList, std::ui
 
 core::Result<void> VulkanDevice::drawIndirect(CommandListHandle commandList, BufferHandle buffer, std::uint64_t offset,
                                               std::uint32_t drawCount, std::uint32_t stride) {
-    if (auto checked = checkDrawCount(drawCount, multiDrawIndirect_); !checked) {
-        return checked;
-    }
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
@@ -208,9 +190,6 @@ core::Result<void> VulkanDevice::drawIndirect(CommandListHandle commandList, Buf
 core::Result<void> VulkanDevice::drawIndexedIndirect(CommandListHandle commandList, BufferHandle buffer,
                                                      std::uint64_t offset, std::uint32_t drawCount,
                                                      std::uint32_t stride) {
-    if (auto checked = checkDrawCount(drawCount, multiDrawIndirect_); !checked) {
-        return checked;
-    }
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
@@ -227,9 +206,6 @@ core::Result<void> VulkanDevice::drawIndirectCount(CommandListHandle commandList
                                                    std::uint64_t offset, BufferHandle countBuffer,
                                                    std::uint64_t countOffset, std::uint32_t maxDrawCount,
                                                    std::uint32_t stride) {
-    if (auto checked = checkCountDraws(drawIndirectCount_); !checked) {
-        return checked;
-    }
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
@@ -251,9 +227,6 @@ core::Result<void> VulkanDevice::drawIndexedIndirectCount(CommandListHandle comm
                                                           std::uint64_t offset, BufferHandle countBuffer,
                                                           std::uint64_t countOffset, std::uint32_t maxDrawCount,
                                                           std::uint32_t stride) {
-    if (auto checked = checkCountDraws(drawIndirectCount_); !checked) {
-        return checked;
-    }
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
@@ -303,9 +276,6 @@ core::Result<void> VulkanDevice::drawMeshIndirect(CommandListHandle commandList,
     if (auto checked = checkMeshDraws(features_.meshShader); !checked) {
         return checked;
     }
-    if (auto checked = checkDrawCount(drawCount, multiDrawIndirect_); !checked) {
-        return checked;
-    }
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
@@ -323,9 +293,6 @@ core::Result<void> VulkanDevice::drawMeshIndirectCount(CommandListHandle command
                                                        std::uint64_t countOffset, std::uint32_t maxDrawCount,
                                                        std::uint32_t stride) {
     if (auto checked = checkMeshDraws(features_.meshShader); !checked) {
-        return checked;
-    }
-    if (auto checked = checkCountDraws(drawIndirectCount_); !checked) {
         return checked;
     }
     auto list = commandListFor(commandList);

@@ -34,10 +34,12 @@ version: {major: 0, minor: 1, patch: 0}
 constants:
   max_color_targets: {value: 8, doc: "The most color targets a graphics pipeline renders to. Fixed at D3D12's D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT so the descs hold fixed arrays; a Vulkan device may report more in max_color_attachments. Taking a span sized by that cap instead may be revisited."}
   mask_all: {value: 4294967295, doc: Every bit of a 32-bit mask set.}
-  no_slot: {value: 4294967295, doc: "A bindless slot a texture doesn't have, in a table its usage doesn't set; no table has a slot this high."}
+  no_slot: {value: 4294967295, doc: "A bindless slot a resource doesn't have, in a table its usage doesn't set; no table has a slot this high."}
   instance_index_limit: {value: 16777216, doc: "Instance custom indices and hit group offsets are below this: every backend's record holds them in 24 bits."}
   transform_floats: {value: 12, doc: The floats of a 3x4 row-major transform.}
   box_floats: {value: 6, doc: "The floats of a box: min xyz, then max xyz."}
+  remaining: {value: 4294967295, doc: "Every mip level, or every layer, from the first one a bfr_texture_range names."}
+  one_layer: {value: 1, doc: "The layers an attachment covers in the C++ wrapper unless it says otherwise; C passes layer_count as given."}
   cluster_geometry_flags_shift: {value: 29, doc: "The bit a cluster geometry word's bfr_cluster_geometry_flag bits start at; the geometry index is its low 24 bits."}
   cluster_vertex_count_shift: {value: 9, doc: "The bit a cluster record's counts word's vertices (9 bits) start at; its triangles are the low 9 bits."}
   acceleration_structure_capture_words: {value: 3, doc: The words of a bfr_acceleration_structure_capture.}
@@ -359,7 +361,7 @@ enums:
       poll: {value: 29}
       destroy_command_list: {value: 30}
       create_buffer: {value: 31}
-      buffer_slot: {value: 32}
+      buffer_slots: {value: 32}
       map_buffer: {value: 33}
       destroy_buffer: {value: 34}
       create_texture: {value: 35}
@@ -435,6 +437,7 @@ enums:
       cluster_sizes: {value: 105}
       build_clusters: {value: 106}
       capture_acceleration_structure: {value: 107}
+      run_garbage_collection: {value: 108}
 
   timestamp_stage:
     doc: >-
@@ -893,7 +896,7 @@ handles:
       A compute or graphics pipeline: shaders with the fixed state they run
       under. Every pipeline shares one resource layout, which its shaders
       declare as follows. Four unbounded tables, each indexed by the slot a
-      resource is given when it is created, which bfr_get_buffer_slot,
+      resource is given when it is created, which bfr_get_buffer_slots,
       bfr_get_texture_slots and bfr_get_sampler_slot report and which is the same number on every
       backend, and one block of the caps' max_push_constants_size bytes of push
       constants that every stage reads, set by bfr_push_constants. On Vulkan the tables are the
@@ -918,8 +921,10 @@ handles:
       or without the fifth, of partitioned top structures by their slots: on
       Vulkan binding 5, partitioned acceleration structures, which shaders
       declare as acceleration structures. D3D12 and Metal have neither
-      yet.
-      Uniform buffers have no table: not every backend's minimum has them. A
+      yet. Where bfr_caps_bindless.max_uniform_buffers is not 0 there is a
+      uniform buffer table, by the uniform slot bfr_get_buffer_slots reports:
+      on Vulkan binding 6, uniform buffers, as the others are, each the whole
+      buffer. D3D12 and Metal have none yet. A
       pipeline's shaders are bytecode for the backend the device runs on.
 
   sampler:
@@ -1128,6 +1133,9 @@ structs:
       - name: max_bindless_samplers
         type: u32
         doc: Slots in the sampler table, passed as max_bindless_textures is; bfr_caps_bindless.max_samplers says how many the adapter holds.
+      - name: max_bindless_uniform_buffers
+        type: u32
+        doc: Slots in the uniform buffer table, passed as max_bindless_textures is. Where bfr_caps_bindless.max_uniform_buffers is 0 the adapter has no such table, and more than 0 fails with error_limit_reached.
       - name: max_timestamp_pools
         type: u32
         doc: Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool fails with error_limit_reached.
@@ -1164,6 +1172,24 @@ structs:
       - name: max_acceleration_structure_property_pools
         type: u32
         doc: "Property pools the device holds at once, 0 for none; past it, bfr_create_acceleration_structure_property_pool fails with error_limit_reached."
+      - name: max_buffers
+        type: u32
+        doc: "Buffers the device holds at once, 0 for none; past it, bfr_create_buffer fails with error_limit_reached."
+      - name: max_textures
+        type: u32
+        doc: "Textures the device holds at once, 0 for none; past it, bfr_create_texture fails with error_limit_reached."
+      - name: max_shaders
+        type: u32
+        doc: "Shaders the device holds at once, 0 for none; past it, bfr_create_shader fails with error_limit_reached."
+      - name: max_pipelines
+        type: u32
+        doc: "Pipelines the device holds at once, 0 for none; past it, bfr_create_compute_pipeline, bfr_create_graphics_pipeline and bfr_create_ray_tracing_pipeline fails with error_limit_reached."
+      - name: max_pipeline_caches
+        type: u32
+        doc: "Pipeline caches the device holds at once, 0 for none; past it, bfr_create_pipeline_cache fails with error_limit_reached."
+      - name: max_acceleration_structures
+        type: u32
+        doc: "Acceleration structures the device holds at once, 0 for none; past it, bfr_create_acceleration_structure fails with error_limit_reached."
       - name: indirect_strides
         type: u32
         array: indirect_stride_count
@@ -1184,8 +1210,7 @@ structs:
         type: u32
         doc: >-
           The device's queue that presents its images; one the device lacks fails with
-          error_invalid_argument. Fails with error_present_unsupported when it
-          can't present to the window.
+          error_invalid_argument.
       - name: image_count
         type: u32
         doc: >-
@@ -1233,12 +1258,22 @@ structs:
       swapchain's format, which is then resolved into the acquired image.
     members:
       - {name: texture, type: texture, doc: Null for the swapchain's image.}
+      - {name: mip_level, type: u32, doc: The mip level drawn to.}
+      - {name: layer, type: u32, doc: "The first layer drawn to; a cube's faces are its layers, and a 3D texture's depth slices are where bfr_caps_features.volume_color_targets."}
+      - name: layer_count
+        type: u32
+        default: one_layer
+        doc: >-
+          The layers drawn to from layer. Vulkan and Metal draw one count of
+          layers in a rendering: the depth-stencil attachment's where there is
+          one, else color attachment 0's. On Vulkan each level and layer of a
+          texture with an attachment usage is a view made with it.
       - {name: load_op, type: load_op, doc: What it holds at the start; 0 is load.}
       - {name: store_op, type: store_op, doc: What becomes of it at the end; 0 is store.}
       - {name: clear_color, type: f32, fixed: 4, doc: "Red, green, blue and alpha, 0 to 1, when load_op is clear."}
       - {name: clear_integer, type: bool, doc: "The target holds integers: clear_color_integer applies instead. D3D12 clears with floats, so there a value a 32-bit float does not hold exactly fails with BFR_RESULT_ERROR_INVALID_ARGUMENT."}
       - {name: clear_color_integer, type: u32, fixed: 4, doc: "Red, green, blue and alpha bits, when load_op is clear; a signed format reads them as int32."}
-      - {name: resolve_texture, type: texture, doc: "A single-sample texture of texture's format and size, with color_attachment usage, in layout color_target, that texture's samples are resolved into as rendering ends; null for none, and null for the attachment the swapchain's image is resolved into. Non-integer formats average and integer ones take sample zero, as the backend resolves; bfr_format_caps.resolve says which formats resolve."}
+      - {name: resolve_texture, type: texture, doc: "A single-sample texture of texture's format and size, with color_attachment usage, in layout color_target, that texture's samples are resolved into as rendering ends; null for none, and null for the attachment the swapchain's image is resolved into. Non-integer formats average and integer ones take sample zero, as the backend resolves; bfr_format_caps.resolve says which formats resolve. It is resolved into at its mip level 0, from layer 0."}
 
   depth_stencil_attachment:
     doc: >-
@@ -1248,6 +1283,9 @@ structs:
       of an aspect the format lacks is ignored.
     members:
       - {name: texture, type: texture, doc: Null for no depth-stencil target.}
+      - {name: mip_level, type: u32, doc: The mip level drawn to.}
+      - {name: layer, type: u32, doc: The first layer drawn to.}
+      - {name: layer_count, type: u32, default: one_layer, doc: "The layers drawn to from layer, as bfr_color_attachment's are."}
       - {name: depth_load_op, type: load_op, doc: 0 is load.}
       - {name: depth_store_op, type: store_op, doc: 0 is store.}
       - {name: stencil_load_op, type: load_op, doc: 0 is load.}
@@ -1255,7 +1293,7 @@ structs:
       - {name: clear_depth, type: f32, doc: "0 to 1, when depth_load_op is clear."}
       - {name: clear_stencil, type: u32, doc: When stencil_load_op is clear. The low 8 bits count.}
       - {name: read_only, type: bool, doc: "The rendering tests depth and stencil but never writes them, and shaders may sample the texture meanwhile; every op is then load and store. The pipelines drawn with write neither depth nor stencil."}
-      - {name: resolve_texture, type: texture, doc: "A single-sample texture of texture's format and size, with depth_stencil usage, in layout depth_stencil_target, that the samples are resolved into as rendering ends, by depth_resolve and stencil_resolve; null for none."}
+      - {name: resolve_texture, type: texture, doc: "A single-sample texture of texture's format and size, with depth_stencil usage, in layout depth_stencil_target, that the samples are resolved into as rendering ends, by depth_resolve and stencil_resolve, at its mip level 0, from layer 0; null for none."}
       - {name: depth_resolve, type: resolve_mode, doc: 0 is none.}
       - {name: stencil_resolve, type: resolve_mode, doc: 0 is none.}
 
@@ -1306,15 +1344,14 @@ structs:
         type: u32
         doc: >-
           Most bfr_push_constants calls the pool's lists record between resets, which a backend
-          that copies push constants into memory makes room for with the pool; 0 is none.
-          Every backend counts them alike.
+          that copies push constants into memory (Metal) makes room for with the pool; 0 is none.
 
   buffer_usage:
     doc: What the GPU does with a buffer. Set every use it will have.
     members:
       - {name: copy_src, type: bool}
       - {name: copy_dst, type: bool}
-      - {name: uniform, type: bool, doc: Shaders read it as constants.}
+      - {name: uniform, type: bool, doc: "Shaders read it as constants, through its slot in the uniform buffer table. The table views the whole buffer, so its size is at most bfr_caps_limits.max_uniform_buffer_range."}
       - {name: storage, type: bool, doc: "Shaders read and write it. D3D12 views it in 32-bit values, so there its size must be a multiple of 4."}
       - {name: index, type: bool, doc: Indexed draws read it.}
       - {name: indirect, type: bool, doc: "Indirect draws, dispatches and traces read their arguments from it."}
@@ -1457,6 +1494,15 @@ structs:
       - {name: total_ns, type: u64}
       - {name: max_ns, type: u64}
 
+  buffer_slots:
+    doc: >-
+      Where a buffer is in the bindless tables bfr_pipeline states, from
+      creation to destruction: the index shaders use. A table the buffer's
+      usage does not set has no slot for it, and reads BFR_NO_SLOT.
+    members:
+      - {name: storage, type: u32, doc: Its index in the storage buffer table; only with storage usage.}
+      - {name: uniform, type: u32, doc: Its index in the uniform buffer table; only with uniform usage.}
+
   texture_slots:
     doc: >-
       Where a texture is in the bindless tables bfr_pipeline states, from
@@ -1465,6 +1511,18 @@ structs:
     members:
       - {name: sampled, type: u32, doc: Its index in the texture table; only with sampled usage.}
       - {name: storage, type: u32, doc: Its index in the storage texture table; only with storage usage.}
+
+  texture_range:
+    doc: >-
+      The mip levels and layers of a texture a barrier moves: mip_count levels
+      from mip_level, and layer_count layers from layer, in every plane.
+      Counts pass through as given; 0 is no count Vulkan takes. A 3D texture
+      has one layer, so a barrier moves every depth slice of its levels.
+    members:
+      - {name: mip_level, type: u32}
+      - {name: mip_count, type: u32, default: remaining}
+      - {name: layer, type: u32}
+      - {name: layer_count, type: u32, default: remaining}
 
   buffer_texture_copy:
     doc: >-
@@ -2183,10 +2241,8 @@ structs:
       cluster_template_alignment for templates and cluster_bottom_alignment
       for bottom structures. addresses holds 8-byte addresses address_stride
       bytes apart, at least 8, and has storage usage; sizes holds 4-byte
-      sizes size_stride bytes apart, at least 4. Every buffer here has a
-      usage bfr_get_buffer_address gives an address for, and each of
-      addresses, sizes and records is read or written within its buffer,
-      from its offset. Scratch is scratch_offset bytes into scratch, which has
+      sizes size_stride bytes apart, at least 4. Each of addresses, sizes and
+      records is read or written within its buffer, from its offset. Scratch is scratch_offset bytes into scratch, which has
       acceleration_structure_scratch usage, at least the size query's
       build_scratch bytes, a multiple of
       bfr_caps_ray_tracing.cluster_scratch_alignment, and overlaps no
@@ -2689,6 +2745,9 @@ structs:
       - {name: sampler_custom_border_color, type: bool, doc: "A border colour other than (0,0,0,0), (0,0,0,1) and (1,1,1,1)."}
       - {name: sampler_integer_border_color, type: bool, doc: A border colour for textures that hold integers.}
       - {name: sampler_unnormalized_coordinates, type: bool}
+      - name: volume_color_targets
+        type: bool
+        doc: A 3D texture with color_attachment usage is drawn to by depth slice, which a bfr_color_attachment's layer and layer_count name. Not for a sparse one on Vulkan.
       - {name: sampler_lod_bias, type: bool, doc: A lod_bias other than 0.}
       - {name: sampler_lod_average, type: bool}
       - {name: compression_bc, type: bool}
@@ -2711,6 +2770,9 @@ structs:
       - name: storage_texture_non_uniform_indexing
         type: bool
         doc: A storage texture table indexed by a value that differs within a shader's invocation group.
+      - name: uniform_buffer_non_uniform_indexing
+        type: bool
+        doc: The uniform buffer table indexed by a value that differs within a shader's invocation group.
       - {name: timestamps_on_all_queues, type: bool, doc: Every graphics and compute queue writes timestamps.}
       - {name: pipeline_statistics, type: bool}
       - {name: occlusion_query_precise, type: bool}
@@ -3054,9 +3116,8 @@ functions:
 
   create_device:
     doc: >-
-      Opens an adapter with the queues desc asks for. With a window in desc,
-      fails with error_present_unsupported unless one of them can present to
-      it.
+      Opens an adapter with the queues desc asks for, preferring queue
+      families that present to the window in desc, if any.
     returns: result
     params:
       - {name: instance, type: instance}
@@ -3178,8 +3239,7 @@ functions:
     doc: >-
       Begins rendering to desc's attachments, with the image bfr_acquire took
       from swapchain as color attachment 0 when swapchain is not null, or as
-      the image attachment 0's texture resolves into when it names one. Sets
-      the viewport and scissor to the whole of the attachments. Only the
+      the image attachment 0's texture resolves into when it names one. Only the
       draws, direct and indirect, and the state they take, are recorded until
       bfr_end_rendering, which resolves the attachments that name a resolve
       texture. Fails with error_invalid_argument when no attachment is given,
@@ -3280,8 +3340,9 @@ functions:
       Sets the first size bytes of the push constants every shader reads, as
       bfr_pipeline states, for the draws and dispatches after it. size is at
       most the caps' max_push_constants_size, which the layout BFR makes
-      holds, else error_invalid_argument. Fails with error_limit_reached past the pool's
-      push_constant_updates.
+      holds. On Metal, which copies the bytes into the pool's ring, fails
+      with error_invalid_argument past that size and error_limit_reached past
+      the pool's push_constant_updates.
     returns: result
     params:
       - {name: device, type: device}
@@ -3354,7 +3415,7 @@ functions:
       bfr_draw_indirect_args buffer holds from offset, stride bytes apart.
       buffer has indirect usage; work that wrote the arguments is ordered
       before by a bfr_barrier. Fails with error_unsupported for draw_count
-      above 1 where bfr_caps_features.multi_draw_indirect is false and, on
+      above 1 on Metal, whose indirect draw has no count, and, on
       D3D12, a stride not in the device's indirect_strides; and as bfr_draw
       does.
     returns: result
@@ -3385,8 +3446,8 @@ functions:
       Records bfr_draw_indirect's draws, as many as the 32-bit count
       count_buffer holds at count_offset when the GPU runs it, at most
       max_draw_count. count_buffer has indirect usage. Fails with
-      error_unsupported where bfr_caps_features.draw_indirect_count is false,
-      and as bfr_draw_indirect does.
+      error_unsupported on Metal, which has none, and as bfr_draw_indirect
+      does.
     returns: result
     params:
       - {name: device, type: device}
@@ -3496,9 +3557,9 @@ functions:
 
   texture_barrier:
     doc: >-
-      Records a barrier, as bfr_barrier does, that also moves every layer and
-      mip level of texture from layout before to layout after. Outside
-      rendering.
+      Records a barrier, as bfr_barrier does, that also moves range's mip
+      levels and layers of texture from layout before to layout after; the
+      rest stay as they are. Outside rendering.
     returns: result
     params:
       - {name: device, type: device}
@@ -3506,6 +3567,7 @@ functions:
       - {name: texture, type: texture}
       - {name: before, type: texture_layout}
       - {name: after, type: texture_layout}
+      - {name: range, type: texture_range, pointer: in}
 
   copy_buffer_to_texture:
     doc: >-
@@ -3606,6 +3668,16 @@ functions:
       - {name: token, type: token, pointer: in}
       - {name: complete, type: bool, pointer: out}
 
+  run_garbage_collection:
+    doc: >-
+      Frees the objects destroy calls retired whose submits the GPU has passed,
+      and gives their slots back to the tables, as each create call also does
+      first. Not for the frame path: it frees memory. Fails with
+      error_device_failed when the backend cannot say what the GPU has passed.
+    returns: result
+    params:
+      - {name: device, type: device}
+
   destroy_command_list:
     doc: >-
       Discards a command list that was not submitted; the pool hands it out
@@ -3641,16 +3713,16 @@ functions:
       - {name: buffer, type: buffer}
       - {name: data, type: opaque, pointer: out}
 
-  get_buffer_slot:
+  get_buffer_slots:
     doc: >-
-      Writes the buffer's index in the storage buffer table bfr_pipeline
-      states, held from creation to destruction. Fails with
-      error_invalid_argument when the buffer has no storage usage.
+      Writes the buffer's indices in the storage and uniform buffer tables
+      bfr_pipeline states, held from creation to destruction; BFR_NO_SLOT in a
+      table its usage does not set.
     returns: result
     params:
       - {name: device, type: device}
       - {name: buffer, type: buffer}
-      - {name: slot, type: u32, pointer: out}
+      - {name: slots, type: buffer_slots, pointer: out}
 
   destroy_buffer:
     doc: >-
@@ -4255,8 +4327,9 @@ functions:
     doc: >-
       Writes count groups' identifiers from first,
       bfr_caps_ray_tracing.identifier_size bytes each, into data, for binding
-      table records. Fails with error_invalid_argument when size is too
-      small.
+      table records. Fails with error_unsupported where
+      bfr_caps_features.ray_tracing_pipeline is false, and
+      error_invalid_argument when size is too small.
     returns: result
     params:
       - {name: device, type: device}
@@ -4315,11 +4388,9 @@ functions:
   get_buffer_address:
     doc: >-
       Writes the buffer's GPU address, for the addresses
-      bfr_trace_rays_indirect_args, cluster records and shaders read. The
-      buffer has indirect, shader_binding_table, acceleration_structure_input,
-      acceleration_structure_data or acceleration_structure_storage usage. Fails with
-      error_unsupported where bfr_caps_features.buffer_address is false, and
-      error_invalid_argument for a buffer of none of those usages.
+      bfr_trace_rays_indirect_args, cluster records and shaders read; every
+      buffer has one where bfr_caps_features.buffer_address. Fails with
+      error_unsupported where it is false.
     returns: result
     params:
       - {name: device, type: device}
@@ -4467,7 +4538,9 @@ functions:
     doc: >-
       Writes the bytes of stack one shader of group takes, for
       bfr_ray_tracing_pipeline_desc.stack_size. The group has that shader.
-      Fails with error_invalid_argument for a pipeline that is not a ray
+      Fails with error_unsupported where
+      bfr_caps_features.ray_tracing_pipeline is false, and
+      error_invalid_argument for a pipeline that is not a ray
       tracing one or an enum value BFR doesn't have.
     returns: result
     params:

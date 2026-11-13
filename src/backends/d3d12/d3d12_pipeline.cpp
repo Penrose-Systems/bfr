@@ -433,7 +433,7 @@ core::Result<D3D12Pipeline*> D3D12Device::pipelineFor(PipelineHandle pipeline) {
 
 core::Result<PipelineHandle> D3D12Device::createComputePipeline(const ComputePipelineDesc& desc) {
     // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectBuffers();
+    collectRetired();
     auto library = pipelineLibraryFor(desc.cache);
     if (!library) {
         return std::unexpected(std::move(library.error()));
@@ -444,7 +444,8 @@ core::Result<PipelineHandle> D3D12Device::createComputePipeline(const ComputePip
     }
     const PipelineHandle pipeline = pipelines_.emplace(std::move(*made));
     if (pipeline.isNull()) {
-        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines", kBufferLimit);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines",
+                             desc_.maxPipelines);
     }
     return pipeline;
 }
@@ -461,7 +462,7 @@ core::Result<PipelineHandle> D3D12Device::createGraphicsPipeline(const GraphicsP
     }
     // Features::meshShader and taskShader are false until BFR has D3D12
     // mesh pipelines, so checkMeshStages refuses every mesh desc.
-    collectBuffers();
+    collectRetired();
     auto library = pipelineLibraryFor(desc.cache);
     if (!library) {
         return std::unexpected(std::move(library.error()));
@@ -472,7 +473,8 @@ core::Result<PipelineHandle> D3D12Device::createGraphicsPipeline(const GraphicsP
     }
     const PipelineHandle pipeline = pipelines_.emplace(std::move(*made));
     if (pipeline.isNull()) {
-        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines", kBufferLimit);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipelines",
+                             desc_.maxPipelines);
     }
     return pipeline;
 }
@@ -490,7 +492,7 @@ core::Result<void> D3D12Device::destroyPipeline(PipelineHandle pipeline) {
     if (!pipelines_.retire(pipeline, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 

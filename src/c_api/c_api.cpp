@@ -7,6 +7,7 @@
 #include "bfr/core/window.h"
 #include "bfr/rhi/acceleration_structure.h"
 #include "bfr/rhi/buffer.h"
+#include "bfr/rhi/call_timing.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
@@ -38,6 +39,19 @@
 #include <utility>
 #include <variant>
 #include <vector>
+
+// The caller's message callback and its user_data, which the Instance's
+// Logger points at, so they live as long as it does.
+struct CMessages {
+    bfr_message_callback callback = nullptr;
+    void* userData = nullptr;
+};
+
+// An Instance and the CMessages its Logger reads, which outlive it.
+struct InstanceHolder {
+    CMessages messages;
+    std::unique_ptr<bfr::rhi::Instance> instance;
+};
 
 // Shares the Instance with its devices, which keep it alive: garbage-collected
 // wrappers destroy them in no fixed order.
@@ -549,7 +563,8 @@ static_assert(static_cast<int>(bfr::rhi::Call::WriteMotionInstances) == BFR_CALL
 static_assert(static_cast<int>(bfr::rhi::Call::BuildClusters) == BFR_CALL_BUILD_CLUSTERS);
 static_assert(static_cast<int>(bfr::rhi::Call::CaptureAccelerationStructure) ==
               BFR_CALL_CAPTURE_ACCELERATION_STRUCTURE);
-static_assert(bfr::rhi::kCallCount == BFR_CALL_CAPTURE_ACCELERATION_STRUCTURE + 1);
+static_assert(static_cast<int>(bfr::rhi::Call::RunGarbageCollection) == BFR_CALL_RUN_GARBAGE_COLLECTION);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_RUN_GARBAGE_COLLECTION + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
     return {.bits = handle.bits};
@@ -1118,6 +1133,9 @@ std::optional<bfr::rhi::RenderingDesc> renderingIn(const bfr_rendering_desc& des
             return std::nullopt;
         }
         rendering.colorAttachments.at(i) = {.texture = fromC(attachment.texture),
+                                            .mipLevel = attachment.mip_level,
+                                            .layer = attachment.layer,
+                                            .layerCount = attachment.layer_count,
                                             .loadOp = *loadOp,
                                             .storeOp = *storeOp,
                                             .clearColor = std::to_array(attachment.clear_color),
@@ -1136,6 +1154,9 @@ std::optional<bfr::rhi::RenderingDesc> renderingIn(const bfr_rendering_desc& des
         return std::nullopt;
     }
     rendering.depthStencil = {.texture = fromC(depth.texture),
+                              .mipLevel = depth.mip_level,
+                              .layer = depth.layer,
+                              .layerCount = depth.layer_count,
                               .depthLoadOp = *depthLoad,
                               .depthStoreOp = *depthStore,
                               .stencilLoadOp = *stencilLoad,
@@ -1186,7 +1207,6 @@ std::optional<NativeWindow> windowIn(const bfr_window& window, bfr::core::Messag
     return bfr::core::window::Metal{.layer = window.window};
 #else
     // An X11 Window is an XID, carried in the pointer.
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     const auto xid = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(window.window));
     return bfr::core::window::Xlib{.display = window.display, .window = xid};
 #endif
@@ -1504,6 +1524,7 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .sampler_custom_border_color = toC(features.samplerCustomBorderColor),
         .sampler_integer_border_color = toC(features.samplerIntegerBorderColor),
         .sampler_unnormalized_coordinates = toC(features.samplerUnnormalizedCoordinates),
+        .volume_color_targets = toC(features.volumeColorTargets),
         .sampler_lod_bias = toC(features.samplerLodBias),
         .sampler_lod_average = toC(features.samplerLodAverage),
         .compression_bc = toC(features.compressionBc),
@@ -1524,6 +1545,7 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .storage_read_without_format = toC(features.storageReadWithoutFormat),
         .storage_write_without_format = toC(features.storageWriteWithoutFormat),
         .storage_texture_non_uniform_indexing = toC(features.storageTextureNonUniformIndexing),
+        .uniform_buffer_non_uniform_indexing = toC(features.uniformBufferNonUniformIndexing),
         .timestamps_on_all_queues = toC(features.timestampsOnAllQueues),
         .pipeline_statistics = toC(features.pipelineStatistics),
         .occlusion_query_precise = toC(features.occlusionQueryPrecise),
@@ -1806,6 +1828,7 @@ bfr_result bfr_create_instance(const bfr_instance_desc* desc, bfr_instance** ins
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT,
                         "application_name or engine_name is null but its length is not 0");
         }
+        auto holder = std::make_shared<InstanceHolder>();
         bfr::rhi::InstanceDesc rhiDesc{.backend = *backend,
                                        .apiMajor = desc->api_major,
                                        .apiMinor = desc->api_minor,
@@ -1821,20 +1844,26 @@ bfr_result bfr_create_instance(const bfr_instance_desc* desc, bfr_instance** ins
                 return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "min_severity {} is not a severity",
                             static_cast<std::int64_t>(desc->min_severity));
             }
-            rhiDesc.logger = {[callback = desc->message_callback,
-                               userData = desc->message_user_data](Severity severity, std::string_view message) {
-                                  callback(static_cast<bfr_message_severity>(severity),
-                                           {.data = message.data(), .length = message.size()}, userData);
+            holder->messages = {.callback = desc->message_callback, .userData = desc->message_user_data};
+            rhiDesc.logger = {[](Severity severity, std::string_view message, void* userData) {
+                                  const auto& messages = *static_cast<const CMessages*>(userData);
+                                  messages.callback(static_cast<bfr_message_severity>(severity),
+                                                    {.data = message.data(), .length = message.size()},
+                                                    messages.userData);
                               },
-                              *least};
+                              &holder->messages, *least};
         }
         auto rhi = bfr::rhi::Instance::create(rhiDesc,
                                               bfr::rhi::RhiConfig{.validation = desc->validation != BFR_FALSE});
         if (!rhi) {
             return fail(rhi.error());
         }
-        // The caller owns it until bfr_destroy_instance.
-        *instance = std::make_unique<bfr_instance>(bfr_instance{.instance = std::move(*rhi), .backend = desc->backend})
+        holder->instance = std::move(*rhi);
+        // The caller owns it until bfr_destroy_instance; the shared pointer
+        // keeps the whole holder, CMessages too, while it or a device lives.
+        std::shared_ptr<bfr::rhi::Instance> shared{holder, holder->instance.get()};
+        *instance = std::make_unique<bfr_instance>(
+                        bfr_instance{.instance = std::move(shared), .backend = desc->backend})
                         .release();
         return BFR_RESULT_SUCCESS;
     });
@@ -1908,6 +1937,7 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
              .maxBindlessStorageTextures = desc->max_bindless_storage_textures,
              .maxBindlessStorageBuffers = desc->max_bindless_storage_buffers,
              .maxBindlessSamplers = desc->max_bindless_samplers,
+             .maxBindlessUniformBuffers = desc->max_bindless_uniform_buffers,
              .maxTimestampPools = desc->max_timestamp_pools,
              .maxSparseMemories = desc->max_sparse_memories,
              .maxTileMappings = desc->max_tile_mappings,
@@ -1915,6 +1945,12 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
              .maxBindlessPartitionedTops = desc->max_bindless_partitioned_tops,
              .maxBuildGeometries = desc->max_build_geometries,
              .maxAccelerationStructurePropertyPools = desc->max_acceleration_structure_property_pools,
+             .maxBuffers = desc->max_buffers,
+             .maxTextures = desc->max_textures,
+             .maxShaders = desc->max_shaders,
+             .maxPipelines = desc->max_pipelines,
+             .maxPipelineCaches = desc->max_pipeline_caches,
+             .maxAccelerationStructures = desc->max_acceleration_structures,
              .indirectStrides = {desc->indirect_strides, desc->indirect_stride_count}});
         if (!created) {
             return fail(created.error());
@@ -2375,10 +2411,10 @@ bfr_result bfr_barrier(bfr_device* device, bfr_command_list command_list) {
 }
 
 bfr_result bfr_texture_barrier(bfr_device* device, bfr_command_list command_list, bfr_texture texture,
-                               bfr_texture_layout before, bfr_texture_layout after) {
+                               bfr_texture_layout before, bfr_texture_layout after, const bfr_texture_range* range) {
     return guarded([&] {
-        if (device == nullptr) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        if (device == nullptr || range == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and range must not be null");
         }
         for (const bfr_texture_layout layout : {before, after}) {
             if (layout < BFR_TEXTURE_LAYOUT_UNDEFINED || layout > BFR_TEXTURE_LAYOUT_RESOLVE_DST) {
@@ -2388,7 +2424,11 @@ bfr_result bfr_texture_barrier(bfr_device* device, bfr_command_list command_list
         }
         const auto recorded = device->device->textureBarrier(fromC(command_list), fromC(texture),
                                                              static_cast<bfr::rhi::TextureLayout>(before),
-                                                             static_cast<bfr::rhi::TextureLayout>(after));
+                                                             static_cast<bfr::rhi::TextureLayout>(after),
+                                                             {.mipLevel = range->mip_level,
+                                                              .mipCount = range->mip_count,
+                                                              .layer = range->layer,
+                                                              .layerCount = range->layer_count});
         return recorded ? BFR_RESULT_SUCCESS : fail(recorded.error());
     });
 }
@@ -2520,6 +2560,16 @@ bfr_result bfr_poll(bfr_device* device, const bfr_token* token, bfr_bool* comple
         }
         *complete = toC(*polled);
         return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_run_garbage_collection(bfr_device* device) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto collected = device->device->runGarbageCollection();
+        return collected ? BFR_RESULT_SUCCESS : fail(collected.error());
     });
 }
 
@@ -2696,17 +2746,17 @@ bfr_result bfr_map_buffer(bfr_device* device, bfr_buffer buffer, void** data) {
     });
 }
 
-bfr_result bfr_get_buffer_slot(bfr_device* device, bfr_buffer buffer, uint32_t* slot) {
+bfr_result bfr_get_buffer_slots(bfr_device* device, bfr_buffer buffer, bfr_buffer_slots* slots) {
     return guarded([&] {
-        if (device == nullptr || slot == nullptr) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and slot must not be null");
+        if (device == nullptr || slots == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and slots must not be null");
         }
-        *slot = 0;
-        const auto found = device->device->bufferSlot(fromC(buffer));
+        *slots = {.storage = BFR_NO_SLOT, .uniform = BFR_NO_SLOT};
+        const auto found = device->device->bufferSlots(fromC(buffer));
         if (!found) {
             return fail(found.error());
         }
-        *slot = *found;
+        *slots = {.storage = found->storage, .uniform = found->uniform};
         return BFR_RESULT_SUCCESS;
     });
 }

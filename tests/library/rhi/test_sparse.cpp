@@ -107,6 +107,13 @@ TEST_CASE("Device maps a sparse buffer's tile to memory, copies through it, and 
         REQUIRE(tiling.has_value());
         REQUIRE(tiling->tileBytes != 0);
         REQUIRE(tiling->tileBytes <= kSparseBufferBytes);
+        // A sparse buffer has its address before any memory is mapped to it.
+        if (made.caps().features.bufferAddress) {
+            const auto address = device.bufferAddress(*sparse);
+            INFO(failureOf(address));
+            REQUIRE(address.has_value());
+            CHECK(*address != 0);
+        }
         const std::uint64_t tile = tiling->tileBytes;
         constexpr std::uint64_t kMemoryTiles = 2;
         const auto memory = device.createSparseMemory(
@@ -269,9 +276,9 @@ TEST_CASE("Device gives a sparse texture's tiling, maps a tile and its tail, and
                                                 .width = width,
                                                 .height = height,
                                                 .depth = 1}};
-        CHECK(device.textureBarrier(*list, *texture, TextureLayout::Undefined, TextureLayout::CopyDst).has_value());
+        CHECK(device.textureBarrier(*list, *texture, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
         CHECK(device.copyBufferToTexture(*list, *upload, *texture, copy).has_value());
-        CHECK(device.textureBarrier(*list, *texture, TextureLayout::CopyDst, TextureLayout::CopySrc).has_value());
+        CHECK(device.textureBarrier(*list, *texture, TextureLayout::CopyDst, TextureLayout::CopySrc, {}).has_value());
         CHECK(device.copyTextureToBuffer(*list, *texture, *readback, copy).has_value());
         run(device, *list, std::span{&*bound, 1});
 

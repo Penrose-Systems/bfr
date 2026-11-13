@@ -220,8 +220,8 @@ TEST_CASE("Device samples a texture through a sampler's slot: nearest and linear
         const auto textureSlots = device.textureSlots(*texture);
         const auto borderedSlot = device.samplerSlot(bordered);
         const auto edgedSlot = device.samplerSlot(edged);
-        const auto borderedTarget = device.bufferSlot(borderedOut);
-        const auto edgedTarget = device.bufferSlot(edgedOut);
+        const auto borderedTarget = storageSlot(device, borderedOut);
+        const auto edgedTarget = storageSlot(device, edgedOut);
         REQUIRE(textureSlots.has_value());
         REQUIRE(borderedSlot.has_value());
         REQUIRE(edgedSlot.has_value());
@@ -232,7 +232,7 @@ TEST_CASE("Device samples a texture through a sampler's slot: nearest and linear
         REQUIRE(pool.has_value());
         auto list = device.beginCommands(*pool);
         REQUIRE(list.has_value());
-        CHECK(device.textureBarrier(*list, *texture, TextureLayout::Undefined, TextureLayout::CopyDst).has_value());
+        CHECK(device.textureBarrier(*list, *texture, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
         const BufferTextureCopy region{.bufferOffset = 0,
                                        .bytesPerRow = bytesPerRow,
                                        .rowsPerImage = 1,
@@ -246,7 +246,7 @@ TEST_CASE("Device samples a texture through a sampler's slot: nearest and linear
                                        .height = 1,
                                        .depth = 1};
         CHECK(device.copyBufferToTexture(*list, upload, *texture, std::span{&region, 1}).has_value());
-        CHECK(device.textureBarrier(*list, *texture, TextureLayout::CopyDst, TextureLayout::Sampled).has_value());
+        CHECK(device.textureBarrier(*list, *texture, TextureLayout::CopyDst, TextureLayout::Sampled, {}).has_value());
         CHECK(device.bindPipeline(*list, *pipeline).has_value());
         for (const SamplePush& push :
              {SamplePush{.textureSlot = textureSlots->sampled, .samplerSlot = *borderedSlot, .target = *borderedTarget},

@@ -554,7 +554,7 @@ core::Result<void> MetalDevice::traceRaysIndirect(CommandListHandle /*commandLis
 }
 
 core::Result<std::uint64_t> MetalDevice::bufferAddress(BufferHandle /*buffer*/) {
-    return std::unexpected(checkBufferAddress(features_.bufferAddress, false).error());
+    return std::unexpected(checkBufferAddress(features_.bufferAddress).error());
 }
 
 core::Result<AccelerationStructurePropertyPoolHandle> MetalDevice::createAccelerationStructurePropertyPool(

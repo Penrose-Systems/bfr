@@ -35,7 +35,7 @@ core::Result<TimestampPoolHandle> MetalDevice::createTimestampPool(const Timesta
         return std::unexpected(std::move(checked.error()));
     }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectBuffers();
+    collectRetired();
     const AutoreleasePool pool;
     const Ref<MTL4::CounterHeapDescriptor> descriptor = adopt(MTL4::CounterHeapDescriptor::alloc()->init());
     descriptor->setType(MTL4::CounterHeapTypeTimestamp);
@@ -64,7 +64,7 @@ core::Result<void> MetalDevice::destroyTimestampPool(TimestampPoolHandle pool) {
     if (!timestampPools_.retire(pool, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the timestamp pool handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 

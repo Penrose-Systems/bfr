@@ -69,7 +69,7 @@ namespace bfr::rhi {
 /// identifierSize bytes, which BFR writes.
 [[nodiscard]] inline core::Result<void> checkIdentifiers(std::uint32_t count, std::span<const std::byte> out,
                                                          std::uint32_t identifierSize) {
-    if (out.size() / identifierSize < count) {
+    if (out.size() < std::size_t{count} * identifierSize) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes hold fewer than {} identifiers of {}",
                              out.size(), count, identifierSize);
     }
@@ -77,18 +77,11 @@ namespace bfr::rhi {
 }
 
 /// Fails with RhiUnsupported where the device gives no buffer addresses, as
-/// Features::bufferAddress says, and RhiInvalidCall for a buffer of no usage
-/// that has one: indirect, shaderBindingTable, accelerationStructureInput,
-/// accelerationStructureData or accelerationStructureStorage.
-[[nodiscard]] inline core::Result<void> checkBufferAddress(bool bufferAddress, bool addressed) {
+/// Features::bufferAddress says.
+[[nodiscard]] inline core::Result<void> checkBufferAddress(bool bufferAddress) {
     if (!bufferAddress) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "the device gives no buffer addresses (Features::bufferAddress)");
-    }
-    if (!addressed) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "the buffer has no indirect, shaderBindingTable, accelerationStructureInput, "
-                             "accelerationStructureData or accelerationStructureStorage usage, so no address");
     }
     return {};
 }

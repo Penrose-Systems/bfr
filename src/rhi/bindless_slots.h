@@ -12,6 +12,12 @@
 
 namespace bfr::rhi {
 
+/// The slots a buffer holds, kEnd in a table its usage does not set.
+struct BufferSlotsHeld {
+    std::uint32_t storage = core::SlotChains::kEnd;
+    std::uint32_t uniform = core::SlotChains::kEnd;
+};
+
 /// The slots a texture holds, kEnd in a table its usage does not set.
 struct TextureSlotsHeld {
     std::uint32_t sampled = core::SlotChains::kEnd;
@@ -30,24 +36,40 @@ public:
           storageTextures_(desc.maxBindlessStorageTextures),
           storageBuffers_(desc.maxBindlessStorageBuffers),
           samplers_(desc.maxBindlessSamplers),
+          uniformBuffers_(desc.maxBindlessUniformBuffers),
           accelerationStructures_(desc.maxBindlessAccelerationStructures),
           partitionedTops_(desc.maxBindlessPartitionedTops) {}
 
-    /// A storage buffer slot when desc's usage is storage, else kEnd. Fails
-    /// with RhiLimitReached when the table is full.
-    [[nodiscard]] core::Result<std::uint32_t> takeBuffer(const BufferDesc& desc) {
-        if (!desc.usage.storage) {
-            return core::SlotChains::kEnd;
+    /// A slot in each table desc's usage names. Fails with RhiLimitReached
+    /// when one is full, taking nothing.
+    [[nodiscard]] core::Result<BufferSlotsHeld> takeBuffer(const BufferDesc& desc) {
+        BufferSlotsHeld held;
+        if (desc.usage.storage) {
+            const auto slot = storageBuffers_.take(1);
+            if (!slot) {
+                return core::failure(core::ErrorCode::RhiLimitReached,
+                                     "the storage buffer table holds at most {} buffers",
+                                     desc_.maxBindlessStorageBuffers);
+            }
+            held.storage = *slot;
         }
-        const auto slot = storageBuffers_.take(1);
-        if (!slot) {
-            return core::failure(core::ErrorCode::RhiLimitReached, "the storage buffer table holds at most {} buffers",
-                                 desc_.maxBindlessStorageBuffers);
+        if (desc.usage.uniform) {
+            const auto slot = uniformBuffers_.take(1);
+            if (!slot) {
+                storageBuffers_.give(held.storage);
+                return core::failure(core::ErrorCode::RhiLimitReached,
+                                     "the uniform buffer table holds at most {} buffers",
+                                     desc_.maxBindlessUniformBuffers);
+            }
+            held.uniform = *slot;
         }
-        return *slot;
+        return held;
     }
 
-    void giveBuffer(std::uint32_t slot) { storageBuffers_.give(slot); }
+    void giveBuffer(const BufferSlotsHeld& held) {
+        storageBuffers_.give(held.storage);
+        uniformBuffers_.give(held.uniform);
+    }
 
     /// A slot in each table desc's usage names. Fails with RhiLimitReached
     /// when one is full, taking nothing.
@@ -136,13 +158,11 @@ public:
         return {.sampled = held.sampled, .storage = held.storage};
     }
 
-    /// slot as bufferSlot reports it. Fails with RhiInvalidCall for kEnd: a
-    /// buffer without storage usage.
-    [[nodiscard]] static core::Result<std::uint32_t> reported(std::uint32_t slot) {
-        if (slot == core::SlotChains::kEnd) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "the buffer has no storage usage, so no slot");
-        }
-        return slot;
+    /// held as bufferSlots reports it: kNoSlot, the chains' kEnd, for a table
+    /// the buffer is not in.
+    [[nodiscard]] static BufferSlots reported(const BufferSlotsHeld& held) {
+        static_assert(core::SlotChains::kEnd == kNoSlot);
+        return {.storage = held.storage, .uniform = held.uniform};
     }
 
 private:
@@ -151,6 +171,7 @@ private:
     core::SlotChains storageTextures_;
     core::SlotChains storageBuffers_;
     core::SlotChains samplers_;
+    core::SlotChains uniformBuffers_;
     core::SlotChains accelerationStructures_;
     core::SlotChains partitionedTops_;
 };

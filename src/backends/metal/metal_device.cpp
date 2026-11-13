@@ -60,6 +60,15 @@ namespace bfr::rhi::metal {
 
 namespace {
 
+// Points attachment at its texture's mipLevel and layer: a 3D texture's depth
+// plane, any other's slice.
+void placeAttachment(MTL::RenderPassAttachmentDescriptor* attachment, std::uint32_t mipLevel, std::uint32_t layer) {
+    const bool volume = attachment->texture() != nullptr && attachment->texture()->textureType() == MTL::TextureType3D;
+    attachment->setLevel(mipLevel);
+    attachment->setSlice(volume ? 0 : layer);
+    attachment->setDepthPlane(volume ? layer : 0);
+}
+
 constexpr std::uint64_t kForever = std::numeric_limits<std::uint64_t>::max();
 
 MTL::LoadAction loadActionFor(LoadOp op) {
@@ -122,13 +131,13 @@ MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Feat
       renderSlots_(desc.maxCommandLists),
       renders_(desc.maxCommandLists),
       submissions_(queueCount(desc)),
-      buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
-      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      buffers_("buffers", desc.maxBuffers, desc.maxBuffers, rhi.logger()),
+      textures_("textures", desc.maxTextures, desc.maxTextures, rhi.logger()),
       samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
       timestampPools_("timestamp pools", desc.maxTimestampPools, desc.maxTimestampPools, rhi.logger()),
       sparseMemories_("sparse memories", desc.maxSparseMemories, desc.maxSparseMemories, rhi.logger()),
       bindless_(desc),
-      pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {}
+      pipelines_("pipelines", desc.maxPipelines, desc.maxPipelines, rhi.logger()) {}
 
 core::Result<void> MetalDevice::open(const DeviceDesc& desc) {
     const AutoreleasePool pool;
@@ -627,8 +636,6 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
     std::array<MTL::Texture*, kMaxColorTargets> resolves{};
     // A swapchain's image is never a signed integer format.
     std::array<Format, kMaxColorTargets> formats{};
-    std::uint32_t width = 0;
-    std::uint32_t height = 0;
     MetalSwapchain* chain = nullptr;
     for (std::uint32_t i = 0; i < desc.colorAttachmentCount; ++i) {
         const ColorAttachment& attachment = desc.colorAttachments.at(i);
@@ -646,8 +653,6 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
             // resolves into.
             if (attachment.texture.isNull()) {
                 colors.at(i) = drawable->texture();
-                width = static_cast<std::uint32_t>(colors.at(i)->width());
-                height = static_cast<std::uint32_t>(colors.at(i)->height());
                 continue;
             }
             resolves.at(i) = drawable->texture();
@@ -658,8 +663,6 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
         }
         colors.at(i) = (*texture)->texture.get();
         formats.at(i) = (*texture)->format;
-        width = (*texture)->width;
-        height = (*texture)->height;
         if (!attachment.resolveTexture.isNull()) {
             auto target = textureFor(attachment.resolveTexture);
             if (!target) {
@@ -677,8 +680,6 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
             return std::unexpected(std::move(texture.error()));
         }
         depth = *texture;
-        width = depth->width;
-        height = depth->height;
         if (!depthStencil.resolveTexture.isNull()) {
             if (auto checked = checkDepthResolve(depthStencil, depth->format, resolve_); !checked) {
                 return checked;
@@ -721,7 +722,10 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
         }
         const ColorAttachment& attachment = desc.colorAttachments.at(i);
         color->setTexture(colors.at(i));
+        placeAttachment(color, attachment.mipLevel, attachment.layer);
         color->setResolveTexture(resolves.at(i));
+        color->setResolveLevel(0);
+        color->setResolveSlice(0);
         color->setLoadAction(loadActionFor(attachment.loadOp));
         color->setStoreAction(resolves.at(i) != nullptr ? resolveActionFor(attachment.storeOp)
                                                         : storeActionFor(attachment.storeOp));
@@ -743,22 +747,38 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
         if (block.depthBytes != 0) {
             const bool resolvesDepth = depthResolve != nullptr && depthStencil.depthResolve != ResolveMode::None;
             depthAttachment->setTexture(depth->texture.get());
+            placeAttachment(depthAttachment, depthStencil.mipLevel, depthStencil.layer);
             depthAttachment->setLoadAction(loadActionFor(depthStencil.depthLoadOp));
             depthAttachment->setStoreAction(resolvesDepth ? resolveActionFor(depthStencil.depthStoreOp)
                                                           : storeActionFor(depthStencil.depthStoreOp));
             depthAttachment->setClearDepth(static_cast<double>(depthStencil.clearDepth));
             if (resolvesDepth) {
                 depthAttachment->setResolveTexture(depthResolve);
+                depthAttachment->setResolveLevel(0);
+                depthAttachment->setResolveSlice(0);
                 depthAttachment->setDepthResolveFilter(MTL::MultisampleDepthResolveFilterSample0);
             }
         }
         if (block.stencilBytes != 0) {
             stencilAttachment->setTexture(depth->texture.get());
+            placeAttachment(stencilAttachment, depthStencil.mipLevel, depthStencil.layer);
             stencilAttachment->setLoadAction(loadActionFor(depthStencil.stencilLoadOp));
             stencilAttachment->setStoreAction(storeActionFor(depthStencil.stencilStoreOp));
             stencilAttachment->setClearStencil(depthStencil.clearStencil);
         }
     }
+    // One count of layers is drawn: the depth-stencil attachment's, else color
+    // attachment 0's, as NVRHI takes it (misc.cpp:166-184). Like Godot, a pass
+    // of one layer is not layered (metal3_objects.cpp:1294-1296); the
+    // descriptor is reused, so that is set too.
+    std::uint32_t layers = 0;
+    if (depth != nullptr) {
+        layers = depthStencil.layerCount;
+    }
+    else if (desc.colorAttachmentCount != 0) {
+        layers = desc.colorAttachments.at(0).layerCount;
+    }
+    pass->setRenderTargetArrayLength(layers > 1 ? layers : 0);
     MTL4::RenderCommandEncoder* encoder = (*list)->buffer->renderCommandEncoder(pass);
     if (encoder == nullptr) {
         return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no render command encoder");
@@ -768,17 +788,7 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
     (*list)->encoderGraphics = {};
     (*list)->state.rendering = true;
     (*list)->presenting = chain != nullptr ? std::optional{swapchain} : std::nullopt;
-    // The whole area, until the caller sets its own.
-    if (auto set = setViewport(commandList, {.x = 0,
-                                             .y = 0,
-                                             .width = static_cast<float>(width),
-                                             .height = static_cast<float>(height),
-                                             .minDepth = 0,
-                                             .maxDepth = 1});
-        !set) {
-        return set;
-    }
-    return setScissor(commandList, {.x = 0, .y = 0, .width = width, .height = height});
+    return {};
 }
 
 core::Result<void> MetalDevice::endRendering(CommandListHandle commandList) {

@@ -701,37 +701,6 @@ TEST_CASE("Vulkan without VK_NV_cluster_acceleration_structure reports no cluste
     }
 }
 
-TEST_CASE("Vulkan refuses a cluster operation reading or writing a buffer with no address", "[vulkan][gpu]") {
-    auto created = Instance::create(vulkanDesc(), {});
-    INFO(failureOf(created));
-    REQUIRE(created.has_value());
-    const std::unique_ptr<Instance> instance = std::move(*created);
-    if (!instance->adapters()[0].caps.features.clusterAccelerationStructure) {
-        SKIP("the adapter has no cluster acceleration structures");
-    }
-    auto made = instance->createDevice(0, kNoWindow, kTestDevice);
-    INFO(failureOf(made));
-    REQUIRE(made.has_value());
-    Device& device = **made;
-    constexpr std::uint64_t kSmall = 256;
-    // Storage usage alone gives a Vulkan buffer no address.
-    const auto plain = device.createBuffer({.size = kSmall, .usage = {.storage = true}});
-    REQUIRE(plain.has_value());
-    const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
-    REQUIRE(pool.has_value());
-    const auto list = device.beginCommands(*pool);
-    REQUIRE(list.has_value());
-    const auto built = device.buildClusters(*list, {.inputs = {.operation = ClusterOperation::BuildClusters,
-                                                               .mode = ClusterMode::ExplicitDestinations},
-                                                    .addresses = *plain,
-                                                    .addressStride = sizeof(std::uint64_t)});
-    REQUIRE_FALSE(built.has_value());
-    CHECK(built.error().code == bfr::core::ErrorCode::RhiInvalidCall);
-    CHECK(device.destroyCommandList(*list).has_value());
-    CHECK(device.destroyCommandPool(*pool).has_value());
-    CHECK(device.destroyBuffer(*plain).has_value());
-}
-
 TEST_CASE("Vulkan refuses partitioned top structure work it has no call for", "[vulkan][gpu]") {
     auto created = Instance::create(vulkanDesc(), {});
     INFO(failureOf(created));
@@ -909,23 +878,6 @@ TEST_CASE("Vulkan refuses opacity micromap work it has no call for", "[vulkan][g
     CHECK(device.destroyCommandList(*list).has_value());
     CHECK(device.destroyCommandPool(*pool).has_value());
     CHECK(device.destroyAccelerationStructure(*micromap).has_value());
-}
-
-TEST_CASE("Vulkan refuses a ray tracing stack size past the 32 bits it takes", "[vulkan][gpu]") {
-    auto created = Instance::create(vulkanDesc(), {});
-    INFO(failureOf(created));
-    REQUIRE(created.has_value());
-    const std::unique_ptr<Instance> instance = std::move(*created);
-    if (!instance->adapters()[0].caps.features.rayTracingPipeline) {
-        SKIP("the adapter has no ray tracing pipelines");
-    }
-    auto made = instance->createDevice(0, kNoWindow, kTestDevice);
-    INFO(failureOf(made));
-    REQUIRE(made.has_value());
-    constexpr std::uint64_t kPast32Bits = std::uint64_t{1} << 32U;
-    const auto pipeline = (**made).createRayTracingPipeline({.stackSize = kPast32Bits});
-    REQUIRE_FALSE(pipeline.has_value());
-    CHECK(pipeline.error().code == bfr::core::ErrorCode::RhiInvalidCall);
 }
 
 TEST_CASE("Vulkan with acceleration structures but no table updated after bind has no table, and makes top structures "
@@ -1137,20 +1089,6 @@ TEST_CASE("Vulkan fails with RhiUnsupported for one kind's queues at different l
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Vulkan fails with RhiPresentUnsupported when no queue family presents to the window", "[vulkan][gpu]") {
-    const AdapterOverrideLayer adapterOverride;
-    const ScopedEnv unsupported("BFR_PRESENT_UNSUPPORTED", "1");
-    const auto rhi = Instance::create(vulkanDesc(), {});
-    INFO(failureOf(rhi));
-    REQUIRE(rhi.has_value());
-
-    const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), bfr::core::window::Headless{}, kTestDevice);
-
-    REQUIRE_FALSE(device.has_value());
-    CHECK(device.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
-    CHECK_THAT(device.error().message.text(), Catch::Matchers::ContainsSubstring("presents to the window"));
-}
-
 TEST_CASE("Vulkan fails with RhiWindowFailed when the API refuses a surface for the device's window", "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv refused("BFR_FAIL", "vkCreateHeadlessSurfaceEXT");
@@ -1181,8 +1119,8 @@ TEST_CASE("Vulkan doesn't ask NVIDIA's driver about a headless window on a loade
 
     const auto device = (*rhi)->createDevice(cpuAdapter(**rhi), bfr::core::window::Headless{}, kTestDevice);
 
-    REQUIRE_FALSE(device.has_value());
-    CHECK(device.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
+    INFO(failureOf(device));
+    CHECK(device.has_value());
     if (bfr::core::kLoggingEnabled) {
         CHECK_THAT(log.str(), Catch::Matchers::ContainsSubstring(
                                   "does not present to headless surfaces; not asked, since loader 1.4.318"));

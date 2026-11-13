@@ -60,6 +60,12 @@ constexpr std::uint32_t kDevicePools = 16;
 constexpr std::uint32_t kDeviceSwapchains = 4;
 constexpr std::uint32_t kDeviceTableSlots = 256;
 constexpr std::uint32_t kDeviceSamplers = 16;
+constexpr std::uint32_t kDeviceObjects = 256;
+// Every mip level and layer of a texture, as a barrier moves it.
+constexpr bfr_texture_range kWholeTexture{.mip_level = 0,
+                                          .mip_count = BFR_REMAINING,
+                                          .layer = 0,
+                                          .layer_count = BFR_REMAINING};
 // One queue at rank 0 and level normal.
 constexpr bfr_queue_desc kOneQueue{.rank = 0, .level = BFR_QUEUE_LEVEL_NORMAL};
 
@@ -132,7 +138,13 @@ struct HeadlessDevice {
     explicit HeadlessDevice(bfr_instance* instance) {
         std::uint32_t count = 0;
         REQUIRE(bfr_get_adapters(instance, &count, nullptr) == BFR_RESULT_SUCCESS);
+        const bfr_swapchain_query headless{.next = nullptr, .window = kHeadless};
         for (std::uint32_t adapter = 0; adapter < count && device == nullptr; ++adapter) {
+            bfr_swapchain_caps presents{};
+            if (bfr_get_swapchain_caps(instance, adapter, &headless, &presents) ==
+                BFR_RESULT_ERROR_PRESENT_UNSUPPORTED) {
+                continue;
+            }
             const bfr_device_desc desc{.next = nullptr,
                                        .adapter = adapter,
                                        .window = kHeadless,
@@ -149,6 +161,7 @@ struct HeadlessDevice {
                                        .max_bindless_storage_textures = kDeviceTableSlots,
                                        .max_bindless_storage_buffers = kDeviceTableSlots,
                                        .max_bindless_samplers = kDeviceSamplers,
+                                       .max_bindless_uniform_buffers = 0,
                                        .max_timestamp_pools = 1,
                                        .max_sparse_memories = 0,
                                        .max_tile_mappings = 0,
@@ -156,11 +169,17 @@ struct HeadlessDevice {
                                        .max_bindless_partitioned_tops = 0,
                                        .max_build_geometries = 0,
                                        .max_acceleration_structure_property_pools = 0,
+                                       .max_buffers = kDeviceObjects,
+                                       .max_textures = kDeviceObjects,
+                                       .max_shaders = kDeviceObjects,
+                                       .max_pipelines = kDeviceObjects,
+                                       .max_pipeline_caches = kDeviceObjects,
+                                       .max_acceleration_structures = kDeviceObjects,
                                        .indirect_strides = nullptr,
                                        .indirect_stride_count = 0};
             const bfr_result result = bfr_create_device(instance, &desc, &device);
             INFO(lastError());
-            REQUIRE((result == BFR_RESULT_SUCCESS || result == BFR_RESULT_ERROR_PRESENT_UNSUPPORTED));
+            REQUIRE(result == BFR_RESULT_SUCCESS);
             if (device != nullptr) {
                 this->adapter = adapter;
             }
@@ -341,6 +360,7 @@ TEST_CASE("C API rejects a struct chained to a device or swapchain desc", "[c_ap
                                          .max_bindless_storage_textures = kDeviceTableSlots,
                                          .max_bindless_storage_buffers = kDeviceTableSlots,
                                          .max_bindless_samplers = kDeviceSamplers,
+                                         .max_bindless_uniform_buffers = 0,
                                          .max_timestamp_pools = 0,
                                          .max_sparse_memories = 0,
                                          .max_tile_mappings = 0,
@@ -348,6 +368,12 @@ TEST_CASE("C API rejects a struct chained to a device or swapchain desc", "[c_ap
                                          .max_bindless_partitioned_tops = 0,
                                          .max_build_geometries = 0,
                                          .max_acceleration_structure_property_pools = 0,
+                                         .max_buffers = kDeviceObjects,
+                                         .max_textures = kDeviceObjects,
+                                         .max_shaders = kDeviceObjects,
+                                         .max_pipelines = kDeviceObjects,
+                                         .max_pipeline_caches = kDeviceObjects,
+                                         .max_acceleration_structures = kDeviceObjects,
                                          .indirect_strides = nullptr,
                                          .indirect_stride_count = 0};
         bfr_device* stray = nullptr;
@@ -395,6 +421,7 @@ TEST_CASE("C API rejects a device desc's null queues with a count, and a queue l
                                          .max_bindless_storage_textures = 0,
                                          .max_bindless_storage_buffers = 0,
                                          .max_bindless_samplers = 0,
+                                         .max_bindless_uniform_buffers = 0,
                                          .max_timestamp_pools = 0,
                                          .max_sparse_memories = 0,
                                          .max_tile_mappings = 0,
@@ -402,6 +429,12 @@ TEST_CASE("C API rejects a device desc's null queues with a count, and a queue l
                                          .max_bindless_partitioned_tops = 0,
                                          .max_build_geometries = 0,
                                          .max_acceleration_structure_property_pools = 0,
+                                         .max_buffers = 0,
+                                         .max_textures = 0,
+                                         .max_shaders = 0,
+                                         .max_pipelines = 0,
+                                         .max_pipeline_caches = 0,
+                                         .max_acceleration_structures = 0,
                                          .indirect_strides = nullptr,
                                          .indirect_stride_count = 0};
         bfr_device* device = nullptr;
@@ -491,7 +524,7 @@ namespace {
 
 struct Mode {
     bfr_present_mode mode;
-    bfr_bool bfr_swapchain_caps::* allowed;
+    bfr_bool bfr_swapchain_caps::*allowed;
     const char* name;
 };
 
@@ -995,10 +1028,11 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, directly
                         .acceleration_structure_storage = BFR_FALSE};
     bfr_buffer readback{};
     REQUIRE(bfr_create_buffer(device.device, &bufferDesc, &readback) == BFR_RESULT_SUCCESS);
-    std::uint32_t slot = 0;
-    REQUIRE(bfr_get_buffer_slot(device.device, target, &slot) == BFR_RESULT_SUCCESS);
-    CHECK(bfr_get_buffer_slot(device.device, readback, &slot) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
-    REQUIRE(bfr_get_buffer_slot(device.device, target, &slot) == BFR_RESULT_SUCCESS);
+    bfr_buffer_slots slots{};
+    REQUIRE(bfr_get_buffer_slots(device.device, readback, &slots) == BFR_RESULT_SUCCESS);
+    CHECK(slots.storage == BFR_NO_SLOT);
+    REQUIRE(bfr_get_buffer_slots(device.device, target, &slots) == BFR_RESULT_SUCCESS);
+    const std::uint32_t slot = slots.storage;
     // One workgroup, read by bfr_dispatch_indirect.
     bufferDesc.memory = BFR_BUFFER_MEMORY_UPLOAD;
     bufferDesc.size = sizeof(bfr_dispatch_indirect_args);
@@ -1109,13 +1143,16 @@ TEST_CASE("C API renders to a texture with the viewport and scissor set, and ref
     bfr_command_list list{};
     REQUIRE(bfr_begin_commands(device.device, pool, &list) == BFR_RESULT_SUCCESS);
     REQUIRE(bfr_texture_barrier(device.device, list, target, BFR_TEXTURE_LAYOUT_UNDEFINED,
-                                BFR_TEXTURE_LAYOUT_COLOR_TARGET) == BFR_RESULT_SUCCESS);
+                                BFR_TEXTURE_LAYOUT_COLOR_TARGET, &kWholeTexture) == BFR_RESULT_SUCCESS);
 
     bfr_rendering_desc rendering{.next = nullptr,
                                  .color_attachment_count = 1,
                                  .color_attachments = {},
                                  .depth_stencil = {}};
     rendering.color_attachments[0] = {.texture = target,
+                                      .mip_level = 0,
+                                      .layer = 0,
+                                      .layer_count = BFR_ONE_LAYER,
                                       .load_op = static_cast<bfr_load_op>(kNotAValue),
                                       .store_op = BFR_STORE_OP_STORE,
                                       .clear_color = {0, 0, 0, 1},
@@ -1203,7 +1240,7 @@ TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call tim
 
     std::uint32_t count = 0;
     REQUIRE(bfr_get_call_timings(device.device, &count, nullptr) == BFR_RESULT_SUCCESS);
-    CHECK(count == BFR_CALL_CAPTURE_ACCELERATION_STRUCTURE + 1);
+    CHECK(count == BFR_CALL_RUN_GARBAGE_COLLECTION + 1);
     std::vector<bfr_call_timing> timings(count);
     REQUIRE(bfr_get_call_timings(device.device, &count, timings.data()) == BFR_RESULT_SUCCESS);
     CHECK(timings.at(BFR_CALL_CREATE_TIMESTAMP_POOL).count == 2);
@@ -1591,6 +1628,9 @@ TEST_CASE("C API allocates and frees nothing on the heap frame after frame", "[c
     constexpr bfr_rendering_desc kClear{.next = nullptr,
                                         .color_attachment_count = 1,
                                         .color_attachments = {{.texture = {},
+                                                               .mip_level = 0,
+                                                               .layer = 0,
+                                                               .layer_count = BFR_ONE_LAYER,
                                                                .load_op = BFR_LOAD_OP_CLEAR,
                                                                .store_op = BFR_STORE_OP_STORE,
                                                                .clear_color = {0, 0, 0, 1},
@@ -1761,6 +1801,7 @@ TEST_CASE("C API passes cluster inputs through, where the adapter has them", "[c
                                    .max_bindless_storage_textures = 0,
                                    .max_bindless_storage_buffers = 0,
                                    .max_bindless_samplers = 0,
+                                   .max_bindless_uniform_buffers = 0,
                                    .max_timestamp_pools = 0,
                                    .max_sparse_memories = 0,
                                    .max_tile_mappings = 0,
@@ -1768,6 +1809,12 @@ TEST_CASE("C API passes cluster inputs through, where the adapter has them", "[c
                                    .max_bindless_partitioned_tops = 0,
                                    .max_build_geometries = 0,
                                    .max_acceleration_structure_property_pools = 0,
+                                   .max_buffers = kDeviceObjects,
+                                   .max_textures = kDeviceObjects,
+                                   .max_shaders = kDeviceObjects,
+                                   .max_pipelines = kDeviceObjects,
+                                   .max_pipeline_caches = kDeviceObjects,
+                                   .max_acceleration_structures = kDeviceObjects,
                                    .indirect_strides = nullptr,
                                    .indirect_stride_count = 0};
         bfr_device* device = nullptr;
@@ -1830,6 +1877,7 @@ TEST_CASE("C API passes a structure's capture to a replay on another device, whe
                                    .max_bindless_storage_textures = 0,
                                    .max_bindless_storage_buffers = 0,
                                    .max_bindless_samplers = 0,
+                                   .max_bindless_uniform_buffers = 0,
                                    .max_timestamp_pools = 0,
                                    .max_sparse_memories = 0,
                                    .max_tile_mappings = 0,
@@ -1837,6 +1885,12 @@ TEST_CASE("C API passes a structure's capture to a replay on another device, whe
                                    .max_bindless_partitioned_tops = 0,
                                    .max_build_geometries = 0,
                                    .max_acceleration_structure_property_pools = 0,
+                                   .max_buffers = kDeviceObjects,
+                                   .max_textures = kDeviceObjects,
+                                   .max_shaders = kDeviceObjects,
+                                   .max_pipelines = kDeviceObjects,
+                                   .max_pipeline_caches = kDeviceObjects,
+                                   .max_acceleration_structures = kDeviceObjects,
                                    .indirect_strides = nullptr,
                                    .indirect_stride_count = 0};
         // A size any backend takes for a structure no build fills.
@@ -1903,6 +1957,7 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
                                    .max_bindless_storage_textures = 0,
                                    .max_bindless_storage_buffers = 0,
                                    .max_bindless_samplers = 0,
+                                   .max_bindless_uniform_buffers = 0,
                                    .max_timestamp_pools = 0,
                                    .max_sparse_memories = 0,
                                    .max_tile_mappings = 0,
@@ -1910,6 +1965,12 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
                                    .max_bindless_partitioned_tops = 0,
                                    .max_build_geometries = 1,
                                    .max_acceleration_structure_property_pools = 0,
+                                   .max_buffers = kDeviceObjects,
+                                   .max_textures = kDeviceObjects,
+                                   .max_shaders = kDeviceObjects,
+                                   .max_pipelines = kDeviceObjects,
+                                   .max_pipeline_caches = kDeviceObjects,
+                                   .max_acceleration_structures = kDeviceObjects,
                                    .indirect_strides = nullptr,
                                    .indirect_stride_count = 0};
         bfr_device* device = nullptr;
@@ -2108,6 +2169,7 @@ TEST_CASE("C API makes shaders and a ray tracing pipeline from them, and gives i
                                          .max_bindless_storage_textures = 0,
                                          .max_bindless_storage_buffers = kDeviceTableSlots,
                                          .max_bindless_samplers = 0,
+                                         .max_bindless_uniform_buffers = 0,
                                          .max_timestamp_pools = 0,
                                          .max_sparse_memories = 0,
                                          .max_tile_mappings = 0,
@@ -2115,6 +2177,12 @@ TEST_CASE("C API makes shaders and a ray tracing pipeline from them, and gives i
                                          .max_bindless_partitioned_tops = 0,
                                          .max_build_geometries = 0,
                                          .max_acceleration_structure_property_pools = 0,
+                                         .max_buffers = kDeviceObjects,
+                                         .max_textures = kDeviceObjects,
+                                         .max_shaders = kDeviceObjects,
+                                         .max_pipelines = kDeviceObjects,
+                                         .max_pipeline_caches = kDeviceObjects,
+                                         .max_acceleration_structures = kDeviceObjects,
                                          .indirect_strides = nullptr,
                                          .indirect_stride_count = 0};
         struct Device {

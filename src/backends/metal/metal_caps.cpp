@@ -168,6 +168,8 @@ Features featuresOf(MTL::Device* device) {
     features.barycentrics = device->supportsShaderBarycentricCoordinates();
     features.atomicInt64 = has64BitAtomics(device);
     features.atomicInt64Texture = has64BitAtomics(device);
+    // A render pass attachment's depthPlane names a 3D texture's slice.
+    features.volumeColorTargets = true;
     addCompressionFeatures(device, features);
     addRenderFeatures(features);
     addDrawFeatures(features);

@@ -72,8 +72,32 @@ struct TextureUsage {
     bool depthStencil = false;
 };
 
-/// A bindless slot a texture doesn't have; no table has a slot this high.
+/// A bindless slot a resource doesn't have; no table has a slot this high.
 inline constexpr std::uint32_t kNoSlot = BFR_NO_SLOT;
+
+/// Every mip level, or every layer, from the first one a TextureRange names.
+inline constexpr std::uint32_t kRemaining = BFR_REMAINING;
+
+/// The mip levels and layers of a texture a barrier moves: mipCount levels
+/// from mipLevel, and layerCount layers from layer, in every plane. Counts
+/// pass through as given; 0 is no count Vulkan takes. A 3D texture has one
+/// layer, so a barrier moves every depth slice of its levels.
+struct TextureRange {
+    std::uint32_t mipLevel = 0;
+    std::uint32_t mipCount = kRemaining;
+    std::uint32_t layer = 0;
+    std::uint32_t layerCount = kRemaining;
+};
+
+/// Where a buffer is in the bindless tables api/bfr.yaml states under
+/// bfr_pipeline, from creation to destruction: the index shaders use. A table
+/// the buffer's usage does not set has no slot for it, and reads kNoSlot.
+struct BufferSlots {
+    /// Its index in the storage buffer table; only with storage usage.
+    std::uint32_t storage = kNoSlot;
+    /// Its index in the uniform buffer table; only with uniform usage.
+    std::uint32_t uniform = kNoSlot;
+};
 
 /// Where a texture is in the bindless tables api/bfr.yaml states under
 /// bfr_pipeline, from creation to destruction: the index shaders use. A table

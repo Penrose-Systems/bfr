@@ -193,7 +193,7 @@ core::Result<TextureHandle> MetalDevice::createTexture(const TextureDesc& desc) 
         return std::unexpected(std::move(checked.error()));
     }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectBuffers();
+    collectRetired();
     // Held until made is gone, which takes it out of the set if it is not kept.
     const std::scoped_lock lock{residencyLock_};
     auto slots = bindless_.takeTexture(desc);
@@ -211,7 +211,8 @@ core::Result<TextureHandle> MetalDevice::createTexture(const TextureDesc& desc) 
     const TextureHandle texture = textures_.emplace(std::move(*made));
     if (texture.isNull()) {
         bindless_.giveTexture(*slots);
-        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} textures", kBufferLimit);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} textures",
+                             desc_.maxTextures);
     }
     if (slots->sampled != core::SlotChains::kEnd) {
         tables().writeSampledTexture(slots->sampled, id);
@@ -243,13 +244,14 @@ core::Result<void> MetalDevice::destroyTexture(TextureHandle texture) {
     if (!textures_.retire(texture, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the texture handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 
 // Metal 4 has no texture layouts, so moving one is the full barrier alone.
 core::Result<void> MetalDevice::textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                               TextureLayout before, TextureLayout after) {
+                                               TextureLayout before, TextureLayout after,
+                                               const TextureRange& /*range*/) {
     // Metal 4 has no layouts, but a layout BFR doesn't have fails here as on
     // every backend.
     if (auto checked = checkLayouts(before, after); !checked) {
@@ -275,7 +277,7 @@ core::Result<void> MetalDevice::copyBufferToTexture(CommandListHandle commandLis
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    if (auto checked = checkAspects((*to)->format, regions); !checked) {
+    if (auto checked = checkAspects(regions); !checked) {
         return checked;
     }
     // Metal 4 copies on a compute encoder. The pool drains the autoreleased
@@ -311,7 +313,7 @@ core::Result<void> MetalDevice::copyTextureToBuffer(CommandListHandle commandLis
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    if (auto checked = checkAspects((*from)->format, regions); !checked) {
+    if (auto checked = checkAspects(regions); !checked) {
         return checked;
     }
     const AutoreleasePool pool;

@@ -44,6 +44,7 @@ inline constexpr std::uint32_t kTestSwapchains = 4;
 inline constexpr std::uint32_t kTestTableSlots = 256;
 inline constexpr std::uint32_t kTestSamplers = 16;
 inline constexpr std::uint32_t kTestTimestampPools = 4;
+inline constexpr std::uint32_t kTestObjects = 1024;
 // Queues at rank 0 and level normal, as many as a test opens.
 inline constexpr std::array<QueueDesc, 4> kTestQueues{};
 // The longest wait there is, so a slow GPU never fails a test.
@@ -58,7 +59,13 @@ inline constexpr DeviceDesc kTestDevice{.graphics = std::span{kTestQueues}.first
                                         .maxBindlessStorageTextures = kTestTableSlots,
                                         .maxBindlessStorageBuffers = kTestTableSlots,
                                         .maxBindlessSamplers = kTestSamplers,
-                                        .maxTimestampPools = kTestTimestampPools};
+                                        .maxTimestampPools = kTestTimestampPools,
+                                        .maxBuffers = kTestObjects,
+                                        .maxTextures = kTestObjects,
+                                        .maxShaders = kTestObjects,
+                                        .maxPipelines = kTestObjects,
+                                        .maxPipelineCaches = kTestObjects,
+                                        .maxAccelerationStructures = kTestObjects};
 
 /// kTestDevice with change made to it.
 template <class Change>
@@ -112,12 +119,17 @@ inline InstanceDesc describe(const TestBackend& backend) {
     return describe(backend.backend);
 }
 
+/// A Logger callback that appends each message to the std::vector<std::string>
+/// userData points at.
+inline void recordInto(core::Severity /*severity*/, std::string_view message, void* userData) {
+    static_cast<std::vector<std::string>*>(userData)->emplace_back(message);
+}
+
 /// A description on backend that records every warning and error the Instance and
 /// validation report.
 inline InstanceDesc recordingInto(Backend backend, std::vector<std::string>& messages) {
     InstanceDesc desc = describe(backend);
-    desc.logger = {[&messages](core::Severity, std::string_view message) { messages.emplace_back(message); },
-                   core::Severity::Warning};
+    desc.logger = {recordInto, &messages, core::Severity::Warning};
     return desc;
 }
 
@@ -130,9 +142,17 @@ inline InstanceDesc recordingInto(const TestBackend& backend, std::vector<std::s
 /// warn about what the environment turned on.
 inline InstanceDesc recordingErrorsInto(Backend backend, std::vector<std::string>& errors) {
     InstanceDesc desc = describe(backend);
-    desc.logger = {[&errors](core::Severity, std::string_view message) { errors.emplace_back(message); },
-                   core::Severity::Error};
+    desc.logger = {recordInto, &errors, core::Severity::Error};
     return desc;
+}
+
+/// buffer's slot in the storage buffer table, as Device::bufferSlots reports it.
+inline core::Result<std::uint32_t> storageSlot(Device& device, BufferHandle buffer) {
+    const auto slots = device.bufferSlots(buffer);
+    if (!slots) {
+        return std::unexpected(slots.error());
+    }
+    return slots->storage;
 }
 
 /// The code and message of a failed result, for INFO; empty on success.
@@ -176,12 +196,16 @@ inline SwapchainDesc swapchainDesc(const Instance& rhi) {
 /// present to it at all: NVIDIA's driver has no headless surfaces.
 inline std::unique_ptr<Device> presentingDevice(Instance& rhi, const core::window::NativeWindow& window) {
     for (std::size_t adapter = 0; adapter < rhi.adapters().size(); ++adapter) {
-        auto device = rhi.createDevice(adapter, window, kTestDevice);
-        if (device.has_value()) {
-            return std::move(*device);
+        const auto caps = rhi.swapchainCaps(adapter, window);
+        if (!caps.has_value()) {
+            INFO(rhi.adapters()[adapter].name << ' ' << failureOf(caps));
+            REQUIRE(caps.error().code == core::ErrorCode::RhiPresentUnsupported);
+            continue;
         }
-        INFO(rhi.adapters()[adapter].name << ' ' << failureOf(device));
-        REQUIRE(device.error().code == core::ErrorCode::RhiPresentUnsupported);
+        auto device = rhi.createDevice(adapter, window, kTestDevice);
+        INFO(failureOf(device));
+        REQUIRE(device.has_value());
+        return std::move(*device);
     }
     FAIL("no adapter presents to the window");
     return nullptr;

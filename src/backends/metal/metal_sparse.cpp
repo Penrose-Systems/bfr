@@ -64,7 +64,7 @@ core::Result<SparseMemoryHandle> MetalDevice::createSparseMemory(const SparseMem
         return std::unexpected(std::move(page.error()));
     }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectBuffers();
+    collectRetired();
     if (!desc.texture.isNull()) {
         auto texture = textureFor(desc.texture);
         if (!texture) {
@@ -121,7 +121,7 @@ core::Result<void> MetalDevice::destroySparseMemory(SparseMemoryHandle memory) {
     if (!sparseMemories_.retire(memory, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the sparse memory handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 

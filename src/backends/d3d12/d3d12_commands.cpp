@@ -84,10 +84,6 @@ core::Result<void> D3D12Device::setScissor(CommandListHandle commandList, const 
     // D3D12_RECT holds the edges as LONG.
     const std::uint64_t right = std::uint64_t{scissor.x} + scissor.width;
     const std::uint64_t bottom = std::uint64_t{scissor.y} + scissor.height;
-    if (!std::in_range<LONG>(right) || !std::in_range<LONG>(bottom)) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "scissor edges {}, {} are past what D3D12 takes", right,
-                             bottom);
-    }
     const D3D12_RECT rect{.left = static_cast<LONG>(scissor.x),
                           .top = static_cast<LONG>(scissor.y),
                           .right = static_cast<LONG>(right),
@@ -148,9 +144,6 @@ core::Result<void> D3D12Device::pushConstants(CommandListHandle commandList, std
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    if (auto checked = checkPushConstants(data, kPushConstantsSize); !checked) {
-        return checked;
-    }
     D3D12CommandPool* pool = commandPools_.find((*list)->pool);
     if (pool == nullptr) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the list's pool is gone");
@@ -160,9 +153,6 @@ core::Result<void> D3D12Device::pushConstants(CommandListHandle commandList, std
     if (type == D3D12_COMMAND_LIST_TYPE_COPY) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "the list records for copy queue {}, which D3D12 gives no push constants", pool->queue);
-    }
-    if (auto counted = countPushConstants(pool->pushed, pool->pushConstantUpdates); !counted) {
-        return counted;
     }
     // Root constants are per kind of pipeline, so both kinds the queue runs
     // get them; every shader reads the one block.
@@ -273,18 +263,12 @@ core::Result<void> D3D12Device::executeIndirect(CommandListHandle commandList, I
 
 core::Result<void> D3D12Device::drawIndirect(CommandListHandle commandList, BufferHandle buffer, std::uint64_t offset,
                                              std::uint32_t drawCount, std::uint32_t stride) {
-    if (auto checked = checkDrawCount(drawCount, multiDrawIndirect_); !checked) {
-        return checked;
-    }
     return executeIndirect(commandList, IndirectKind::Draw, stride, drawCount, buffer, offset, std::nullopt, 0);
 }
 
 core::Result<void> D3D12Device::drawIndexedIndirect(CommandListHandle commandList, BufferHandle buffer,
                                                     std::uint64_t offset, std::uint32_t drawCount,
                                                     std::uint32_t stride) {
-    if (auto checked = checkDrawCount(drawCount, multiDrawIndirect_); !checked) {
-        return checked;
-    }
     return executeIndirect(commandList, IndirectKind::DrawIndexed, stride, drawCount, buffer, offset, std::nullopt, 0);
 }
 
@@ -292,9 +276,6 @@ core::Result<void> D3D12Device::drawIndirectCount(CommandListHandle commandList,
                                                   std::uint64_t offset, BufferHandle countBuffer,
                                                   std::uint64_t countOffset, std::uint32_t maxDrawCount,
                                                   std::uint32_t stride) {
-    if (auto checked = checkCountDraws(drawIndirectCount_); !checked) {
-        return checked;
-    }
     return executeIndirect(commandList, IndirectKind::Draw, stride, maxDrawCount, buffer, offset, countBuffer,
                            countOffset);
 }
@@ -303,9 +284,6 @@ core::Result<void> D3D12Device::drawIndexedIndirectCount(CommandListHandle comma
                                                          std::uint64_t offset, BufferHandle countBuffer,
                                                          std::uint64_t countOffset, std::uint32_t maxDrawCount,
                                                          std::uint32_t stride) {
-    if (auto checked = checkCountDraws(drawIndirectCount_); !checked) {
-        return checked;
-    }
     return executeIndirect(commandList, IndirectKind::DrawIndexed, stride, maxDrawCount, buffer, offset, countBuffer,
                            countOffset);
 }
@@ -443,7 +421,7 @@ core::Result<void> D3D12Device::traceRaysIndirect(CommandListHandle /*commandLis
 }
 
 core::Result<std::uint64_t> D3D12Device::bufferAddress(BufferHandle /*buffer*/) {
-    return std::unexpected(checkBufferAddress(features_.bufferAddress, false).error());
+    return std::unexpected(checkBufferAddress(features_.bufferAddress).error());
 }
 
 core::Result<AccelerationStructurePropertyPoolHandle> D3D12Device::createAccelerationStructurePropertyPool(

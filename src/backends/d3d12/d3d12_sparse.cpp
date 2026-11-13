@@ -53,7 +53,7 @@ core::Result<SparseMemoryHandle> D3D12Device::createSparseMemory(const SparseMem
                              "sparse memory is made for a texture or buffer; neither was given");
     }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectBuffers();
+    collectRetired();
     // On ResourceHeapTier 1 a heap holds one kind of resource, its
     // D3D12_HEAP_FLAG_ALLOW_ONLY_* flags, and on tier 2 any. A multisampled
     // texture's heap takes the multisample placement alignment
@@ -119,7 +119,7 @@ core::Result<void> D3D12Device::destroySparseMemory(SparseMemoryHandle memory) {
     if (!sparseMemories_.retire(memory, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the sparse memory handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 

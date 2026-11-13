@@ -21,6 +21,7 @@
 #include "vulkan/vulkan_pipeline.h"
 #include "vulkan/vulkan_result.h"
 #include "vulkan/vulkan_swapchain.h"
+#include "vulkan/vulkan_texture.h"
 
 #include <volk.h>
 #include <vulkan/vk_enum_string_helper.h>
@@ -81,6 +82,33 @@ VkAttachmentStoreOp storeOpFor(StoreOp op) {
             return VK_ATTACHMENT_STORE_OP_DONT_CARE;
     }
     return VK_ATTACHMENT_STORE_OP_DONT_CARE;
+}
+
+// The size of extent's mipLevel, at least 1 each way.
+VkExtent2D mipExtent(VkExtent2D extent, std::uint32_t mipLevel) {
+    const auto at = [mipLevel](std::uint32_t size) {
+        return std::max(mipLevel < std::numeric_limits<std::uint32_t>::digits ? size >> mipLevel : 0U, 1U);
+    };
+    return {.width = at(extent.width), .height = at(extent.height)};
+}
+
+// texture's view of mipLevel from layer, a 3D texture's depth slice. Fails
+// with RhiUnsupported for a 3D texture made with none, which Vulkan draws to
+// only through 2D views of an image made for them (Features::
+// volumeColorTargets, and not sparse), and RhiInvalidCall past its levels or
+// layers: there is no such view.
+core::Result<VkImageView> attachmentViewOf(const VulkanTexture& texture, std::uint32_t mipLevel, std::uint32_t layer) {
+    if (texture.size().depth > 1 && !texture.hasAttachmentViews()) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "Vulkan draws to a 3D texture only through 2D views of its slices, which this one has "
+                             "none of: Features::volumeColorTargets is false, or it is sparse");
+    }
+    VkImageView view = texture.attachmentView(mipLevel, layer);
+    if (view == VK_NULL_HANDLE) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "the texture has no level {} or no layer {}", mipLevel,
+                             layer);
+    }
+    return view;
 }
 
 VkResolveModeFlagBits resolveModeFor(ResolveMode mode) {
@@ -176,7 +204,8 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
         made->replayAllocator_ = *replaying;
     }
     auto layout = VulkanBindlessLayout::create(made->table_, device, desc, setup.pushConstantsSize,
-                                               setup.accelerationStructureTable, setup.features.partitionedTop);
+                                               setup.accelerationStructureTable, setup.features.partitionedTop,
+                                               setup.uniformBufferTable);
     if (!layout) {
         return std::unexpected(std::move(layout.error()));
     }
@@ -191,15 +220,12 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       device_(device),
       hasBudget_(setup.hasBudget),
       hasSwapchain_(setup.hasSwapchain),
-      pushConstantsSize_(setup.pushConstantsSize),
       timestampPeriod_(setup.timestampPeriod),
       timestamps_(setup.timestamps),
-      multiDrawIndirect_(setup.multiDrawIndirect),
-      drawIndirectCount_(setup.drawIndirectCount),
       features_(setup.features),
       resolve_(setup.resolve),
       rayTracing_(setup.rayTracing),
-      addressing_{.indirectAddresses = setup.deviceAddresses,
+      addressing_{.addresses = setup.deviceAddresses,
                   .scratch = std::max<VkDeviceSize>({setup.rayTracing.scratchAlignment,
                                                      setup.features.partitionedTop ? kPartitionedAlignment : 0,
                                                      setup.rayTracing.clusterScratchAlignment}),
@@ -221,19 +247,20 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       renderSlots_(desc.maxCommandLists),
       renders_(desc.maxCommandLists),
       submissions_(queueCount(desc)),
-      buffers_("buffers", kBufferCapacity, kBufferLimit, rhi.logger()),
-      textures_("textures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      buffers_("buffers", desc.maxBuffers, desc.maxBuffers, rhi.logger()),
+      textures_("textures", desc.maxTextures, desc.maxTextures, rhi.logger()),
       samplers_("samplers", desc.maxBindlessSamplers, desc.maxBindlessSamplers, rhi.logger()),
       timestampPools_("timestamp pools", desc.maxTimestampPools, desc.maxTimestampPools, rhi.logger()),
       sparseMemories_("sparse memories", desc.maxSparseMemories, desc.maxSparseMemories, rhi.logger()),
-      pipelineCaches_("pipeline caches", kBufferCapacity, kBufferLimit, rhi.logger()),
-      accelerationStructures_("acceleration structures", kBufferCapacity, kBufferLimit, rhi.logger()),
+      pipelineCaches_("pipeline caches", desc.maxPipelineCaches, desc.maxPipelineCaches, rhi.logger()),
+      accelerationStructures_("acceleration structures", desc.maxAccelerationStructures, desc.maxAccelerationStructures,
+                              rhi.logger()),
       propertyPools_("acceleration structure property pools", desc.maxAccelerationStructurePropertyPools,
                      desc.maxAccelerationStructurePropertyPools, rhi.logger()),
       builds_(desc.maxBuildGeometries),
       bindless_(desc),
-      shaders_("shaders", kBufferCapacity, kBufferLimit, rhi.logger()),
-      pipelines_("pipelines", kBufferCapacity, kBufferLimit, rhi.logger()) {
+      shaders_("shaders", desc.maxShaders, desc.maxShaders, rhi.logger()),
+      pipelines_("pipelines", desc.maxPipelines, desc.maxPipelines, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
     // A core command above the version the device uses must not be called
     // (initialization.adoc:146-148), so below 1.3 the core entries take the
@@ -413,15 +440,6 @@ core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::
     if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Fixed for the surface, so asked once.
-    const auto presents = instance_->presents(adapter_, queues_[desc.queue]->family, *surface);
-    if (!presents) {
-        return std::unexpected(presents.error());
-    }
-    if (!*presents) {
-        return core::failure(core::ErrorCode::RhiPresentUnsupported, "queue {} doesn't present to the window",
-                             desc.queue);
-    }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, instance_->instanceTable(),
                                                           std::move(*surface), desc, families_, instance_->logger());
     if (swapchain.isNull()) {
@@ -535,15 +553,8 @@ core::Result<CommandPoolHandle> VulkanDevice::createCommandPool(const CommandPoo
             return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkAllocateCommandBuffers", .result = result});
         }
     }
-    const CommandPoolHandle commandPool = commandPools_.emplace(
-        VulkanCommandPool{.pool = pool,
-                          .queue = desc.queue,
-                          .pushConstantUpdates = desc.pushConstantUpdates,
-                          .pushed = 0,
-                          .first = *first,
-                          .next = *first,
-                          .recording = 0,
-                          .lastSubmit = 0});
+    const CommandPoolHandle commandPool = commandPools_.emplace(VulkanCommandPool{
+        .pool = pool, .queue = desc.queue, .first = *first, .next = *first, .recording = 0, .lastSubmit = 0});
     if (commandPool.isNull()) {
         release(pool);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
@@ -557,10 +568,6 @@ core::Result<void> VulkanDevice::resetCommandPool(CommandPoolHandle commandPool)
     if (!pool) {
         return std::unexpected(std::move(pool.error()));
     }
-    const auto completed = completedValue(*queues_[(*pool)->queue]);
-    if (!completed) {
-        return std::unexpected(completed.error());
-    }
     if (const VkResult result = table_.vkResetCommandPool(device_, (*pool)->pool, 0); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkResetCommandPool", .result = result});
     }
@@ -570,7 +577,6 @@ core::Result<void> VulkanDevice::resetCommandPool(CommandPoolHandle commandPool)
         end(lists_[slot].live);
     }
     (*pool)->next = (*pool)->first;
-    (*pool)->pushed = 0;
     return {};
 }
 
@@ -629,7 +635,7 @@ core::Result<CommandListHandle> VulkanDevice::beginCommands(CommandPoolHandle co
         table_.vkCmdBindDescriptorSets(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_.pipelineLayout(), 0, 1, &set, 0,
                                        nullptr);
     }
-    if (type != QueueType::Copy) {
+    if (queues_[(*pool)->queue]->compute) {
         table_.vkCmdBindDescriptorSets(buffer, VK_PIPELINE_BIND_POINT_COMPUTE, layout_.pipelineLayout(), 0, 1, &set, 0,
                                        nullptr);
     }
@@ -669,6 +675,9 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
     VkRenderingAttachmentInfo stencil{};
     VkExtent2D extent{};
     std::optional<AcquiredImage> image;
+    // Vulkan and Metal draw one count of layers, as NVRHI takes it: the
+    // depth-stencil attachment's, else color attachment 0's (misc.cpp:166-184).
+    std::uint32_t layerCount = desc.colorAttachmentCount != 0 ? desc.colorAttachments.at(0).layerCount : 0;
     for (std::uint32_t i = 0; i < desc.colorAttachmentCount; ++i) {
         const ColorAttachment& attachment = desc.colorAttachments.at(i);
         VkRenderingAttachmentInfo& color = colors.at(i);
@@ -706,14 +715,22 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
-        color.imageView = (*texture)->view();
-        extent = (*texture)->extent();
+        auto view = attachmentViewOf(**texture, attachment.mipLevel, attachment.layer);
+        if (!view) {
+            return std::unexpected(std::move(view.error()));
+        }
+        color.imageView = *view;
+        extent = mipExtent((*texture)->extent(), attachment.mipLevel);
         if (!attachment.resolveTexture.isNull()) {
             auto target = textureFor(attachment.resolveTexture);
             if (!target) {
                 return std::unexpected(std::move(target.error()));
             }
-            resolveView = (*target)->view();
+            auto targetView = attachmentViewOf(**target, 0, 0);
+            if (!targetView) {
+                return std::unexpected(std::move(targetView.error()));
+            }
+            resolveView = *targetView;
         }
         if (resolveView != VK_NULL_HANDLE) {
             // The only modes a color resolve takes (VUID-VkRenderingAttachmentInfo-imageView-06129, -06130).
@@ -731,8 +748,12 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
         }
         // Each aspect the format has gets its slot, with its own ops. A
         // read-only attachment keeps what it holds without writing it.
+        auto view = attachmentViewOf(**texture, depthStencil.mipLevel, depthStencil.layer);
+        if (!view) {
+            return std::unexpected(std::move(view.error()));
+        }
         depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        depth.imageView = (*texture)->view();
+        depth.imageView = *view;
         depth.imageLayout = depthStencil.readOnly ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
                                                   : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         depth.clearValue.depthStencil = {.depth = depthStencil.clearDepth, .stencil = depthStencil.clearStencil};
@@ -746,15 +767,20 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
             if (!target) {
                 return std::unexpected(std::move(target.error()));
             }
+            auto targetView = attachmentViewOf(**target, 0, 0);
+            if (!targetView) {
+                return std::unexpected(std::move(targetView.error()));
+            }
             // Both aspects resolve into one view (VUID-VkRenderingInfo-pDepthAttachment-06086).
             for (VkRenderingAttachmentInfo* aspect : {&depth, &stencil}) {
-                aspect->resolveImageView = (*target)->view();
+                aspect->resolveImageView = *targetView;
                 aspect->resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             }
             depth.resolveMode = resolveModeFor(depthStencil.depthResolve);
             stencil.resolveMode = resolveModeFor(depthStencil.stencilResolve);
         }
-        extent = (*texture)->extent();
+        extent = mipExtent((*texture)->extent(), depthStencil.mipLevel);
+        layerCount = depthStencil.layerCount;
     }
     if (image.has_value()) {
         // Rendered to earlier in this list, the swapchain is already in its chain.
@@ -781,7 +807,7 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
     VkRenderingInfo rendering{};
     rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     rendering.renderArea = {.offset = {.x = 0, .y = 0}, .extent = extent};
-    rendering.layerCount = 1;
+    rendering.layerCount = layerCount;
     rendering.colorAttachmentCount = desc.colorAttachmentCount;
     rendering.pColorAttachments = colors.data();
     if (depth.imageView != VK_NULL_HANDLE) {
@@ -791,15 +817,7 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
     }
     table_.vkCmdBeginRendering(buffer, &rendering);
     (*list)->presenting = image.has_value() ? std::optional{swapchain} : std::nullopt;
-    // The whole area, until the caller sets its own.
-    const auto whole = static_cast<float>(extent.width);
-    const auto height = static_cast<float>(extent.height);
-    if (auto set = setViewport(commandList,
-                               {.x = 0, .y = 0, .width = whole, .height = height, .minDepth = 0, .maxDepth = 1});
-        !set) {
-        return set;
-    }
-    return setScissor(commandList, {.x = 0, .y = 0, .width = extent.width, .height = extent.height});
+    return {};
 }
 
 core::Result<void> VulkanDevice::endRendering(CommandListHandle commandList) {

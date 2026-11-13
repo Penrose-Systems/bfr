@@ -32,6 +32,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -46,6 +47,13 @@ constexpr std::uint32_t kSide = 8;
 constexpr std::uint32_t kTexelBytes = 4;
 constexpr std::uint32_t kVertices = 3;
 constexpr std::uint32_t kPositionFloats = 4;
+
+// Sets the viewport and scissor to the whole of a kSide by kSide target.
+void viewWhole(Device& device, CommandListHandle list) {
+    CHECK(device.setViewport(list, {.x = 0, .y = 0, .width = kSide, .height = kSide, .minDepth = 0, .maxDepth = 1})
+              .has_value());
+    CHECK(device.setScissor(list, {.x = 0, .y = 0, .width = kSide, .height = kSide}).has_value());
+}
 
 // An Instance and a device on its first adapter, presenting nowhere.
 struct DrawDevice {
@@ -204,13 +212,14 @@ public:
         REQUIRE(pool.has_value());
         auto list = device.beginCommands(*pool);
         REQUIRE(list.has_value());
-        CHECK(device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget).has_value());
+        CHECK(
+            device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
         if (multisampled) {
-            CHECK(
-                device.textureBarrier(*list, drawn, TextureLayout::Undefined, TextureLayout::ColorTarget).has_value());
+            CHECK(device.textureBarrier(*list, drawn, TextureLayout::Undefined, TextureLayout::ColorTarget, {})
+                      .has_value());
         }
         if (!depth.isNull()) {
-            CHECK(device.textureBarrier(*list, depth, TextureLayout::Undefined, TextureLayout::DepthStencilTarget)
+            CHECK(device.textureBarrier(*list, depth, TextureLayout::Undefined, TextureLayout::DepthStencilTarget, {})
                       .has_value());
         }
         RenderingDesc rendering{.colorAttachmentCount = 1,
@@ -234,20 +243,23 @@ public:
         const auto begun = device.beginRendering(*list, {}, rendering);
         INFO(failureOf(begun));
         REQUIRE(begun.has_value());
+        viewWhole(device, *list);
         record(*list);
         CHECK(device.endRendering(*list).has_value());
         if (multisampled && targets.byCommand) {
-            CHECK(
-                device.textureBarrier(*list, drawn, TextureLayout::ColorTarget, TextureLayout::ResolveSrc).has_value());
-            CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::ResolveDst)
+            CHECK(device.textureBarrier(*list, drawn, TextureLayout::ColorTarget, TextureLayout::ResolveSrc, {})
+                      .has_value());
+            CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::ResolveDst, {})
                       .has_value());
             const auto resolved = device.resolveTexture(*list, drawn, 0, 0, target, 0, 0);
             INFO(failureOf(resolved));
             CHECK(resolved.has_value());
-            CHECK(device.textureBarrier(*list, target, TextureLayout::ResolveDst, TextureLayout::CopySrc).has_value());
+            CHECK(device.textureBarrier(*list, target, TextureLayout::ResolveDst, TextureLayout::CopySrc, {})
+                      .has_value());
         }
         else {
-            CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::CopySrc).has_value());
+            CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::CopySrc, {})
+                      .has_value());
         }
         const BufferTextureCopy whole{.bufferOffset = 0,
                                       .bytesPerRow = bytesPerRow_,
@@ -306,14 +318,17 @@ TEST_CASE("Device gives a storage buffer and a sampled or storage texture a slot
         const BufferHandle first = created(device, {.size = kBytes, .usage = {.storage = true}});
         const BufferHandle second = created(device, {.size = kBytes, .usage = {.storage = true}});
         const BufferHandle plain = created(device, {.size = kBytes, .usage = {.copyDst = true}});
-        const auto firstSlot = device.bufferSlot(first);
-        const auto secondSlot = device.bufferSlot(second);
+        const auto firstSlot = storageSlot(device, first);
+        const auto secondSlot = storageSlot(device, second);
         REQUIRE(firstSlot.has_value());
         REQUIRE(secondSlot.has_value());
         CHECK(*firstSlot != *secondSlot);
         CHECK(*firstSlot < kTestDevice.maxBindlessStorageBuffers);
         CHECK(*secondSlot < kTestDevice.maxBindlessStorageBuffers);
-        CHECK(device.bufferSlot(plain).error().code == ErrorCode::RhiInvalidCall);
+        const auto plainSlots = device.bufferSlots(plain);
+        REQUIRE(plainSlots.has_value());
+        CHECK(plainSlots->storage == kNoSlot);
+        CHECK(plainSlots->uniform == kNoSlot);
 
         const TextureDesc square{.dimension = TextureDimension::D2,
                                  .format = Format::Rgba8Unorm,
@@ -342,7 +357,7 @@ TEST_CASE("Device gives a storage buffer and a sampled or storage texture a slot
         }
         CHECK(device.destroyTexture(both).has_value());
         CHECK(device.destroyTexture(neither).has_value());
-        CHECK(device.bufferSlot(first).error().code == ErrorCode::RhiInvalidHandle);
+        CHECK(storageSlot(device, first).error().code == ErrorCode::RhiInvalidHandle);
         CHECK(device.textureSlots(both).error().code == ErrorCode::RhiInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
@@ -377,7 +392,7 @@ TEST_CASE("Device gives a depth-stencil texture that shaders sample a slot, and 
         REQUIRE(pool.has_value());
         auto list = device.beginCommands(*pool);
         REQUIRE(list.has_value());
-        CHECK(device.textureBarrier(*list, depth, TextureLayout::Undefined, TextureLayout::DepthStencilTarget)
+        CHECK(device.textureBarrier(*list, depth, TextureLayout::Undefined, TextureLayout::DepthStencilTarget, {})
                   .has_value());
         const RenderingDesc rendering{.colorAttachmentCount = 0,
                                       .colorAttachments = {},
@@ -392,8 +407,8 @@ TEST_CASE("Device gives a depth-stencil texture that shaders sample a slot, and 
         INFO(failureOf(begun));
         REQUIRE(begun.has_value());
         CHECK(device.endRendering(*list).has_value());
-        CHECK(
-            device.textureBarrier(*list, depth, TextureLayout::DepthStencilTarget, TextureLayout::Sampled).has_value());
+        CHECK(device.textureBarrier(*list, depth, TextureLayout::DepthStencilTarget, TextureLayout::Sampled, {})
+                  .has_value());
         const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
         INFO(failureOf(sent));
         REQUIRE(sent.has_value());
@@ -420,7 +435,7 @@ TEST_CASE("Device dispatches a compute pipeline that writes a storage buffer thr
         const PipelineHandle pipeline = created(device,
                                                 ComputePipelineDesc{.compute = spirv(bfr::test::spirv::kBindlessComp),
                                                                     .workgroupSize = {kWorkgroup, 1, 1}});
-        const auto slot = device.bufferSlot(target);
+        const auto slot = storageSlot(device, target);
         REQUIRE(slot.has_value());
         const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists, .pushConstantUpdates = 1});
         REQUIRE(pool.has_value());
@@ -447,6 +462,88 @@ TEST_CASE("Device dispatches a compute pipeline that writes a storage buffer thr
             CHECK(values.at(i) == i);
         }
         CHECK(device.destroyPipeline(pipeline).has_value());
+        CHECK(device.destroyBuffer(target).has_value());
+        CHECK(device.destroyBuffer(readback).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device gives a uniform buffer a slot in its table, which shaders read, where the adapter has one",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    constexpr std::uint32_t kUniforms = 4;
+    constexpr std::uint32_t kValue = 0x5EED;
+    std::vector<std::string> messages;
+    {
+        auto opened = createInstance(recordingInto(backend, messages), kValidation);
+        INFO(failureOf(opened));
+        REQUIRE(opened.has_value());
+        const std::unique_ptr<Instance> instance = std::move(*opened);
+        const Caps& caps = instance->adapters()[0].caps;
+        if (caps.bindless.maxUniformBuffers == 0) {
+            // No table to give slots in.
+            const auto refused = instance->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& desc) {
+                                                            desc.maxBindlessUniformBuffers = 1;
+                                                        }));
+            CHECK(refused.error().code == ErrorCode::RhiLimitReached);
+            SKIP("the adapter has no uniform buffer table");
+        }
+        auto made = instance->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& desc) {
+                                               desc.maxBindlessUniformBuffers = kUniforms;
+                                           }));
+        INFO(failureOf(made));
+        REQUIRE(made.has_value());
+        Device& device = **made;
+        const BufferHandle source = created(device, {.size = caps.limits.minUniformBufferAlignment,
+                                                     .memory = BufferMemory::Upload,
+                                                     .usage = {.uniform = true}});
+        const auto sourceSlots = device.bufferSlots(source);
+        REQUIRE(sourceSlots.has_value());
+        CHECK(sourceSlots->uniform < kUniforms);
+        CHECK(sourceSlots->storage == kNoSlot);
+        const auto mapped = device.mapBuffer(source);
+        REQUIRE(mapped.has_value());
+        std::memcpy(mapped->data(), &kValue, sizeof(kValue));
+
+        if (!takesSpirv(backend)) {
+            CHECK(device.destroyBuffer(source).has_value());
+            SKIP("no " << backend.name << " bytecode is checked in");
+        }
+        const BufferHandle target = created(device, {.size = sizeof(std::uint32_t),
+                                                     .usage = {.copySrc = true, .storage = true}});
+        const BufferHandle readback = created(device, {.size = sizeof(std::uint32_t),
+                                                       .memory = BufferMemory::Readback,
+                                                       .usage = {.copyDst = true}});
+        const PipelineHandle pipeline = created(device,
+                                                ComputePipelineDesc{.compute = spirv(bfr::test::spirv::kUniformComp),
+                                                                    .workgroupSize = {1, 1, 1}});
+        const auto targetSlot = storageSlot(device, target);
+        REQUIRE(targetSlot.has_value());
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists, .pushConstantUpdates = 1});
+        REQUIRE(pool.has_value());
+        auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+
+        CHECK(device.bindPipeline(*list, pipeline).has_value());
+        const std::array<std::uint32_t, 2> push{*targetSlot, sourceSlots->uniform};
+        CHECK(device.pushConstants(*list, std::as_bytes(std::span{push})).has_value());
+        CHECK(device.dispatch(*list, 1, 1, 1).has_value());
+        CHECK(device.barrier(*list).has_value());
+        const BufferCopy whole{.srcOffset = 0, .dstOffset = 0, .size = sizeof(std::uint32_t)};
+        CHECK(device.copyBuffer(*list, target, readback, std::span{&whole, 1}).has_value());
+        const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+        INFO(failureOf(sent));
+        REQUIRE(sent.has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
+
+        const auto read = device.mapBuffer(readback);
+        REQUIRE(read.has_value());
+        std::uint32_t value = 0;
+        std::memcpy(&value, read->data(), sizeof(value));
+        CHECK(value == kValue);
+        CHECK(device.destroyPipeline(pipeline).has_value());
+        CHECK(device.destroyBuffer(source).has_value());
         CHECK(device.destroyBuffer(target).has_value());
         CHECK(device.destroyBuffer(readback).has_value());
         CHECK(device.destroyCommandPool(*pool).has_value());
@@ -487,7 +584,7 @@ TEST_CASE("Device hands work across queues: compute writes and copy reads it, co
         const PipelineHandle pipeline = created(device,
                                                 ComputePipelineDesc{.compute = spirv(bfr::test::spirv::kBindlessComp),
                                                                     .workgroupSize = {kWorkgroup, 1, 1}});
-        const auto slot = device.bufferSlot(written);
+        const auto slot = storageSlot(device, written);
         REQUIRE(slot.has_value());
 
         const std::uint64_t bytesPerRow = alignUp(std::uint64_t{kSide} * kTexelBytes,
@@ -555,13 +652,14 @@ TEST_CASE("Device hands work across queues: compute writes and copy reads it, co
         // moves it on and reads it back.
         const auto uploading = device.beginCommands(*copyPool);
         REQUIRE(uploading.has_value());
-        CHECK(
-            device.textureBarrier(*uploading, *texture, TextureLayout::Undefined, TextureLayout::CopyDst).has_value());
+        CHECK(device.textureBarrier(*uploading, *texture, TextureLayout::Undefined, TextureLayout::CopyDst, {})
+                  .has_value());
         CHECK(device.copyBufferToTexture(*uploading, upload, *texture, std::span{&whole, 1}).has_value());
         const Token filled = send(kCopy, *uploading, std::span{&read, 1});
         const auto consuming = device.beginCommands(*graphicsPool);
         REQUIRE(consuming.has_value());
-        CHECK(device.textureBarrier(*consuming, *texture, TextureLayout::CopyDst, TextureLayout::CopySrc).has_value());
+        CHECK(device.textureBarrier(*consuming, *texture, TextureLayout::CopyDst, TextureLayout::CopySrc, {})
+                  .has_value());
         CHECK(device.copyTextureToBuffer(*consuming, *texture, uploaded, std::span{&whole, 1}).has_value());
         const Token used = send(kGraphics, *consuming, std::span{&filled, 1});
         REQUIRE(device.wait(used, kTestWait).has_value());
@@ -618,7 +716,7 @@ TEST_CASE("Device draws a triangle pulled from a storage buffer into a texture, 
         const auto written = device.mapBuffer(positions);
         REQUIRE(written.has_value());
         std::memcpy(written->data(), kTopHalf.data(), sizeof(kTopHalf));
-        const auto slot = device.bufferSlot(positions);
+        const auto slot = storageSlot(device, positions);
         REQUIRE(slot.has_value());
 
         const TextureHandle target = created(device, {.dimension = TextureDimension::D2,
@@ -638,7 +736,8 @@ TEST_CASE("Device draws a triangle pulled from a storage buffer into a texture, 
         auto list = device.beginCommands(*pool);
         REQUIRE(list.has_value());
 
-        CHECK(device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget).has_value());
+        CHECK(
+            device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
         RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
         rendering.colorAttachments[0] = {.texture = target,
                                          .loadOp = LoadOp::Clear,
@@ -647,11 +746,12 @@ TEST_CASE("Device draws a triangle pulled from a storage buffer into a texture, 
         const auto begun = device.beginRendering(*list, {}, rendering);
         INFO(failureOf(begun));
         REQUIRE(begun.has_value());
+        viewWhole(device, *list);
         CHECK(device.bindPipeline(*list, pipeline).has_value());
         CHECK(device.pushConstants(*list, bytesOf({.positions = *slot, .color = {1, 0, 0, 1}})).has_value());
         CHECK(device.draw(*list, kVertices, 1, 0, 0).has_value());
         CHECK(device.endRendering(*list).has_value());
-        CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::CopySrc).has_value());
+        CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::CopySrc, {}).has_value());
         const BufferTextureCopy whole{.bufferOffset = 0,
                                       .bytesPerRow = bytesPerRow,
                                       .rowsPerImage = kSide,
@@ -714,7 +814,7 @@ TEST_CASE("Device blends with the constant color setBlendConstants sets", "[rhi]
         const auto written = device.mapBuffer(positions);
         REQUIRE(written.has_value());
         std::memcpy(written->data(), kWhole.data(), sizeof(kWhole));
-        const auto slot = device.bufferSlot(positions);
+        const auto slot = storageSlot(device, positions);
         REQUIRE(slot.has_value());
         const TextureHandle target = created(device, {.dimension = TextureDimension::D2,
                                                       .format = Format::Rgba8Unorm,
@@ -744,19 +844,21 @@ TEST_CASE("Device blends with the constant color setBlendConstants sets", "[rhi]
         auto list = device.beginCommands(*pool);
         REQUIRE(list.has_value());
 
-        CHECK(device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget).has_value());
+        CHECK(
+            device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
         RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
         rendering.colorAttachments[0] = {.texture = target,
                                          .loadOp = LoadOp::Clear,
                                          .storeOp = StoreOp::Store,
                                          .clearColor = {0, 0, 0, 0}};
         REQUIRE(device.beginRendering(*list, {}, rendering).has_value());
+        viewWhole(device, *list);
         CHECK(device.bindPipeline(*list, pipeline).has_value());
         CHECK(device.setBlendConstants(*list, {0, 1, 0, 1}).has_value());
         CHECK(device.pushConstants(*list, bytesOf({.positions = *slot, .color = {1, 1, 1, 1}})).has_value());
         CHECK(device.draw(*list, kVertices, 1, 0, 0).has_value());
         CHECK(device.endRendering(*list).has_value());
-        CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::CopySrc).has_value());
+        CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::CopySrc, {}).has_value());
         const BufferTextureCopy whole{.bufferOffset = 0,
                                       .bytesPerRow = bytesPerRow,
                                       .rowsPerImage = kSide,
@@ -817,7 +919,7 @@ TEST_CASE("Device writes the stencil reference setStencilReference sets", "[rhi]
         const auto written = device.mapBuffer(positions);
         REQUIRE(written.has_value());
         std::memcpy(written->data(), kWhole.data(), sizeof(kWhole));
-        const auto slot = device.bufferSlot(positions);
+        const auto slot = storageSlot(device, positions);
         REQUIRE(slot.has_value());
         const TextureDesc texture{.dimension = TextureDimension::D2,
                                   .format = Format::Rgba8Unorm,
@@ -850,8 +952,9 @@ TEST_CASE("Device writes the stencil reference setStencilReference sets", "[rhi]
         auto list = device.beginCommands(*pool);
         REQUIRE(list.has_value());
 
-        CHECK(device.textureBarrier(*list, color, TextureLayout::Undefined, TextureLayout::ColorTarget).has_value());
-        CHECK(device.textureBarrier(*list, depth, TextureLayout::Undefined, TextureLayout::DepthStencilTarget)
+        CHECK(
+            device.textureBarrier(*list, color, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
+        CHECK(device.textureBarrier(*list, depth, TextureLayout::Undefined, TextureLayout::DepthStencilTarget, {})
                   .has_value());
         RenderingDesc rendering{.colorAttachmentCount = 1,
                                 .colorAttachments = {},
@@ -864,14 +967,15 @@ TEST_CASE("Device writes the stencil reference setStencilReference sets", "[rhi]
                                                  .clearStencil = 0}};
         rendering.colorAttachments[0] = {.texture = color, .loadOp = LoadOp::Clear, .storeOp = StoreOp::Store};
         REQUIRE(device.beginRendering(*list, {}, rendering).has_value());
+        viewWhole(device, *list);
         constexpr std::uint32_t kReference = 7;
         CHECK(device.bindPipeline(*list, pipeline).has_value());
         CHECK(device.setStencilReference(*list, kReference).has_value());
         CHECK(device.pushConstants(*list, bytesOf({.positions = *slot, .color = {1, 1, 1, 1}})).has_value());
         CHECK(device.draw(*list, kVertices, 1, 0, 0).has_value());
         CHECK(device.endRendering(*list).has_value());
-        CHECK(
-            device.textureBarrier(*list, depth, TextureLayout::DepthStencilTarget, TextureLayout::CopySrc).has_value());
+        CHECK(device.textureBarrier(*list, depth, TextureLayout::DepthStencilTarget, TextureLayout::CopySrc, {})
+                  .has_value());
         const BufferTextureCopy stencil{.bufferOffset = 0,
                                         .bytesPerRow = bytesPerRow,
                                         .rowsPerImage = kSide,
@@ -936,7 +1040,8 @@ TEST_CASE("Device clears an integer target to the integers asked for", "[rhi][ag
         auto list = device.beginCommands(*pool);
         REQUIRE(list.has_value());
 
-        CHECK(device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget).has_value());
+        CHECK(
+            device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
         RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
         rendering.colorAttachments[0] = {.texture = target,
                                          .loadOp = LoadOp::Clear,
@@ -948,7 +1053,7 @@ TEST_CASE("Device clears an integer target to the integers asked for", "[rhi][ag
         INFO(failureOf(begun));
         REQUIRE(begun.has_value());
         CHECK(device.endRendering(*list).has_value());
-        CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::CopySrc).has_value());
+        CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::CopySrc, {}).has_value());
         const BufferTextureCopy whole{
             .bytesPerRow = bytesPerRow, .rowsPerImage = kSide, .width = kSide, .height = kSide, .depth = 1};
         CHECK(device.copyTextureToBuffer(*list, target, readback, std::span{&whole, 1}).has_value());
@@ -962,6 +1067,259 @@ TEST_CASE("Device clears an integer target to the integers asked for", "[rhi][ag
         std::uint32_t texel = 0;
         std::memcpy(&texel, read->data(), sizeof(texel));
         CHECK(texel == bits);
+        CHECK(device.destroyTexture(target).has_value());
+        CHECK(device.destroyBuffer(readback).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device renders to the mip level and layers an attachment names", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    constexpr std::uint32_t kLayers = 4;
+    constexpr std::uint32_t kMips = 2;
+    constexpr std::uint32_t kMip = 1;
+    constexpr std::uint32_t kFirst = 2;
+    constexpr std::uint32_t kCleared = 7;
+    std::vector<std::string> messages;
+    {
+        const DrawDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const Limits& limits = made.instance->adapters()[0].caps.limits;
+        constexpr std::uint32_t kMipSide = kSide >> kMip;
+        const std::uint64_t bytesPerRow = alignUp(std::uint64_t{kMipSide} * sizeof(std::uint32_t),
+                                                  std::max<std::uint64_t>(limits.copyRowPitchAlignment, 1));
+        const std::uint64_t layerBytes = alignUp(bytesPerRow * kMipSide,
+                                                 std::max<std::uint64_t>(limits.copyOffsetAlignment, 1));
+        const TextureHandle target = created(device, {.dimension = TextureDimension::D2,
+                                                      .format = Format::R32Uint,
+                                                      .width = kSide,
+                                                      .height = kSide,
+                                                      .depth = 1,
+                                                      .layers = kLayers,
+                                                      .mipLevels = kMips,
+                                                      .samples = 1,
+                                                      .usage = {.copySrc = true, .colorAttachment = true}});
+        const BufferHandle readback = created(device, {.size = layerBytes * kLayers,
+                                                       .memory = BufferMemory::Readback,
+                                                       .usage = {.copyDst = true}});
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+
+        CHECK(
+            device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
+        // Every layer of the level cleared to 0, then two of them to kCleared.
+        for (const auto& [layer, count, value] :
+             {std::tuple{0U, kLayers, 0U}, std::tuple{kFirst, kLayers - kFirst, kCleared}}) {
+            RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+            rendering.colorAttachments[0] = {.texture = target,
+                                             .mipLevel = kMip,
+                                             .layer = layer,
+                                             .layerCount = count,
+                                             .loadOp = LoadOp::Clear,
+                                             .storeOp = StoreOp::Store,
+                                             .clearColor = {},
+                                             .clearInteger = true,
+                                             .clearColorInteger = {value, 0, 0, 0}};
+            const auto begun = device.beginRendering(*list, {}, rendering);
+            INFO(failureOf(begun));
+            REQUIRE(begun.has_value());
+            CHECK(device.endRendering(*list).has_value());
+        }
+        CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::CopySrc, {}).has_value());
+        std::array<BufferTextureCopy, kLayers> layers{};
+        for (std::uint32_t layer = 0; layer < kLayers; ++layer) {
+            layers.at(layer) = {.bufferOffset = layerBytes * layer,
+                                .bytesPerRow = bytesPerRow,
+                                .rowsPerImage = kMipSide,
+                                .mipLevel = kMip,
+                                .layer = layer,
+                                .width = kMipSide,
+                                .height = kMipSide,
+                                .depth = 1};
+        }
+        CHECK(device.copyTextureToBuffer(*list, target, readback, layers).has_value());
+        const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+        INFO(failureOf(sent));
+        REQUIRE(sent.has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
+
+        const auto read = device.mapBuffer(readback);
+        REQUIRE(read.has_value());
+        for (std::uint32_t layer = 0; layer < kLayers; ++layer) {
+            std::uint32_t texel = 0;
+            std::memcpy(&texel, read->subspan(layerBytes * layer).data(), sizeof(texel));
+            INFO("layer " << layer);
+            CHECK(texel == (layer >= kFirst ? kCleared : 0U));
+        }
+        CHECK(device.destroyTexture(target).has_value());
+        CHECK(device.destroyBuffer(readback).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device renders to the depth slices of a 3D texture an attachment names, where the adapter can",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    constexpr std::uint32_t kSlices = 4;
+    constexpr std::uint32_t kFirst = 2;
+    constexpr std::uint32_t kCleared = 7;
+    std::vector<std::string> messages;
+    {
+        const DrawDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const Caps& caps = made.instance->adapters()[0].caps;
+        if (!caps.features.volumeColorTargets) {
+            SKIP("the adapter draws to no 3D texture by slice");
+        }
+        const std::uint64_t bytesPerRow = alignUp(std::uint64_t{kSide} * sizeof(std::uint32_t),
+                                                  std::max<std::uint64_t>(caps.limits.copyRowPitchAlignment, 1));
+        const std::uint64_t sliceBytes = alignUp(bytesPerRow * kSide,
+                                                 std::max<std::uint64_t>(caps.limits.copyOffsetAlignment, 1));
+        const TextureHandle target = created(device, {.dimension = TextureDimension::D3,
+                                                      .format = Format::R32Uint,
+                                                      .width = kSide,
+                                                      .height = kSide,
+                                                      .depth = kSlices,
+                                                      .layers = 1,
+                                                      .mipLevels = 1,
+                                                      .samples = 1,
+                                                      .usage = {.copySrc = true, .colorAttachment = true}});
+        const BufferHandle readback = created(device, {.size = sliceBytes * kSlices,
+                                                       .memory = BufferMemory::Readback,
+                                                       .usage = {.copyDst = true}});
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+
+        CHECK(
+            device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
+        // Every slice cleared to 0, then two of them to kCleared.
+        for (const auto& [slice, count, value] :
+             {std::tuple{0U, kSlices, 0U}, std::tuple{kFirst, kSlices - kFirst, kCleared}}) {
+            RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+            rendering.colorAttachments[0] = {.texture = target,
+                                             .layer = slice,
+                                             .layerCount = count,
+                                             .loadOp = LoadOp::Clear,
+                                             .storeOp = StoreOp::Store,
+                                             .clearColor = {},
+                                             .clearInteger = true,
+                                             .clearColorInteger = {value, 0, 0, 0}};
+            const auto begun = device.beginRendering(*list, {}, rendering);
+            INFO(failureOf(begun));
+            REQUIRE(begun.has_value());
+            CHECK(device.endRendering(*list).has_value());
+        }
+        CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::CopySrc, {}).has_value());
+        std::array<BufferTextureCopy, kSlices> slices{};
+        for (std::uint32_t slice = 0; slice < kSlices; ++slice) {
+            slices.at(slice) = {.bufferOffset = sliceBytes * slice,
+                                .bytesPerRow = bytesPerRow,
+                                .rowsPerImage = kSide,
+                                .z = slice,
+                                .width = kSide,
+                                .height = kSide,
+                                .depth = 1};
+        }
+        CHECK(device.copyTextureToBuffer(*list, target, readback, slices).has_value());
+        const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+        INFO(failureOf(sent));
+        REQUIRE(sent.has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
+
+        const auto read = device.mapBuffer(readback);
+        REQUIRE(read.has_value());
+        for (std::uint32_t slice = 0; slice < kSlices; ++slice) {
+            std::uint32_t texel = 0;
+            std::memcpy(&texel, read->subspan(sliceBytes * slice).data(), sizeof(texel));
+            INFO("slice " << slice);
+            CHECK(texel == (slice >= kFirst ? kCleared : 0U));
+        }
+        CHECK(device.destroyTexture(target).has_value());
+        CHECK(device.destroyBuffer(readback).has_value());
+        CHECK(device.destroyCommandPool(*pool).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device moves only the mip levels a texture barrier names, so one level renders while another is read",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    constexpr std::uint32_t kMips = 2;
+    constexpr std::array<std::uint32_t, kMips> kValues{3, 5};
+    std::vector<std::string> messages;
+    {
+        const DrawDevice made{recordingInto(backend, messages)};
+        Device& device = *made.device;
+        const Limits& limits = made.instance->adapters()[0].caps.limits;
+        const std::uint64_t bytesPerRow = alignUp(std::uint64_t{kSide} * sizeof(std::uint32_t),
+                                                  std::max<std::uint64_t>(limits.copyRowPitchAlignment, 1));
+        const std::uint64_t mipBytes = alignUp(bytesPerRow * kSide,
+                                               std::max<std::uint64_t>(limits.copyOffsetAlignment, 1));
+        const TextureHandle target = created(device, {.dimension = TextureDimension::D2,
+                                                      .format = Format::R32Uint,
+                                                      .width = kSide,
+                                                      .height = kSide,
+                                                      .depth = 1,
+                                                      .layers = 1,
+                                                      .mipLevels = kMips,
+                                                      .samples = 1,
+                                                      .usage = {.copySrc = true, .colorAttachment = true}});
+        const BufferHandle readback =
+            created(device, {.size = mipBytes * kMips, .memory = BufferMemory::Readback, .usage = {.copyDst = true}});
+        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        auto list = device.beginCommands(*pool);
+        REQUIRE(list.has_value());
+
+        // Each level is cleared while the one before it waits to be copied.
+        std::array<BufferTextureCopy, kMips> levels{};
+        for (std::uint32_t mip = 0; mip < kMips; ++mip) {
+            const TextureRange level{.mipLevel = mip, .mipCount = 1, .layer = 0, .layerCount = 1};
+            CHECK(device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, level)
+                      .has_value());
+            RenderingDesc rendering{.colorAttachmentCount = 1, .colorAttachments = {}, .depthStencil = {}};
+            rendering.colorAttachments[0] = {.texture = target,
+                                             .mipLevel = mip,
+                                             .loadOp = LoadOp::Clear,
+                                             .storeOp = StoreOp::Store,
+                                             .clearColor = {},
+                                             .clearInteger = true,
+                                             .clearColorInteger = {kValues.at(mip), 0, 0, 0}};
+            const auto begun = device.beginRendering(*list, {}, rendering);
+            INFO(failureOf(begun));
+            REQUIRE(begun.has_value());
+            CHECK(device.endRendering(*list).has_value());
+            CHECK(device.textureBarrier(*list, target, TextureLayout::ColorTarget, TextureLayout::CopySrc, level)
+                      .has_value());
+            const std::uint32_t side = kSide >> mip;
+            levels.at(mip) = {.bufferOffset = mipBytes * mip,
+                              .bytesPerRow = bytesPerRow,
+                              .rowsPerImage = side,
+                              .mipLevel = mip,
+                              .width = side,
+                              .height = side,
+                              .depth = 1};
+        }
+        CHECK(device.copyTextureToBuffer(*list, target, readback, levels).has_value());
+        const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+        INFO(failureOf(sent));
+        REQUIRE(sent.has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
+
+        const auto read = device.mapBuffer(readback);
+        REQUIRE(read.has_value());
+        for (std::uint32_t mip = 0; mip < kMips; ++mip) {
+            std::uint32_t texel = 0;
+            std::memcpy(&texel, read->subspan(mipBytes * mip).data(), sizeof(texel));
+            INFO("mip " << mip);
+            CHECK(texel == kValues.at(mip));
+        }
         CHECK(device.destroyTexture(target).has_value());
         CHECK(device.destroyBuffer(readback).has_value());
         CHECK(device.destroyCommandPool(*pool).has_value());
@@ -1015,7 +1373,7 @@ TEST_CASE("Device refuses an enum value BFR doesn't have with RhiInvalidCall", "
         pipeline = colorPipeline();
         pipeline.colorTargets[0].blend.srcColor = static_cast<BlendFactor>(kPast);
         CHECK(device.createGraphicsPipeline(pipeline).error().code == ErrorCode::RhiInvalidCall);
-        CHECK(device.textureBarrier(*list, target, static_cast<TextureLayout>(kPast), TextureLayout::ColorTarget)
+        CHECK(device.textureBarrier(*list, target, static_cast<TextureLayout>(kPast), TextureLayout::ColorTarget, {})
                   .error()
                   .code == ErrorCode::RhiInvalidCall);
         CHECK(device.bindIndexBuffer(*list, indices, 0, static_cast<IndexType>(kPast)).error().code ==
@@ -1039,7 +1397,9 @@ TEST_CASE("Device refuses an enum value BFR doesn't have with RhiInvalidCall", "
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Device refuses push constants and renderings it can't pass on with RhiInvalidCall", "[rhi][agnostic]") {
+TEST_CASE(
+    "Device takes push constants to the layout's size, and refuses renderings it can't pass on with RhiInvalidCall",
+    "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     if (!takesSpirv(backend)) {
         SKIP("no " << backend.name << " bytecode is checked in");
@@ -1071,16 +1431,13 @@ TEST_CASE("Device refuses push constants and renderings it can't pass on with Rh
         const Viewport whole{.x = 0, .y = 0, .width = kSide, .height = kSide, .minDepth = 0, .maxDepth = 1};
         const Rect all{.x = 0, .y = 0, .width = kSide, .height = kSide};
 
-        // Push constants are as many bytes as the layout BFR made holds and
-        // no more, and at most the pool's updates.
+        // Push constants are as many bytes as the layout BFR made holds.
         const std::uint32_t pushSize = made.instance->adapters()[0].caps.limits.maxPushConstantsSize;
-        const std::vector<std::byte> pushed(pushSize + sizeof(std::uint32_t));
-        CHECK(device.pushConstants(*list, pushed).error().code == ErrorCode::RhiInvalidCall);
-        CHECK(device.pushConstants(*list, std::span{pushed}.first(pushSize)).has_value());
+        const std::vector<std::byte> pushed(pushSize);
+        CHECK(device.pushConstants(*list, pushed).has_value());
         for (std::uint32_t update = 1; update < kUpdates; ++update) {
             CHECK(device.pushConstants(*list, bytesOf({})).has_value());
         }
-        CHECK(device.pushConstants(*list, bytesOf({})).error().code == ErrorCode::RhiLimitReached);
 
         // A rendering wants an attachment, and a texture where it says one.
         const RenderingDesc none{};
@@ -1089,13 +1446,14 @@ TEST_CASE("Device refuses push constants and renderings it can't pass on with Rh
         CHECK(device.beginRendering(*list, {}, unnamed).error().code == ErrorCode::RhiInvalidCall);
         RenderingDesc rendering = unnamed;
         rendering.colorAttachments[0].texture = target;
-        CHECK(device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget).has_value());
+        CHECK(
+            device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
         REQUIRE(device.beginRendering(*list, {}, rendering).has_value());
+        CHECK(device.setViewport(*list, whole).has_value());
+        CHECK(device.setScissor(*list, all).has_value());
         CHECK(device.bindPipeline(*list, graphics).has_value());
         CHECK(device.bindIndexBuffer(*list, indices, 0, IndexType::Uint16).has_value());
         CHECK(device.drawIndexed(*list, 0, 0, 0, 0, 0).has_value());
-        CHECK(device.setViewport(*list, whole).has_value());
-        CHECK(device.setScissor(*list, all).has_value());
         CHECK(device.endRendering(*list).has_value());
 
         CHECK(device.destroyCommandList(*list).has_value());
@@ -1128,7 +1486,7 @@ TEST_CASE("Device draws indirectly the arguments a buffer holds, many at a strid
                                                                                           0,  1, 0, 1, -1, 0,  0, 1,
                                                                                           1,  0, 0, 1, 0,  -1, 0, 1};
         const BufferHandle positions = uploaded(device, kHalves, {.storage = true});
-        const auto slot = device.bufferSlot(positions);
+        const auto slot = storageSlot(device, positions);
         REQUIRE(slot.has_value());
         const PipelineHandle pipeline = created(device, colorPipeline());
         const auto draws =
@@ -1170,37 +1528,27 @@ TEST_CASE("Device draws indirectly the arguments a buffer holds, many at a strid
             CHECK(image.at(kSide / 2, kTopRow) == kRed);
             CHECK(image.at(kSide / 2, kBottomRow) == kBlack);
         }
-        SECTION("two draws read the second arguments a stride on") {
+        SECTION("two draws read the second arguments a stride on, where the device draws several") {
+            if (!caps.features.multiDrawIndirect) {
+                SKIP("the adapter draws one indirect draw per call");
+            }
             const Rendered image{device, caps.limits, [&](CommandListHandle list) {
                                      bind(list);
-                                     const auto drawn = drawIndirect(list, 2);
-                                     if (caps.features.multiDrawIndirect) {
-                                         CHECK(drawn.has_value());
-                                     }
-                                     else {
-                                         CHECK(drawn.error().code == ErrorCode::RhiUnsupported);
-                                     }
+                                     CHECK(drawIndirect(list, 2).has_value());
                                  }};
-            if (caps.features.multiDrawIndirect) {
-                CHECK(image.at(kSide / 2, kTopRow) == kRed);
-                CHECK(image.at(kSide / 2, kBottomRow) == kRed);
-            }
+            CHECK(image.at(kSide / 2, kTopRow) == kRed);
+            CHECK(image.at(kSide / 2, kBottomRow) == kRed);
         }
-        SECTION("a count buffer holding 1 draws one of at most two") {
+        SECTION("a count buffer holding 1 draws one of at most two, where the device reads a count") {
+            if (!caps.features.drawIndirectCount) {
+                SKIP("the adapter reads no draw count from a buffer");
+            }
             const Rendered image{device, caps.limits, [&](CommandListHandle list) {
                                      bind(list);
-                                     const auto drawn = drawCounted(list, 2);
-                                     if (caps.features.drawIndirectCount) {
-                                         CHECK(drawn.has_value());
-                                     }
-                                     else {
-                                         CHECK(drawn.error().code == ErrorCode::RhiUnsupported);
-                                     }
+                                     CHECK(drawCounted(list, 2).has_value());
                                  }};
-            if (caps.features.drawIndirectCount) {
-                CHECK(image.at(kSide / 2, kTopRow) == kRed);
-                CHECK(image.at(kSide / 2, kBottomRow) == kBlack);
-            }
+            CHECK(image.at(kSide / 2, kTopRow) == kRed);
+            CHECK(image.at(kSide / 2, kBottomRow) == kBlack);
         }
         for (const BufferHandle buffer : {positions, args, indexedArgs, indices, count}) {
             CHECK(device.destroyBuffer(buffer).has_value());
@@ -1228,7 +1576,7 @@ TEST_CASE("Device dispatches indirectly the workgroups a buffer holds", "[rhi][a
         const PipelineHandle pipeline = created(device,
                                                 ComputePipelineDesc{.compute = spirv(bfr::test::spirv::kBindlessComp),
                                                                     .workgroupSize = {kWorkgroup, 1, 1}});
-        const auto slot = device.bufferSlot(target);
+        const auto slot = storageSlot(device, target);
         REQUIRE(slot.has_value());
         const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists, .pushConstantUpdates = 1});
         REQUIRE(pool.has_value());
@@ -1279,7 +1627,7 @@ TEST_CASE("Device assembles the exact topology a pipeline or setTopology names, 
         constexpr std::array<float, std::size_t{kCorners} * kPositionFloats> kQuad{-1, -1, 0, 1, 1, -1, 0, 1,
                                                                                    -1, 1,  0, 1, 1, 1,  0, 1};
         const BufferHandle positions = uploaded(device, kQuad, {.storage = true});
-        const auto slot = device.bufferSlot(positions);
+        const auto slot = storageSlot(device, positions);
         REQUIRE(slot.has_value());
         const PipelineHandle list = created(device, colorPipeline());
         GraphicsPipelineDesc stripDesc = colorPipeline();
@@ -1349,7 +1697,7 @@ TEST_CASE("Device assembles the exact topology a pipeline or setTopology names, 
             constexpr std::array<float, std::size_t{kCorners} * kPositionFloats> kRound{-1, -1, 0, 1, 1,  -1, 0, 1,
                                                                                         1,  1,  0, 1, -1, 1,  0, 1};
             const BufferHandle round = uploaded(device, kRound, {.storage = true});
-            const auto roundSlot = device.bufferSlot(round);
+            const auto roundSlot = storageSlot(device, round);
             REQUIRE(roundSlot.has_value());
             const Rendered image{device, caps.limits, [&](CommandListHandle commands) {
                                      CHECK(device.bindPipeline(commands, list).has_value());
@@ -1395,9 +1743,9 @@ void renderDepth(Device& device, const DepthStencilAttachment& attachment, Textu
     REQUIRE(pool.has_value());
     auto list = device.beginCommands(*pool);
     REQUIRE(list.has_value());
-    CHECK(device.textureBarrier(*list, attachment.texture, before, TextureLayout::DepthStencilTarget).has_value());
+    CHECK(device.textureBarrier(*list, attachment.texture, before, TextureLayout::DepthStencilTarget, {}).has_value());
     if (!resolve.isNull()) {
-        CHECK(device.textureBarrier(*list, resolve, TextureLayout::Undefined, TextureLayout::DepthStencilTarget)
+        CHECK(device.textureBarrier(*list, resolve, TextureLayout::Undefined, TextureLayout::DepthStencilTarget, {})
                   .has_value());
     }
     const RenderingDesc rendering{.colorAttachmentCount = 0, .colorAttachments = {}, .depthStencil = attachment};
@@ -1405,9 +1753,9 @@ void renderDepth(Device& device, const DepthStencilAttachment& attachment, Textu
     INFO(failureOf(begun));
     REQUIRE(begun.has_value());
     CHECK(device.endRendering(*list).has_value());
-    CHECK(device.textureBarrier(*list, attachment.texture, TextureLayout::DepthStencilTarget, after).has_value());
+    CHECK(device.textureBarrier(*list, attachment.texture, TextureLayout::DepthStencilTarget, after, {}).has_value());
     if (!resolve.isNull()) {
-        CHECK(device.textureBarrier(*list, resolve, TextureLayout::DepthStencilTarget, TextureLayout::CopySrc)
+        CHECK(device.textureBarrier(*list, resolve, TextureLayout::DepthStencilTarget, TextureLayout::CopySrc, {})
                   .has_value());
     }
     const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
@@ -1490,7 +1838,7 @@ TEST_CASE("Device tests depth, and resolves a multisampled attachment as renderi
                                                                                     0,  1,  1, 1, 0, 1};
         const BufferHandle half = uploaded(device, kHalf, {.storage = true});
         const auto slotOf = [&](BufferHandle buffer) {
-            const auto slot = device.bufferSlot(buffer);
+            const auto slot = storageSlot(device, buffer);
             REQUIRE(slot.has_value());
             return *slot;
         };
@@ -1663,7 +2011,7 @@ TEST_CASE("Device samples a depth attachment it tests read-only", "[rhi][agnosti
         constexpr std::array<float, std::size_t{kVertices} * kPositionFloats> kNear{-1, -1, 0,  1, 3, -1,
                                                                                     0,  1,  -1, 3, 0, 1};
         const BufferHandle positions = uploaded(device, kNear, {.storage = true});
-        const auto positionSlot = device.bufferSlot(positions);
+        const auto positionSlot = storageSlot(device, positions);
         REQUIRE(positionSlot.has_value());
         GraphicsPipelineDesc desc = colorPipeline();
         desc.fragment = spirv(bfr::test::spirv::kBindlessFrag);
@@ -1728,7 +2076,7 @@ TEST_CASE("Device draws with mesh shaders, directly and indirectly, and with a t
                                                                                              1,  -1, 0,  1, 1, 1,
                                                                                              0,  1,  -1, 1, 0, 1};
         const BufferHandle positions = uploaded(device, kHalves, {.storage = true});
-        const auto slot = device.bufferSlot(positions);
+        const auto slot = storageSlot(device, positions);
         REQUIRE(slot.has_value());
         const PipelineHandle mesh = created(device, meshDesc);
         // Two workgroups; then, for the count draw, one, and two again, which

@@ -624,10 +624,6 @@ core::Result<VkDeviceAddress> VulkanDevice::addressOf(BufferHandle buffer, std::
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    if ((*found)->address() == 0) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "a buffer read or written by address has no usage that gives it one");
-    }
     return (*found)->address() + offset;
 }
 
@@ -724,7 +720,7 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
         return micromapHasNoReference();
     }
     // Cold, so structures the GPU is done with are freed here.
-    collectBuffers();
+    collectRetired();
     auto slot = bindless_.takeAccelerationStructure(desc.type);
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
@@ -738,7 +734,7 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     const auto place = [&](VkBufferUsageFlags usage, VkDeviceSize alignment) -> core::Result<VulkanBuffer> {
         if (!desc.captureReplay) {
             return placeVulkanBuffer(table_, device_, allocator_, desc.size, usage, BufferMemory::Device, families_,
-                                     alignment, core::SlotChains::kEnd);
+                                     alignment, {});
         }
         auto replayable = placeReplayableVulkanBuffer(table_, device_, replayAllocator_, desc.size, usage, families_,
                                                       {.buffer = desc.replay.words[kBufferWord],
@@ -771,7 +767,8 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
         if (made.isNull()) {
             giveBack();
             return core::failure(core::ErrorCode::RhiLimitReached,
-                                 "the device holds at most {} acceleration structures", kBufferLimit);
+                                 "the device holds at most {} acceleration structures",
+                                 desc_.maxAccelerationStructures);
         }
         if (*slot != core::SlotChains::kEnd) {
             layout_.writePartitionedTop(*slot, address);
@@ -805,7 +802,8 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
         if (named.isNull()) {
             giveBack();
             return core::failure(core::ErrorCode::RhiLimitReached,
-                                 "the device holds at most {} acceleration structures", kBufferLimit);
+                                 "the device holds at most {} acceleration structures",
+                                 desc_.maxAccelerationStructures);
         }
         return named;
     }
@@ -846,7 +844,7 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     if (made.isNull()) {
         giveBack();
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} acceleration structures",
-                             kBufferLimit);
+                             desc_.maxAccelerationStructures);
     }
     if (*slot != core::SlotChains::kEnd) {
         layout_.writeAccelerationStructure(*slot, structure);
@@ -895,7 +893,7 @@ core::Result<void> VulkanDevice::destroyAccelerationStructure(AccelerationStruct
     if (!accelerationStructures_.retire(structure, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the acceleration structure handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 
@@ -1047,11 +1045,14 @@ core::Result<void> VulkanDevice::buildAccelerationStructureIndirect(CommandListH
                                                                     const AccelerationStructureBuild& build,
                                                                     BufferHandle ranges, std::uint64_t offset,
                                                                     std::uint32_t stride) {
-    auto found = bufferFor(ranges);
-    if (!found) {
-        return std::unexpected(std::move(found.error()));
+    if (auto checked = checkAccelerationStructures(features_.accelerationStructure); !checked) {
+        return checked;
     }
-    const std::pair<VkDeviceAddress, std::uint32_t> read{(*found)->address() + offset, stride};
+    auto address = addressOf(ranges, offset);
+    if (!address) {
+        return std::unexpected(std::move(address.error()));
+    }
+    const std::pair<VkDeviceAddress, std::uint32_t> read{*address, stride};
     return recordBuild(commandList, build, &read);
 }
 
@@ -1368,7 +1369,7 @@ core::Result<AccelerationStructurePropertyPoolHandle> VulkanDevice::createAccele
                              "Vulkan writes no property {} of opacity micromaps, only compacted and serialized sizes",
                              static_cast<std::uint32_t>(desc.property));
     }
-    collectBuffers();
+    collectRetired();
     VkQueryPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
     info.queryType = desc.opacityMicromaps ? *micromapType : queryTypeFor(desc.property);
@@ -1398,7 +1399,7 @@ core::Result<void> VulkanDevice::destroyAccelerationStructurePropertyPool(
     if (!propertyPools_.retire(pool, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the property pool handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 

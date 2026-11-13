@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <format>
@@ -136,26 +137,11 @@ VkImageAspectFlags aspectFor(TextureAspect aspect) {
 }
 
 // region as Vulkan takes it: the buffer's rows in texels, which Vulkan counts
-// in and BFR states in bytes. Fails with RhiInvalidCall when a value has no
-// room in VkBufferImageCopy: a row that is not whole blocks or is more texels
-// than a uint32_t counts, or an offset past an int32_t.
-core::Result<VkBufferImageCopy> copyFor(const BufferTextureCopy& region, Format format) {
+// in and BFR states in bytes, and its offsets as Vulkan's int32_t.
+VkBufferImageCopy copyFor(const BufferTextureCopy& region, Format format) {
     const FormatBlock& block = blockOf(format);
     const std::uint32_t blockBytes = bytesOf(block, region.aspect);
     const std::uint64_t rowTexels = blockBytes == 0 ? 0 : region.bytesPerRow / blockBytes * block.width;
-    if (blockBytes != 0 && region.bytesPerRow % blockBytes != 0) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes per row is not whole blocks of {} bytes",
-                             region.bytesPerRow, blockBytes);
-    }
-    if (!std::in_range<std::uint32_t>(rowTexels)) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes per row is more texels than Vulkan counts",
-                             region.bytesPerRow);
-    }
-    if (!std::in_range<std::int32_t>(region.x) || !std::in_range<std::int32_t>(region.y) ||
-        !std::in_range<std::int32_t>(region.z)) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "offset {}, {}, {} is past what Vulkan takes", region.x,
-                             region.y, region.z);
-    }
     return VkBufferImageCopy{.bufferOffset = region.bufferOffset,
                              .bufferRowLength = static_cast<std::uint32_t>(rowTexels),
                              .bufferImageHeight = region.rowsPerImage,
@@ -211,7 +197,9 @@ VulkanTexture::VulkanTexture(const VolkDeviceTable& table, VkDevice device, VmaA
       slots_(slots),
       sparse_(desc.sparse),
       size_{.width = desc.width, .height = desc.height, .depth = desc.depth},
-      tiling_(sparse) {}
+      tiling_(sparse),
+      mipLevels_(desc.mipLevels),
+      layers_(desc.layers) {}
 
 VulkanTexture::VulkanTexture(VulkanTexture&& other) noexcept
     : table_(other.table_),
@@ -227,9 +215,17 @@ VulkanTexture::VulkanTexture(VulkanTexture&& other) noexcept
       slots_(other.slots_),
       sparse_(other.sparse_),
       size_(other.size_),
-      tiling_(other.tiling_) {}
+      tiling_(other.tiling_),
+      attachmentViews_(std::move(other.attachmentViews_)),
+      mipLevels_(other.mipLevels_),
+      layers_(other.layers_) {}
 
 VulkanTexture::~VulkanTexture() {
+    for (VkImageView attachment : attachmentViews_) {
+        if (attachment != VK_NULL_HANDLE) {
+            table_->vkDestroyImageView(device_, attachment, nullptr);
+        }
+    }
     if (shaderView_ != VK_NULL_HANDLE && shaderView_ != view_) {
         table_->vkDestroyImageView(device_, shaderView_, nullptr);
     }
@@ -241,18 +237,66 @@ VulkanTexture::~VulkanTexture() {
     }
 }
 
+VkImageView VulkanTexture::attachmentView(std::uint32_t mipLevel, std::uint32_t layer) const {
+    if (attachmentViews_.empty() || mipLevel >= mipLevels_ || layer >= layers_) {
+        return VK_NULL_HANDLE;
+    }
+    return attachmentViews_[(std::size_t{mipLevel} * layers_) + layer];
+}
+
+core::Result<void> VulkanTexture::makeAttachmentViews(const TextureDesc& desc, VkFormat format, bool slices) {
+    const bool volume = desc.dimension == TextureDimension::D3;
+    if ((!desc.usage.colorAttachment && !desc.usage.depthStencil) || (volume && !slices)) {
+        return {};
+    }
+    // A 3D texture's views are of its depth slices, fewer at each level; the
+    // rest of a level's run stays VK_NULL_HANDLE.
+    if (volume) {
+        layers_ = desc.depth;
+    }
+    attachmentViews_.assign(std::size_t{mipLevels_} * layers_, VK_NULL_HANDLE);
+    for (std::uint32_t mip = 0; mip < mipLevels_; ++mip) {
+        const std::uint32_t layers = volume ? std::max(desc.depth >> mip, 1U) : layers_;
+        for (std::uint32_t layer = 0; layer < layers; ++layer) {
+            VkImageViewCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            info.image = image_;
+            info.viewType = desc.dimension == TextureDimension::D1 ? VK_IMAGE_VIEW_TYPE_1D_ARRAY
+                                                                   : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            info.format = format;
+            info.subresourceRange = {.aspectMask = aspects_,
+                                     .baseMipLevel = mip,
+                                     .levelCount = 1,
+                                     .baseArrayLayer = layer,
+                                     .layerCount = layers - layer};
+            VkImageView& view = attachmentViews_[(std::size_t{mip} * layers_) + layer];
+            if (const VkResult result = table_->vkCreateImageView(device_, &info, nullptr, &view);
+                result != VK_SUCCESS) {
+                view = VK_NULL_HANDLE;
+                return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateImageView", .result = result});
+            }
+        }
+    }
+    return {};
+}
+
 core::Result<VulkanTexture> createVulkanTexture(const VolkDeviceTable& table, VkDevice device, VmaAllocator allocator,
                                                 const TextureDesc& desc, std::span<const std::uint32_t> families,
-                                                const TextureSlotsHeld& slots) {
+                                                const TextureSlotsHeld& slots, bool volumeColorTargets) {
     if (desc.sparse && desc.tileBytes != 0) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "Vulkan sets a sparse texture's tile size itself; tileBytes is 0");
     }
     VkImageCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    // A 3D color target is drawn to through 2D views of its slices, which
+    // need the image made for them (VUID-VkImageViewCreateInfo-image-06723),
+    // and sparse images may not be (VUID-VkImageCreateInfo-flags-09403).
+    const bool slices = desc.dimension == TextureDimension::D3 && desc.usage.colorAttachment && !desc.sparse &&
+                        volumeColorTargets;
     info.flags = (desc.dimension == TextureDimension::Cube ? VkImageCreateFlags{VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT}
                                                            : 0U) |
-                 sparseFlags(desc);
+                 (slices ? VkImageCreateFlags{VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT} : 0U) | sparseFlags(desc);
     info.imageType = typeFor(desc.dimension);
     info.format = vulkanFormat(desc.format);
     info.extent = {.width = desc.width, .height = desc.height, .depth = desc.depth};
@@ -327,7 +371,11 @@ core::Result<VulkanTexture> createVulkanTexture(const VolkDeviceTable& table, Vk
             return std::unexpected(std::move(created.error()));
         }
     }
-    return VulkanTexture{table, device, allocator, image, made, view, shaderView, desc, aspects, slots, sparse};
+    VulkanTexture texture{table, device, allocator, image, made, view, shaderView, desc, aspects, slots, sparse};
+    if (auto views = texture.makeAttachmentViews(desc, info.format, slices); !views) {
+        return std::unexpected(std::move(views.error()));
+    }
+    return texture;
 }
 
 // The device's texture calls, beside the textures they make.
@@ -345,12 +393,12 @@ core::Result<TextureHandle> VulkanDevice::createTexture(const TextureDesc& desc)
         return std::unexpected(std::move(checked.error()));
     }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectBuffers();
+    collectRetired();
     auto slots = bindless_.takeTexture(desc);
     if (!slots) {
         return std::unexpected(std::move(slots.error()));
     }
-    auto made = createVulkanTexture(table_, device_, allocator_, desc, families_, *slots);
+    auto made = createVulkanTexture(table_, device_, allocator_, desc, families_, *slots, features_.volumeColorTargets);
     if (!made) {
         bindless_.giveTexture(*slots);
         return std::unexpected(std::move(made.error()));
@@ -360,7 +408,8 @@ core::Result<TextureHandle> VulkanDevice::createTexture(const TextureDesc& desc)
     const TextureHandle texture = textures_.emplace(std::move(*made));
     if (texture.isNull()) {
         bindless_.giveTexture(*slots);
-        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} textures", kBufferLimit);
+        return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} textures",
+                             desc_.maxTextures);
     }
     if (slots->sampled != core::SlotChains::kEnd) {
         layout_.writeSampledImage(slots->sampled, view, sampled);
@@ -392,12 +441,12 @@ core::Result<void> VulkanDevice::destroyTexture(TextureHandle texture) {
     if (!textures_.retire(texture, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the texture handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 
 core::Result<void> VulkanDevice::textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                                TextureLayout before, TextureLayout after) {
+                                                TextureLayout before, TextureLayout after, const TextureRange& range) {
     if (auto checked = checkLayouts(before, after); !checked) {
         return checked;
     }
@@ -420,11 +469,14 @@ core::Result<void> VulkanDevice::textureBarrier(CommandListHandle commandList, T
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = (*found)->image();
+    // kRemaining is Vulkan's VK_REMAINING_MIP_LEVELS and _ARRAY_LAYERS.
+    static_assert(kRemaining == VK_REMAINING_MIP_LEVELS);
+    static_assert(kRemaining == VK_REMAINING_ARRAY_LAYERS);
     barrier.subresourceRange = {.aspectMask = (*found)->aspects(),
-                                .baseMipLevel = 0,
-                                .levelCount = VK_REMAINING_MIP_LEVELS,
-                                .baseArrayLayer = 0,
-                                .layerCount = VK_REMAINING_ARRAY_LAYERS};
+                                .baseMipLevel = range.mipLevel,
+                                .levelCount = range.mipCount,
+                                .baseArrayLayer = range.layer,
+                                .layerCount = range.layerCount};
     // An image barrier orders only the image, so the memory barrier barrier()
     // records goes with it.
     VkMemoryBarrier2 memory{};
@@ -458,18 +510,11 @@ core::Result<void> VulkanDevice::copyBufferToTexture(CommandListHandle commandLi
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    if (auto checked = checkAspects((*to)->format(), regions); !checked) {
+    if (auto checked = checkAspects(regions); !checked) {
         return checked;
     }
-    // Every region is checked before any is recorded, so a bad one leaves the
-    // list as it was.
     for (const BufferTextureCopy& region : regions) {
-        if (auto copy = copyFor(region, (*to)->format()); !copy) {
-            return std::unexpected(std::move(copy.error()));
-        }
-    }
-    for (const BufferTextureCopy& region : regions) {
-        const VkBufferImageCopy copy = *copyFor(region, (*to)->format());
+        const VkBufferImageCopy copy = copyFor(region, (*to)->format());
         table_.vkCmdCopyBufferToImage((*list)->buffer, (*from)->buffer(), (*to)->image(),
                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
     }
@@ -490,18 +535,11 @@ core::Result<void> VulkanDevice::copyTextureToBuffer(CommandListHandle commandLi
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    if (auto checked = checkAspects((*from)->format(), regions); !checked) {
+    if (auto checked = checkAspects(regions); !checked) {
         return checked;
     }
-    // Every region is checked before any is recorded, so a bad one leaves the
-    // list as it was.
     for (const BufferTextureCopy& region : regions) {
-        if (auto copy = copyFor(region, (*from)->format()); !copy) {
-            return std::unexpected(std::move(copy.error()));
-        }
-    }
-    for (const BufferTextureCopy& region : regions) {
-        const VkBufferImageCopy copy = *copyFor(region, (*from)->format());
+        const VkBufferImageCopy copy = copyFor(region, (*from)->format());
         table_.vkCmdCopyImageToBuffer((*list)->buffer, (*from)->image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                       (*to)->buffer(), 1, &copy);
     }
@@ -521,15 +559,6 @@ core::Result<void> VulkanDevice::copyTexture(CommandListHandle commandList, Text
     auto to = textureFor(dst);
     if (!to) {
         return std::unexpected(std::move(to.error()));
-    }
-    // VkImageCopy's offsets are int32_t.
-    for (const TextureCopy& region : regions) {
-        const std::array offsets{region.srcX, region.srcY, region.srcZ, region.dstX, region.dstY, region.dstZ};
-        if (!std::ranges::all_of(offsets, [](std::uint32_t offset) { return std::in_range<std::int32_t>(offset); })) {
-            return core::failure(core::ErrorCode::RhiInvalidCall,
-                                 "offsets {}, {}, {} and {}, {}, {} are past what Vulkan takes", region.srcX,
-                                 region.srcY, region.srcZ, region.dstX, region.dstY, region.dstZ);
-        }
     }
     for (const TextureCopy& region : regions) {
         const VkImageAspectFlags aspect = (*from)->aspects();
@@ -730,10 +759,6 @@ core::Result<void> VulkanDevice::addTextureBinds(VulkanQueue& queue, const TileM
         const std::uint32_t x = region.x * shape.width;
         const std::uint32_t y = region.y * shape.height;
         const std::uint32_t z = region.z * shape.depth;
-        if (!std::in_range<std::int32_t>(x) || !std::in_range<std::int32_t>(y) || !std::in_range<std::int32_t>(z)) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "tile {}, {}, {} is past what Vulkan takes", region.x,
-                                 region.y, region.z);
-        }
         std::ignore = queue.imageBinds.push(
             VkSparseImageMemoryBind{.subresource = {.aspectMask = aspectFor(region.aspect),
                                                     .mipLevel = region.mipLevel,

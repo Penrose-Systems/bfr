@@ -12,6 +12,7 @@
 #include "vulkan/vulkan_result.h"
 
 #include <volk.h>
+#include <vulkan/vulkan_beta.h>
 #include <vulkan/vulkan_core.h>
 
 #include <algorithm>
@@ -251,8 +252,12 @@ BindlessLimits bindlessFrom(const PropertyQuery& properties, const DeviceFeature
         .maxTextures = vulkan12.maxDescriptorSetUpdateAfterBindSampledImages,
         .maxStorageTextures = vulkan12.maxDescriptorSetUpdateAfterBindStorageImages,
         .maxStorageBuffers = vulkan12.maxDescriptorSetUpdateAfterBindStorageBuffers,
-        // The device builds no bindless table of uniform buffers.
-        .maxUniformBuffers = 0,
+        // The table updates after bind, as the others do, which needs its
+        // feature
+        // (VUID-VkDescriptorSetLayoutBindingFlagsCreateInfo-descriptorBindingUniformBufferUpdateAfterBind-03005).
+        .maxUniformBuffers = on(features.vulkan12.descriptorBindingUniformBufferUpdateAfterBind)
+                                 ? vulkan12.maxDescriptorSetUpdateAfterBindUniformBuffers
+                                 : 0,
         .maxSamplers = vulkan12.maxDescriptorSetUpdateAfterBindSamplers,
         .maxPerStage = vulkan12.maxPerStageUpdateAfterBindResources,
         .maxAccelerationStructures =
@@ -371,6 +376,10 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
         .samplerCustomBorderColor = customBorderColors(features),
         .samplerIntegerBorderColor = true,
         .samplerUnnormalizedCoordinates = true,
+        // Through 2D views of a 3D image, which a portability driver says
+        // whether it makes (VUID-VkImageCreateInfo-imageView2DOn3DImage-04459).
+        .volumeColorTargets = !lists(extensions, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME) ||
+                              on(features.portability.imageView2DOn3DImage),
         // Core, but a portability driver says whether it has it
         // (VUID-VkSamplerCreateInfo-samplerMipLodBias-04467).
         .samplerLodBias = !lists(extensions, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME) ||
@@ -399,6 +408,7 @@ Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& prope
         .storageReadWithoutFormat = on(core.shaderStorageImageReadWithoutFormat),
         .storageWriteWithoutFormat = on(core.shaderStorageImageWriteWithoutFormat),
         .storageTextureNonUniformIndexing = on(features.vulkan12.shaderStorageImageArrayNonUniformIndexing),
+        .uniformBufferNonUniformIndexing = on(features.vulkan12.shaderUniformBufferArrayNonUniformIndexing),
         .timestampsOnAllQueues = on(properties.core.properties.limits.timestampComputeAndGraphics),
         .pipelineStatistics = on(core.pipelineStatisticsQuery),
         .occlusionQueryPrecise = on(core.occlusionQueryPrecise),

@@ -1,65 +1,61 @@
 # BFR design
 
-Ground-up design, started 2026-10-24. Nothing here is final. Every entry is
-the current choice and its reason; when a later question exposes a problem,
-the earlier choice is reopened. Earlier proposals are input like everything
-else. [`research.md`](research.md) has what other engines and RHIs do.
+Current choices and their reasons, started 2026-10-24. Nothing is final; a
+choice is reopened when a later question exposes a problem, and earlier
+proposals are input like everything else. What other
+engines and RHIs do is in [`research.md`](research.md).
 
 ## Requirements
 
-- Standalone library first. Any C++ renderer is a first-class consumer.
-- Minimum requirements, which each `backend` value in `api/bfr.yaml`
-  states. An adapter below them is not listed. Reason: bindless binding, dynamic rendering and explicit barriers are what
-  every BFR call is built on; everything past them is reported through caps.
-- The caller names the API version the instance is made at, and BFR passes
-  it to the backend as it is. Below the minimum, creating the instance fails
-  with RhiUnsupported; above it, nothing is capped: each device runs at the
-  lower of the caller's version and its adapter's, and turns on what that
-  version has. Where a backend has a feature both in core and as an
-  extension, BFR uses the form the device has. D3D12 and Metal don't read the
-  version yet; they are paused while Vulkan takes shape (owner, 2026-11-08).
-- Binding is bindless only, with no non-bindless path.
+- Standalone library first; any C++ renderer is a first-class consumer.
+- Minimum requirements: each `backend` value in `api/bfr.yaml`. Adapters
+  below them are not listed. Reason: every call is built on bindless
+  binding, dynamic rendering and explicit barriers; the rest is in caps.
+- The caller names the instance's API version, passed through as is. Below
+  the minimum, instance creation fails with RhiUnsupported; above it,
+  nothing is capped: a device runs at the lower of that version and its
+  adapter's and turns on what that version has, using core or extension form as the
+  device has it. D3D12 and Metal don't read the version yet (paused while
+  Vulkan takes shape, owner, 2026-11-08).
+- Bindless binding only.
 - Platforms: Windows, Linux, macOS, Android (Vulkan), iOS (Metal).
-- Backends: Vulkan, D3D12, Metal. No WebGPU: it has no explicit barriers, no
-  bindless, no push constants and one queue.
-- Workloads: real-time 3D games, GPU-driven rendering (indirect, compute
-  culling, mesh shaders), ray tracing, tools and editors (many swapchains,
-  offscreen rendering, readback).
+- Backends: Vulkan, D3D12, Metal. Not WebGPU: no explicit barriers,
+  bindless or push constants, and one queue.
+- Workloads: real-time 3D games, GPU-driven rendering (indirect, compute culling,
+  mesh shaders), ray tracing, tools and editors (many swapchains, offscreen
+  rendering, readback).
 
 ## Current choices
 
-- Language: C++23 for the implementation. A C++26 feature is adopted only
-  once MSVC, Apple Clang and the Android NDK all ship it. Reason: MSVC and
-  Apple Clang are required for D3D12 and Metal; C++26 reflection is GCC-only
-  as of 2026-10.
-- Namespaces: `bfr` for the API, `bfr::core` for the base (results,
-  handles, pools, logging, window handles), `bfr::rhi` for the backends.
-- Public API: C. Wrappers for C++, C#, Rust and Python are part of the
-  project. See [C API and wrappers](#c-api-and-wrappers). Reason: C++ has no
-  stable ABI; every FFI speaks the C calling convention.
-
-- Layering: two layers in one library. The core exposes explicit barriers
-  (caller states access before and after) and owns GPU lifetime (resources
-  retire against completion tokens, never on CPU release). The render graph
-  always ships and is the primary path; it uses only the public core API.
-  Users may bypass it with their own graph on the core. Reason: standalone
-  consumers with their own graph need barriers nothing guesses under; bindless
-  and GPU-driven work hide accesses from inference, so access is declared
-  either way; backends implement only the core.
-- One authority per resource at a time. A resource the graph did not create
-  is imported with its current state and exported with its final state.
-- No automatic barrier tracker in the first cut; one is planned later, as an
-  opt-in layer over the explicit barriers that a command list can switch off
-  (NVRHI's `setEnableAutomaticBarriers` is the model). Reason: the graph
-  already holds every access a tracker would infer, so the graph and the
-  explicit path ship first; a tracker is a third authority over a resource
-  and must follow the same import and export rule. Upload and readback
-  helpers issue their own barriers in the core.
+- C++23 for the implementation; a C++26 feature once MSVC, Apple Clang and the Android NDK all
+  ship it. Reason: MSVC and Apple Clang are required for D3D12 and Metal;
+  C++26 reflection is GCC-only as of 2026-10.
+- Namespaces: `bfr` (API), `bfr::core` (the base: results, handles, pools, logging,
+  window handles), `bfr::rhi` (backends).
+- Public API is C, with C++, C#, Rust and Python wrappers in the project
+  ([below](#c-api-and-wrappers)). Reason: C++ has no stable ABI; every FFI
+  speaks C.
+- Two layers in one library. The core has explicit barriers (caller states access before
+  and after) and owns GPU lifetime (resources retire against completion
+  tokens, not CPU release). The render graph always ships, is the primary
+  path, uses only the public core API; users may bypass it with their own graph
+  on the core. Reason: callers
+  with their own graph need barriers nothing guesses under; bindless and
+  GPU-driven work hide accesses from inference, so access is declared either
+  way; backends implement
+  only the core.
+- One authority per resource at a time: what the graph didn't create is imported with
+  its current state and exported with its final one.
+- No automatic barrier tracker in the first cut. Planned: an opt-in layer
+  over explicit barriers, switchable per command list (NVRHI's
+  `setEnableAutomaticBarriers` is the model). Reason: the graph already
+  knows every access, so the graph and the explicit path ship first; a
+  tracker is a third authority bound by the same import/export
+  rule.
 
 ## Core RHI (draft)
 
-First pass at the base layer. Objects, ownership and contracts only; no
-signatures yet.
+Objects, ownership and contracts; no signatures yet.
 
 ### Object map
 
@@ -81,362 +77,317 @@ copied in at creation.
 
 ### Backend selection
 
-Runtime, chosen at `Instance` creation; each backend compiled in by build
-option. Several instances of different backends may coexist in one process.
-Reason: Windows has two backends and tools may want both; one indirect call
-per command is small next to driver cost.
-
-There is no null backend. The agnostic tests run on each backend the build
-has, and on Mesa's lavapipe, which runs Vulkan on the CPU, so they run on a
-machine with no GPU. Reason: a backend that draws nothing tests nothing a
-driver does, and every call would need a second, empty version. BFR promises
-no numeric minimum: an app reads the caps and decides.
-
-A device can be rebuilt while the app runs: on another backend, on another
-adapter, or on the same one after device loss. BFR waits for the GPU, reads
-back resource contents if the old device still works, destroys everything,
-recreates every object from its stored desc on the new device and uploads
-the contents again. Handles stay the same, so the app's code doesn't change.
-After device loss the contents are gone, so BFR reports which resources need
-refilling. A rebuild happens between frames; unsubmitted command lists are
-dropped. Pipelines need bytecode for every backend the app may switch to.
-Reason: switching backend or GPU in a settings menu, and recovering from
-device loss, are the same job, and BFR is the one that knows every object.
-Not built until resources exist.
-
-Commands are translated to native calls as they are recorded, not buffered
-and replayed. Reason: avoids recording everything twice. Revisit if Metal
-encoder switching needs lookahead.
+- Picked at run time when the `Instance` is made; each compiled in by build
+  option; instances of different backends may coexist. Reason: Windows has
+  two backends and tools may want both; one indirect call per command is
+  small next to driver cost.
+- No null backend: agnostic tests run on every built backend and on
+  Mesa's lavapipe (CPU Vulkan), so no GPU is needed. Reason: a backend that draws
+  nothing tests no driver, and every call would need an empty twin.
+- No numeric minimum is promised; apps read caps and decide.
+- Device rebuild (not built until resources exist): onto another backend or
+  adapter, or the same one after loss, between frames. BFR waits for the
+  GPU, reads contents back if the old device works, destroys everything,
+  recreates each object from its stored desc and re-uploads. Handles don't
+  change, so app code doesn't either; after loss the contents are gone and
+  BFR reports which resources need refilling.
+  Unsubmitted lists are dropped; pipelines need bytecode for every backend
+  the app may switch to. Reason: a settings-menu switch and loss recovery
+  are one job, and BFR is what knows every object.
+- Commands translate to native calls as recorded, not buffered for replay.
+  Reason: no double recording. Revisit if Metal encoder switching needs
+  lookahead.
 
 ### Device and queues
 
-- The device is created from an adapter with the queues the caller asks
-  for, and turns on what the adapter reports in the core structs of the
-  version it uses and in the extensions BFR enables, but robust access,
-  which changes what an out-of-bounds access does and costs speed. Caps
-  report each feature beyond BFR's minimum requirements.
-- Caps are per adapter and readable before any device exists. Reason:
-  features are asked for when the device is created, and choosing
-  a GPU shouldn't mean opening each one. One call returns everything fixed
-  (info, limits, bindless, compute, mesh, ray tracing, features, memory,
-  queues) as one struct. Formats, a window's swapchain caps and formats, the
-  live memory budget are calls of their own: per
-  format, per window, or changing while the app runs. A limit for a
-  feature the adapter lacks is 0.
-- Queue types: graphics, compute, copy. A device opens the graphics, compute
-  and copy queues its desc asks for, refused when the adapter has fewer; caps
-  say how many it has. Queues are numbered: graphics from 0, then compute,
-  then copy. A pool records for one queue; a submit names the
-  queue, the lists in order and the tokens to wait on, and returns the token
-  it signals. Each queue has its own timeline and is externally synchronized,
+- A device turns on what its adapter reports in its version's core structs
+  and the extensions BFR enables, except robust access (changes
+  out-of-bounds behaviour, costs speed). Caps report each feature beyond the
+  minimum.
+- Caps are per adapter, readable before any device. Reason: features are
+  requested at device creation; choosing a GPU shouldn't mean opening each.
+  One call returns everything fixed (info, limits, bindless, compute, mesh,
+  ray tracing, features, memory, queues); formats, a window's swapchain caps
+  and formats, and the live memory budget are separate calls, since they
+  vary per format, per window or over time. A limit for a missing feature
+  is 0.
+- Queues: graphics, compute, copy, opened as the desc asks, refused when the
+  adapter has fewer (caps give the count), numbered graphics from 0, then
+  compute, then copy. A pool records for one queue. A submit names the
+  queue, lists in order and tokens to wait on, and returns the token it
+  signals. Each queue has its own timeline and is externally synchronized,
   so submits to different queues never contend.
 
 ### Synchronization
 
-- One primitive for all queue progress: a timeline (Vulkan timeline
-  semaphore, D3D12 fence, Metal shared event). A completion token is
-  `{queue, value}`. Submissions wait on and signal tokens; the CPU waits on
-  or polls them. Binary semaphores exist only inside the swapchain.
-- Barriers are explicit: the caller records a full barrier, after which the
-  list's later commands start once its earlier ones have finished, and see
-  what they wrote. Each backend has one natively (a Vulkan memory barrier,
-  a D3D12 global barrier, a Metal 4 consumer barrier). A finer form, by
-  resource, stage and access, comes only if measurement shows the full one
-  costs too much.
-- Textures move between named layouts with a texture barrier, which is also
-  a full barrier. The caller names the layout a texture is in and the one it
-  moves to; BFR keeps no record of it. Metal has no layouts, so there it is
-  the full barrier alone.
-- D3D12 barriers are enhanced barriers, in BFR's minimum requirements.
-  Reason: a legacy-barrier path doubles the sync code.
-- The Metal backend targets Metal 4 (macOS/iOS 26+), in BFR's minimum
-  requirements. Reason: Metal 4 has explicit barriers, residency sets and
-  command allocators, which match this core directly.
+- One progress primitive: a timeline (Vulkan timeline semaphore, D3D12
+  fence, Metal shared event). Token = `{queue, value}`; submits wait on and
+  signal tokens; the CPU waits or polls. Binary semaphores live only inside
+  the swapchain.
+- Barriers are explicit and full: a list's later commands start after its
+  earlier ones finish and see their writes. Native on each backend (Vulkan memory
+  barrier, D3D12 global barrier, Metal 4 consumer barrier). A finer form
+  (resource, stage, access) only if measurement shows the full one costs
+  too much.
+- A texture barrier is a full barrier that also moves a texture between
+  layouts the caller names (from and to); BFR keeps no record. On Metal,
+  which has no layouts, it is just the full barrier.
+- D3D12 uses enhanced barriers (minimum requirement). Reason: a legacy path
+  doubles the sync code.
+- Metal targets Metal 4, macOS/iOS 26+ (minimum requirement). Reason: its
+  explicit barriers, residency sets and command allocators match this core.
 
 ### Lifetime and residency
 
-- `destroy(handle)` is deferred: the object is freed once every queue has
-  passed the values submitted before the call. The handle is invalid at once.
-  Each handle table retires an object against the last submitted value and
-  frees it when that value completes. Until queues submit, every value has
-  completed, so objects are freed during the destroy call. A handle table's
-  token is one 64-bit number, not a queue's timeline value: the device keeps
-  a submission ID that every submit advances, retires against the
-  latest, and collects a serial once every queue has passed the value it
-  submitted under it.
-- Swapchains are the exception: destroying one waits for the GPU's use of
-  it and destroys it before returning. Reason: its window belongs to the
-  application, which closes it once the destroy call returns; a deferred
-  destruction would need the window kept open until a moment the
-  application cannot observe. Destroying a swapchain is rare, so the wait
-  costs nothing that matters.
-- Destroying an object an unsubmitted command list references is a usage
-  error, which a usage check reports.
-- Residency is part of the core contract, not a backend detail. Bindless
-  means shaders reach resources the API never sees per draw; Metal 4 needs
-  them in a residency set. The device keeps a residency set of all live
-  bindless resources; deferred destruction and graph aliasing update it.
+- `destroy(handle)` invalidates the handle at once; the object is freed when
+  every queue has passed what was submitted before. The device keeps one
+  64-bit submission ID (not a queue timeline value) that every submit
+  advances; tables retire against the latest and free an ID's objects once every
+  queue has passed the value it submitted under that ID. Before any submit, destroy frees
+  at once.
+- Except swapchains: destroy waits for the GPU's use of it and returns
+  with it gone.
+  Reason: the app closes its window when destroy returns; deferring would
+  keep the window needed until a moment the app can't see. Rare, so the
+  wait is cheap.
+- Destroying an object an unsubmitted list references is a usage error,
+  which a usage check reports.
+- Residency is part of the core contract, not a backend detail: bindless shaders reach resources no draw names, and
+  Metal 4 needs them in a residency set. The device keeps one of all live
+  bindless resources, updated by deferred destruction and graph aliasing.
 
 ### Resources and memory
 
-- Buffer, Texture, Sampler, AccelerationStructure. Default allocation goes
-  through an internal allocator (VMA, D3D12MA, Metal heaps).
-- `Heap` plus placed resources for explicit memory control. The graph's
-  transient aliasing is built on this, so it stays public.
-- Upload and readback helpers live in the core and issue their own barriers.
-  Readback returns a completion token; blocking waits are explicit.
+- Buffer, Texture, Sampler, AccelerationStructure, allocated by default
+  through VMA, D3D12MA or Metal heaps.
+- `Heap` and placed resources for explicit memory; public because the
+  graph's transient aliasing is built on them.
+- Upload and readback helpers are in the core and issue their own barriers.
+  Readback returns a token; blocking waits are explicit.
 
 ### Binding model
 
-- One global layout for every pipeline: a bindless table of texture and
-  buffer views, a sampler table, and a small push-constant block. No
-  per-pipeline layouts or descriptor sets. The exact layout the shaders
-  declare, per backend, is published in `api/bfr.yaml` under `pipeline`;
-  the table sizes are the `DeviceDesc`'s `max_bindless_*` members, made
-  with the device and passed to the backend as given. No uniform buffer
-  table yet: Vulkan's update-after-bind for uniform buffers is a feature not
-  every device has.
+- One global layout: a bindless table of texture and buffer views, a
+  sampler table, a small push-constant block. No per-pipeline layouts or
+  descriptor sets. Each backend's shader-side layout is in `api/bfr.yaml`
+  under `pipeline`; table sizes are `DeviceDesc`'s `max_bindless_*`, made
+  with the device and passed through. A uniform buffer table where the backend
+  updates uniform buffers after bind; caps say where.
 - Shaders reach buffers and textures by descriptor index. Reason: HLSL on
-  D3D12 has no pointer dereference; indices work on all three backends. GPU
-  addresses appear only where the native APIs require them (ray tracing
-  build inputs, indirect arguments).
-- A resource takes its slot in each table its usage names when it is
-  created, and `get_buffer_slot`, `get_texture_slots` and `get_sampler_slot`
-  report it; the slot is the same number on every backend, so one shader
-  index means one thing.
-  On D3D12 that takes each descriptor range's offset from the table's start
-  to be its region's, so an index in space 1 or 2 is table-local. The slot
-  goes back to its table when the resource is collected, after every submit
-  made before its destroy has run, never at the destroy itself, so pending
-  work never sees a slot reused.
-- A sampler is a handle that holds one slot in the sampler table. Every
-  member of its desc reaches the backend unchanged; only a member the backend
-  has no setting for fails, with `error_unsupported`. Identical samplers are not shared: each create reaches
-  the backend and holds its own slot. The Vulkan device turns on each
-  optional sampler feature its caps report, so the caps say what it has.
-- Metal 4 has no push constants and no `setBytes` on its encoders; resources
-  bind only through `MTL4ArgumentTable`, which Metal snapshots at each draw
-  or dispatch. The Metal backend copies push-constant data into a ring owned
-  by the command pool, sized by the pool's `push_constant_updates`, and
-  binds that address with `setAddress` before the draw. The member has no
-  default, since only the caller knows how many it records. The ring is recycled
-  with the pool's reset and kept resident. Vulkan and D3D12 need no room, but
-  count against the member all the same, so the limit means one thing on
-  every backend; it is on the pool because a caller declares a capacity, not
-  a backend.
-- Limits set the sizes: push constants as `bfr_caps_limits.max_push_constants_size`
-  reports (the device's limit on Vulkan, the root signature's room on D3D12,
-  128 on Metal); samplers as
-  `bfr_caps_bindless.max_samplers` reports. Mobile descriptor limits still
-  to check.
+  D3D12 has no pointer dereference; indices work on all three backends. Every buffer has a GPU address where
+  the device gives them, for the calls that read by address (ray tracing build inputs, indirect arguments).
+- A resource takes a slot in each table its usage names at creation,
+  reported by `get_buffer_slots`, `get_texture_slots` and `get_sampler_slot`;
+  it is the same
+  number on every backend so a shader index means one thing. On D3D12 BFR sets
+  each descriptor range's offset from the table's start to its region's, so indices in spaces 1 and 2
+  are table-local. A slot is freed when its resource is collected (after
+  every submit before the destroy has run), never at destroy, so pending
+  work never sees it reused.
+- A sampler holds one sampler-table slot. Every desc member reaches the
+  backend unchanged; only one the backend has no setting for fails, with
+  `error_unsupported`. Identical samplers are not shared: each create reaches the backend
+  and holds its own slot. Vulkan turns on each optional sampler feature its
+  caps report, so the caps say what it has.
+- Metal 4 has no push constants or encoder `setBytes`; it binds only through
+  `MTL4ArgumentTable`, snapshotted per draw or dispatch. The backend copies
+  push constants into a resident ring owned by the command pool, sized by
+  its `push_constant_updates`, reset with the pool, bound by `setAddress`
+  before the draw. No default: only the caller knows how many it records.
+  Vulkan and D3D12 need no ring and pass push constants straight through;
+  it is on the pool because a caller declares capacity, not a backend.
+- Push constants are sized by `bfr_caps_limits.max_push_constants_size`
+  (device limit on Vulkan, root signature room on D3D12, 128 on Metal);
+  samplers by `bfr_caps_bindless.max_samplers`.
 
 ### Pipelines
 
-- Graphics, mesh and compute pipelines take per-backend shader bytecode plus
-  fixed state and attachment formats. No render pass objects (dynamic
-  rendering). The pipeline fixes the topology class; the exact topology,
-  viewport, scissor, blend constants and stencil reference are set when
-  recording, as every backend allows.
-- With one global layout, BFR needs almost no reflection: push-constant size
+- Graphics, mesh and compute pipelines take per-backend bytecode, fixed
+  state and attachment formats; no render pass objects (dynamic rendering). The pipeline fixes
+  the topology class; exact topology, viewport, scissor, blend constants and
+  stencil reference are set while recording, as every backend allows.
+- With one global layout, BFR needs almost no reflection: push-constant
   and workgroup size.
-- Creation is asynchronous. A pipeline is pending, ready or failed; recording
-  with a pipeline that is not ready is a usage error. Fallback choice belongs
-  to the renderer. Not yet: today `createComputePipeline` and
-  `createGraphicsPipeline` return the made pipeline, or its failure.
-- Pipeline cache: load and store as blobs through a host hook.
-- Vertex input: vertex pulling only; shaders fetch vertices by index.
-  Reason: simplest core, fits GPU-driven work. Revisit if measurements on
-  tile-based mobile GPUs show fixed-function fetch winning for position-only
-  shading.
-- Clip space is one convention on every backend: x right, y up, z 0 at the
-  near plane and 1 at the far, which D3D12 and Metal have natively. The
-  Vulkan backend passes every viewport with negative height and its y
-  offset by the height, core since 1.1, which also makes winding read the
-  same. Reason: one vertex shader and one front face mean the same thing
-  everywhere. Hazel does the same; Godot instead flips in its shader
-  translation, treating Vulkan as canonical, which BFR cannot since the
-  caller compiles the shaders.
-- What a shader sees of `first_instance` is the backend's own: Vulkan's
-  `gl_InstanceIndex` and Metal's `instance_id` include it, D3D12's
-  `SV_InstanceID` counts from 0. BFR passes the value through and documents
-  the difference rather than patching bytecode it did not compile.
+- Creation is asynchronous: pending, ready or failed; recording with a
+  pipeline not ready is a usage error; fallback is the renderer's choice.
+  Not yet: today `createComputePipeline` and `createGraphicsPipeline` return
+  the pipeline or its failure.
+- Pipeline cache: blobs loaded and stored through a host hook.
+- Vertex pulling only: shaders fetch vertices by index. Reason: simplest core, fits GPU-driven work. Revisit
+  if measurements on tile-based mobile GPUs show fixed-function fetch winning for
+  position-only shading.
+- One clip space: x right, y up, z 0 near to 1 far, native on D3D12 and
+  Metal. Vulkan gets negative-height viewports offset by the height (core
+  since 1.1), which also matches winding. Reason: one vertex shader and
+  front face mean the same everywhere. Hazel does the same; Godot flips in
+  shader translation, treating Vulkan as canonical, which BFR can't since the caller compiles shaders.
+- `first_instance` as a shader sees it is the backend's: Vulkan's
+  `gl_InstanceIndex` and Metal's `instance_id` include it; D3D12's
+  `SV_InstanceID` starts at 0. BFR passes the value through and documents
+  the difference rather than patching bytecode it didn't compile.
 
 ### Command recording
 
-- A `CommandPool` belongs to one thread and one frame slot; it is reset once
-  its work completes, which the caller knows from the completion token its
-  last submit returned. Resetting earlier is a usage error. `CommandList`s
-  from it are recorded by that thread only. D3D12 and Metal 4 let one list
-  record from an allocator at a time, so there a pool holds one allocator per
-  list recording.
-- Lists recorded on many threads are submitted in the order given to
-  `submit`; recording order across threads means nothing.
-- Rendering scopes carry attachments and load and store actions explicitly.
+- A `CommandPool` belongs to one thread and frame slot and is reset after
+  its last submit's token completes (earlier is a usage error); only that
+  thread records its lists. D3D12 and Metal 4 allow one recording list per
+  allocator, so there a pool holds one allocator per recording list.
+- Lists from many threads are submitted in the order given to `submit`,
+  whatever the recording order.
+- Rendering scopes carry attachments and load/store actions explicitly.
   Reason: tile-based GPUs depend on them.
-- Commands: barriers, copies, clears, draw (direct, indexed, indirect,
-  indirect count), mesh dispatch, compute dispatch (direct, indirect),
+- Commands: barriers, copies, clears, draws (direct, indexed, indirect,
+  indirect count), mesh and compute dispatch (direct, indirect),
   acceleration structure builds, push constants, pipeline bind, viewport and
   scissor, timestamps and queries, debug markers. Today: barriers, copies,
-  rendering to swapchain images and textures with load and store actions,
-  viewport and scissor (set to the whole area when rendering begins),
-  pipeline bind, push constants, index buffer bind, direct and indexed
-  draws, direct dispatches.
-- Each backend keeps the same record of what a list has bound and makes the
-  same usage checks of a draw or dispatch (`src/rhi/command_check.h`), so a
-  misuse fails the same way on every backend.
+  rendering to swapchain images and textures with load/store actions,
+  viewport and scissor, pipeline bind,
+  push constants, index buffer bind, direct and indexed draws, direct
+  dispatches.
+- Every backend keeps the same record of what a list has bound
+  (`src/rhi/command_check.h`). The few checks BFR makes of a call live there
+  once, for the backends that need them: Metal's for the push constants it
+  copies into its pool and the indirect draw counts its call has none of.
 
 ### Swapchain
 
-- Created from a device, a native window handle and a presenting queue. Any
+- Made from a device, a native window handle and a presenting queue; any
   number per device (tools).
 - Acquire returns the image's texture and an internal wait; present waits on
   a render token.
-- Vulkan: one present semaphore per image, so binary semaphores are never
-  reused while the presentation engine holds them; use swapchain
-  maintenance extensions where present.
-- Resize and window loss are reported as results, not fatal errors.
+- Vulkan: one present semaphore per image, so none is reused while the
+  presentation engine holds it; swapchain maintenance extensions where
+  present.
+- Resize and window loss are results, not fatal errors.
 
 ### Ray tracing
 
-- Core: acceleration structures and inline ray queries from any shader
-  stage. All three backends support them.
-- Ray-tracing pipelines with shader binding tables sit behind a capability
-  and stay out of the first cut. Open: how Metal's intersection and visible
-  function tables map to a binding table.
+- Core: acceleration structures and inline ray queries from any stage, on
+  all three backends.
+- Ray tracing pipelines with binding tables sit behind a capability, out of
+  the first cut.
 
 ### Handles
 
-- Instance and device are opaque pointers; an app holds one of each and
-  every call names them.
-- Everything else is a generational 64-bit handle: a 24-bit slot index under
-  a 40-bit generation. Each type is its own struct, so the C compiler rejects
-  a buffer where a texture is expected, and every wrapper has a class per
-  type, so a handle carries no type tag. Scoped to one device; every call
-  names the device, so a handle needs no device ID. Reason: C-compatible,
-  safe against stale use, no reference counts. The generation grows by two
-  per reuse of a slot and the free list reuses the last slot freed, so 32
-  bits would come round after 2^31 destroy-and-create cycles on one slot, a
-  few days of churn for a tool; 40 bits never do.
+- Instance and device are opaque pointers; an app holds one of each, named
+  in every call.
+- Everything else is a 64-bit generational handle (24-bit slot, 40-bit
+  generation) scoped to one device; every call names the device, so it needs no
+  device ID. A struct per
+  type, so C rejects a buffer for a texture, and a wrapper class per type,
+  so no type tag. Reason: C-compatible, stale-safe, no reference counts.
+  Generations grow by two per reuse and the free list reuses the last slot
+  freed, so 32 bits would wrap after 2^31 cycles on one slot (days of tool
+  churn); 40 bits never do.
 
 ### Threading
 
-- Creation and destruction on a device are safe from any thread.
-  Destroying a handle that is already gone does nothing. Reason: C# and
-  Python wrappers destroy from garbage-collector finalizers.
-- Looking up a handle takes no lock: recording resolves handles on every
-  command, from many threads. Creation and destruction lock only to take or
-  give back a slot; objects are built and destroyed outside the lock. Each
-  object type has a fixed maximum per device; past it creation fails with
-  `limit_reached`. Reason: the slot table is sized once, so lookups never see
-  it move.
-- A command list is used by one thread at a time.
-- Submission to one queue is externally synchronized; different queues may
-  submit concurrently.
-- A swapchain is externally synchronized.
-- A handle's calls name its device, and destroying the device destroys its
-  handles, so nothing may be called on a handle once its device is
-  destroyed. The device and handle objects of a garbage-collected wrapper
-  may be finalized in either order, so the wrapper keeps the order itself:
-  its device destroys the handles it still tracks, under a lock, and a
-  handle finalizer that finds its device gone does nothing. In C# the
-  device is a `SafeHandle` each handle wrapper adds a reference to, so the
-  device is released last whatever order the finalizers run; in Python
-  each handle holds its device; Rust and C++ borrow it.
+- Create and destroy are safe from any thread; destroying a handle already
+  gone does nothing. Reason: C# and Python destroy from GC finalizers.
+- Handle lookup is lock-free, since recording resolves handles on every
+  command from many threads. Create and destroy lock only to take or return
+  a slot; objects are built and destroyed outside the lock. Each type has a fixed maximum per device; past it creation fails
+  with `limit_reached`. Reason: a table sized once never moves under a
+  lookup.
+- A command list is used by one thread at a time; a swapchain is externally
+  synchronized; queues as in [Device and queues](#device-and-queues).
+- Destroying a device destroys its handles; nothing may be called on them
+  after. A GC wrapper may finalize device and handles in any order, so it
+  keeps the order: the device destroys the handles it still tracks, under a
+  lock, and a handle finalizer finding its device gone does nothing. C#:
+  each handle adds a reference to the device's `SafeHandle`, so the device
+  goes last. Python: each handle holds its device. Rust and C++ borrow it.
 
 ### Failure
 
-- Creation returns a `bfr_result` and writes the object through an out
-  parameter; `bfr_get_last_error` gives the calling thread's message for its
-  last failure. Recording calls return nothing; a usage check reports misuse
-  through the message callback. Wrappers turn failures into their language's
-  errors.
-- Device loss is sticky: every later call reports it, and a host callback
-  fires once, until the device is rebuilt (see Backend selection).
-- Validation is configured at instance creation; messages go to a host
-  callback.
+- Creation returns `bfr_result` and writes the object to an out parameter;
+  `bfr_get_last_error` gives the thread's last failure message. Recording
+  calls return nothing; usage checks report misuse through the message
+  callback. Wrappers map failures to their language's errors.
+- Device loss is sticky: every later call reports it and a host callback
+  fires once, until a [rebuild](#backend-selection).
+- Validation is set at instance creation; messages go to a host callback.
 
 ## C API and wrappers
 
-The C API is mostly a target for wrappers, all of which this project writes.
-Direct use from C works but is not the main case.
+The C API mainly serves the wrappers, all of which this project writes; direct C use works but is
+secondary.
 
 ### Source of truth
 
-A YAML description of the API generates `bfr.h` and the bulk of every
-wrapper. It records what a C header cannot: which pointer is an array and
-which field is its count, what may be null, what owns what, which thread a
-callback runs on. Reason: one description keeps four languages from drifting;
-hand-written wrappers would each drift from the header.
+A YAML description generates `bfr.h` and most of every wrapper. It records
+what a C header can't: which pointer is an array and which field its count,
+what may be null, what owns what, which thread a callback runs on. Reason:
+one description keeps four languages in step; hand-written wrappers drift.
 
 ### C rules
 
-- Names: `bfr_` prefix, snake_case: `bfr_device_create_buffer`,
-  `bfr_buffer_desc`, `BFR_FORMAT_RGBA8_UNORM`.
-- Description structs start with `const bfr_chain* next`. After 1.0 a struct
-  never changes; new fields arrive as chained structs. Before 1.0 anything
-  may break.
-- Enums are C enums with a `_FORCE32 = 0x7FFFFFFF` member, so they are 32
-  bits on every compiler and generators keep their type. Flags are
-  `uint64_t`. `bfr_bool` is `uint8_t`, as C++'s `bool` is, so structs of
-  numbers and bools pass between C and the C++ wrapper without a copy. C#
-  binds it as `byte`, or as `bool` with `[MarshalAs(UnmanagedType.U1)]`.
-- Strings are `{data, length}`; arrays are a pointer and a count.
-- The caller owns what it passes; BFR copies what it keeps. Lists BFR
-  returns use two calls: one for the count, one to fill the caller's array.
+- Names: `bfr_` prefix, snake_case (`bfr_device_create_buffer`,
+  `bfr_buffer_desc`, `BFR_FORMAT_RGBA8_UNORM`).
+- Desc structs start with `const bfr_chain* next`. After 1.0 structs never
+  change; new fields come as chained structs. Before 1.0 anything may break.
+- Enums have `_FORCE32 = 0x7FFFFFFF`, so they are 32 bits on every compiler
+  and generators keep their type. Flags are `uint64_t`. `bfr_bool` is
+  `uint8_t` like C++'s `bool`, so structs of numbers and bools pass between C and
+  the C++ wrapper uncopied;
+  C# binds it as `byte` or `[MarshalAs(UnmanagedType.U1)] bool`.
+- Strings are `{data, length}`; arrays a pointer and a count.
+- The caller owns what it passes; BFR copies what it keeps. Returned lists
+  take two calls: count, then fill.
 - No function-like macros, unions, bitfields, anonymous structs or flexible
   array members. Reason: bindgen, ClangSharp and cffi handle them badly.
-- Callbacks are a function pointer and `void* user_data`, kept to the
-  message callback. Everything else is polled: pipeline readiness by query,
-  device loss by result. Reason: calling into C# or Python from a driver
-  thread is costly and easy to get wrong.
-- Destroy calls may come in any order: a device keeps its instance alive
-  until the device is destroyed. Reason: garbage collectors finalize in no
-  fixed order. The instance's message callback and `user_data` must then
-  stay valid until its last device is destroyed, so a wrapper ties them to
-  the last device, not to the instance object.
-- Calls that would be made once per item take arrays. Reason: a call from
-  Python costs microseconds.
-- `bfr.h` compiles as C11 and C++. The shared library exports only `bfr_*`
-  symbols, through a linker export list as well as hidden visibility
-  (libstdc++ gives its templates default visibility). No exception crosses
-  the boundary: each entry point turns one into a result.
-- Two libraries from one set of objects: static `bfr`, which also exposes
-  the C++ classes behind the C API to the tests, and shared `bfr_shared`
-  (`libbfr`), which exposes only the C API. The wrappers load the shared one.
-- Settings that belong to one object go on that object's desc, not the
-  instance: the swapchain's image count is on `bfr_swapchain_desc`.
+- Callbacks (function pointer plus `void* user_data`) are kept to the
+  message callback; the rest is polled (pipeline readiness by query, device
+  loss by result). Reason: calling into C# or Python from a driver thread is
+  costly and error-prone.
+- Destroys may come in any order: a device keeps its instance alive.
+  Reason: GCs finalize in no fixed order. So the instance's message callback
+  and `user_data` must outlive its last device, and wrappers tie them to
+  that device, not the instance object.
+- What would be one call per item takes an array. Reason: a Python call
+  costs microseconds.
+- `bfr.h` compiles as C11 and C++. The shared library exports only `bfr_*`,
+  by linker export list as well as hidden visibility (libstdc++ gives its
+  templates default visibility). No exception crosses the boundary: each entry point turns one into a
+  result.
+- One set of objects, two libraries: static `bfr`, which also gives the
+  tests the C++ classes behind the C API, and shared `bfr_shared` (`libbfr`), C API only,
+  which the wrappers load.
+- A setting belonging to one object goes on its desc, not the instance
+  (swapchain image count is on `bfr_swapchain_desc`).
 
 ### Wrappers
 
 - Generated from the description: raw bindings, enums, flags, scoped
   ownership (RAII in C++, `IDisposable` in C#, `Drop` in Rust, context
-  managers in Python), errors as exceptions or results. Hand-written only
-  where a language deserves its own shape, such as command recording.
-- C++ (`bfr.hpp`): C++23. Calls return `std::expected` and nothing
-  throws, so it works with exceptions off. Windows and other extension
-  structs go after the desc as extra arguments; one the desc doesn't take
-  won't compile. A handle borrows its device, so the device must outlive
-  it. A struct names a handle by its `Ref` (`BufferRef`), a borrowed value
-  laid out as the C handle, so structs and arrays pass to C without a copy.
-  Object methods are `const` because many threads can call them;
-  handle methods aren't, because calls on one handle can't overlap.
-  Reason: lots of engines turn exceptions off, the C API already returns
-  results, and the library needs C++23 anyway.
-- In `bindings/<language>`, each tested through the real library.
-- Order: C++ first, which the tests use; then C#; then Rust and
-  Python.
+  managers in Python), errors as
+  exceptions or results. Hand-written only where a language deserves its own
+  shape, such as command recording.
+- C++ (`bfr.hpp`, C++23) returns `std::expected` and never throws, so it
+  works with exceptions off. Reason: many engines disable exceptions, the C
+  API already returns results, and the library needs C++23 anyway.
+  Extension structs (Windows and others) follow the desc as extra
+  arguments; one the desc doesn't take won't compile. A handle borrows its
+  device, which must outlive it. Structs name handles by `Ref`
+  (`BufferRef`), a borrowed value laid out as the C handle, so structs and
+  arrays pass to C uncopied.
+  Object methods are `const` because many threads call them; handle methods
+  aren't, because calls on one handle can't overlap.
+- Each in `bindings/<language>`, tested through the real library.
+- Order: C++ (the tests use it), C#, then Rust and Python.
 - No package publishing (NuGet, crates.io, PyPI) until the API settles.
   Reason: each needs prebuilt libraries and CI on every platform.
 
 ## Open questions (rough order)
 
-1. Mobile descriptor and update-after-bind limits (Mali, Adreno) to size the
-   bindless tables.
+1. Mobile descriptor and update-after-bind limits (Mali, Adreno) for sizing
+   the bindless tables.
 2. Render graph scope: which of dependencies, barriers, transient pooling,
-   aliasing, async compute and pass culling ship first; graph lifetime
-   (rebuilt per frame or cached); how pass callbacks record.
+   aliasing, async compute and pass culling ship first; graph lifetime (rebuilt per frame or cached);
+   how pass callbacks record.
 3. Shader contract: source language and compiler (Slang is the candidate),
    per-backend bytecode packaging.
-4. Ray-tracing pipelines on Metal.
+4. Ray tracing pipelines on Metal: mapping its intersection and visible
+   function tables to a binding table.
 5. Host hooks: logging, allocators, pipeline cache, imports, diagnostics.
 6. Repo, build, tests, first backend, CI.

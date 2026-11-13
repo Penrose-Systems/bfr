@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace bfr::rhi::vulkan {
 
@@ -57,6 +58,21 @@ public:
     /// The whole texture's size in texels, its depth or 1.
     [[nodiscard]] VkExtent3D size() const { return size_; }
     [[nodiscard]] const VulkanSparseTiling& tiling() const { return tiling_; }
+    /// The view a rendering draws to mipLevel through, from layer to the last
+    /// layer, a 3D texture's depth slice; VK_NULL_HANDLE past the texture's
+    /// levels or layers, or where it has none.
+    [[nodiscard]] VkImageView attachmentView(std::uint32_t mipLevel, std::uint32_t layer) const;
+    /// Makes attachmentView's views as desc says, of format, one for each
+    /// level and layer, or each level's depth slices for a 3D texture made
+    /// 2D-array compatible, when slices: Vulkan's rendering has no level or
+    /// first layer of its own, only its views'. They are 2D arrays, as an
+    /// attachment's view is never a cube or 3D
+    /// (VUID-VkRenderingAttachmentInfo-imageView-12470). Fails with
+    /// RhiDeviceFailed when the API refuses one; those made go with the
+    /// texture.
+    [[nodiscard]] core::Result<void> makeAttachmentViews(const TextureDesc& desc, VkFormat format, bool slices);
+    /// Whether makeAttachmentViews made any.
+    [[nodiscard]] bool hasAttachmentViews() const { return !attachmentViews_.empty(); }
 
 private:
     const VolkDeviceTable* table_;
@@ -73,16 +89,22 @@ private:
     bool sparse_;
     VkExtent3D size_;
     VulkanSparseTiling tiling_;
+    // Level by level, each a run of layers; made with the texture, which is
+    // cold.
+    std::vector<VkImageView> attachmentViews_;
+    std::uint32_t mipLevels_;
+    std::uint32_t layers_;
 };
 
 /// A texture as desc says, in device memory, or with none when it is sparse,
 /// shared by the queue families in families when there is more than one, as
-/// buffers are, holding slots. table is device's and outlives it. Fails with
+/// buffers are, holding slots, drawn to by depth slice when it is a 3D color
+/// target and volumeColorTargets. table is device's and outlives it. Fails with
 /// RhiUnsupported for a tileBytes, which Vulkan sets itself, RhiOutOfMemory
 /// when memory runs out and RhiDeviceFailed when VMA or the API refuses.
 [[nodiscard]] core::Result<VulkanTexture> createVulkanTexture(const VolkDeviceTable& table, VkDevice device,
                                                               VmaAllocator allocator, const TextureDesc& desc,
                                                               std::span<const std::uint32_t> families,
-                                                              const TextureSlotsHeld& slots);
+                                                              const TextureSlotsHeld& slots, bool volumeColorTargets);
 
 } // namespace bfr::rhi::vulkan

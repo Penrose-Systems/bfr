@@ -60,7 +60,7 @@ core::Result<SparseMemoryHandle> VulkanDevice::createSparseMemory(const SparseMe
         return core::failure(core::ErrorCode::RhiUnsupported, "Vulkan sets tile sizes itself; tileBytes is 0");
     }
     // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectBuffers();
+    collectRetired();
     // The memory types and alignment every resource named takes.
     VkMemoryRequirements requirements{.size = desc.size, .alignment = 1, .memoryTypeBits = ~0U};
     if (!desc.texture.isNull()) {
@@ -113,7 +113,7 @@ core::Result<void> VulkanDevice::destroySparseMemory(SparseMemoryHandle memory) 
     if (!sparseMemories_.retire(memory, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the sparse memory handle is stale");
     }
-    collectBuffers();
+    collectRetired();
     return {};
 }
 

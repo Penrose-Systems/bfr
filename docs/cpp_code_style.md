@@ -44,7 +44,7 @@ The measured fastest correct layout beats textbook idiom.
 - A non-obvious layout names its measurement in a comment. [review]
 
 ## Optimisation
-- Standard C++ may come first in a task, marked `// PERF: …`; code flagged outside the task is marked `// PERF(#issue): …`. The process is in [`contributing.md`](contributing.md#optimisation). [loop]
+- Standard C++ may come first in a task, marked `// PERF: …`; code flagged outside the task is marked `// PERF(#issue): …`. [loop]
 
 ## Comments
 - The code is the comment: names and structure explain it. [review]

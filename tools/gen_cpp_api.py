@@ -468,12 +468,15 @@ class Renderer:
         for name, callback in api.callbacks.items():
             self.emit("")
             self.emit(*doc(callback["doc"] + " May be called on several threads at once."))
-            params = [p for p in callback["params"] if p["type"] != "opaque"]
+            params = callback["params"]
             for param in params:
                 if param.get("doc"):
                     self.emit(*doc(f"{param['name']}: {param['doc']}"))
+            # A plain function and the caller's pointer, as C takes them: no
+            # std::function, which the messages BFR sends from its frame path
+            # would call through.
             signature = ", ".join(f"{cpp_type(api, p['type'])} {camel(p['name'])}" for p in params)
-            self.emit(f"using {pascal(name)} = std::function<void({signature})>;")
+            self.emit(f"using {pascal(name)} = void (*)({signature});")
         for name in [*api.objects, *api.handles]:
             self.emit("")
             self.emit(f"class {pascal(name)};")
@@ -531,7 +534,7 @@ class Renderer:
         self.emit(f"struct {pascal(name)} {{")
         counts = self.plan.counts_of(name)
         for member in struct["members"]:
-            if member.get("user_data") or member["name"] in counts:
+            if member["name"] in counts:
                 continue
             member_doc = member.get("doc", "")
             if member.get("optional") and member["type"] in api.callbacks:
@@ -573,12 +576,20 @@ class Renderer:
             params = callback["params"]
             c_params = ", ".join(f"{c_type(p['type'])} {p['name']}" for p in params)
             user_data = next(p for p in params if p["type"] == "opaque")["name"]
-            args = ", ".join(callback_arg(api, p["type"], p["name"]) for p in params if p["type"] != "opaque")
+            args = ", ".join("state.userData" if p["type"] == "opaque" else callback_arg(api, p["type"], p["name"])
+                             for p in params)
             self.emit(
                 "",
-                f"/// Calls the {pascal(name)} user_data points at; nothing it throws reaches C.",
+                f"/// A {pascal(name)} and the caller's pointer it is given, which C's user_data points at.",
+                f"struct {pascal(name)}State {{",
+                f"    {pascal(name)} callback = nullptr;",
+                "    void* userData = nullptr;",
+                "};",
+                "",
+                f"/// Calls the {pascal(name)}State user_data points at; nothing it throws reaches C.",
                 f"inline void {camel(name)}Trampoline({c_params}) noexcept {{",
-                f"    callQuietly([&] {{ (*static_cast<const {pascal(name)}*>({user_data}))({args}); }});",
+                f"    const auto& state = *static_cast<const {pascal(name)}State*>({user_data});",
+                f"    callQuietly([&] {{ state.callback({args}); }});",
                 "}",
             )
         for name in sorted(plan.in_structs, key=list(api.structs).index):
@@ -606,7 +617,7 @@ class Renderer:
             fields.append(".next = next")
         if struct.get("extends"):
             fields.append(f".chain = {{.next = nullptr, .type = {macro('struct_type', name)}}}")
-        params += [f"{pascal(c['type'])}* {camel(c['name'])}" for c in callbacks]
+        params += [f"{pascal(c['type'])}State* {camel(c['name'])}" for c in callbacks]
         arrays = self.plan.arrays_of(name)
         counts = {a["array"]: a for a in arrays}
         for member in struct["members"]:
@@ -868,8 +879,11 @@ class Renderer:
                 extra.append("nullptr")
             for callback in self.plan.callbacks_of(kind):
                 state = camel(callback["name"])
-                self.emit(f"    auto {state} = {name}.{state} ? std::make_shared<{pascal(callback['type'])}>("
-                          f"{name}.{state}) : nullptr;")
+                partner = next(m for m in api.structs[kind]["members"] if m.get("user_data") in
+                               (callback["name"], callback["type"]))
+                state_type = f"detail::{pascal(callback['type'])}State"
+                self.emit(f"    auto {state} = {name}.{state} != nullptr ? std::make_shared<{state_type}>("
+                          f"{state_type}{{{name}.{state}, {name}.{camel(partner['name'])}}}) : nullptr;")
                 extra.append(f"{state}.get()")
                 if not method.static or callback_state is not None:
                     raise SpecError(f"{method.function}: the C++ generator handles one callback, in the desc "

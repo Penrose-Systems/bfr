@@ -36,8 +36,8 @@ public:
     /// is destroyed; resizeSwapchain builds its images. Fails with
     /// RhiWindowFailed when there is no window, when its window system's
     /// surface extension is unavailable, or when the API refuses the window,
-    /// RhiPresentUnsupported when the device or desc.queue can't present to
-    /// it, RhiInvalidCall when the device has no queue desc.queue or an enum
+    /// RhiPresentUnsupported when the device has no swapchain extension,
+    /// RhiInvalidCall when the device has no queue desc.queue or an enum
     /// in desc is not one BFR has, and RhiLimitReached when the device holds
     /// maxSwapchains already.
     [[nodiscard]] virtual core::Result<SwapchainHandle> createSwapchain(const core::window::NativeWindow& window,
@@ -103,9 +103,8 @@ public:
 
     /// Begins rendering to desc's attachments, with the image acquire took
     /// from swapchain as color attachment 0 when swapchain is not null, or as
-    /// the image attachment 0's texture resolves into when it names one, and
-    /// sets the viewport and scissor to the whole of them; ends with
-    /// endRendering, which resolves the attachments that name a resolve
+    /// the image attachment 0's texture resolves into when it names one; ends
+    /// with endRendering, which resolves the attachments that name a resolve
     /// texture. Only the draws, direct and indirect, and the state they take,
     /// are recorded in between. Fails with RhiInvalidCall when no attachment
     /// is given, when a color attachment but the swapchain's names no texture,
@@ -162,11 +161,11 @@ public:
     [[nodiscard]] virtual core::Result<void> setTopology(CommandListHandle commandList, Topology topology) = 0;
 
     /// Sets the first data.size() bytes of the push constants every shader
-    /// reads, for the draws and dispatches after it. Fails with RhiInvalidCall
-    /// when the size is more than the caps' limits.maxPushConstantsSize, which
-    /// the layout BFR makes holds,
-    /// RhiLimitReached past the pool's pushConstantUpdates, and
-    /// RhiInvalidHandle when the list is gone.
+    /// reads, for the draws and dispatches after it; data.size() is at most
+    /// the caps' limits.maxPushConstantsSize, which the layout BFR makes
+    /// holds. Fails, on Metal, which copies the bytes into the pool's ring,
+    /// with RhiInvalidCall past that size and RhiLimitReached past the pool's
+    /// pushConstantUpdates; and with RhiInvalidHandle when the list is gone.
     [[nodiscard]] virtual core::Result<void> pushConstants(CommandListHandle commandList,
                                                            std::span<const std::byte> data) = 0;
 
@@ -205,8 +204,8 @@ public:
     /// Records drawCount draws as draw does, each with the DrawIndirectArgs
     /// buffer holds from offset, stride bytes apart. buffer has indirect
     /// usage; work that wrote the arguments is ordered before by a barrier.
-    /// Fails with RhiUnsupported for drawCount above 1 where
-    /// Features::multiDrawIndirect is false and, on D3D12, a stride not in
+    /// Fails with RhiUnsupported for drawCount above 1 on Metal, whose
+    /// indirect draw has no count, and, on D3D12, a stride not in
     /// DeviceDesc::indirectStrides; and as draw does, or with RhiInvalidHandle
     /// when the buffer is gone.
     [[nodiscard]] virtual core::Result<void> drawIndirect(CommandListHandle commandList, BufferHandle buffer,
@@ -222,8 +221,8 @@ public:
 
     /// Records drawIndirect's draws, as many as the 32-bit count countBuffer
     /// holds at countOffset when the GPU runs it, at most maxDrawCount.
-    /// countBuffer has indirect usage. Fails with RhiUnsupported where
-    /// Features::drawIndirectCount is false, and as drawIndirect does.
+    /// countBuffer has indirect usage. Fails with RhiUnsupported on Metal,
+    /// which has none, and as drawIndirect does.
     [[nodiscard]] virtual core::Result<void> drawIndirectCount(CommandListHandle commandList, BufferHandle buffer,
                                                                std::uint64_t offset, BufferHandle countBuffer,
                                                                std::uint64_t countOffset, std::uint32_t maxDrawCount,
@@ -277,11 +276,13 @@ public:
     /// wrote. Fails with RhiInvalidHandle when the list is gone.
     [[nodiscard]] virtual core::Result<void> barrier(CommandListHandle commandList) = 0;
 
-    /// Records a barrier, as barrier does, that also moves every layer and
-    /// mip level of texture from layout before to layout after. Outside
-    /// rendering. Fails with RhiInvalidHandle when the list or texture is gone.
+    /// Records a barrier, as barrier does, that also moves range's mip levels
+    /// and layers of texture from layout before to layout after; the rest
+    /// stay as they are. Outside rendering. Fails with RhiInvalidHandle when
+    /// the list or texture is gone.
     [[nodiscard]] virtual core::Result<void> textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                                            TextureLayout before, TextureLayout after) = 0;
+                                                            TextureLayout before, TextureLayout after,
+                                                            const TextureRange& range) = 0;
 
     /// Records copies of regions from buffer to texture, which is in layout
     /// CopyDst, outside rendering; api/bfr.yaml states the alignment the
@@ -337,6 +338,12 @@ public:
     /// Whether the GPU has passed token, without blocking. Fails as wait does.
     [[nodiscard]] virtual core::Result<bool> poll(Token token) = 0;
 
+    /// Frees the objects destroy calls retired whose submits the GPU has
+    /// passed, and gives their slots back to the tables, as each create call
+    /// also does first. Not for the frame path: it frees memory. Fails with
+    /// RhiDeviceFailed when the backend cannot say what the GPU has passed.
+    [[nodiscard]] virtual core::Result<void> runGarbageCollection() = 0;
+
     /// Discards a command list that was not submitted; the pool hands it out
     /// again after its next reset. A null handle does nothing. Fails with RhiInvalidHandle when the list is already
     /// gone.
@@ -347,14 +354,14 @@ public:
     /// it is not for the frame path. Fails with RhiInvalidCall for memory BFR
     /// doesn't have, RhiOutOfMemory when the API says the memory ran
     /// out, RhiLimitReached at the device's maximum of buffers or of storage
-    /// buffer slots, and RhiDeviceFailed when the API refuses the desc or
+    /// or uniform buffer slots, and RhiDeviceFailed when the API refuses the desc or
     /// gives no buffer.
     [[nodiscard]] virtual core::Result<BufferHandle> createBuffer(const BufferDesc& desc) = 0;
 
-    /// The buffer's index in the storage buffer table, held from creation to
-    /// destruction. Fails with RhiInvalidCall when the buffer has no storage
-    /// usage and RhiInvalidHandle when it is destroyed.
-    [[nodiscard]] virtual core::Result<std::uint32_t> bufferSlot(BufferHandle buffer) = 0;
+    /// The buffer's indices in the storage and uniform buffer tables, held
+    /// from creation to destruction; kNoSlot in a table its usage does not
+    /// set. Fails with RhiInvalidHandle when it is destroyed.
+    [[nodiscard]] virtual core::Result<BufferSlots> bufferSlots(BufferHandle buffer) = 0;
 
     /// Where the CPU reaches an upload or readback buffer, borrowed until the
     /// buffer is destroyed. CPU writes reach the GPU, and GPU writes reach the
@@ -788,7 +795,8 @@ public:
 
     /// The bytes of stack one shader of group takes, for
     /// RayTracingPipelineDesc::stackSize. The group has that shader. Fails
-    /// with RhiInvalidCall for an enum value BFR doesn't have, and
+    /// with RhiUnsupported where Features::rayTracingPipeline is false,
+    /// RhiInvalidCall for an enum value BFR doesn't have, and
     /// RhiInvalidHandle when it is gone.
     [[nodiscard]] virtual core::Result<std::uint64_t> rayTracingStackSize(PipelineHandle pipeline, std::uint32_t group,
                                                                           RayTracingGroupShader shader) = 0;
@@ -820,8 +828,9 @@ public:
 
     /// Writes count groups' identifiers from first, RayTracingLimits::
     /// identifierSize bytes each, into out, for binding table records. Fails
-    /// with RhiInvalidCall when out is too small, and RhiInvalidHandle when it
-    /// is gone.
+    /// with RhiUnsupported where Features::rayTracingPipeline is false,
+    /// RhiInvalidCall when out is too small, and RhiInvalidHandle when it is
+    /// gone.
     [[nodiscard]] virtual core::Result<void> shaderIdentifiers(PipelineHandle pipeline, std::uint32_t first,
                                                                std::uint32_t count, std::span<std::byte> out) = 0;
 
@@ -851,11 +860,9 @@ public:
                                                                std::uint64_t offset) = 0;
 
     /// The buffer's GPU address, for the addresses TraceRaysIndirectArgs,
-    /// cluster records and shaders read. The buffer has indirect,
-    /// shaderBindingTable, accelerationStructureInput, accelerationStructureData
-    /// or accelerationStructureStorage usage. Fails with RhiUnsupported where
-    /// Features::bufferAddress is false, RhiInvalidCall for a buffer of none
-    /// of those usages, and RhiInvalidHandle when it is gone.
+    /// cluster records and shaders read; every buffer has one where
+    /// Features::bufferAddress. Fails with RhiUnsupported where it is false,
+    /// and RhiInvalidHandle when the buffer is gone.
     [[nodiscard]] virtual core::Result<std::uint64_t> bufferAddress(BufferHandle buffer) = 0;
 
     /// The CPU time spent in each of the device's calls since it was made,

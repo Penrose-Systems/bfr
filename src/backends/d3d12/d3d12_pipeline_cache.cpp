@@ -224,7 +224,7 @@ core::Result<PipelineCacheHandle> D3D12Device::createPipelineCache(const Pipelin
     const PipelineCacheHandle cache = pipelineCaches_.emplace(std::move(*made));
     if (cache.isNull()) {
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} pipeline caches",
-                             kBufferLimit);
+                             desc_.maxPipelineCaches);
     }
     return cache;
 }

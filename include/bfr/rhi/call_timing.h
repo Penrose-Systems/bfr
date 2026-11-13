@@ -41,7 +41,7 @@ enum class Call : std::uint32_t {
     Poll = 29,
     DestroyCommandList = 30,
     CreateBuffer = 31,
-    BufferSlot = 32,
+    BufferSlots = 32,
     MapBuffer = 33,
     DestroyBuffer = 34,
     CreateTexture = 35,
@@ -119,10 +119,11 @@ enum class Call : std::uint32_t {
     ClusterSizes = 105,
     BuildClusters = 106,
     CaptureAccelerationStructure = 107,
+    RunGarbageCollection = 108,
 };
 
 /// How many values Call has.
-inline constexpr std::size_t kCallCount = 108;
+inline constexpr std::size_t kCallCount = 109;
 
 /// The CPU time one kind of call has taken, read from std::chrono::steady_clock
 /// around each call: how many there were, their nanoseconds in all, and the

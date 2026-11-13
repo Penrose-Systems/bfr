@@ -3,6 +3,7 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/buffer.h"
 #include "metal/metal_util.h"
+#include "rhi/bindless_slots.h"
 
 #include <Metal/Metal.hpp>
 
@@ -40,9 +41,10 @@ struct MetalBuffer {
     Ref<MTL::Buffer> buffer;
     BufferMemory memory = BufferMemory::Device;
     std::span<std::byte> mapped;
-    /// Its place in the storage buffer table, kEnd without storage usage; the
-    /// device gives it back when the buffer is collected.
-    std::uint32_t slot = 0;
+    /// Its places in the storage and uniform buffer tables, kEnd in a table
+    /// its usage does not set; the device gives them back when the buffer is
+    /// collected.
+    BufferSlotsHeld slots;
     std::optional<MTL::SparsePageSize> page;
     std::uint64_t tileBytes = 0;
     // Declared after buffer, so it leaves the set before it is released.
