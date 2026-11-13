@@ -579,6 +579,12 @@ typedef enum bfr_call {
     BFR_CALL_BEGIN_QUERY = 113,
     BFR_CALL_END_QUERY = 114,
     BFR_CALL_RESOLVE_QUERIES = 115,
+    BFR_CALL_BEGIN_DEBUG_LABEL = 116,
+    BFR_CALL_END_DEBUG_LABEL = 117,
+    BFR_CALL_INSERT_DEBUG_LABEL = 118,
+    BFR_CALL_BEGIN_QUEUE_DEBUG_LABEL = 119,
+    BFR_CALL_END_QUEUE_DEBUG_LABEL = 120,
+    BFR_CALL_INSERT_QUEUE_DEBUG_LABEL = 121,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -1418,6 +1424,9 @@ typedef struct bfr_device_desc {
     // Query pools the device holds at once, 0 for none; past it, bfr_create_query_pool fails with
     // error_limit_reached.
     uint32_t max_query_pools;
+    // The longest bfr_debug_label name, in bytes, the label calls take. Room for one, and the '\0'
+    // the backend reads as its end, is made for each list and each queue with the device.
+    uint32_t max_debug_label_length;
     // Sparse memories the device holds at once, 0 for none; past it, bfr_create_sparse_memory fails
     // with error_limit_reached.
     uint32_t max_sparse_memories;
@@ -1801,6 +1810,15 @@ typedef struct bfr_query_pool_desc {
     // Read only for pipeline_statistics.
     bfr_pipeline_statistics_mask statistics;
 } bfr_query_pool_desc;
+
+// A name a debugger or profiler shows on a region of a list's or a queue's work, or on one point in
+// it.
+typedef struct bfr_debug_label {
+    // Read during the call only.
+    bfr_string name;
+    // Red, green, blue and alpha, 0 to 1, passed to the backend as given.
+    float color[4];
+} bfr_debug_label;
 
 // Where a pool's results land in the buffer bfr_resolve_queries writes, as the backend lays them
 // out: stride bytes for each query, and in each, the 64-bit value of an occlusion or
@@ -3243,6 +3261,10 @@ typedef struct bfr_caps_features {
     bfr_bool queries;
     bfr_bool pipeline_statistics;
     bfr_bool occlusion_query_precise;
+    // bfr_begin_debug_label, bfr_end_debug_label and bfr_insert_debug_label.
+    bfr_bool debug_labels;
+    // bfr_begin_queue_debug_label, bfr_end_queue_debug_label and bfr_insert_queue_debug_label.
+    bfr_bool queue_debug_labels;
 } bfr_caps_features;
 
 // One pool of memory.
@@ -4261,6 +4283,46 @@ BFR_API bfr_result bfr_resolve_queries(
     uint32_t count,
     bfr_buffer buffer,
     uint64_t offset);
+
+// Records the start of a region of the list's commands named by label, ended by
+// bfr_end_debug_label; regions nest. Where bfr_caps_features.debug_labels. Fails with
+// error_unsupported where it is false, error_limit_reached when the name is longer than the
+// device's max_debug_label_length, and error_invalid_argument when the name holds a '\0', which the
+// backend reads as its end.
+BFR_API bfr_result bfr_begin_debug_label(
+    bfr_device* device,
+    bfr_command_list command_list,
+    const bfr_debug_label* label);
+
+// Records the end of the list's innermost labelled region. Fails with error_unsupported where
+// bfr_caps_features.debug_labels is false.
+BFR_API bfr_result bfr_end_debug_label(bfr_device* device, bfr_command_list command_list);
+
+// Records label at this point in the list's commands. Fails as bfr_begin_debug_label.
+BFR_API bfr_result bfr_insert_debug_label(
+    bfr_device* device,
+    bfr_command_list command_list,
+    const bfr_debug_label* label);
+
+// Starts a region of the work submitted to queue named by label, ended by
+// bfr_end_queue_debug_label; regions nest. Where bfr_caps_features.queue_debug_labels. Fails as
+// bfr_begin_debug_label, with error_unsupported where queue_debug_labels is false and
+// error_invalid_argument when the device has no such queue.
+BFR_API bfr_result bfr_begin_queue_debug_label(
+    bfr_device* device,
+    uint32_t queue,
+    const bfr_debug_label* label);
+
+// Ends the innermost labelled region of queue's work. Fails with error_unsupported where
+// bfr_caps_features.queue_debug_labels is false, and error_invalid_argument when the device has no
+// such queue.
+BFR_API bfr_result bfr_end_queue_debug_label(bfr_device* device, uint32_t queue);
+
+// Names this point in the work submitted to queue. Fails as bfr_begin_queue_debug_label.
+BFR_API bfr_result bfr_insert_queue_debug_label(
+    bfr_device* device,
+    uint32_t queue,
+    const bfr_debug_label* label);
 
 // Creates desc's size bytes of device memory for the tiles of the sparse resources desc names. Not
 // for the frame path. Fails with error_invalid_argument for no resource, error_unsupported for a

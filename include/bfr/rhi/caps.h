@@ -313,6 +313,11 @@ struct Features {
     bool queries = false;
     bool pipelineStatistics = false;
     bool occlusionQueryPrecise = false;
+    /// Device::beginDebugLabel, endDebugLabel and insertDebugLabel.
+    bool debugLabels = false;
+    /// Device::beginQueueDebugLabel, endQueueDebugLabel and
+    /// insertQueueDebugLabel.
+    bool queueDebugLabels = false;
 };
 
 struct MemoryHeap {

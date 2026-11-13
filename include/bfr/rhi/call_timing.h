@@ -127,10 +127,16 @@ enum class Call : std::uint32_t {
     BeginQuery = 113,
     EndQuery = 114,
     ResolveQueries = 115,
+    BeginDebugLabel = 116,
+    EndDebugLabel = 117,
+    InsertDebugLabel = 118,
+    BeginQueueDebugLabel = 119,
+    EndQueueDebugLabel = 120,
+    InsertQueueDebugLabel = 121,
 };
 
 /// How many values Call has.
-inline constexpr std::size_t kCallCount = 116;
+inline constexpr std::size_t kCallCount = 122;
 
 /// The CPU time one kind of call has taken, read from std::chrono::steady_clock
 /// around each call: how many there were, their nanoseconds in all, and the

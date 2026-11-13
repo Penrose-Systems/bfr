@@ -7,6 +7,7 @@
 #include "bfr/rhi/call_timing.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
+#include "bfr/rhi/debug_label.h"
 #include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/query.h"
 #include "bfr/rhi/sampler.h"
@@ -548,6 +549,41 @@ public:
     [[nodiscard]] virtual core::Result<void> resolveQueries(CommandListHandle commandList, QueryPoolHandle pool,
                                                             std::uint32_t first, std::uint32_t count,
                                                             BufferHandle buffer, std::uint64_t offset) = 0;
+
+    /// Records the start of a region of the list's commands named by label,
+    /// ended by endDebugLabel; regions nest. Where Features::debugLabels.
+    /// Fails with RhiUnsupported where it is false, RhiLimitReached when the
+    /// name is longer than DeviceDesc::maxDebugLabelLength, RhiInvalidCall
+    /// when the name holds a '\0', which the backend reads as its end, and
+    /// RhiInvalidHandle for a list that is gone.
+    [[nodiscard]] virtual core::Result<void> beginDebugLabel(CommandListHandle commandList,
+                                                             const DebugLabel& label) = 0;
+
+    /// Records the end of the list's innermost labelled region. Fails with
+    /// RhiUnsupported where Features::debugLabels is false, and
+    /// RhiInvalidHandle for a list that is gone.
+    [[nodiscard]] virtual core::Result<void> endDebugLabel(CommandListHandle commandList) = 0;
+
+    /// Records label at this point in the list's commands. Fails as
+    /// beginDebugLabel.
+    [[nodiscard]] virtual core::Result<void> insertDebugLabel(CommandListHandle commandList,
+                                                              const DebugLabel& label) = 0;
+
+    /// Starts a region of the work submitted to queue named by label, ended by
+    /// endQueueDebugLabel; regions nest. Where Features::queueDebugLabels.
+    /// Fails as beginDebugLabel, with RhiUnsupported where
+    /// Features::queueDebugLabels is false and RhiInvalidCall when the device
+    /// has no such queue.
+    [[nodiscard]] virtual core::Result<void> beginQueueDebugLabel(std::uint32_t queue, const DebugLabel& label) = 0;
+
+    /// Ends the innermost labelled region of queue's work. Fails with
+    /// RhiUnsupported where Features::queueDebugLabels is false, and
+    /// RhiInvalidCall when the device has no such queue.
+    [[nodiscard]] virtual core::Result<void> endQueueDebugLabel(std::uint32_t queue) = 0;
+
+    /// Names this point in the work submitted to queue. Fails as
+    /// beginQueueDebugLabel.
+    [[nodiscard]] virtual core::Result<void> insertQueueDebugLabel(std::uint32_t queue, const DebugLabel& label) = 0;
 
     /// How long a timestamp tick lasts on queue, as the backend gives it.
     /// Fails with RhiInvalidCall when the device has no such queue, and

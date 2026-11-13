@@ -1169,10 +1169,13 @@ ResolveCaps resolveFrom(const PropertyQuery& properties) {
 }
 
 Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
-              std::span<const VkExtensionProperties> extensions) {
+              std::span<const VkExtensionProperties> extensions, bool debugUtils) {
     const DeviceFeatures features(vk, adapter, version, extensions);
     const PropertyQuery properties(vk, adapter, version, extensions);
-    const Features reported = featuresFrom(features, properties, extensions);
+    Features reported = featuresFrom(features, properties, extensions);
+    // VK_EXT_debug_utils labels both command buffers and queues.
+    reported.debugLabels = debugUtils;
+    reported.queueDebugLabels = debugUtils;
     KindFlags kinds;
     Caps caps{
         .info = infoFrom(properties),

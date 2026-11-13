@@ -23,9 +23,12 @@
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
 #include <catch2/matchers/catch_matchers_quantifiers.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <dlfcn.h>
 #include <vulkan/vulkan_core.h>
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -1295,4 +1298,83 @@ TEST_CASE("Vulkan logs the device it creates, its queue families and its extensi
     CHECK_THAT(log.str(), Catch::Matchers::ContainsSubstring("device on " + (*rhi)->adapters()[cpuAdapter(**rhi)].name +
                                                              ", queue families 0, extensions: VK_KHR_swapchain, ") &&
                               Catch::Matchers::ContainsSubstring("VK_KHR_portability_subset"));
+}
+
+namespace {
+constexpr std::uint32_t kLabelLength = 16;
+} // namespace
+
+TEST_CASE("Vulkan enables VK_EXT_debug_utils without validation where the loader lists it, and labels with it",
+          "[vulkan][gpu]") {
+    // The loader's own listing, read through its exported entry point.
+    void* loader = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
+    REQUIRE(loader != nullptr);
+    const auto getProcAddr = std::bit_cast<PFN_vkGetInstanceProcAddr>(dlsym(loader, "vkGetInstanceProcAddr"));
+    REQUIRE(getProcAddr != nullptr);
+    const auto enumerate = std::bit_cast<PFN_vkEnumerateInstanceExtensionProperties>(
+        getProcAddr(VK_NULL_HANDLE, "vkEnumerateInstanceExtensionProperties"));
+    REQUIRE(enumerate != nullptr);
+    std::uint32_t count = 0;
+    REQUIRE(enumerate(nullptr, &count, nullptr) == VK_SUCCESS);
+    std::vector<VkExtensionProperties> extensions(count);
+    REQUIRE(enumerate(nullptr, &count, extensions.data()) == VK_SUCCESS);
+    dlclose(loader);
+    const bool listed = std::ranges::any_of(extensions, [](const VkExtensionProperties& extension) {
+        return std::string_view{extension.extensionName} == VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    });
+
+    const auto rhi = Instance::create(vulkanDesc(), {});
+    INFO(failureOf(rhi));
+    REQUIRE(rhi.has_value());
+    const Features& features = (*rhi)->adapters()[0].caps.features;
+    CHECK(features.debugLabels == listed);
+    CHECK(features.queueDebugLabels == listed);
+    if (!listed) {
+        SKIP("the loader lists no VK_EXT_debug_utils");
+    }
+    auto made = (*rhi)->createDevice(0, kNoWindow,
+                                     testDeviceWith([](DeviceDesc& desc) { desc.maxDebugLabelLength = kLabelLength; }));
+    INFO(failureOf(made));
+    REQUIRE(made.has_value());
+    Device& device = **made;
+    const auto commands = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+    REQUIRE(commands.has_value());
+    auto list = device.beginCommands(*commands);
+    REQUIRE(list.has_value());
+    CHECK(device.beginDebugLabel(*list, {.name = "frame"}).has_value());
+    CHECK(device.endDebugLabel(*list).has_value());
+    CHECK(device.insertQueueDebugLabel(0, {.name = "submit"}).has_value());
+    const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+    REQUIRE(sent.has_value());
+    REQUIRE(device.wait(*sent, kTestWait).has_value());
+    CHECK(device.destroyCommandPool(*commands).has_value());
+}
+
+TEST_CASE("Vulkan passes an end label with no begin through, and validation reports it", "[vulkan][gpu]") {
+    std::vector<std::string> errors;
+    {
+        auto created = Instance::create(recordingErrorsInto(errors), kValidation);
+        INFO(failureOf(created));
+        REQUIRE(created.has_value());
+        const std::unique_ptr<Instance> instance = std::move(*created);
+        if (!instance->adapters()[0].caps.features.debugLabels) {
+            SKIP("the instance has no VK_EXT_debug_utils");
+        }
+        auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+        INFO(failureOf(made));
+        REQUIRE(made.has_value());
+        Device& device = **made;
+        const auto commands = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(commands.has_value());
+        auto list = device.beginCommands(*commands);
+        REQUIRE(list.has_value());
+
+        CHECK(device.endDebugLabel(*list).has_value());
+        const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
+        REQUIRE(sent.has_value());
+        REQUIRE(device.wait(*sent, kTestWait).has_value());
+        CHECK(device.destroyCommandPool(*commands).has_value());
+    }
+    CHECK_THAT(errors, Catch::Matchers::AnyMatch(
+                           Catch::Matchers::ContainsSubstring("VUID-vkCmdEndDebugUtilsLabelEXT-commandBuffer-01912")));
 }

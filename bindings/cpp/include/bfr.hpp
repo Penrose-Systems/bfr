@@ -771,6 +771,12 @@ enum class Call : std::int32_t {
     BeginQuery = BFR_CALL_BEGIN_QUERY,
     EndQuery = BFR_CALL_END_QUERY,
     ResolveQueries = BFR_CALL_RESOLVE_QUERIES,
+    BeginDebugLabel = BFR_CALL_BEGIN_DEBUG_LABEL,
+    EndDebugLabel = BFR_CALL_END_DEBUG_LABEL,
+    InsertDebugLabel = BFR_CALL_INSERT_DEBUG_LABEL,
+    BeginQueueDebugLabel = BFR_CALL_BEGIN_QUEUE_DEBUG_LABEL,
+    EndQueueDebugLabel = BFR_CALL_END_QUEUE_DEBUG_LABEL,
+    InsertQueueDebugLabel = BFR_CALL_INSERT_QUEUE_DEBUG_LABEL,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -892,6 +898,12 @@ enum class Call : std::int32_t {
     case Call::BeginQuery: return "begin_query";
     case Call::EndQuery: return "end_query";
     case Call::ResolveQueries: return "resolve_queries";
+    case Call::BeginDebugLabel: return "begin_debug_label";
+    case Call::EndDebugLabel: return "end_debug_label";
+    case Call::InsertDebugLabel: return "insert_debug_label";
+    case Call::BeginQueueDebugLabel: return "begin_queue_debug_label";
+    case Call::EndQueueDebugLabel: return "end_queue_debug_label";
+    case Call::InsertQueueDebugLabel: return "insert_queue_debug_label";
     }
     return {};
 }
@@ -2305,6 +2317,9 @@ struct DeviceDesc {
     /// Query pools the device holds at once, 0 for none; past it, bfr_create_query_pool fails with
     /// error_limit_reached.
     std::uint32_t maxQueryPools{};
+    /// The longest bfr_debug_label name, in bytes, the label calls take. Room for one, and the '\0'
+    /// the backend reads as its end, is made for each list and each queue with the device.
+    std::uint32_t maxDebugLabelLength{};
     /// Sparse memories the device holds at once, 0 for none; past it, bfr_create_sparse_memory
     /// fails with error_limit_reached.
     std::uint32_t maxSparseMemories{};
@@ -2661,6 +2676,15 @@ struct QueryPoolDesc {
     std::uint32_t count{};
     /// Read only for pipeline_statistics.
     PipelineStatisticsMask statistics{};
+};
+
+/// A name a debugger or profiler shows on a region of a list's or a queue's work, or on one point
+/// in it.
+struct DebugLabel {
+    /// Read during the call only.
+    std::string_view name{};
+    /// Red, green, blue and alpha, 0 to 1, passed to the backend as given.
+    std::array<float, 4> color{};
 };
 
 /// Where a pool's results land in the buffer bfr_resolve_queries writes, as the backend lays them
@@ -4034,6 +4058,10 @@ struct CapsFeatures {
     bool queries{};
     bool pipelineStatistics{};
     bool occlusionQueryPrecise{};
+    /// bfr_begin_debug_label, bfr_end_debug_label and bfr_insert_debug_label.
+    bool debugLabels{};
+    /// bfr_begin_queue_debug_label, bfr_end_queue_debug_label and bfr_insert_queue_debug_label.
+    bool queueDebugLabels{};
 };
 
 /// One pool of memory.
@@ -4407,6 +4435,7 @@ inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
         .max_bindless_uniform_buffers = value.maxBindlessUniformBuffers,
         .max_timestamp_pools = value.maxTimestampPools,
         .max_query_pools = value.maxQueryPools,
+        .max_debug_label_length = value.maxDebugLabelLength,
         .max_sparse_memories = value.maxSparseMemories,
         .max_tile_mappings = value.maxTileMappings,
         .max_bindless_acceleration_structures = value.maxBindlessAccelerationStructures,
@@ -4549,6 +4578,13 @@ inline bfr_query_pool_desc toC(const QueryPoolDesc& value) {
         .type = static_cast<bfr_query_type>(value.type),
         .count = value.count,
         .statistics = toC(value.statistics),
+    };
+}
+
+inline bfr_debug_label toC(const DebugLabel& value) {
+    return {
+        .name = detail::toC(value.name),
+        .color = {value.color[0], value.color[1], value.color[2], value.color[3]},
     };
 }
 
@@ -5189,6 +5225,8 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .queries = value.queries != BFR_FALSE,
         .pipelineStatistics = value.pipeline_statistics != BFR_FALSE,
         .occlusionQueryPrecise = value.occlusion_query_precise != BFR_FALSE,
+        .debugLabels = value.debug_labels != BFR_FALSE,
+        .queueDebugLabels = value.queue_debug_labels != BFR_FALSE,
     };
 }
 
@@ -5795,6 +5833,34 @@ public:
     /// bfr_get_query_layout says, once the GPU has written them. The buffer needs copy_dst usage.
     /// Outside rendering.
     [[nodiscard]] Expected<void> resolveQueries(CommandList commandList, const QueryPool& pool, std::uint32_t first, std::uint32_t count, const Buffer& buffer, std::uint64_t offset) const;
+
+    /// Records the start of a region of the list's commands named by label, ended by
+    /// bfr_end_debug_label; regions nest. Where bfr_caps_features.debug_labels. Fails with
+    /// error_unsupported where it is false, error_limit_reached when the name is longer than the
+    /// device's max_debug_label_length, and error_invalid_argument when the name holds a '\0',
+    /// which the backend reads as its end.
+    [[nodiscard]] Expected<void> beginDebugLabel(CommandList commandList, const DebugLabel& label) const;
+
+    /// Records the end of the list's innermost labelled region. Fails with error_unsupported where
+    /// bfr_caps_features.debug_labels is false.
+    [[nodiscard]] Expected<void> endDebugLabel(CommandList commandList) const;
+
+    /// Records label at this point in the list's commands. Fails as bfr_begin_debug_label.
+    [[nodiscard]] Expected<void> insertDebugLabel(CommandList commandList, const DebugLabel& label) const;
+
+    /// Starts a region of the work submitted to queue named by label, ended by
+    /// bfr_end_queue_debug_label; regions nest. Where bfr_caps_features.queue_debug_labels. Fails
+    /// as bfr_begin_debug_label, with error_unsupported where queue_debug_labels is false and
+    /// error_invalid_argument when the device has no such queue.
+    [[nodiscard]] Expected<void> beginQueueDebugLabel(std::uint32_t queue, const DebugLabel& label) const;
+
+    /// Ends the innermost labelled region of queue's work. Fails with error_unsupported where
+    /// bfr_caps_features.queue_debug_labels is false, and error_invalid_argument when the device
+    /// has no such queue.
+    [[nodiscard]] Expected<void> endQueueDebugLabel(std::uint32_t queue) const;
+
+    /// Names this point in the work submitted to queue. Fails as bfr_begin_queue_debug_label.
+    [[nodiscard]] Expected<void> insertQueueDebugLabel(std::uint32_t queue, const DebugLabel& label) const;
 
     /// Creates desc's size bytes of device memory for the tiles of the sparse resources desc names.
     /// Not for the frame path. Fails with error_invalid_argument for no resource, error_unsupported
@@ -7557,6 +7623,52 @@ inline Expected<void> Device::endQuery(CommandList commandList, const QueryPool&
 
 inline Expected<void> Device::resolveQueries(CommandList commandList, const QueryPool& pool, std::uint32_t first, std::uint32_t count, const Buffer& buffer, std::uint64_t offset) const {
     if (const bfr_result result = bfr_resolve_queries(device_, commandList.get(), pool.get(), first, count, buffer.get(), offset); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::beginDebugLabel(CommandList commandList, const DebugLabel& label) const {
+    const bfr_debug_label cLabel = detail::toC(label);
+    if (const bfr_result result = bfr_begin_debug_label(device_, commandList.get(), &cLabel); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::endDebugLabel(CommandList commandList) const {
+    if (const bfr_result result = bfr_end_debug_label(device_, commandList.get()); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::insertDebugLabel(CommandList commandList, const DebugLabel& label) const {
+    const bfr_debug_label cLabel = detail::toC(label);
+    if (const bfr_result result = bfr_insert_debug_label(device_, commandList.get(), &cLabel); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::beginQueueDebugLabel(std::uint32_t queue, const DebugLabel& label) const {
+    const bfr_debug_label cLabel = detail::toC(label);
+    if (const bfr_result result = bfr_begin_queue_debug_label(device_, queue, &cLabel); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::endQueueDebugLabel(std::uint32_t queue) const {
+    if (const bfr_result result = bfr_end_queue_debug_label(device_, queue); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return {};
+}
+
+inline Expected<void> Device::insertQueueDebugLabel(std::uint32_t queue, const DebugLabel& label) const {
+    const bfr_debug_label cLabel = detail::toC(label);
+    if (const bfr_result result = bfr_insert_queue_debug_label(device_, queue, &cLabel); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return {};

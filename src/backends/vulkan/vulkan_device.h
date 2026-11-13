@@ -138,6 +138,8 @@ struct VulkanQueue {
     core::FixedVector<VkSparseMemoryBind> bufferBinds;
     core::FixedVector<VkSemaphore> waitSemaphores;
     core::FixedVector<std::uint64_t> waitSemaphoreValues;
+    // Room for the longest debug label name and its '\0', made with the queue.
+    std::vector<char> label;
     std::mutex lock;
 };
 
@@ -303,6 +305,12 @@ public:
     [[nodiscard]] core::Result<void> resolveQueries(CommandListHandle commandList, QueryPoolHandle pool,
                                                     std::uint32_t first, std::uint32_t count, BufferHandle buffer,
                                                     std::uint64_t offset) override;
+    [[nodiscard]] core::Result<void> beginDebugLabel(CommandListHandle commandList, const DebugLabel& label) override;
+    [[nodiscard]] core::Result<void> endDebugLabel(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<void> insertDebugLabel(CommandListHandle commandList, const DebugLabel& label) override;
+    [[nodiscard]] core::Result<void> beginQueueDebugLabel(std::uint32_t queue, const DebugLabel& label) override;
+    [[nodiscard]] core::Result<void> endQueueDebugLabel(std::uint32_t queue) override;
+    [[nodiscard]] core::Result<void> insertQueueDebugLabel(std::uint32_t queue, const DebugLabel& label) override;
     [[nodiscard]] core::Result<TimestampRate> timestampRate(std::uint32_t queue) const override;
     [[nodiscard]] core::Result<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue,
                                                                          HostClock clock) const override;
@@ -405,6 +413,13 @@ private:
     [[nodiscard]] core::Result<QueueType> queueTypeOf(const VulkanCommandList& list);
     // The pool a handle names; RhiInvalidHandle when it is gone.
     [[nodiscard]] core::Result<const VulkanQueryPool*> queryPoolFor(QueryPoolHandle pool);
+    // The list or queue a label call records on. Fail with RhiUnsupported
+    // where Features::debugLabels or queueDebugLabels is false, and as
+    // commandListFor and checkQueue do.
+    [[nodiscard]] core::Result<VulkanCommandList*> labelledList(CommandListHandle commandList);
+    [[nodiscard]] core::Result<VulkanQueue*> labelledQueue(std::uint32_t queue);
+    // The room for the label of the list in slot.
+    [[nodiscard]] std::span<char> listLabel(std::uint32_t slot);
     [[nodiscard]] core::Result<VulkanBuffer*> bufferFor(BufferHandle buffer);
     [[nodiscard]] core::Result<VulkanTexture*> textureFor(TextureHandle texture);
     [[nodiscard]] core::Result<VulkanPipeline*> pipelineFor(PipelineHandle pipeline);
@@ -486,6 +501,9 @@ private:
     // take indices. Both are made here, at the device's maximum of lists.
     core::SlotChains listSlots_;
     std::vector<VulkanListSlot> lists_;
+    // Room for the longest debug label name and its '\0' for each list slot,
+    // in slot order, made here so a label never touches the heap.
+    std::vector<char> listLabels_;
     core::SlotChains renderSlots_;
     std::vector<SwapchainHandle> renders_;
     // Live pools and destroyed ones not yet collected, held to

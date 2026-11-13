@@ -575,7 +575,13 @@ static_assert(static_cast<int>(bfr::rhi::Call::CaptureAccelerationStructure) ==
 static_assert(static_cast<int>(bfr::rhi::Call::RunGarbageCollection) == BFR_CALL_RUN_GARBAGE_COLLECTION);
 static_assert(static_cast<int>(bfr::rhi::Call::CreateQueryPool) == BFR_CALL_CREATE_QUERY_POOL);
 static_assert(static_cast<int>(bfr::rhi::Call::ResolveQueries) == BFR_CALL_RESOLVE_QUERIES);
-static_assert(bfr::rhi::kCallCount == BFR_CALL_RESOLVE_QUERIES + 1);
+static_assert(static_cast<int>(bfr::rhi::Call::BeginDebugLabel) == BFR_CALL_BEGIN_DEBUG_LABEL);
+static_assert(static_cast<int>(bfr::rhi::Call::EndDebugLabel) == BFR_CALL_END_DEBUG_LABEL);
+static_assert(static_cast<int>(bfr::rhi::Call::InsertDebugLabel) == BFR_CALL_INSERT_DEBUG_LABEL);
+static_assert(static_cast<int>(bfr::rhi::Call::BeginQueueDebugLabel) == BFR_CALL_BEGIN_QUEUE_DEBUG_LABEL);
+static_assert(static_cast<int>(bfr::rhi::Call::EndQueueDebugLabel) == BFR_CALL_END_QUEUE_DEBUG_LABEL);
+static_assert(static_cast<int>(bfr::rhi::Call::InsertQueueDebugLabel) == BFR_CALL_INSERT_QUEUE_DEBUG_LABEL);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_INSERT_QUEUE_DEBUG_LABEL + 1);
 static_assert(static_cast<int>(bfr::rhi::QueryType::Occlusion) == BFR_QUERY_TYPE_OCCLUSION);
 static_assert(static_cast<int>(bfr::rhi::QueryType::PipelineStatistics) == BFR_QUERY_TYPE_PIPELINE_STATISTICS);
 static_assert(static_cast<int>(bfr::rhi::QueryType::MeshPrimitivesGenerated) ==
@@ -1296,6 +1302,15 @@ bfr_adapter_type toC(bfr::rhi::AdapterType type) {
     return BFR_ADAPTER_TYPE_OTHER;
 }
 
+// A null label, or a null name with a length, is no label.
+bool isLabel(const bfr_debug_label* label) {
+    return label != nullptr && (label->name.data != nullptr || label->name.length == 0);
+}
+
+bfr::rhi::DebugLabel fromC(const bfr_debug_label& label) {
+    return {.name = {label.name.data, label.name.length}, .color = std::to_array(label.color)};
+}
+
 bfr_string toC(const std::string& text) {
     return {.data = text.data(), .length = text.size()};
 }
@@ -1592,6 +1607,8 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .queries = toC(features.queries),
         .pipeline_statistics = toC(features.pipelineStatistics),
         .occlusion_query_precise = toC(features.occlusionQueryPrecise),
+        .debug_labels = toC(features.debugLabels),
+        .queue_debug_labels = toC(features.queueDebugLabels),
     };
 }
 
@@ -1983,6 +2000,7 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
              .maxBindlessUniformBuffers = desc->max_bindless_uniform_buffers,
              .maxTimestampPools = desc->max_timestamp_pools,
              .maxQueryPools = desc->max_query_pools,
+             .maxDebugLabelLength = desc->max_debug_label_length,
              .maxSparseMemories = desc->max_sparse_memories,
              .maxTileMappings = desc->max_tile_mappings,
              .maxBindlessAccelerationStructures = desc->max_bindless_acceleration_structures,
@@ -3211,6 +3229,70 @@ bfr_result bfr_resolve_queries(bfr_device* device, bfr_command_list command_list
         const auto resolved = device->device->resolveQueries(fromC(command_list), fromC(pool), first, count,
                                                              fromC(buffer), offset);
         return resolved ? BFR_RESULT_SUCCESS : fail(resolved.error());
+    });
+}
+
+bfr_result bfr_begin_debug_label(bfr_device* device, bfr_command_list command_list, const bfr_debug_label* label) {
+    return guarded([&] {
+        if (device == nullptr || !isLabel(label)) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT,
+                        "device and label must not be null, nor the label's name where its length is not 0");
+        }
+        const auto begun = device->device->beginDebugLabel(fromC(command_list), fromC(*label));
+        return begun ? BFR_RESULT_SUCCESS : fail(begun.error());
+    });
+}
+
+bfr_result bfr_end_debug_label(bfr_device* device, bfr_command_list command_list) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto ended = device->device->endDebugLabel(fromC(command_list));
+        return ended ? BFR_RESULT_SUCCESS : fail(ended.error());
+    });
+}
+
+bfr_result bfr_insert_debug_label(bfr_device* device, bfr_command_list command_list, const bfr_debug_label* label) {
+    return guarded([&] {
+        if (device == nullptr || !isLabel(label)) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT,
+                        "device and label must not be null, nor the label's name where its length is not 0");
+        }
+        const auto inserted = device->device->insertDebugLabel(fromC(command_list), fromC(*label));
+        return inserted ? BFR_RESULT_SUCCESS : fail(inserted.error());
+    });
+}
+
+bfr_result bfr_begin_queue_debug_label(bfr_device* device, uint32_t queue, const bfr_debug_label* label) {
+    return guarded([&] {
+        if (device == nullptr || !isLabel(label)) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT,
+                        "device and label must not be null, nor the label's name where its length is not 0");
+        }
+        const auto begun = device->device->beginQueueDebugLabel(queue, fromC(*label));
+        return begun ? BFR_RESULT_SUCCESS : fail(begun.error());
+    });
+}
+
+bfr_result bfr_end_queue_debug_label(bfr_device* device, uint32_t queue) {
+    return guarded([&] {
+        if (device == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
+        }
+        const auto ended = device->device->endQueueDebugLabel(queue);
+        return ended ? BFR_RESULT_SUCCESS : fail(ended.error());
+    });
+}
+
+bfr_result bfr_insert_queue_debug_label(bfr_device* device, uint32_t queue, const bfr_debug_label* label) {
+    return guarded([&] {
+        if (device == nullptr || !isLabel(label)) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT,
+                        "device and label must not be null, nor the label's name where its length is not 0");
+        }
+        const auto inserted = device->device->insertQueueDebugLabel(queue, fromC(*label));
+        return inserted ? BFR_RESULT_SUCCESS : fail(inserted.error());
     });
 }
 

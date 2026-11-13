@@ -307,6 +307,10 @@ core::Result<std::vector<const char*>> optionalExtensions() {
         return lists(*listed, extension);
     };
     std::vector<const char*> extensions;
+    // Debug labels and object names, whether or not validation is on.
+    if (available(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    }
     if (available(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
         extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
     }
@@ -609,7 +613,10 @@ core::Result<void> VulkanInstance::createInstance(const InstanceDesc& desc) {
     const VkDebugUtilsMessengerCreateInfoEXT messenger = messengerInfo(&messages_);
     if (config().validation) {
         layers.push_back(kValidationLayer);
-        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        // The layer has it where the instance doesn't list it.
+        if (std::ranges::find(extensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == extensions.end()) {
+            extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        }
         info.pNext = &messenger;
     }
     info.enabledLayerCount = static_cast<std::uint32_t>(layers.size());
@@ -671,6 +678,7 @@ core::Result<void> VulkanInstance::listAdapters() {
         return failure(core::ErrorCode::RhiInstanceFailed, devices.error());
     }
 
+    const bool debugUtils = std::ranges::find(extensions_, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) != extensions_.end();
     // Each adapter not listed, and why: below BFR's minimum, or a call that
     // failed while checking. One that fails is skipped, so the others still
     // work. A device on an adapter uses the lower of the instance's version
@@ -696,7 +704,7 @@ core::Result<void> VulkanInstance::listAdapters() {
         }
         adapters_.push_back({.name = properties.deviceName,
                              .type = adapterType(properties.deviceType),
-                             .caps = readCaps(vk_, device, version, *extensions)});
+                             .caps = readCaps(vk_, device, version, *extensions, debugUtils)});
         physicalDevices_.push_back(device);
         versions_.push_back(version);
         hasBudget_.push_back(lists(*extensions, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME));

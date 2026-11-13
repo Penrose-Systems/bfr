@@ -74,7 +74,7 @@ struct QueueDesc {
 /// A graphics queue's lists run every call. A compute queue's run all but
 /// rendering, draws, the calls that set their state or bind a graphics
 /// pipeline or an index buffer, and resolveTexture; a copy queue's run only
-/// copies, barriers and writeTimestamp. A copy between a buffer and a
+/// copies, barriers, writeTimestamp and the debug label calls. A copy between a buffer and a
 /// texture's depth or stencil runs only in a graphics queue's lists, and one
 /// in a copy queue's has a bufferOffset that is a multiple of 4.
 /// TextureLayout says which layouts each kind's lists move a texture between.
@@ -95,6 +95,10 @@ struct DeviceDesc {
     std::uint32_t maxBindlessUniformBuffers = 0;
     std::uint32_t maxTimestampPools = 0;
     std::uint32_t maxQueryPools = 0;
+    /// The longest DebugLabel name, in bytes, the label calls take. Room for
+    /// one, and the '\0' the backend reads as its end, is made for each list
+    /// and each queue with the device.
+    std::uint32_t maxDebugLabelLength = 0;
     std::uint32_t maxSparseMemories = 0;
     /// The most texture regions and the most buffer regions one
     /// updateTileMappings call takes.

@@ -137,10 +137,11 @@ struct DeviceFeatures {
 /// takes dynamic rendering.
 [[nodiscard]] std::vector<std::string> missingRequirements(const DeviceFeatures& features);
 
-/// Everything about adapter that stays the same while it runs. These queries
-/// can't fail.
+/// Everything about adapter that stays the same while it runs; debugUtils
+/// says whether the instance enabled VK_EXT_debug_utils. These queries can't
+/// fail.
 [[nodiscard]] Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
-                            std::span<const VkExtensionProperties> extensions);
+                            std::span<const VkExtensionProperties> extensions, bool debugUtils);
 
 /// Which formats added by 1.3 a device on adapter has: all of them from 1.3,
 /// else those of the extensions adapter lists, which the device enables.

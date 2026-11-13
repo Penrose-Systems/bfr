@@ -244,6 +244,7 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       commandLists_("command lists", desc.maxCommandLists, desc.maxCommandLists, rhi.logger()),
       listSlots_(desc.maxCommandLists),
       lists_(desc.maxCommandLists),
+      listLabels_(std::size_t{desc.maxCommandLists} * (std::size_t{desc.maxDebugLabelLength} + 1)),
       renderSlots_(desc.maxCommandLists),
       renders_(desc.maxCommandLists),
       submissions_(queueCount(desc)),
@@ -336,6 +337,7 @@ core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const
         queue->bufferBinds = core::FixedVector<VkSparseMemoryBind>{desc.maxTileMappings};
         queue->waitSemaphores = core::FixedVector<VkSemaphore>{queues_.size()};
         queue->waitSemaphoreValues = core::FixedVector<std::uint64_t>{queues_.size()};
+        queue->label.resize(std::size_t{desc.maxDebugLabelLength} + 1);
         if (std::ranges::find(families_, queue->family) == families_.end()) {
             families_.push_back(queue->family);
         }

@@ -405,6 +405,30 @@ core::Result<void> TimedDevice::resolveQueries(CommandListHandle commandList, Qu
                           [&] { return device_->resolveQueries(commandList, pool, first, count, buffer, offset); });
 }
 
+core::Result<void> TimedDevice::beginDebugLabel(CommandListHandle commandList, const DebugLabel& label) {
+    return counters_.time(Call::BeginDebugLabel, [&] { return device_->beginDebugLabel(commandList, label); });
+}
+
+core::Result<void> TimedDevice::endDebugLabel(CommandListHandle commandList) {
+    return counters_.time(Call::EndDebugLabel, [&] { return device_->endDebugLabel(commandList); });
+}
+
+core::Result<void> TimedDevice::insertDebugLabel(CommandListHandle commandList, const DebugLabel& label) {
+    return counters_.time(Call::InsertDebugLabel, [&] { return device_->insertDebugLabel(commandList, label); });
+}
+
+core::Result<void> TimedDevice::beginQueueDebugLabel(std::uint32_t queue, const DebugLabel& label) {
+    return counters_.time(Call::BeginQueueDebugLabel, [&] { return device_->beginQueueDebugLabel(queue, label); });
+}
+
+core::Result<void> TimedDevice::endQueueDebugLabel(std::uint32_t queue) {
+    return counters_.time(Call::EndQueueDebugLabel, [&] { return device_->endQueueDebugLabel(queue); });
+}
+
+core::Result<void> TimedDevice::insertQueueDebugLabel(std::uint32_t queue, const DebugLabel& label) {
+    return counters_.time(Call::InsertQueueDebugLabel, [&] { return device_->insertQueueDebugLabel(queue, label); });
+}
+
 core::Result<TimestampRate> TimedDevice::timestampRate(std::uint32_t queue) const {
     return counters_.time(Call::TimestampRate, [&] { return device_->timestampRate(queue); });
 }

@@ -184,6 +184,12 @@ public:
     [[nodiscard]] core::Result<void> resolveQueries(CommandListHandle commandList, QueryPoolHandle pool,
                                                     std::uint32_t first, std::uint32_t count, BufferHandle buffer,
                                                     std::uint64_t offset) override;
+    [[nodiscard]] core::Result<void> beginDebugLabel(CommandListHandle commandList, const DebugLabel& label) override;
+    [[nodiscard]] core::Result<void> endDebugLabel(CommandListHandle commandList) override;
+    [[nodiscard]] core::Result<void> insertDebugLabel(CommandListHandle commandList, const DebugLabel& label) override;
+    [[nodiscard]] core::Result<void> beginQueueDebugLabel(std::uint32_t queue, const DebugLabel& label) override;
+    [[nodiscard]] core::Result<void> endQueueDebugLabel(std::uint32_t queue) override;
+    [[nodiscard]] core::Result<void> insertQueueDebugLabel(std::uint32_t queue, const DebugLabel& label) override;
     [[nodiscard]] core::Result<TimestampRate> timestampRate(std::uint32_t queue) const override;
     [[nodiscard]] core::Result<CalibratedTimestamps> calibrateTimestamps(std::uint32_t queue,
                                                                          HostClock clock) const override;

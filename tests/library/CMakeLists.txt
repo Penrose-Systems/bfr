@@ -72,6 +72,7 @@ add_executable(bfr_tests
     core/test_text.cpp
     rhi/test_buffer.cpp
     rhi/test_caps.cpp
+    rhi/test_debug_label.cpp
     rhi/test_frame_allocations.cpp
     rhi/test_instance.cpp
     rhi/test_pipeline.cpp
