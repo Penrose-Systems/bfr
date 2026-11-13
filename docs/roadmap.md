@@ -52,4 +52,4 @@ still type-check.
     sample positions, HDR and present timing, and whatever each backend's
     caps turn up as we go.
 
-Next: 13 on Vulkan; 12 on D3D12 and Metal when they resume.
+Next: 14 on Vulkan; 12 and 13 on D3D12 and Metal when they resume.
