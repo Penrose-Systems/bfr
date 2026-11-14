@@ -362,6 +362,13 @@ core::Result<std::unique_ptr<VulkanInstance>> VulkanInstance::create(const Insta
                              "Vulkan names no version {}.{}: a major takes 7 bits and a minor 10", desc.apiMajor,
                              desc.apiMinor);
     }
+    // Vulkan's versions start at 1.0 (VUID-VkApplicationInfo-apiVersion-04010).
+    // It reads 0.0 as 1.0, but the caller names the version, so 0.0 is
+    // refused too rather than taken as 1.0.
+    if (desc.apiMajor == 0) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "{}.{} is no Vulkan version: they start at 1.0",
+                             desc.apiMajor, desc.apiMinor);
+    }
     const std::uint32_t version = VK_MAKE_API_VERSION(0, desc.apiMajor, desc.apiMinor, 0);
     if (auto opened = openLoader(); !opened) {
         return std::unexpected(std::move(opened.error()));
@@ -697,7 +704,20 @@ core::Result<void> VulkanInstance::listAdapters() {
     for (VkPhysicalDevice device : *devices) {
         VkPhysicalDeviceProperties properties{};
         vk_.vkGetPhysicalDeviceProperties(device, &properties);
-        const auto extensions = deviceExtensions(vk_, device);
+        auto extensions = deviceExtensions(vk_, device);
+        // Below 1.1, VK_KHR_device_group takes the instance's
+        // VK_KHR_device_group_creation, and VK_KHR_buffer_device_address takes
+        // device groups (vkdocs xml/vk.xml): without it, a device can enable
+        // neither, so the adapter is read as lacking them.
+        if (extensions && version_ < VK_API_VERSION_1_1 &&
+            std::ranges::find(extensions_, std::string_view{VK_KHR_DEVICE_GROUP_CREATION_EXTENSION_NAME}) ==
+                extensions_.end()) {
+            std::erase_if(*extensions, [](const VkExtensionProperties& extension) {
+                const std::string_view name{extension.extensionName};
+                return name == VK_KHR_DEVICE_GROUP_EXTENSION_NAME ||
+                       name == VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME;
+            });
+        }
         if (!extensions) {
             const std::string why = "skipped, " + extensions.error().message();
             BFR_LOG_WARN(logger(), "adapter {}: {}", describe(vk_, device, properties), why);

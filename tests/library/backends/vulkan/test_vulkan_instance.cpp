@@ -226,6 +226,18 @@ TEST_CASE("Vulkan skips an adapter it fails to check, and says which call failed
     }
 }
 
+TEST_CASE("Vulkan fails with RhiInvalidCall for a major version of 0", "[vulkan][unit]") {
+    const std::uint32_t minor = GENERATE(0U, 1U, 2U);
+
+    const auto rhi = Instance::create(vulkanAt(0, minor), {});
+
+    INFO(minor);
+    REQUIRE_FALSE(rhi.has_value());
+    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiInvalidCall);
+    CHECK_THAT(rhi.error().message.text(),
+               Catch::Matchers::Equals(std::format("0.{} is no Vulkan version: they start at 1.0", minor)));
+}
+
 TEST_CASE("Vulkan lists adapters at the oldest versions, through the extensions later ones made core",
           "[vulkan][gpu]") {
     const auto [major, minor] = GENERATE(std::pair{1U, 0U}, std::pair{1U, 1U});
