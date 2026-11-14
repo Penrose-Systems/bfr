@@ -251,7 +251,7 @@ bfr::rhi::BufferDesc bufferIn(const bfr_buffer_desc& desc) {
     using namespace bfr;
     using namespace bfr::rhi;
     BufferDesc buffer{.size = desc.size,
-                      .memory = BufferMemory::Device,
+                      .memory = static_cast<BufferMemory>(desc.memory),
                       .usage = {.copySrc = desc.usage.copy_src != BFR_FALSE,
                                 .copyDst = desc.usage.copy_dst != BFR_FALSE,
                                 .uniform = desc.usage.uniform != BFR_FALSE,
@@ -267,8 +267,6 @@ bfr::rhi::BufferDesc bufferIn(const bfr_buffer_desc& desc) {
                       .sparseAliased = desc.sparse_aliased != BFR_FALSE,
                       .tileBytes = desc.tile_bytes,
                       .name = fromC(desc.name)};
-    const auto memory = static_cast<BufferMemory>(desc.memory);
-    buffer.memory = memory;
     return buffer;
 }
 
@@ -284,8 +282,7 @@ bfr::rhi::TextureHandle fromC(bfr_texture handle) {
 bfr::rhi::TextureDesc textureIn(const bfr_texture_desc& desc) {
     using namespace bfr;
     using namespace bfr::rhi;
-    const auto dimension = static_cast<TextureDimension>(desc.dimension);
-    return TextureDesc{.dimension = dimension,
+    return TextureDesc{.dimension = static_cast<TextureDimension>(desc.dimension),
                        .format = static_cast<Format>(desc.format),
                        .width = desc.width,
                        .height = desc.height,
@@ -375,8 +372,7 @@ std::optional<std::vector<bfr::rhi::QueueDesc>> queuesIn(const bfr_queue_desc* q
     std::vector<bfr::rhi::QueueDesc> out;
     out.reserve(count);
     for (const bfr_queue_desc& queue : std::span{queues, count}) {
-        const auto level = static_cast<bfr::QueueLevel>(queue.level);
-        out.push_back({.rank = queue.rank, .level = level});
+        out.push_back({.rank = queue.rank, .level = static_cast<bfr::QueueLevel>(queue.level)});
     }
     return out;
 }
@@ -502,8 +498,7 @@ static_assert(sizeof(bfr_partition_translation_record) == sizeof(bfr::rhi::Parti
 bfr::rhi::AccelerationStructureFlags flagsIn(const bfr_acceleration_structure_flags& flags) {
     using namespace bfr;
     using namespace bfr::rhi;
-    const auto preference = static_cast<BuildPreference>(flags.preference);
-    return AccelerationStructureFlags{.preference = preference,
+    return AccelerationStructureFlags{.preference = static_cast<BuildPreference>(flags.preference),
                                       .allowUpdate = flags.allow_update != BFR_FALSE,
                                       .minimizeMemory = flags.minimize_memory != BFR_FALSE,
                                       .allowCompaction = flags.allow_compaction != BFR_FALSE,
@@ -3301,7 +3296,6 @@ bfr_result bfr_write_instances(bfr_device* device, const bfr_acceleration_struct
         if ((instances == nullptr && instance_count != 0) || (data == nullptr && size != 0)) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instances and data must not be null with a count");
         }
-        using namespace bfr;
         using namespace bfr::rhi;
         const std::span out{static_cast<std::byte*>(data), size};
         const std::span from{instances, instance_count};

@@ -20,7 +20,7 @@ endfunction()
 # by its path from public_dir, with what linking target provides and nothing
 # else. It is not part of target.
 function(bfr_add_header_check target public_dir)
-    file(GLOB_RECURSE headers CONFIGURE_DEPENDS ${public_dir}/*.h)
+    file(GLOB_RECURSE headers CONFIGURE_DEPENDS ${public_dir}/*.h ${public_dir}/*.hpp)
     if(NOT headers)
         return()
     endif()

@@ -775,9 +775,6 @@ core::Result<void> checkTileAspect(Format format, TextureAspect aspect) {
 } // namespace
 
 core::Result<TextureTiling> D3D12Device::textureTiling(TextureHandle texture, TextureAspect aspect) {
-    if (auto checked = checkKnown(aspect, "texture aspect"); !checked) {
-        return std::unexpected(std::move(checked.error()));
-    }
     auto found = textureFor(texture);
     if (!found) {
         return std::unexpected(std::move(found.error()));

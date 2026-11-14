@@ -1,36 +1,20 @@
 #pragma once
 
+#include "bfr/bfr_enums.hpp"
 #include "bfr/core/error.h"
-#include "bfr/rhi/format.h"
 
-#include <algorithm>
-#include <cstdint>
-#include <optional>
+#include <utility>
 
 namespace bfr::rhi {
 
-/// number as the Format of kFormats it is; nothing for Undefined, which names
-/// no format, or a number Format does not have. Takes the number wider than
-/// Format, so a caller holding one checks it before a cast that would cut it
-/// short.
-[[nodiscard]] constexpr std::optional<Format> knownFormat(std::int64_t number) {
-    const auto* found = std::ranges::find_if(kFormats, [number](Format format) {
-        return static_cast<std::int64_t>(format) == number;
-    });
-    if (found == kFormats.end()) {
-        return std::nullopt;
-    }
-    return *found;
-}
-
-/// Fails with RhiInvalidCall when format is not one of kFormats: Undefined,
-/// which names no format, or a number Format does not have. Each backend's
-/// format tables hold kFormats only, so every call that looks a caller's
-/// format up in them calls this first.
+/// Fails with RhiInvalidCall when format is Undefined, which names no format,
+/// or a number Format does not have. Each backend's format tables hold every
+/// other format, so every call that looks a caller's format up in them calls
+/// this first.
 [[nodiscard]] inline core::Result<void> checkFormat(Format format) {
-    if (!knownFormat(static_cast<std::int64_t>(format))) {
+    if (format == Format::Undefined || name(format).empty()) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "format {} is not one BFR has",
-                             static_cast<std::uint32_t>(format));
+                             std::to_underlying(format));
     }
     return {};
 }
