@@ -4,6 +4,7 @@
 #include <vulkan/vulkan_core.h>
 
 #include <bit>
+#include <cstdint>
 #include <mutex>
 
 namespace bfr::rhi::vulkan {

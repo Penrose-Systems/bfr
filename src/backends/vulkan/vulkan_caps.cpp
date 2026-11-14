@@ -928,15 +928,12 @@ void fillCore12(DeviceFeatures& features, std::span<const VkExtensionProperties>
     v11.variablePointers = features.variablePointers.variablePointers;
     v11.protectedMemory = features.protectedMemory.protectedMemory;
     v11.samplerYcbcrConversion = features.ycbcrConversion.samplerYcbcrConversion;
-    // Before 1.1 the extension has no struct: listed is the feature.
-    v11.shaderDrawParameters = hasCore11(features.version)
-                                   ? features.drawParameters.shaderDrawParameters
-                                   : (lists(extensions, VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME) ? VK_TRUE
-                                                                                                      : VK_FALSE);
-
     const auto listed = [extensions](const char* extension) {
         return lists(extensions, extension) ? VK_TRUE : VK_FALSE;
     };
+    // Before 1.1 the extension has no struct: listed is the feature.
+    v11.shaderDrawParameters = hasCore11(features.version) ? features.drawParameters.shaderDrawParameters
+                                                           : listed(VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME);
     VkPhysicalDeviceVulkan12Features& v12 = features.vulkan12;
     const VkPhysicalDeviceDescriptorIndexingFeaturesEXT& indexing = features.descriptorIndexing;
     v12.samplerMirrorClampToEdge = listed(VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME);

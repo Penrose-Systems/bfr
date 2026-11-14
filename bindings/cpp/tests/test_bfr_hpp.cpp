@@ -192,12 +192,12 @@ TEST_CASE("C++ API objects that own nothing go quietly", "[cpp_api][unit]") {
 }
 
 TEST_CASE("C++ API starts a ray tracing group with no shader in any slot", "[cpp_api][unit]") {
-    constexpr bfr::RayTracingGroup group{};
+    constexpr bfr::RayTracingGroup kGroup{};
 
-    STATIC_CHECK(group.general == BFR_NO_SHADER);
-    STATIC_CHECK(group.closestHit == BFR_NO_SHADER);
-    STATIC_CHECK(group.anyHit == BFR_NO_SHADER);
-    STATIC_CHECK(group.intersection == BFR_NO_SHADER);
+    STATIC_CHECK(kGroup.general == BFR_NO_SHADER);
+    STATIC_CHECK(kGroup.closestHit == BFR_NO_SHADER);
+    STATIC_CHECK(kGroup.anyHit == BFR_NO_SHADER);
+    STATIC_CHECK(kGroup.intersection == BFR_NO_SHADER);
 }
 
 TEST_CASE("C++ API names enum values as bfr.yaml does", "[cpp_api][unit]") {

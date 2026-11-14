@@ -6,6 +6,7 @@
 #include "vulkan/instance_table.h"
 
 #include <volk.h>
+#include <vulkan/vulkan_core.h>
 
 #include <cstdint>
 #include <optional>
