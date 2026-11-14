@@ -7,7 +7,7 @@ import sys
 import unittest
 
 from bfr_api import REPO_ROOT, SOURCE, Api, SpecError, load
-from gen_cpp_api import HEADER, render
+from gen_cpp_api import ENUMS_HEADER, HEADER, render, render_enums
 from test_bfr_api import MINIMAL, with_default
 
 
@@ -59,12 +59,18 @@ class RenderTests(unittest.TestCase):
         self.assertIn("    std::uint32_t alignment = BFR_DEFAULT_ALIGNMENT;", header)
 
     def test_enums_are_enum_classes_valued_by_the_c_names(self) -> None:
-        self.assertIn("enum class Result : std::int32_t {", self.header)
-        self.assertIn("    ErrorLost = BFR_RESULT_ERROR_LOST,", self.header)
+        enums = render_enums(Api(with_more(MINIMAL)))
+        self.assertIn("enum class Result : std::int32_t {", enums)
+        self.assertIn("    ErrorLost = BFR_RESULT_ERROR_LOST,", enums)
 
     def test_every_enum_value_has_its_yaml_name(self) -> None:
-        self.assertIn("[[nodiscard]] constexpr std::string_view name(Result value) {", self.header)
-        self.assertIn('    case Result::ErrorLost: return "error_lost";', self.header)
+        enums = render_enums(Api(with_more(MINIMAL)))
+        self.assertIn("[[nodiscard]] constexpr std::string_view name(Result value) {", enums)
+        self.assertIn('    case Result::ErrorLost: return "error_lost";', enums)
+
+    def test_the_wrapper_takes_its_enums_from_the_shared_header(self) -> None:
+        self.assertIn('#include "bfr/bfr_enums.hpp"', self.header)
+        self.assertNotIn("enum class Result", self.header)
 
     def test_objects_and_handles_destroy_what_they_own(self) -> None:
         self.assertIn("    ~Buffer() { bfr_destroy_buffer(device_, buffer_); }", self.header)
@@ -474,6 +480,10 @@ class DeterminismTests(unittest.TestCase):
 class RepositoryTests(unittest.TestCase):
     def test_committed_header_matches_the_description(self) -> None:
         self.assertEqual(HEADER.read_text(encoding="utf-8"), render(load(SOURCE)), "run: python3 tools/gen_cpp_api.py")
+
+    def test_committed_enums_header_matches_the_description(self) -> None:
+        self.assertEqual(ENUMS_HEADER.read_text(encoding="utf-8"), render_enums(load(SOURCE)),
+                         "run: python3 tools/gen_cpp_api.py")
 
 
 if __name__ == "__main__":

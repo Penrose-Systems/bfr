@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bfr/bfr.h"
+#include "bfr/bfr_enums.hpp" // IWYU pragma: export
 #include "bfr/core/handle.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/format.h"
@@ -77,106 +78,6 @@ struct ComputePipelineDesc {
     /// RhiInvalidCall for one holding a '\0', which the backend reads as its
     /// end, and RhiDeviceFailed when the backend refuses it.
     std::string_view name{};
-};
-
-/// What draws assemble vertices into. Lists take each primitive's vertices
-/// apart; strips share each one with the next; a fan shares the first vertex
-/// with every triangle, where Features::triangleFans. The values are the C
-/// API's.
-enum class Topology : std::uint8_t {
-    TriangleList = 0,
-    TriangleStrip = 1,
-    TriangleFan = 2,
-    LineList = 3,
-    LineStrip = 4,
-    PointList = 5,
-};
-
-/// Whether an index of all ones ends a strip and starts the next, in indexed
-/// draws, and the index type it is all ones of: D3D12 fixes that value in the
-/// pipeline. Restart on a list topology needs Features::listRestart. The
-/// values are the C API's.
-enum class PrimitiveRestart : std::uint8_t {
-    Off = 0,
-    Index16 = 1,
-    Index32 = 2,
-};
-
-/// Which triangles a graphics pipeline discards by the way they face. The
-/// values are the C API's.
-enum class CullMode : std::uint8_t {
-    None = 0,
-    Front = 1,
-    Back = 2,
-};
-
-/// Which winding of a triangle's vertices on screen faces the viewer. The
-/// values are the C API's.
-enum class FrontFace : std::uint8_t {
-    CounterClockwise = 0,
-    Clockwise = 1,
-};
-
-/// How a graphics pipeline fills triangles. The values are the C API's.
-enum class FillMode : std::uint8_t {
-    Solid = 0,
-    Wireframe = 1,
-};
-
-/// How a depth or stencil test compares the new value against the stored
-/// one, or a compare sampler a reference against each texel; the test passes
-/// when the comparison holds. The values are the C API's.
-enum class CompareOp : std::uint8_t {
-    Always = 0,
-    Never = 1,
-    Less = 2,
-    Equal = 3,
-    LessEqual = 4,
-    Greater = 5,
-    NotEqual = 6,
-    GreaterEqual = 7,
-};
-
-/// What a stencil test does to the stored stencil value. The values are the
-/// C API's.
-enum class StencilOp : std::uint8_t {
-    Keep = 0,
-    Zero = 1,
-    Replace = 2,
-    IncrementClamp = 3,
-    DecrementClamp = 4,
-    Invert = 5,
-    IncrementWrap = 6,
-    DecrementWrap = 7,
-};
-
-/// What a blend multiplies a color or alpha by. The values are the C API's.
-enum class BlendFactor : std::uint8_t {
-    Zero = 0,
-    One = 1,
-    SrcColor = 2,
-    OneMinusSrcColor = 3,
-    DstColor = 4,
-    OneMinusDstColor = 5,
-    SrcAlpha = 6,
-    OneMinusSrcAlpha = 7,
-    DstAlpha = 8,
-    OneMinusDstAlpha = 9,
-    ConstantColor = 10,
-    OneMinusConstantColor = 11,
-    ConstantAlpha = 12,
-    OneMinusConstantAlpha = 13,
-    SrcAlphaSaturate = 14,
-};
-
-/// How a blend combines the source and destination once each is multiplied
-/// by its factor. The values are the C API's.
-enum class BlendOp : std::uint8_t {
-    Add = 0,
-    Subtract = 1,
-    ReverseSubtract = 2,
-    Min = 3,
-    Max = 4,
 };
 
 /// How a graphics pipeline turns primitives into fragments.
@@ -293,31 +194,10 @@ struct GraphicsPipelineDesc {
     std::string_view name{};
 };
 
-/// The stage a ray tracing pipeline's shader runs at. The values are the C
-/// API's.
-enum class RayTracingStage : std::uint8_t {
-    RayGeneration = 0,
-    Miss = 1,
-    ClosestHit = 2,
-    AnyHit = 3,
-    Intersection = 4,
-    Callable = 5,
-};
-
 /// One shader of a ray tracing pipeline, run at stage.
 struct RayTracingShader {
     RayTracingStage stage = RayTracingStage::RayGeneration;
     ShaderHandle shader{};
-};
-
-/// What a ray tracing pipeline's group holds. The values are the C API's.
-enum class RayTracingGroupType : std::uint8_t {
-    /// general: one ray generation, miss or callable shader.
-    General = 0,
-    /// closestHit and anyHit, either kNoShader, for triangles.
-    TriangleHit = 1,
-    /// intersection, and closestHit and anyHit, either kNoShader, for boxes.
-    BoxHit = 2,
 };
 
 /// No shader in a RayTracingGroup's slot.
@@ -331,15 +211,6 @@ struct RayTracingGroup {
     std::uint32_t closestHit = kNoShader;
     std::uint32_t anyHit = kNoShader;
     std::uint32_t intersection = kNoShader;
-};
-
-/// The shader of a group whose stack size Device::rayTracingStackSize reads.
-/// The values are the C API's.
-enum class RayTracingGroupShader : std::uint8_t {
-    General = 0,
-    ClosestHit = 1,
-    AnyHit = 2,
-    Intersection = 3,
 };
 
 /// How to create a ray tracing pipeline: at least one ray generation shader,

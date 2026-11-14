@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bfr/bfr_enums.hpp" // IWYU pragma: export
 #include "bfr/core/handle.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
@@ -24,34 +25,6 @@ namespace bfr::rhi {
 struct AccelerationStructure;
 
 using AccelerationStructureHandle = core::Handle<AccelerationStructure>;
-
-enum class AccelerationStructureType : std::uint8_t {
-    Bottom,
-    Top,
-    /// Where Features::opacityMicromap.
-    OpacityMicromap,
-    /// Where Features::partitionedTop: traced as a top one is, from its own
-    /// table.
-    PartitionedTop,
-};
-
-/// The states a micromap's subtriangles take: 1 bit each for two, opaque or
-/// transparent, or 2 bits for four, adding unknown-opaque and
-/// unknown-transparent, which any-hit shaders decide. The values are the
-/// C API's.
-enum class OpacityMicromapFormat : std::uint32_t {
-    TwoState = 1,
-    FourState = 2,
-};
-
-/// Micromap indices that name no micromap: the whole triangle in one state.
-/// Written as they are into an index of TriangleOpacityMicromap::indexType.
-enum class OpacityMicromapSpecialIndex : std::int32_t {
-    FullyTransparent = -1,
-    FullyOpaque = -2,
-    FullyUnknownTransparent = -3,
-    FullyUnknownOpaque = -4,
-};
 
 /// count micromaps, or triangles naming micromaps, of subdivisionLevel and
 /// format.
@@ -88,13 +61,6 @@ struct TriangleOpacityMicromap {
     std::uint32_t baseTriangle = 0;
     std::uint32_t firstUsage = 0;
     std::uint32_t usageCount = 0;
-};
-
-/// What a build favours; passed to the backend as given.
-enum class BuildPreference : std::uint8_t {
-    None,
-    FastTrace,
-    FastBuild,
 };
 
 struct AccelerationStructureFlags {
@@ -166,14 +132,6 @@ inline constexpr std::size_t kTransformFloats = 12;
 /// partition, which holds instances apart from the others.
 inline constexpr std::uint32_t kGlobalPartition = 0xFFFFFFFF;
 
-/// What a PartitionedTopOp record does: writes instances, updates them, or
-/// moves partitions. The values are the records'.
-enum class PartitionedTopOpType : std::uint32_t {
-    WriteInstance = 0,
-    UpdateInstance = 1,
-    WritePartitionTranslation = 2,
-};
-
 /// One kind of work in a partitioned top structure's build, as a buffer
 /// holds it: count records of type (a PartitionedTopOpType's value), stride
 /// bytes apart from address, a Device::bufferAddress plus an offset. No two
@@ -184,18 +142,6 @@ struct PartitionedTopOp {
     std::uint32_t count = 0;
     std::uint64_t address = 0;
     std::uint64_t stride = 0;
-};
-
-/// The bits of a PartitionedInstanceRecord's flags. The values are the
-/// records'.
-enum class PartitionedInstanceFlag : std::uint32_t {
-    CullDisable = 1,
-    FrontCounterClockwise = 2,
-    ForceOpaque = 4,
-    ForceNonOpaque = 8,
-    /// The instance's bounds are read, and later UpdateInstance records may
-    /// name it.
-    ExplicitBounds = 16,
 };
 
 /// The floats of a box: min xyz, then max xyz.
@@ -378,23 +324,6 @@ struct AccelerationStructureBuildRange {
     std::uint32_t transformOffset = 0;
 };
 
-/// What a property pool's entries hold, one per structure a write names, of
-/// RayTracingLimits::propertyEntryBytes each.
-enum class AccelerationStructureProperty : std::uint8_t {
-    /// The bytes a compact copy takes, of a structure built with
-    /// allowCompaction.
-    CompactedSize = 0,
-    /// The bytes serializeAccelerationStructure writes, where
-    /// Features::accelerationStructureSerialization.
-    SerializedSize = 1,
-    /// How many bottom structure references a serialized top structure
-    /// holds, where Features::serializedBottomCount.
-    SerializedBottomCount = 2,
-    /// The bytes the structure takes now, where
-    /// Features::accelerationStructureCurrentSize.
-    CurrentSize = 3,
-};
-
 /// Entries of one AccelerationStructureProperty, written by lists and
 /// resolved into a buffer. Calls on one pool must not overlap. Only named, by
 /// an AccelerationStructurePropertyPoolHandle.
@@ -418,14 +347,6 @@ inline constexpr std::size_t kSerializedIdentifierSize = 32;
 /// Instance custom indices and hit group offsets are below this: every
 /// backend's record holds them in 24 bits.
 inline constexpr std::uint32_t kInstanceIndexLimit = 1U << 24U;
-
-/// How an instance's geometry counts as opaque: as each geometry says, or
-/// all opaque, or none.
-enum class InstanceOpacity : std::uint8_t {
-    AsGeometry,
-    ForceOpaque,
-    ForceNonOpaque,
-};
 
 /// One instance of a bottom structure in a top one. A null bottomStructure
 /// is an instance no ray hits.
@@ -456,14 +377,6 @@ struct AccelerationStructureInstance {
     std::uint64_t bottomReference = 0;
 };
 
-/// How a motion instance moves: not at all, by its keyframes' matrices, or
-/// by their SrtTransforms. The values are the C API's.
-enum class InstanceMotion : std::uint8_t {
-    None = 0,
-    Matrix = 1,
-    Srt = 2,
-};
-
 /// A transform as its parts: scale, the shears a (xy), b (xz) and c (yz), and
 /// a pivot added after them, then a rotation quaternion (x, y, z, w) about
 /// the origin and a translation. Keyframes between are blended part by part.
@@ -491,39 +404,6 @@ struct AccelerationStructureMotionInstance {
     InstanceMotion motion = InstanceMotion::None;
     std::uint32_t firstKeyframe = 0;
     std::uint32_t keyframeCount = 0;
-};
-
-/// What a cluster operation does: moves structures, builds cluster bottom
-/// structures from clusters, builds clusters or cluster templates from
-/// triangles, instantiates templates into clusters, or fetches templates'
-/// indices, which is all Vulkan states of it. A cluster holds at most RayTracingLimits::maxClusterTriangles
-/// triangles; a cluster bottom structure holds clusters and is what an
-/// instance names; a template is a cluster built without its positions. The
-/// values are Vulkan's.
-enum class ClusterOperation : std::uint8_t {
-    Move = 0,
-    BuildBottoms = 1,
-    BuildClusters = 2,
-    BuildTemplates = 3,
-    InstantiateTemplates = 4,
-    TemplateIndices = 5,
-};
-
-/// Where a cluster operation's structures go: packed from one destination,
-/// their addresses and sizes written; at addresses the GPU reads, their
-/// sizes read; or nowhere, only their sizes written. The values are
-/// Vulkan's.
-enum class ClusterMode : std::uint8_t {
-    ImplicitDestinations = 0,
-    ExplicitDestinations = 1,
-    ComputeSizes = 2,
-};
-
-/// What a Move moves. The values are Vulkan's.
-enum class ClusterStructureType : std::uint8_t {
-    Bottom = 0,
-    Cluster = 1,
-    Template = 2,
 };
 
 /// The upper bounds a cluster operation of clusters or templates is sized
@@ -640,27 +520,6 @@ struct ClusterBottomRecord {
     std::uint32_t clusterCount = 0;
     std::uint32_t clusterStride = 0;
     std::uint64_t clusters = 0;
-};
-
-/// The index types of a cluster record's indices and micromap indices. The
-/// values are the records'.
-enum class ClusterIndexFormat : std::uint32_t {
-    Uint8 = 1,
-    Uint16 = 2,
-    Uint32 = 4,
-};
-
-/// The bits of a geometry word's flags. The values are the records'.
-enum class ClusterGeometryFlag : std::uint32_t {
-    CullDisable = 1,
-    NoDuplicateAnyHit = 2,
-    Opaque = 4,
-};
-
-/// The bits of a cluster record's clusterFlags. The values are the records'.
-enum class ClusterFlag : std::uint32_t {
-    /// Instances may disable its opacity micromaps.
-    AllowDisableOpacityMicromaps = 1,
 };
 
 /// A geometry word: the geometry index in its low 24 bits, below

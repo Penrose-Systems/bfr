@@ -29,6 +29,7 @@
 #include <utility>
 #include <vector>
 
+using namespace bfr;
 using namespace bfr::rhi;
 using namespace bfr::rhi::test;
 using bfr::core::ErrorCode;

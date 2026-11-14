@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 
+using namespace bfr;
 using namespace bfr::rhi;
 using namespace bfr::rhi::test;
 
@@ -29,7 +30,7 @@ TEST_CASE("Instance has a name for each backend", "[rhi][unit]") {
 }
 
 TEST_CASE("Instance fails with RhiBackendUnavailable for a backend this build lacks", "[rhi][unit]") {
-    for (const Backend backend : {Backend::Vulkan, Backend::D3D12, Backend::Metal}) {
+    for (const Backend backend : {Backend::Vulkan, Backend::D3d12, Backend::Metal}) {
         if (std::ranges::contains(backends(), backend)) {
             continue;
         }

@@ -26,6 +26,7 @@ Checks: >
     -modernize-avoid-c-arrays,
     -modernize-use-trailing-return-type,
     performance-*,
+    -performance-enum-size,
     readability-*,
     -readability-function-cognitive-complexity,
     -readability-function-size,

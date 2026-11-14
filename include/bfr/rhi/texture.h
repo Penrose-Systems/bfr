@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bfr/bfr.h"
+#include "bfr/bfr_enums.hpp" // IWYU pragma: export
 #include "bfr/core/handle.h"
 #include "bfr/rhi/format.h"
 
@@ -16,52 +17,6 @@ using TextureHandle = core::Handle<Texture>;
 
 /// Faces of a cube: the layers a Cube texture has per cube.
 inline constexpr std::uint32_t kCubeFaces = 6;
-
-/// The shape of a texture. The values are the C API's.
-enum class TextureDimension : std::uint8_t {
-    D2 = 0,
-    D1 = 1,
-    D3 = 2,
-    /// Six square faces per cube, in layers: a multiple of 6, face by face.
-    Cube = 3,
-};
-
-/// How a texture's memory is arranged for what the GPU does with it next.
-/// Device::textureBarrier moves a texture between layouts; BFR keeps no
-/// record of the one it is in. A copy queue's lists move a texture only
-/// between Undefined, CopySrc and CopyDst, and a compute queue's never to or
-/// from ColorTarget, DepthStencilTarget, DepthStencilRead, ResolveSrc or
-/// ResolveDst, as D3D12's layouts for those queues allow; so a texture crosses
-/// between queues in a layout both kinds take. The values are the C API's.
-enum class TextureLayout : std::uint8_t {
-    /// Its contents are not kept. Only a layout to move from.
-    Undefined = 0,
-    CopySrc = 1,
-    CopyDst = 2,
-    /// Shaders read it through the texture table.
-    Sampled = 3,
-    /// Shaders read and write it through the storage texture table.
-    Storage = 4,
-    /// Rendering writes color to it.
-    ColorTarget = 5,
-    /// Rendering tests and writes depth or stencil in it.
-    DepthStencilTarget = 6,
-    /// Rendering tests depth or stencil in it without writing, as a
-    /// DepthStencilAttachment with readOnly; shaders may sample it meanwhile.
-    DepthStencilRead = 7,
-    /// Device::resolveTexture reads it.
-    ResolveSrc = 8,
-    /// Device::resolveTexture writes it.
-    ResolveDst = 9,
-};
-
-/// Which part of a texel a copy moves. The values are the C API's, and so is
-/// the size: BufferTextureCopy is read in place from bfr_buffer_texture_copy.
-enum class TextureAspect : std::int32_t { // NOLINT(performance-enum-size)
-    Color = 0,
-    Depth = 1,
-    Stencil = 2,
-};
 
 /// What the GPU does with a texture. Set every use it will have.
 struct TextureUsage {

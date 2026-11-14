@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bfr/bfr_enums.hpp" // IWYU pragma: export
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
@@ -19,44 +20,12 @@
 
 namespace bfr::rhi {
 
-enum class AdapterType : std::uint8_t {
-    Discrete,
-    Integrated,
-    Virtual,
-    Cpu,
-    Other,
-};
-
 /// A GPU a device can be created on.
 struct Adapter {
     std::string name;
     AdapterType type = AdapterType::Other;
     Caps caps;
 };
-
-/// The native graphics API an Instance runs on, and what BFR needs of it. The
-/// values are bfr_backend's, so that zero, which a default-initialised
-/// InstanceDesc holds, names no backend.
-enum class Backend : std::uint8_t {
-    /// Vulkan 1.2 or later with dynamic rendering and synchronization2
-    /// (extensions before 1.3), descriptor indexing with update-after-bind and
-    /// partially bound tables, and timelines.
-    Vulkan = 1,
-    D3D12 = 2,
-    Metal = 3,
-};
-
-[[nodiscard]] constexpr std::string_view name(Backend backend) noexcept {
-    switch (backend) {
-        case Backend::Vulkan:
-            return "vulkan";
-        case Backend::D3D12:
-            return "d3d12";
-        case Backend::Metal:
-            return "metal";
-    }
-    return "unknown";
-}
 
 /// The backends this build has, in Backend order. Instance::create accepts these
 /// and refuses every other.

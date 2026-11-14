@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bfr/bfr.h"
+#include "bfr/bfr_enums.hpp" // IWYU pragma: export
 #include "bfr/core/handle.h"
 
 #include <array>
@@ -14,38 +15,6 @@ namespace bfr::rhi {
 struct QueryPool;
 
 using QueryPoolHandle = core::Handle<QueryPool>;
-
-/// What a pool's queries count between beginQuery and endQuery. The values
-/// are the C API's.
-enum class QueryType : std::uint8_t {
-    /// Samples that pass the depth and stencil tests: an exact count where
-    /// beginQuery asks for one, else 0 for none and another value for some.
-    Occlusion = 0,
-    /// The statistics QueryPoolDesc::statistics selects.
-    PipelineStatistics = 1,
-    /// Primitives mesh shaders emit.
-    MeshPrimitivesGenerated = 2,
-};
-
-/// One statistic a PipelineStatistics query counts, in Vulkan's bit order,
-/// which is D3D12's field order. Each counts what the backend counts:
-/// TessellationControl is patches on Vulkan and hull shader invocations on
-/// D3D12. The values are the C API's.
-enum class PipelineStatistic : std::uint8_t {
-    InputVertices = 0,
-    InputPrimitives = 1,
-    VertexInvocations = 2,
-    GeometryInvocations = 3,
-    GeometryPrimitives = 4,
-    ClipInvocations = 5,
-    ClipPrimitives = 6,
-    FragmentInvocations = 7,
-    TessellationControl = 8,
-    TessellationEvaluationInvocations = 9,
-    ComputeInvocations = 10,
-    TaskInvocations = 11,
-    MeshInvocations = 12,
-};
 
 /// How many PipelineStatistic values there are.
 inline constexpr std::size_t kPipelineStatistics = BFR_PIPELINE_STATISTIC_COUNT;

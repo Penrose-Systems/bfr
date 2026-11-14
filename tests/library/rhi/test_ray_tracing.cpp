@@ -41,6 +41,7 @@
 #include <utility>
 #include <vector>
 
+using namespace bfr;
 using namespace bfr::rhi;
 using namespace bfr::rhi::test;
 using bfr::core::ErrorCode;
@@ -1822,7 +1823,8 @@ TEST_CASE("Device builds clusters and cluster bottom structures from records the
 
         constexpr std::uint32_t kCounts = 1U | (kTriangleVertices << kClusterVertexCountShift) |
                                           (std::to_underlying(ClusterIndexFormat::Uint8) << kClusterIndexFormatShift);
-        constexpr std::uint32_t kOpaque = std::to_underlying(ClusterGeometryFlag::Opaque) << kClusterGeometryFlagsShift;
+        constexpr auto kOpaque = static_cast<std::uint32_t>(std::to_underlying(ClusterGeometryFlag::Opaque))
+                                 << kClusterGeometryFlagsShift;
         const ClusterTriangleRecord cluster{.clusterId = 0,
                                             .counts = kCounts,
                                             .baseGeometry = kOpaque,

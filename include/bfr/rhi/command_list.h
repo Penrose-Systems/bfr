@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bfr/bfr.h"
+#include "bfr/bfr_enums.hpp" // IWYU pragma: export
 #include "bfr/core/handle.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/pipeline.h"
@@ -25,25 +26,6 @@ using CommandPoolHandle = core::Handle<CommandPool>;
 struct CommandList;
 
 using CommandListHandle = core::Handle<CommandList>;
-
-/// What a queue runs.
-enum class QueueType : std::uint8_t {
-    Graphics,
-    Compute,
-    Copy,
-};
-
-/// A queue's priority against every queue on the system, other processes'
-/// included. Normal is the level a backend's queues have when none is set.
-/// Queues::graphicsLevels and the others say which levels each kind takes; one
-/// above normal may need privileges the process lacks, and then fails as the
-/// backend says.
-enum class QueueLevel : std::uint32_t {
-    Normal = 0,
-    Low = 1,
-    High = 2,
-    Realtime = 3,
-};
 
 /// One queue a device opens. rank, 0 to 1, is its priority against the
 /// device's other queues, higher first, passed to the backend as given; where
@@ -237,36 +219,6 @@ struct TraceRaysIndirectArgs {
     std::uint32_t depth = 0;
 };
 
-/// What an attachment holds when rendering begins.
-enum class LoadOp : std::uint8_t {
-    /// What the image held before.
-    Load,
-    /// The clear color.
-    Clear,
-    /// Anything; the renderer writes every pixel.
-    DontCare,
-};
-
-/// What becomes of an attachment when rendering ends.
-enum class StoreOp : std::uint8_t {
-    /// What was rendered is kept.
-    Store,
-    /// It may be dropped.
-    DontCare,
-};
-
-/// How the samples of a depth or stencil pixel become one when a rendering's
-/// depth-stencil attachment is resolved; Caps::resolve says which the device
-/// has. The values are the C API's.
-enum class ResolveMode : std::uint8_t {
-    /// Not resolved.
-    None = 0,
-    SampleZero = 1,
-    Average = 2,
-    Min = 3,
-    Max = 4,
-};
-
 /// One color target of a rendering: a texture with colorAttachment usage, in
 /// layout ColorTarget, or, as attachment 0 when beginRendering is given a
 /// swapchain, that swapchain's acquired image, with texture null. Given a
@@ -367,12 +319,6 @@ struct Rect {
     std::uint32_t y = 0;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
-};
-
-/// How wide each index of an index buffer is. The values are the C API's.
-enum class IndexType : std::uint8_t {
-    Uint32 = 0,
-    Uint16 = 1,
 };
 
 } // namespace bfr::rhi

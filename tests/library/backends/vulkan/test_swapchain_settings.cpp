@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <limits>
 
+using namespace bfr;
 using namespace bfr::rhi;
 using namespace bfr::rhi::vulkan;
 

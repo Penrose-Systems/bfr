@@ -70,19 +70,16 @@ class RepositoryTests(unittest.TestCase):
     def test_committed_header_matches_the_description(self) -> None:
         self.assertEqual(HEADER.read_text(encoding="utf-8"), render(load(SOURCE)), "run: python3 tools/gen_c_api.py")
 
-    def test_the_implementation_s_formats_match_the_description(self) -> None:
-        # format.h repeats the format enum for the C++ code behind the C API.
+    def test_the_implementation_lists_every_format_a_texture_may_have(self) -> None:
+        # kFormats lists the formats a texture may have: every one but undefined.
         text = (REPO_ROOT / "include" / "bfr" / "rhi" / "format.h").read_text(encoding="utf-8")
-        enum = text[text.index("enum class Format") : text.index("};")]
-        declared = re.findall(r"^    (\w+) = (\d+),$", enum, re.MULTILINE)
         listed = re.findall(r"Format::(\w+)", text[text.index("kFormats") :])
         expected = [
-            ("".join(part[:1].upper() + part[1:] for part in name.split("_")), value["value"])
+            "".join(part[:1].upper() + part[1:] for part in name.split("_"))
             for name, value in load(SOURCE).enums["format"]["values"].items()
+            if value["value"] != 0
         ]
-        self.assertEqual([(name, int(value)) for name, value in declared], expected)
-        # kFormats lists the formats a texture may have: every one but undefined.
-        self.assertEqual(listed, [name for name, value in expected if value != 0])
+        self.assertEqual(listed, expected)
 
 
 if __name__ == "__main__":

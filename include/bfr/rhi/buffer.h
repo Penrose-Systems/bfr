@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bfr/bfr_enums.hpp" // IWYU pragma: export
 #include "bfr/core/handle.h"
 
 #include <cstdint>
@@ -11,16 +12,6 @@ namespace bfr::rhi {
 struct Buffer;
 
 using BufferHandle = core::Handle<Buffer>;
-
-/// Where a buffer's memory is, and whether the CPU maps it.
-enum class BufferMemory : std::uint8_t {
-    /// On or nearest the GPU; the CPU does not map it.
-    Device,
-    /// The CPU writes it and the GPU reads it.
-    Upload,
-    /// The GPU writes it and the CPU reads it.
-    Readback,
-};
 
 /// What the GPU does with a buffer. Set every use it will have.
 struct BufferUsage {

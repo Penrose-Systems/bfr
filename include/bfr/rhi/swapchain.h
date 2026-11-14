@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bfr/bfr_enums.hpp" // IWYU pragma: export
 #include "bfr/core/handle.h"
 #include "bfr/rhi/format.h"
 
@@ -13,71 +14,6 @@ namespace bfr::rhi {
 struct Swapchain;
 
 using SwapchainHandle = core::Handle<Swapchain>;
-
-/// What the backend said of a swapchain as an image was acquired or
-/// presented: Matches when it said nothing more than that the call
-/// succeeded; Suboptimal when it no longer matches its window exactly but
-/// still presents, which Vulkan says with VK_SUBOPTIMAL_KHR, and which
-/// resizeSwapchain mends when the caller chooses.
-enum class SwapchainStatus : std::uint32_t {
-    Matches = 0,
-    Suboptimal = 1,
-};
-
-/// How a swapchain presents. Fifo is on every window; the others are on those
-/// whose swapchain caps list them.
-enum class PresentMode : std::uint8_t {
-    /// Presents wait for vertical blank and queue up.
-    Fifo,
-    /// As Fifo, but a late frame presents at once, and may tear.
-    FifoRelaxed,
-    /// Presents wait for vertical blank, and a newer frame replaces a waiting one.
-    Mailbox,
-    /// Presents at once, and may tear.
-    Immediate,
-};
-
-/// The name of mode, as bfr.yaml spells it.
-[[nodiscard]] constexpr std::string_view name(PresentMode mode) {
-    switch (mode) {
-        case PresentMode::Fifo:
-            return "fifo";
-        case PresentMode::FifoRelaxed:
-            return "fifo_relaxed";
-        case PresentMode::Mailbox:
-            return "mailbox";
-        case PresentMode::Immediate:
-            return "immediate";
-    }
-    return "unknown";
-}
-
-/// How a window blends a swapchain's alpha.
-enum class AlphaMode : std::uint8_t {
-    /// The window ignores alpha.
-    Opaque,
-    /// Colors are already multiplied by alpha.
-    Premultiplied,
-    /// The window multiplies colors by alpha.
-    Postmultiplied,
-    /// The window system decides how alpha blends.
-    Inherit,
-};
-
-/// The name of mode, as bfr.yaml spells it.
-[[nodiscard]] constexpr std::string_view name(AlphaMode mode) {
-    switch (mode) {
-        case AlphaMode::Opaque:
-            return "opaque";
-        case AlphaMode::Premultiplied:
-            return "premultiplied";
-        case AlphaMode::Postmultiplied:
-            return "postmultiplied";
-        case AlphaMode::Inherit:
-            return "inherit";
-    }
-    return "unknown";
-}
 
 /// What a swapchain is asked to be. Each value is passed to the backend as
 /// given; the backend accepts or refuses it.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bfr/bfr_enums.hpp" // IWYU pragma: export
 #include "bfr/core/handle.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/command_list.h"
@@ -80,14 +81,6 @@ struct SparseFormat {
     bool singleTail = false;
     /// Every mip level not a whole number of tiles is in the tail.
     bool alignedMipSize = false;
-};
-
-/// What a tile mapping does to its region. The values are the C API's.
-enum class TileMapping : std::uint32_t {
-    /// Maps the region to the memory's tiles.
-    Map = 0,
-    /// Leaves the region with no memory; memoryTile is unused.
-    Unmap = 1,
 };
 
 /// One region of a sparse texture mapped to memory or unmapped. Below the

@@ -34,7 +34,7 @@ constexpr std::array<Backend, kBackendCount> kBackends{
     Backend::Vulkan,
 #endif
 #if BFR_HAS_D3D12
-    Backend::D3D12,
+    Backend::D3d12,
 #endif
 #if BFR_HAS_METAL
     Backend::Metal,
@@ -58,10 +58,10 @@ core::Result<std::unique_ptr<Instance>> createOn(const InstanceDesc& desc, const
         case Backend::Vulkan:
 #endif
 #if BFR_HAS_D3D12
-        case Backend::D3D12:
+        case Backend::D3d12:
             return d3d12::D3D12Instance::create(desc, config);
 #else
-        case Backend::D3D12:
+        case Backend::D3d12:
 #endif
 #if BFR_HAS_METAL
         case Backend::Metal:
