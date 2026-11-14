@@ -2968,10 +2968,10 @@ static_assert(offsetof(RayTracingShader, shader) == offsetof(bfr_ray_tracing_sha
 /// identifier; no_shader is none.
 struct RayTracingGroup {
     RayTracingGroupType type{};
-    std::uint32_t general{};
-    std::uint32_t closestHit{};
-    std::uint32_t anyHit{};
-    std::uint32_t intersection{};
+    std::uint32_t general = BFR_NO_SHADER;
+    std::uint32_t closestHit = BFR_NO_SHADER;
+    std::uint32_t anyHit = BFR_NO_SHADER;
+    std::uint32_t intersection = BFR_NO_SHADER;
 };
 static_assert(sizeof(RayTracingGroup) == sizeof(bfr_ray_tracing_group) && alignof(RayTracingGroup) == alignof(bfr_ray_tracing_group) &&
               std::is_standard_layout_v<RayTracingGroup> && std::is_trivially_copyable_v<RayTracingGroup>);

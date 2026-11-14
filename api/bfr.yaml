@@ -1790,10 +1790,10 @@ structs:
       record names by its group's identifier; no_shader is none.
     members:
       - {name: type, type: ray_tracing_group_type}
-      - {name: general, type: u32}
-      - {name: closest_hit, type: u32}
-      - {name: any_hit, type: u32}
-      - {name: intersection, type: u32}
+      - {name: general, type: u32, default: no_shader}
+      - {name: closest_hit, type: u32, default: no_shader}
+      - {name: any_hit, type: u32, default: no_shader}
+      - {name: intersection, type: u32, default: no_shader}
 
   ray_tracing_pipeline_desc:
     doc: >-
