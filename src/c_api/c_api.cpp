@@ -316,6 +316,10 @@ bfr::rhi::BufferHandle fromC(bfr_buffer handle) {
     return bfr::rhi::BufferHandle::fromBits(handle.bits);
 }
 
+// The C and C++ buffer memories are the same numbers, so they cross as they are.
+static_assert(static_cast<int>(bfr::rhi::BufferMemory::Device) == BFR_BUFFER_MEMORY_DEVICE);
+static_assert(static_cast<int>(bfr::rhi::BufferMemory::Readback) == BFR_BUFFER_MEMORY_READBACK);
+
 // The buffer desc asks for. Nothing when its memory is not one BFR has; error
 // says which.
 std::optional<bfr::rhi::BufferDesc> bufferIn(const bfr_buffer_desc& desc, bfr::core::Message& error) {
@@ -1325,6 +1329,7 @@ bfr_bool toC(bool value) {
 // The C and C++ enums below are the same numbers.
 static_assert(static_cast<int>(bfr::rhi::Format::R8Unorm) == BFR_FORMAT_R8_UNORM);
 static_assert(static_cast<int>(bfr::rhi::Format::Astc12x12Float) == BFR_FORMAT_ASTC_12X12_FLOAT);
+static_assert(static_cast<int>(bfr::rhi::ColorSpace::Srgb) == BFR_COLOR_SPACE_SRGB);
 static_assert(static_cast<int>(bfr::rhi::ColorSpace::DisplayNative) == BFR_COLOR_SPACE_DISPLAY_NATIVE);
 static_assert(static_cast<int>(bfr::rhi::DisplayRotation::Other) == BFR_DISPLAY_ROTATION_OTHER);
 
