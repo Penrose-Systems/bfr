@@ -88,9 +88,9 @@ enums:
       vulkan:
         value: 1
         doc: >-
-          Vulkan 1.2 or later with dynamic rendering and synchronization2
-          (extensions before 1.3), descriptor indexing with update-after-bind
-          and partially bound tables, and timelines.
+          Vulkan with dynamic rendering and synchronization2, descriptor
+          indexing with update-after-bind and partially bound tables, and
+          timelines, core or as extensions at the version a device uses.
       d3d12: {value: 2, doc: "D3D12, Shader Model 6.6 with enhanced barriers."}
       metal: {value: 3, doc: Metal 4.}
 
@@ -1042,9 +1042,9 @@ structs:
         type: u32
         doc: >-
           The API version the caller uses, in bfr_caps_info's terms (1, 2 is
-          Vulkan 1.2), passed to the backend as it is. Below what BFR needs,
-          which the backend's bfr_backend value states, bfr_create_instance
-          fails with error_unsupported.
+          Vulkan 1.2), passed to the backend as it is. An adapter that lacks
+          what the backend's bfr_backend value states at that version is not
+          listed.
       - {name: api_minor, type: u32, doc: The minor part of api_major's version.}
       - {name: validation, type: bool, doc: Enable the backend's validation layer. On Metal its messages go to the system log.}
       - {name: message_callback, type: message_callback, optional: true}
@@ -2687,7 +2687,7 @@ structs:
       - {name: max_render_height, type: u32, doc: Tallest render area.}
       - {name: max_render_layers, type: u32, doc: Most layers rendered at once.}
       - {name: color_sample_counts, type: u32, doc: "Sample counts for float and normalized color attachments: each set bit is a count it supports, 1, 2, 4 and so on. 0 on D3D12, which answers per format only, in bfr_format_caps.sample_counts."}
-      - {name: integer_sample_counts, type: u32, doc: "Sample counts for integer color attachments; 0 on D3D12, as color_sample_counts says."}
+      - {name: integer_sample_counts, type: u32, doc: "Sample counts for integer color attachments; 0 on D3D12, as color_sample_counts says, and on Vulkan before 1.2, which answers per format only."}
       - {name: depth_sample_counts, type: u32, doc: "Sample counts for depth attachments; 0 on D3D12, as color_sample_counts says."}
       - {name: stencil_sample_counts, type: u32, doc: "Sample counts for stencil attachments; 0 on D3D12, as color_sample_counts says."}
       - {name: no_attachment_sample_counts, type: u32, doc: Sample counts for rendering with no attachments.}

@@ -1,6 +1,8 @@
 #!/bin/sh
-# Compiles the test shaders to SPIR-V and writes them into spirv.h as arrays
-# of bytes, as a caller hands code to BFR, so the tests need no compiler. Run
+# Compiles the test shaders to SPIR-V, each for the oldest Vulkan it builds
+# for, so a device at that version takes it: 1.0, else SPIR-V 1.4, which a 1.1
+# device with VK_KHR_spirv_1_4 takes and mesh and ray tracing shaders need.
+# Writes them into spirv.h as arrays of bytes, as a caller hands code to BFR, so the tests need no compiler. Run
 # after changing a shader; the header is checked in.
 set -e
 cd "$(dirname "$0")"
@@ -12,12 +14,14 @@ cd "$(dirname "$0")"
     echo "#include <cstdint>"
     echo
     echo "namespace bfr::test::spirv {"
-    # emit NAME SHADER [FLAGS...]: SHADER compiled with FLAGS as array kNAME.
+    # emit NAME SHADER [FLAGS...]: SHADER compiled for $target with FLAGS as
+    # array kNAME.
     emit() {
         name="$1"
         shader="$2"
         shift 2
-        glslangValidator -V --target-env vulkan1.2 "$@" -o "$name.spv" "$shader" > /dev/null
+        # shellcheck disable=SC2086 # $target is several flags.
+        glslangValidator -V $target "$@" -o "$name.spv" "$shader" > /dev/null
         echo
         echo "/// $shader${1:+ ($*)}, as SPIR-V bytes."
         printf "inline constexpr std::array<std::uint8_t, %s> k%s{\n" "$(stat -c %s "$name.spv")" "$name"
@@ -25,7 +29,12 @@ cd "$(dirname "$0")"
         echo "};"
         rm "$name.spv"
     }
-    for shader in bindless.comp bindless.vert bindless.frag color.frag sample.comp triangle.mesh triangle.task ray_query.comp ray_query_any.comp ray_positions.comp uniform.comp trace.rgen trace_motion.rgen trace.rmiss trace.rchit box.rint; do
+    target="--target-env vulkan1.0"
+    for shader in bindless.comp bindless.vert bindless.frag color.frag sample.comp uniform.comp; do
+        emit "$(echo "$shader" | sed 's/[._]\(.\)/\U\1/g; s/^./\U&/')" "$shader"
+    done
+    target="--target-env vulkan1.1 --target-env spirv1.4"
+    for shader in triangle.mesh triangle.task ray_query.comp ray_query_any.comp ray_positions.comp trace.rgen trace_motion.rgen trace.rmiss trace.rchit box.rint; do
         emit "$(echo "$shader" | sed 's/[._]\(.\)/\U\1/g; s/^./\U&/')" "$shader"
     done
     emit RayQueryPartitionedComp ray_query.comp -DPARTITIONED

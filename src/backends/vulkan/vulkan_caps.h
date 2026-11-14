@@ -20,14 +20,21 @@ namespace bfr::rhi::vulkan {
 // and adapter's (initialization.adoc:883-910), and is 1.2 or later; extensions
 // are the device extensions adapter lists.
 
-/// The oldest Vulkan BFR runs on.
-inline constexpr std::uint32_t kMinimumVersion = VK_API_VERSION_1_2;
-
 /// The keyframes a motion structure or instance has on Vulkan, times 0 and 1
 /// (vertices, accelstructures.adoc:1207-1214; instance transforms, 2086-2090 and 2145-2149),
 /// and the bytes between motion instance records (accelstructures.adoc:1796-1797).
 inline constexpr std::uint32_t kVulkanMotionKeyframes = 2;
 inline constexpr std::uint32_t kVulkanMotionInstanceStride = 160;
+
+/// Whether a device at version has what Vulkan 1.1 made core.
+[[nodiscard]] constexpr bool hasCore11(std::uint32_t version) {
+    return version >= VK_API_VERSION_1_1;
+}
+
+/// Whether a device at version has what Vulkan 1.2 made core.
+[[nodiscard]] constexpr bool hasCore12(std::uint32_t version) {
+    return version >= VK_API_VERSION_1_2;
+}
 
 /// Whether a device at version has what Vulkan 1.3 made core.
 [[nodiscard]] constexpr bool hasCore13(std::uint32_t version) {
@@ -41,10 +48,13 @@ inline constexpr std::uint32_t kVulkanMotionInstanceStride = 160;
 /// The features a device turns on, as adapter reports them: every one in the
 /// structs of each core version up to version, and every one of each extension
 /// below that it lists, which the device then enables. Below 1.3, the
-/// extensions 1.3 made core stand in for its struct. The caps read the same
-/// structs, so they say what the device has. core heads the chain a create
-/// info's pNext takes; the chain points into itself, so it stays where it is
-/// made.
+/// extensions 1.3 made core stand in for its struct. Below 1.2, the structs
+/// 1.1 made core and those of the extensions 1.2 made core stand in for
+/// vulkan11 and vulkan12, which are filled from them after the query, so a
+/// reader finds a feature in one place whatever the version. The caps read
+/// the same structs, so they say what the device has. core heads the chain a
+/// create info's pNext takes; the chain points into itself, so it stays where
+/// it is made.
 struct DeviceFeatures {
     DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
                    std::span<const VkExtensionProperties> extensions);
@@ -59,6 +69,30 @@ struct DeviceFeatures {
     VkPhysicalDeviceVulkan12Features vulkan12{};
     VkPhysicalDeviceVulkan13Features vulkan13{};
     VkPhysicalDeviceVulkan14Features vulkan14{};
+    /// Below 1.2, what 1.1 made core, copied into vulkan11; below 1.1, the
+    /// extension's, where adapter lists it.
+    VkPhysicalDevice16BitStorageFeatures storage16{};
+    VkPhysicalDeviceMultiviewFeatures multiview{};
+    VkPhysicalDeviceVariablePointersFeatures variablePointers{};
+    VkPhysicalDeviceProtectedMemoryFeatures protectedMemory{};
+    VkPhysicalDeviceSamplerYcbcrConversionFeatures ycbcrConversion{};
+    VkPhysicalDeviceShaderDrawParametersFeatures drawParameters{};
+    /// Below 1.2, what 1.2 made core, where adapter lists the extension,
+    /// copied into vulkan12. A 1.2 feature with no struct of its own, such as
+    /// drawIndirectCount, is the extension's being listed.
+    VkPhysicalDevice8BitStorageFeaturesKHR storage8{};
+    VkPhysicalDeviceShaderAtomicInt64FeaturesKHR atomicInt64{};
+    VkPhysicalDeviceShaderFloat16Int8FeaturesKHR float16Int8{};
+    VkPhysicalDeviceDescriptorIndexingFeaturesEXT descriptorIndexing{};
+    VkPhysicalDeviceScalarBlockLayoutFeaturesEXT scalarBlockLayout{};
+    VkPhysicalDeviceImagelessFramebufferFeaturesKHR imagelessFramebuffer{};
+    VkPhysicalDeviceUniformBufferStandardLayoutFeaturesKHR uniformBufferStandardLayout{};
+    VkPhysicalDeviceShaderSubgroupExtendedTypesFeaturesKHR subgroupExtendedTypes{};
+    VkPhysicalDeviceSeparateDepthStencilLayoutsFeaturesKHR separateDepthStencilLayouts{};
+    VkPhysicalDeviceHostQueryResetFeaturesEXT hostQueryReset{};
+    VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineSemaphore{};
+    VkPhysicalDeviceBufferDeviceAddressFeaturesKHR bufferDeviceAddress{};
+    VkPhysicalDeviceVulkanMemoryModelFeaturesKHR memoryModel{};
     /// Below 1.3, what 1.3 made core, where adapter lists the extension.
     VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRendering{};
     VkPhysicalDeviceSynchronization2FeaturesKHR synchronization2{};

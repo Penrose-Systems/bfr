@@ -71,7 +71,10 @@ void link(void**& tail, Struct& next) {
 // The property structs one query fills: those of each core version up to
 // version, and an extension's only when the adapter lists it, since chaining
 // one it lacks is invalid. Below 1.3, the extensions 1.3 made core stand in
-// for its struct. The chain points into itself, so it stays where it is made.
+// for its struct. Below 1.2, the structs 1.1 made core and those of the
+// extensions 1.2 made core stand in for vulkan11 and vulkan12, which are
+// filled from them after the query. The chain points into itself, so it stays
+// where it is made.
 struct PropertyQuery {
     PropertyQuery(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
                   std::span<const VkExtensionProperties> extensions)
@@ -79,6 +82,12 @@ struct PropertyQuery {
         core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         vulkan11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES;
         vulkan12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
+        id.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+        maintenance3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES;
+        subgroup.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+        driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES_KHR;
+        depthStencilResolve.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES_KHR;
+        descriptorIndexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES_EXT;
         vulkan13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES;
         maintenance4.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES_KHR;
         subgroupSizeControl.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES_EXT;
@@ -93,17 +102,36 @@ struct PropertyQuery {
         customBorderColor.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_PROPERTIES_EXT;
 
         void** tail = &core.pNext;
-        link(tail, vulkan11);
-        link(tail, vulkan12);
         const auto linkIfListed = [&tail, extensions](const char* extension, auto& next) {
             if (lists(extensions, extension)) {
                 link(tail, next);
             }
         };
+        const bool at12 = hasCore12(version);
+        if (at12) {
+            link(tail, vulkan11);
+            link(tail, vulkan12);
+        }
+        else if (hasCore11(version)) {
+            link(tail, id);
+            link(tail, maintenance3);
+            link(tail, subgroup);
+        }
+        else {
+            // Below 1.1 an adapter's IDs need an instance extension and its
+            // subgroups have no struct: both read as zero.
+            linkIfListed(VK_KHR_MAINTENANCE_3_EXTENSION_NAME, maintenance3);
+        }
+        if (!at12) {
+            linkIfListed(VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME, driver);
+            linkIfListed(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME, depthStencilResolve);
+            linkIfListed(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME, descriptorIndexing);
+        }
         if (at13) {
             link(tail, vulkan13);
         }
-        else {
+        // Both take 1.1 (vkdocs xml/vk.xml), as the device's features do.
+        else if (hasCore11(version)) {
             linkIfListed(VK_KHR_MAINTENANCE_4_EXTENSION_NAME, maintenance4);
             linkIfListed(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME, subgroupSizeControl);
         }
@@ -117,6 +145,9 @@ struct PropertyQuery {
         linkIfListed(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, shadingRate);
         linkIfListed(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, customBorderColor);
         vk.vkGetPhysicalDeviceProperties2(adapter, &core);
+        if (!at12) {
+            fillCore12();
+        }
     }
     ~PropertyQuery() = default;
     PropertyQuery(const PropertyQuery&) = delete;
@@ -136,10 +167,50 @@ struct PropertyQuery {
         return at13 ? vulkan13.maxSubgroupSize : subgroupSizeControl.maxSubgroupSize;
     }
 
+    // Below 1.2, fills the fields of vulkan11 and vulkan12 the caps read from
+    // the structs that stand in for them. framebufferIntegerColorSampleCounts,
+    // which 1.2 added, stays 0: before it, each format answers alone.
+    void fillCore12() {
+        std::ranges::copy(id.deviceUUID, std::begin(vulkan11.deviceUUID));
+        std::ranges::copy(id.driverUUID, std::begin(vulkan11.driverUUID));
+        std::ranges::copy(id.deviceLUID, std::begin(vulkan11.deviceLUID));
+        vulkan11.deviceLUIDValid = id.deviceLUIDValid;
+        vulkan11.maxMemoryAllocationSize = maintenance3.maxMemoryAllocationSize;
+        vulkan11.maxPerSetDescriptors = maintenance3.maxPerSetDescriptors;
+        vulkan11.subgroupSize = subgroup.subgroupSize;
+        vulkan11.subgroupSupportedStages = subgroup.supportedStages;
+        vulkan11.subgroupSupportedOperations = subgroup.supportedOperations;
+        vulkan11.subgroupQuadOperationsInAllStages = subgroup.quadOperationsInAllStages;
+        std::ranges::copy(driver.driverName, std::begin(vulkan12.driverName));
+        std::ranges::copy(driver.driverInfo, std::begin(vulkan12.driverInfo));
+        vulkan12.driverID = driver.driverID;
+        vulkan12.conformanceVersion = driver.conformanceVersion;
+        vulkan12.supportedDepthResolveModes = depthStencilResolve.supportedDepthResolveModes;
+        vulkan12.supportedStencilResolveModes = depthStencilResolve.supportedStencilResolveModes;
+        vulkan12.independentResolveNone = depthStencilResolve.independentResolveNone;
+        vulkan12.independentResolve = depthStencilResolve.independentResolve;
+        vulkan12.maxPerStageUpdateAfterBindResources = descriptorIndexing.maxPerStageUpdateAfterBindResources;
+        vulkan12.maxDescriptorSetUpdateAfterBindSamplers = descriptorIndexing.maxDescriptorSetUpdateAfterBindSamplers;
+        vulkan12.maxDescriptorSetUpdateAfterBindUniformBuffers =
+            descriptorIndexing.maxDescriptorSetUpdateAfterBindUniformBuffers;
+        vulkan12.maxDescriptorSetUpdateAfterBindStorageBuffers =
+            descriptorIndexing.maxDescriptorSetUpdateAfterBindStorageBuffers;
+        vulkan12.maxDescriptorSetUpdateAfterBindSampledImages =
+            descriptorIndexing.maxDescriptorSetUpdateAfterBindSampledImages;
+        vulkan12.maxDescriptorSetUpdateAfterBindStorageImages =
+            descriptorIndexing.maxDescriptorSetUpdateAfterBindStorageImages;
+    }
+
     bool at13;
     VkPhysicalDeviceProperties2 core{};
     VkPhysicalDeviceVulkan11Properties vulkan11{};
     VkPhysicalDeviceVulkan12Properties vulkan12{};
+    VkPhysicalDeviceIDProperties id{};
+    VkPhysicalDeviceMaintenance3Properties maintenance3{};
+    VkPhysicalDeviceSubgroupProperties subgroup{};
+    VkPhysicalDeviceDriverPropertiesKHR driver{};
+    VkPhysicalDeviceDepthStencilResolvePropertiesKHR depthStencilResolve{};
+    VkPhysicalDeviceDescriptorIndexingPropertiesEXT descriptorIndexing{};
     VkPhysicalDeviceVulkan13Properties vulkan13{};
     VkPhysicalDeviceMaintenance4PropertiesKHR maintenance4{};
     VkPhysicalDeviceSubgroupSizeControlPropertiesEXT subgroupSizeControl{};
@@ -809,6 +880,118 @@ bool has(VkFormatFeatureFlags2 features, VkFormatFeatureFlags2 feature) {
 
 } // namespace
 
+namespace {
+
+// The extensions 1.1 made core that have no features struct BFR reads,
+// enabled below 1.1 where the adapter lists them, as the extensions 1.2 made
+// core take them (vkdocs xml/vk.xml).
+constexpr std::array kCore11Extensions{
+    VK_KHR_MAINTENANCE_1_EXTENSION_NAME,
+    VK_KHR_MAINTENANCE_2_EXTENSION_NAME,
+    VK_KHR_MAINTENANCE_3_EXTENSION_NAME,
+    VK_KHR_STORAGE_BUFFER_STORAGE_CLASS_EXTENSION_NAME,
+    VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME,
+    VK_KHR_BIND_MEMORY_2_EXTENSION_NAME,
+    VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
+    VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
+    VK_KHR_RELAXED_BLOCK_LAYOUT_EXTENSION_NAME,
+    VK_KHR_DESCRIPTOR_UPDATE_TEMPLATE_EXTENSION_NAME,
+    VK_KHR_DEVICE_GROUP_EXTENSION_NAME,
+};
+
+// The extensions 1.2 made core that have no features struct, enabled below 1.2
+// where the adapter lists them. VK_KHR_depth_stencil_resolve takes
+// VK_KHR_create_renderpass2 (vkdocs xml/vk.xml). VK_KHR_spirv_1_4, which takes
+// 1.1, is apart.
+constexpr std::array kCore12Extensions{
+    VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME,   VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME,
+    VK_EXT_SAMPLER_FILTER_MINMAX_EXTENSION_NAME, VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME,
+    VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME,   VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME,
+    VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME,     VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME,
+    VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME,
+};
+
+// Below 1.2, fills vulkan11 and vulkan12 from the structs that stand in for
+// them, so readers find each feature where 1.2 keeps it. A 1.2 feature with
+// no struct of its own is the extension's being listed, and so enabled;
+// subgroupBroadcastDynamicId, which no extension has, stays false.
+void fillCore12(DeviceFeatures& features, std::span<const VkExtensionProperties> extensions) {
+    VkPhysicalDeviceVulkan11Features& v11 = features.vulkan11;
+    v11.storageBuffer16BitAccess = features.storage16.storageBuffer16BitAccess;
+    v11.uniformAndStorageBuffer16BitAccess = features.storage16.uniformAndStorageBuffer16BitAccess;
+    v11.storagePushConstant16 = features.storage16.storagePushConstant16;
+    v11.storageInputOutput16 = features.storage16.storageInputOutput16;
+    v11.multiview = features.multiview.multiview;
+    v11.multiviewGeometryShader = features.multiview.multiviewGeometryShader;
+    v11.multiviewTessellationShader = features.multiview.multiviewTessellationShader;
+    v11.variablePointersStorageBuffer = features.variablePointers.variablePointersStorageBuffer;
+    v11.variablePointers = features.variablePointers.variablePointers;
+    v11.protectedMemory = features.protectedMemory.protectedMemory;
+    v11.samplerYcbcrConversion = features.ycbcrConversion.samplerYcbcrConversion;
+    // Before 1.1 the extension has no struct: listed is the feature.
+    v11.shaderDrawParameters = hasCore11(features.version)
+                                   ? features.drawParameters.shaderDrawParameters
+                                   : (lists(extensions, VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME) ? VK_TRUE
+                                                                                                      : VK_FALSE);
+
+    const auto listed = [extensions](const char* extension) {
+        return lists(extensions, extension) ? VK_TRUE : VK_FALSE;
+    };
+    VkPhysicalDeviceVulkan12Features& v12 = features.vulkan12;
+    const VkPhysicalDeviceDescriptorIndexingFeaturesEXT& indexing = features.descriptorIndexing;
+    v12.samplerMirrorClampToEdge = listed(VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME);
+    v12.drawIndirectCount = listed(VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME);
+    v12.storageBuffer8BitAccess = features.storage8.storageBuffer8BitAccess;
+    v12.uniformAndStorageBuffer8BitAccess = features.storage8.uniformAndStorageBuffer8BitAccess;
+    v12.storagePushConstant8 = features.storage8.storagePushConstant8;
+    v12.shaderBufferInt64Atomics = features.atomicInt64.shaderBufferInt64Atomics;
+    v12.shaderSharedInt64Atomics = features.atomicInt64.shaderSharedInt64Atomics;
+    v12.shaderFloat16 = features.float16Int8.shaderFloat16;
+    v12.shaderInt8 = features.float16Int8.shaderInt8;
+    v12.descriptorIndexing = listed(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
+    v12.shaderInputAttachmentArrayDynamicIndexing = indexing.shaderInputAttachmentArrayDynamicIndexing;
+    v12.shaderUniformTexelBufferArrayDynamicIndexing = indexing.shaderUniformTexelBufferArrayDynamicIndexing;
+    v12.shaderStorageTexelBufferArrayDynamicIndexing = indexing.shaderStorageTexelBufferArrayDynamicIndexing;
+    v12.shaderUniformBufferArrayNonUniformIndexing = indexing.shaderUniformBufferArrayNonUniformIndexing;
+    v12.shaderSampledImageArrayNonUniformIndexing = indexing.shaderSampledImageArrayNonUniformIndexing;
+    v12.shaderStorageBufferArrayNonUniformIndexing = indexing.shaderStorageBufferArrayNonUniformIndexing;
+    v12.shaderStorageImageArrayNonUniformIndexing = indexing.shaderStorageImageArrayNonUniformIndexing;
+    v12.shaderInputAttachmentArrayNonUniformIndexing = indexing.shaderInputAttachmentArrayNonUniformIndexing;
+    v12.shaderUniformTexelBufferArrayNonUniformIndexing = indexing.shaderUniformTexelBufferArrayNonUniformIndexing;
+    v12.shaderStorageTexelBufferArrayNonUniformIndexing = indexing.shaderStorageTexelBufferArrayNonUniformIndexing;
+    v12.descriptorBindingUniformBufferUpdateAfterBind = indexing.descriptorBindingUniformBufferUpdateAfterBind;
+    v12.descriptorBindingSampledImageUpdateAfterBind = indexing.descriptorBindingSampledImageUpdateAfterBind;
+    v12.descriptorBindingStorageImageUpdateAfterBind = indexing.descriptorBindingStorageImageUpdateAfterBind;
+    v12.descriptorBindingStorageBufferUpdateAfterBind = indexing.descriptorBindingStorageBufferUpdateAfterBind;
+    v12.descriptorBindingUniformTexelBufferUpdateAfterBind =
+        indexing.descriptorBindingUniformTexelBufferUpdateAfterBind;
+    v12.descriptorBindingStorageTexelBufferUpdateAfterBind =
+        indexing.descriptorBindingStorageTexelBufferUpdateAfterBind;
+    v12.descriptorBindingUpdateUnusedWhilePending = indexing.descriptorBindingUpdateUnusedWhilePending;
+    v12.descriptorBindingPartiallyBound = indexing.descriptorBindingPartiallyBound;
+    v12.descriptorBindingVariableDescriptorCount = indexing.descriptorBindingVariableDescriptorCount;
+    v12.runtimeDescriptorArray = indexing.runtimeDescriptorArray;
+    v12.samplerFilterMinmax = listed(VK_EXT_SAMPLER_FILTER_MINMAX_EXTENSION_NAME);
+    v12.scalarBlockLayout = features.scalarBlockLayout.scalarBlockLayout;
+    v12.imagelessFramebuffer = features.imagelessFramebuffer.imagelessFramebuffer;
+    v12.uniformBufferStandardLayout = features.uniformBufferStandardLayout.uniformBufferStandardLayout;
+    v12.shaderSubgroupExtendedTypes = features.subgroupExtendedTypes.shaderSubgroupExtendedTypes;
+    v12.separateDepthStencilLayouts = features.separateDepthStencilLayouts.separateDepthStencilLayouts;
+    v12.hostQueryReset = features.hostQueryReset.hostQueryReset;
+    v12.timelineSemaphore = features.timelineSemaphore.timelineSemaphore;
+    v12.bufferDeviceAddress = features.bufferDeviceAddress.bufferDeviceAddress;
+    v12.bufferDeviceAddressCaptureReplay = features.bufferDeviceAddress.bufferDeviceAddressCaptureReplay;
+    v12.bufferDeviceAddressMultiDevice = features.bufferDeviceAddress.bufferDeviceAddressMultiDevice;
+    v12.vulkanMemoryModel = features.memoryModel.vulkanMemoryModel;
+    v12.vulkanMemoryModelDeviceScope = features.memoryModel.vulkanMemoryModelDeviceScope;
+    v12.vulkanMemoryModelAvailabilityVisibilityChains =
+        features.memoryModel.vulkanMemoryModelAvailabilityVisibilityChains;
+    v12.shaderOutputViewportIndex = listed(VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME);
+    v12.shaderOutputLayer = listed(VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME);
+}
+
+} // namespace
+
 DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
                                std::span<const VkExtensionProperties> extensions)
     : version(version) {
@@ -817,6 +1000,25 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     vulkan12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     vulkan13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     vulkan14.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
+    storage16.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
+    multiview.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES;
+    variablePointers.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTERS_FEATURES;
+    protectedMemory.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_FEATURES;
+    ycbcrConversion.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES;
+    drawParameters.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES;
+    storage8.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES_KHR;
+    atomicInt64.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_INT64_FEATURES_KHR;
+    float16Int8.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES_KHR;
+    descriptorIndexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT;
+    scalarBlockLayout.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES_EXT;
+    imagelessFramebuffer.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES_KHR;
+    uniformBufferStandardLayout.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFORM_BUFFER_STANDARD_LAYOUT_FEATURES_KHR;
+    subgroupExtendedTypes.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SUBGROUP_EXTENDED_TYPES_FEATURES_KHR;
+    separateDepthStencilLayouts.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SEPARATE_DEPTH_STENCIL_LAYOUTS_FEATURES_KHR;
+    hostQueryReset.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_QUERY_RESET_FEATURES_EXT;
+    timelineSemaphore.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
+    bufferDeviceAddress.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_KHR;
+    memoryModel.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES_KHR;
     dynamicRendering.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR;
     synchronization2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR;
     extendedDynamicState.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT;
@@ -858,8 +1060,6 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     clusters.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV;
 
     void** tail = &core.pNext;
-    link(tail, vulkan11);
-    link(tail, vulkan12);
     // Chaining an extension's struct the adapter lacks is invalid.
     const auto linkIfListed = [this, &tail, extensions](const char* extension, auto& next) {
         if (lists(extensions, extension)) {
@@ -872,6 +1072,51 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
             enabledExtensions.push_back(extension);
         }
     };
+    // Below 1.2, what 1.1 made core, and every extension 1.2 made core that
+    // the adapter lists, so a device has at 1.1 what it would have at 1.2.
+    // Below 1.1, the extensions 1.1 made core stand in for its structs, and an
+    // extension that takes 1.1 is left out, so the caps report it missing.
+    const bool at11 = hasCore11(version);
+    if (hasCore12(version)) {
+        link(tail, vulkan11);
+        link(tail, vulkan12);
+    }
+    else {
+        if (at11) {
+            link(tail, storage16);
+            link(tail, multiview);
+            link(tail, variablePointers);
+            link(tail, protectedMemory);
+            link(tail, ycbcrConversion);
+            link(tail, drawParameters);
+            enableIfListed(VK_KHR_SPIRV_1_4_EXTENSION_NAME);
+            linkIfListed(VK_KHR_SHADER_SUBGROUP_EXTENDED_TYPES_EXTENSION_NAME, subgroupExtendedTypes);
+        }
+        else {
+            for (const char* extension : kCore11Extensions) {
+                enableIfListed(extension);
+            }
+            linkIfListed(VK_KHR_16BIT_STORAGE_EXTENSION_NAME, storage16);
+            linkIfListed(VK_KHR_MULTIVIEW_EXTENSION_NAME, multiview);
+            linkIfListed(VK_KHR_VARIABLE_POINTERS_EXTENSION_NAME, variablePointers);
+            linkIfListed(VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME, ycbcrConversion);
+        }
+        for (const char* extension : kCore12Extensions) {
+            enableIfListed(extension);
+        }
+        linkIfListed(VK_KHR_8BIT_STORAGE_EXTENSION_NAME, storage8);
+        linkIfListed(VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME, atomicInt64);
+        linkIfListed(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME, float16Int8);
+        linkIfListed(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME, descriptorIndexing);
+        linkIfListed(VK_EXT_SCALAR_BLOCK_LAYOUT_EXTENSION_NAME, scalarBlockLayout);
+        linkIfListed(VK_KHR_IMAGELESS_FRAMEBUFFER_EXTENSION_NAME, imagelessFramebuffer);
+        linkIfListed(VK_KHR_UNIFORM_BUFFER_STANDARD_LAYOUT_EXTENSION_NAME, uniformBufferStandardLayout);
+        linkIfListed(VK_KHR_SEPARATE_DEPTH_STENCIL_LAYOUTS_EXTENSION_NAME, separateDepthStencilLayouts);
+        linkIfListed(VK_EXT_HOST_QUERY_RESET_EXTENSION_NAME, hostQueryReset);
+        linkIfListed(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME, timelineSemaphore);
+        linkIfListed(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME, bufferDeviceAddress);
+        linkIfListed(VK_KHR_VULKAN_MEMORY_MODEL_EXTENSION_NAME, memoryModel);
+    }
     // Below 1.3, every extension 1.3 made core that the adapter lists, so a
     // device has at 1.2 what it would have at 1.3.
     if (hasCore13(version)) {
@@ -899,8 +1144,11 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
         linkIfListed(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME, extendedDynamicState);
         linkIfListed(VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME, astcHdr);
         linkIfListed(VK_EXT_4444_FORMATS_EXTENSION_NAME, formats4444);
-        linkIfListed(VK_KHR_MAINTENANCE_4_EXTENSION_NAME, maintenance4);
-        linkIfListed(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME, subgroupSizeControl);
+        // Both take 1.1 (vkdocs xml/vk.xml).
+        if (at11) {
+            linkIfListed(VK_KHR_MAINTENANCE_4_EXTENSION_NAME, maintenance4);
+            linkIfListed(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME, subgroupSizeControl);
+        }
     }
     if (version >= VK_API_VERSION_1_4) {
         link(tail, vulkan14);
@@ -918,11 +1166,14 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     linkIfListed(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, customBorderColor);
     linkIfListed(VK_KHR_MAINTENANCE_9_EXTENSION_NAME, maintenance9);
     linkIfListed(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME, listRestart);
-    linkIfListed(VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh);
+    // Mesh shaders and acceleration structures take 1.1 (vkdocs xml/vk.xml).
+    if (at11) {
+        linkIfListed(VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh);
+    }
     // VK_KHR_acceleration_structure needs VK_KHR_deferred_host_operations
     // (vkdocs xml/vk.xml:24210); ray queries and pipelines, and their
     // maintenance, need acceleration structures.
-    if (lists(extensions, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)) {
+    if (at11 && lists(extensions, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)) {
         enableIfListed(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
         linkIfListed(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, accelerationStructure);
         linkIfListed(VK_KHR_RAY_QUERY_EXTENSION_NAME, rayQuery);
@@ -955,6 +1206,9 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
         }
     }
     vk.vkGetPhysicalDeviceFeatures2(adapter, &core);
+    if (!hasCore12(version)) {
+        fillCore12(*this, extensions);
+    }
 }
 
 bool DeviceFeatures::hasDynamicRendering() const {

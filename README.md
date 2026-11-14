@@ -7,7 +7,7 @@ for C++, C#, Rust and Python.
 
 | | |
 |---|---|
-| GPU | Vulkan 1.3 · D3D12 SM 6.6 with enhanced barriers · Metal 4 (Apple GPU family 7+) |
+| GPU | Vulkan with descriptor indexing, timelines, dynamic rendering and synchronization2 · D3D12 SM 6.6 with enhanced barriers · Metal 4 (Apple GPU family 7+) |
 | Build | CMake 3.28, Ninja, GCC 13 or Clang 19, vcpkg in `VCPKG_ROOT` |
 | Linux | X11 and Wayland development headers |
 | macOS | MoltenVK, for Vulkan |
@@ -111,7 +111,7 @@ BFR is one library over three backends.
 flowchart TB
     App["Your renderer"] --> Core
     Core["Core: devices, resources, pipelines,<br/>commands, explicit barriers, GPU lifetime"]
-    Core --> VK["Vulkan 1.3"]
+    Core --> VK["Vulkan"]
     Core --> DX["D3D12 (SM 6.6, enhanced barriers)"]
     Core --> MT["Metal 4"]
 ```
@@ -125,7 +125,7 @@ flowchart TB
 ## Starting up
 
 1. **Create an instance**, choosing a backend (Vulkan, D3D12 or Metal), the
-   API version you use (Vulkan 1.2 or later), validation settings and a
+   API version you use, validation settings and a
    message callback. Several instances, even of different backends, can live
    in one process.
 2. **List adapters.** Each is a plain description: name, vendor, limits,
@@ -302,7 +302,7 @@ whose previous work is still running.
 
 ## How the backends map
 
-| BFR concept | Vulkan 1.3 | D3D12 | Metal 4 |
+| BFR concept | Vulkan | D3D12 | Metal 4 |
 |---|---|---|---|
 | Timeline | Timeline semaphore | Fence | Shared event |
 | Barrier | Synchronization 2 | Enhanced barriers | Encoder barriers |
