@@ -29,6 +29,12 @@ _Avoid_: context, logical device
 A backend for the tests alone: it lists one adapter that reports nothing and
 draws nothing. It is not part of the library an app links.
 
+**Core**:
+BFR's public layer: devices, resources, pipelines, commands, explicit
+barriers and GPU lifetime. Backends implement only the core. Not the
+`bfr::core` namespace, which holds results, handles, pools and logging; the
+core's interfaces are in `bfr::rhi`.
+
 **Wrapper**:
 A language binding over the C API (C++, C#, Rust, Python) that this project
 writes and generates from the API description.
@@ -217,33 +223,6 @@ one that is not ready is a usage error.
 **Vertex pulling**:
 Shaders fetch vertices by index from buffers; there are no vertex buffers or
 input layouts.
-
-## Render graph
-
-**Render graph**:
-The layer that ships with BFR for building a frame from passes and their reads
-and writes: it orders passes, emits barriers and pools transient textures. It
-uses only the public core API.
-_Avoid_: frame graph
-
-**Core**:
-The lower public layer: devices, resources, pipelines, commands, explicit
-barriers and GPU lifetime. Backends implement only the core. Not the
-`bfr::core` namespace, which holds results, handles, pools and logging; the
-core's interfaces are in `bfr::rhi`.
-
-**Authority**:
-Whoever currently states a resource's barriers: the graph, the caller's code or
-native interop. One authority per resource at a time.
-
-**Import / export**:
-Handing a resource into the graph with its current state, and out of it with
-its final state.
-
-**Transient**:
-A texture that lives only within one graph execution and may share memory
-with other transients.
-_Avoid_: temporary, scratch
 
 ## API shape
 

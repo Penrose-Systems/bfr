@@ -105,14 +105,11 @@ sketches are illustrative; no names or signatures have been designed yet.
 
 ## The pieces
 
-BFR is one library with two layers over three backends.
+BFR is one library over three backends.
 
 ```mermaid
 flowchart TB
-    App["Your renderer"] --> Graph["Render graph<br/>(ships with BFR)"]
-    App --> Own["Your own graph<br/>or hand-written code"]
-    Graph --> Core
-    Own --> Core
+    App["Your renderer"] --> Core
     Core["Core: devices, resources, pipelines,<br/>commands, explicit barriers, GPU lifetime"]
     Core --> VK["Vulkan 1.3"]
     Core --> DX["D3D12 (SM 6.6, enhanced barriers)"]
@@ -123,11 +120,7 @@ flowchart TB
   and nothing more: barriers are yours to state, order is yours to choose.
   It does own one thing for you: no GPU memory is freed while the GPU might
   still use it.
-- **The render graph** is the normal way to build a frame. You describe
-  passes and what each reads and writes; it orders them, places barriers and
-  manages temporary textures. It is built only on the public core API, so
-  anything it does, your own code can do too.
-- **Backends** implement only the core. They never see the graph.
+- **Backends** implement only the core.
 
 ## Starting up
 
@@ -154,8 +147,7 @@ is caught rather than dereferenced.
 
 **Buffers and textures** are created from descriptions (size, format,
 usage). By default BFR places them in memory through its internal allocator.
-For control over memory, create a **heap** and place resources in it; the
-graph uses this to let short-lived textures share memory.
+For control over memory, create a **heap** and place resources in it.
 
 **Views** are how shaders see resources. Creating a texture or buffer view
 gives it a slot in the device's bindless table and returns that slot's index.
@@ -222,7 +214,7 @@ A list holds:
   and debug markers.
 
 ```cpp
-// Illustrative. A direct-path scene pass without the graph.
+// Illustrative. A scene pass.
 CommandList cl = device.begin(pool);
 cl.barrier({ .texture = scene_color,
              .before  = { .stage = none,         .access = none,        .layout = undefined },
@@ -266,7 +258,7 @@ sequenceDiagram
     R->>B: Wait until this frame slot's last token completes
     R->>B: Reset the slot's command pools
     R->>S: Acquire image
-    R->>B: Record lists (graph or direct), possibly on many threads
+    R->>B: Record lists, possibly on many threads
     R->>B: Submit in order, waiting on the acquire
     B->>G: Native submission, signals timeline value N
     B-->>R: Token {graphics, N}
@@ -277,23 +269,6 @@ sequenceDiagram
 
 Frames in flight overlap: the CPU waits only when it comes back to a slot
 whose previous work is still running.
-
-## Using the graph, or your own
-
-With BFR's graph you import persistent resources (including the swapchain
-image), describe temporary textures and add passes with their reads and
-writes. The graph orders passes, emits the barriers, pools temporary
-textures and calls your pass callbacks to record. It submits through the
-same core calls you would. What the graph does and does not do in its first
-version is still open.
-
-With your own graph, or none, you call the core directly and state barriers
-yourself.
-
-Either way, one rule holds: **one authority per resource at a time.** A
-resource the graph did not create is imported with its current state and
-exported with its final state, so the graph, your code and native interop
-can hand resources between each other safely.
 
 ## Lifetime
 
