@@ -4,7 +4,6 @@
 #include <vulkan/vulkan_core.h>
 
 #include <bit>
-#include <cstdint>
 #include <mutex>
 
 namespace bfr::rhi::vulkan {
@@ -23,7 +22,7 @@ void loadDeviceProcAddr(VkInstance instance) {
 
 } // namespace
 
-InstanceTable loadInstanceTable(VkInstance instance, std::uint32_t version) {
+InstanceTable loadInstanceTable(VkInstance instance) {
     loadDeviceProcAddr(instance);
     InstanceTable table;
 #define BFR_LOAD(name) table.name = std::bit_cast<PFN_##name>(vkGetInstanceProcAddr(instance, #name))
@@ -62,19 +61,6 @@ InstanceTable loadInstanceTable(VkInstance instance, std::uint32_t version) {
     BFR_LOAD(vkGetPhysicalDeviceSurfaceFormatsKHR);
     BFR_LOAD(vkGetPhysicalDeviceSurfacePresentModesKHR);
 #undef BFR_LOAD
-    // A core command above the instance's version must not be called
-    // (initialization.adoc:146-148).
-    if (version < VK_API_VERSION_1_1) {
-#define BFR_LOAD_KHR(name) table.name = std::bit_cast<PFN_##name>(vkGetInstanceProcAddr(instance, #name "KHR"))
-        BFR_LOAD_KHR(vkGetPhysicalDeviceProperties2);
-        BFR_LOAD_KHR(vkGetPhysicalDeviceFeatures2);
-        BFR_LOAD_KHR(vkGetPhysicalDeviceFormatProperties2);
-        BFR_LOAD_KHR(vkGetPhysicalDeviceImageFormatProperties2);
-        BFR_LOAD_KHR(vkGetPhysicalDeviceMemoryProperties2);
-        BFR_LOAD_KHR(vkGetPhysicalDeviceQueueFamilyProperties2);
-        BFR_LOAD_KHR(vkGetPhysicalDeviceSparseImageFormatProperties2);
-#undef BFR_LOAD_KHR
-    }
     return table;
 }
 

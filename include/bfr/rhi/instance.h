@@ -38,9 +38,9 @@ struct Adapter {
 /// values are bfr_backend's, so that zero, which a default-initialised
 /// InstanceDesc holds, names no backend.
 enum class Backend : std::uint8_t {
-    /// Vulkan with dynamic rendering and synchronization2, descriptor indexing
-    /// with update-after-bind and partially bound tables, and timelines, core
-    /// or as extensions at the version a device uses.
+    /// Vulkan 1.2 or later with dynamic rendering and synchronization2
+    /// (extensions before 1.3), descriptor indexing with update-after-bind and
+    /// partially bound tables, and timelines.
     Vulkan = 1,
     D3D12 = 2,
     Metal = 3,
@@ -67,8 +67,9 @@ struct InstanceDesc {
     Backend backend{};
 
     /// The API version the caller uses, in AdapterInfo's terms (1, 2 is
-    /// Vulkan 1.2), passed to the backend as it is. An adapter that lacks
-    /// what the backend's Backend value states at that version is not listed.
+    /// Vulkan 1.2), passed to the backend as it is. Below what BFR needs,
+    /// which the backend's Backend value states, create fails with
+    /// RhiUnsupported.
     std::uint32_t apiMajor = 0;
     std::uint32_t apiMinor = 0;
 

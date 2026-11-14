@@ -226,27 +226,16 @@ TEST_CASE("Vulkan skips an adapter it fails to check, and says which call failed
     }
 }
 
-TEST_CASE("Vulkan fails with RhiInvalidCall for a major version of 0", "[vulkan][unit]") {
-    const std::uint32_t minor = GENERATE(0U, 1U, 2U);
-
-    const auto rhi = Instance::create(vulkanAt(0, minor), {});
-
-    INFO(minor);
-    REQUIRE_FALSE(rhi.has_value());
-    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiInvalidCall);
-    CHECK_THAT(rhi.error().message.text(),
-               Catch::Matchers::Equals(std::format("0.{} is no Vulkan version: they start at 1.0", minor)));
-}
-
-TEST_CASE("Vulkan lists adapters at the oldest versions, through the extensions later ones made core",
-          "[vulkan][gpu]") {
-    const auto [major, minor] = GENERATE(std::pair{1U, 0U}, std::pair{1U, 1U});
+TEST_CASE("Vulkan fails with RhiUnsupported for a version below BFR's minimum", "[vulkan][unit]") {
+    const auto [major, minor] = GENERATE(std::pair{0U, 0U}, std::pair{1U, 0U}, std::pair{1U, 1U});
 
     const auto rhi = Instance::create(vulkanAt(major, minor), {});
 
-    INFO(major << '.' << minor << ' ' << failureOf(rhi));
-    REQUIRE(rhi.has_value());
-    CHECK_FALSE((*rhi)->adapters().empty());
+    INFO(major << '.' << minor);
+    REQUIRE_FALSE(rhi.has_value());
+    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    CHECK_THAT(rhi.error().message.text(),
+               Catch::Matchers::Equals(std::format("Vulkan {}.{} is below BFR's minimum, 1.2", major, minor)));
 }
 
 TEST_CASE("Vulkan fails with RhiInvalidCall for a version Vulkan can't name", "[vulkan][unit]") {
@@ -333,14 +322,16 @@ TEST_CASE("Vulkan at 1.2 reports a format through the 32-bit query without VK_KH
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Vulkan lists an adapter at Vulkan 1.1 that has BFR's features as extensions", "[vulkan][gpu]") {
+TEST_CASE("Vulkan fails with RhiNoAdapter when every adapter is below BFR's minimum", "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv version("BFR_ADAPTER_MINOR", "1");
 
     const auto rhi = Instance::create(vulkanDesc(), {});
 
-    REQUIRE(rhi.has_value());
-    CHECK_FALSE((*rhi)->adapters().empty());
+    REQUIRE_FALSE(rhi.has_value());
+    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
+    CHECK_THAT(rhi.error().message.text(),
+               Catch::Matchers::ContainsSubstring("below BFR's minimum, Vulkan 1.1, needs 1.2"));
 }
 
 TEST_CASE("Vulkan fails with RhiNoAdapter when an adapter lacks a feature BFR needs, at 1.2 and later, and names it",
@@ -371,21 +362,6 @@ TEST_CASE("Vulkan lists no 1.2 adapter without an extension 1.3 made core that B
     const ScopedEnv hidden("BFR_ADAPTER_HIDE", extension);
 
     const auto rhi = Instance::create(vulkanAt(1, 2), {});
-
-    INFO(extension);
-    REQUIRE_FALSE(rhi.has_value());
-    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiNoAdapter);
-    CHECK_THAT(rhi.error().message.text(),
-               Catch::Matchers::ContainsSubstring(std::string{"below BFR's minimum, lacks "} + feature));
-}
-
-TEST_CASE("Vulkan lists no 1.1 adapter without an extension 1.2 made core that BFR needs", "[vulkan][gpu]") {
-    const auto [extension, feature] = GENERATE(std::pair{"VK_EXT_descriptor_indexing", "descriptorIndexing"},
-                                               std::pair{"VK_KHR_timeline_semaphore", "timelineSemaphore"});
-    const AdapterOverrideLayer adapterOverride;
-    const ScopedEnv hidden("BFR_ADAPTER_HIDE", extension);
-
-    const auto rhi = Instance::create(vulkanAt(1, 1), {});
 
     INFO(extension);
     REQUIRE_FALSE(rhi.has_value());
@@ -1250,13 +1226,14 @@ TEST_CASE("Vulkan logs why an adapter is below BFR's minimum", "[vulkan][gpu]") 
         SKIP("logging is compiled out");
     }
     const AdapterOverrideLayer adapterOverride;
-    const ScopedEnv hidden("BFR_ADAPTER_NO_FEATURE", "timelineSemaphore");
+    const ScopedEnv version("BFR_ADAPTER_MINOR", "1");
     std::ostringstream log;
 
     const auto rhi = Instance::create(vulkanLoggingInto(log), {});
 
     REQUIRE_FALSE(rhi.has_value());
-    CHECK_THAT(log.str(), Catch::Matchers::ContainsSubstring(": below BFR's minimum, lacks timelineSemaphore"));
+    CHECK_THAT(log.str(),
+               Catch::Matchers::ContainsSubstring(", Vulkan 1.1: below BFR's minimum, Vulkan 1.1, needs 1.2"));
 }
 
 TEST_CASE("Vulkan logs the validation layer's version", "[vulkan][gpu]") {

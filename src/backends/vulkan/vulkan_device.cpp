@@ -265,23 +265,10 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       pipelines_("pipelines", desc.maxPipelines, desc.maxPipelines, rhi.logger()) {
     volkLoadDeviceTable(&table_, device_);
     // A core command above the version the device uses must not be called
-    // (initialization.adoc:146-148), so below 1.1, 1.2 and 1.3 the core entries
-    // take the functions of the extensions those versions made core, which the
-    // device enabled where the adapter lists them. vkCmdSetPrimitiveTopologyEXT
-    // is null without extendedDynamicState, and then never called; so is each
-    // entry below whose extension the adapter lacks, which the caps then say.
-    if (!hasCore11(setup.apiVersion)) {
-        table_.vkGetDescriptorSetLayoutSupport = table_.vkGetDescriptorSetLayoutSupportKHR;
-    }
-    if (!hasCore12(setup.apiVersion)) {
-        table_.vkCmdDrawIndirectCount = table_.vkCmdDrawIndirectCountKHR;
-        table_.vkCmdDrawIndexedIndirectCount = table_.vkCmdDrawIndexedIndirectCountKHR;
-        table_.vkGetBufferDeviceAddress = table_.vkGetBufferDeviceAddressKHR;
-        table_.vkGetBufferOpaqueCaptureAddress = table_.vkGetBufferOpaqueCaptureAddressKHR;
-        table_.vkGetDeviceMemoryOpaqueCaptureAddress = table_.vkGetDeviceMemoryOpaqueCaptureAddressKHR;
-        table_.vkGetSemaphoreCounterValue = table_.vkGetSemaphoreCounterValueKHR;
-        table_.vkWaitSemaphores = table_.vkWaitSemaphoresKHR;
-    }
+    // (initialization.adoc:146-148), so below 1.3 the core entries take the
+    // functions of the extensions 1.3 made core, which the device enabled.
+    // vkCmdSetPrimitiveTopologyEXT is null without extendedDynamicState, and
+    // then never called.
     if (!hasCore13(setup.apiVersion)) {
         table_.vkCmdBeginRendering = table_.vkCmdBeginRenderingKHR;
         table_.vkCmdEndRendering = table_.vkCmdEndRenderingKHR;

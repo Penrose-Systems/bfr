@@ -161,9 +161,8 @@ typedef enum bfr_result {
 
 // The native API an instance runs on.
 typedef enum bfr_backend {
-    // Vulkan with dynamic rendering and synchronization2, descriptor indexing with update-after-
-    // bind and partially bound tables, and timelines, core or as extensions at the version a device
-    // uses.
+    // Vulkan 1.2 or later with dynamic rendering and synchronization2 (extensions before 1.3),
+    // descriptor indexing with update-after-bind and partially bound tables, and timelines.
     BFR_BACKEND_VULKAN = 1,
     // D3D12, Shader Model 6.6 with enhanced barriers.
     BFR_BACKEND_D3D12 = 2,
@@ -1302,8 +1301,8 @@ typedef struct bfr_instance_desc {
     const bfr_chain* next;
     bfr_backend backend;
     // The API version the caller uses, in bfr_caps_info's terms (1, 2 is Vulkan 1.2), passed to the
-    // backend as it is. An adapter that lacks what the backend's bfr_backend value states at that
-    // version is not listed.
+    // backend as it is. Below what BFR needs, which the backend's bfr_backend value states,
+    // bfr_create_instance fails with error_unsupported.
     uint32_t api_major;
     // The minor part of api_major's version.
     uint32_t api_minor;
@@ -3004,8 +3003,7 @@ typedef struct bfr_caps_limits {
     // supports, 1, 2, 4 and so on. 0 on D3D12, which answers per format only, in
     // bfr_format_caps.sample_counts.
     uint32_t color_sample_counts;
-    // Sample counts for integer color attachments; 0 on D3D12, as color_sample_counts says, and on
-    // Vulkan before 1.2, which answers per format only.
+    // Sample counts for integer color attachments; 0 on D3D12, as color_sample_counts says.
     uint32_t integer_sample_counts;
     // Sample counts for depth attachments; 0 on D3D12, as color_sample_counts says.
     uint32_t depth_sample_counts;

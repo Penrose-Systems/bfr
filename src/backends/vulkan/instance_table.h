@@ -1,9 +1,6 @@
 #pragma once
 
 #include <volk.h>
-#include <vulkan/vulkan_core.h>
-
-#include <cstdint>
 
 namespace bfr::rhi::vulkan {
 
@@ -48,8 +45,7 @@ struct InstanceTable {
 /// when the instance didn't enable it. The first call also points volk's
 /// vkGetDeviceProcAddr at the loader, which every device table is built
 /// through; the loader's version dispatches on the device it is given, so it
-/// serves every instance. Below 1.1, at version, the queries 1.1 made core
-/// take VK_KHR_get_physical_device_properties2's, which the instance enabled.
-[[nodiscard]] InstanceTable loadInstanceTable(VkInstance instance, std::uint32_t version);
+/// serves every instance.
+[[nodiscard]] InstanceTable loadInstanceTable(VkInstance instance);
 
 } // namespace bfr::rhi::vulkan

@@ -176,9 +176,12 @@ std::string familyList(std::span<const VkDeviceQueueCreateInfo> queues) {
 }
 
 // Why the adapter is below BFR's minimum at version, the one a device on it
-// uses: the features it lacks, by name; empty when it has them.
+// uses; empty when it meets it.
 std::string belowMinimum(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
                          std::span<const VkExtensionProperties> extensions) {
+    if (version < kMinimumVersion) {
+        return std::format("Vulkan {}, needs {}", versionName(version), versionName(kMinimumVersion));
+    }
     const DeviceFeatures features(vk, adapter, version, extensions);
     std::vector<std::string> missing = missingRequirements(features);
     return missing.empty() ? std::string{} : "lacks " + core::text::join(missing, ", ");
@@ -290,11 +293,8 @@ VKAPI_ATTR VkBool32 VKAPI_CALL onMessage(VkDebugUtilsMessageSeverityFlagBitsEXT 
 // The instance extensions the Instance enables when the loader has them, or the
 // listing that failed. Portability enumeration shows portability drivers, such
 // as MoltenVK. The surface extensions cover every window system this build
-// supports, and each needs VK_KHR_surface. Below 1.1, at version, the
-// extensions 1.1 made core that the device extensions BFR enables take: the
-// *2 queries, and device groups, which VK_KHR_buffer_device_address takes
-// (vkdocs xml/vk.xml).
-core::Result<std::vector<const char*>> optionalExtensions(std::uint32_t version) {
+// supports, and each needs VK_KHR_surface.
+core::Result<std::vector<const char*>> optionalExtensions() {
     const auto listed = listAll<VkExtensionProperties>("vkEnumerateInstanceExtensionProperties",
                                                        [](std::uint32_t* count, VkExtensionProperties* extensions) {
                                                            return vkEnumerateInstanceExtensionProperties(nullptr, count,
@@ -307,14 +307,6 @@ core::Result<std::vector<const char*>> optionalExtensions(std::uint32_t version)
         return lists(*listed, extension);
     };
     std::vector<const char*> extensions;
-    if (version < VK_API_VERSION_1_1) {
-        for (const char* extension :
-             {VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, VK_KHR_DEVICE_GROUP_CREATION_EXTENSION_NAME}) {
-            if (available(extension)) {
-                extensions.push_back(extension);
-            }
-        }
-    }
     // Debug labels and object names, whether or not validation is on.
     if (available(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -362,14 +354,11 @@ core::Result<std::unique_ptr<VulkanInstance>> VulkanInstance::create(const Insta
                              "Vulkan names no version {}.{}: a major takes 7 bits and a minor 10", desc.apiMajor,
                              desc.apiMinor);
     }
-    // Vulkan's versions start at 1.0 (VUID-VkApplicationInfo-apiVersion-04010).
-    // It reads 0.0 as 1.0, but the caller names the version, so 0.0 is
-    // refused too rather than taken as 1.0.
-    if (desc.apiMajor == 0) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "{}.{} is no Vulkan version: they start at 1.0",
-                             desc.apiMajor, desc.apiMinor);
-    }
     const std::uint32_t version = VK_MAKE_API_VERSION(0, desc.apiMajor, desc.apiMinor, 0);
+    if (version < kMinimumVersion) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "Vulkan {} is below BFR's minimum, {}",
+                             versionName(version), versionName(kMinimumVersion));
+    }
     if (auto opened = openLoader(); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
@@ -611,17 +600,11 @@ core::Result<void> VulkanInstance::createInstance(const InstanceDesc& desc) {
     info.pApplicationInfo = &application;
 
     std::vector<const char*> layers;
-    auto optional = optionalExtensions(version_);
+    auto optional = optionalExtensions();
     if (!optional) {
         return std::unexpected(optional.error());
     }
     std::vector<const char*> extensions = std::move(*optional);
-    // Below 1.1 the extension is how an adapter's features are read at all.
-    if (version_ < VK_API_VERSION_1_1 &&
-        std::ranges::find(extensions, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME) == extensions.end()) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "Vulkan {} without {}, which the loader lacks",
-                             versionName(version_), VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
-    }
     if (std::ranges::find(extensions, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) != extensions.end()) {
         info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
     }
@@ -667,7 +650,7 @@ core::Result<void> VulkanInstance::createInstance(const InstanceDesc& desc) {
             BFR_LOG_INFO(logger(), "{} {}", kValidationLayer, versionName((*layer)->specVersion));
         }
     }
-    vk_ = loadInstanceTable(instance_, version_);
+    vk_ = loadInstanceTable(instance_);
     BFR_LOG_INFO(logger(), "Vulkan instance {}, validation {}", versionName(version_),
                  config().validation ? "on" : "off");
 
@@ -704,20 +687,7 @@ core::Result<void> VulkanInstance::listAdapters() {
     for (VkPhysicalDevice device : *devices) {
         VkPhysicalDeviceProperties properties{};
         vk_.vkGetPhysicalDeviceProperties(device, &properties);
-        auto extensions = deviceExtensions(vk_, device);
-        // Below 1.1, VK_KHR_device_group takes the instance's
-        // VK_KHR_device_group_creation, and VK_KHR_buffer_device_address takes
-        // device groups (vkdocs xml/vk.xml): without it, a device can enable
-        // neither, so the adapter is read as lacking them.
-        if (extensions && version_ < VK_API_VERSION_1_1 &&
-            std::ranges::find(extensions_, std::string_view{VK_KHR_DEVICE_GROUP_CREATION_EXTENSION_NAME}) ==
-                extensions_.end()) {
-            std::erase_if(*extensions, [](const VkExtensionProperties& extension) {
-                const std::string_view name{extension.extensionName};
-                return name == VK_KHR_DEVICE_GROUP_EXTENSION_NAME ||
-                       name == VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME;
-            });
-        }
+        const auto extensions = deviceExtensions(vk_, device);
         if (!extensions) {
             const std::string why = "skipped, " + extensions.error().message();
             BFR_LOG_WARN(logger(), "adapter {}: {}", describe(vk_, device, properties), why);

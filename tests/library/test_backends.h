@@ -3,7 +3,7 @@
 // Which backends the agnostic test cases run on: every backend the build has,
 // or only those the test program's --backend options name. ctest's entries
 // name one: vulkan on lavapipe by default, each GPU backend under gpu. Vulkan's
-// entries run again with --api-version 1.2, 1.1 and 1.0.
+// entries run again with --api-version 1.2, BFR's minimum.
 
 #include <cstdint>
 #include <string_view>
