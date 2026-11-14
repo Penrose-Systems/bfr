@@ -33,7 +33,7 @@
 Anything per frame, view, pass, draw or instance, plus any job the frame waits on.
 - No heap allocation or freeing, not even the first time; storage is made when its owner is created, and scratch comes from the frame arena. [audit, tests]
 - No `std::function`, string keys or allocating formatting. [audit, review]
-- Virtual calls per pass are fine, per draw or instance are not. [review]
+- Virtual calls per pass are fine. Per draw, each recorded command may make one virtual call, at the API-to-backend boundary, and none below it; an opt-in diagnostic layer may add one more. Per instance, none. [review]
 - Elsewhere, allocate from the lifetime class's home; the general heap only in documented cold code. [review]
 
 ## Data-oriented
