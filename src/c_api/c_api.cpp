@@ -20,6 +20,8 @@
 #include "bfr/rhi/sparse.h"
 #include "bfr/rhi/swapchain.h"
 #include "bfr/rhi/texture.h"
+#include "rhi/enum_check.h"
+#include "rhi/format_check.h"
 
 #include <algorithm>
 #include <array>
@@ -106,6 +108,19 @@ std::optional<Severity> severityFrom(bfr_message_severity severity) {
     return static_cast<Severity>(severity);
 }
 
+// value as the C++ enum E; nothing when it is not one E has, and error says
+// which. The check comes before the cast, which would cut a 32-bit C value
+// short to E's size.
+template <class E, class C>
+std::optional<E> enumIn(C value, const char* what, bfr::core::Message& error) {
+    const auto number = static_cast<std::int64_t>(value);
+    const std::optional<E> known = bfr::rhi::knownValue<E>(number);
+    if (!known) {
+        error.format("{} {} is not one BFR has", what, number);
+    }
+    return known;
+}
+
 // value as a Format, Undefined included; nothing when it is not one BFR has.
 std::optional<bfr::rhi::Format> formatIn(bfr_format value, const char* what, bfr::core::Message& error) {
     using namespace bfr::rhi;
@@ -113,14 +128,11 @@ std::optional<bfr::rhi::Format> formatIn(bfr_format value, const char* what, bfr
     if (number == static_cast<std::int64_t>(Format::Undefined)) {
         return Format::Undefined;
     }
-    const auto* found = std::ranges::find_if(kFormats, [number](Format known) {
-        return static_cast<std::int64_t>(known) == number;
-    });
-    if (found == kFormats.end()) {
+    const std::optional<Format> format = knownFormat(number);
+    if (!format) {
         error.format("{} {} is not one BFR has", what, number);
-        return std::nullopt;
     }
-    return *found;
+    return format;
 }
 
 // The swapchain desc asks for. Nothing when a value is one BFR doesn't have; error says which.
@@ -152,13 +164,11 @@ std::optional<bfr::rhi::SwapchainDesc> swapchainIn(const bfr_swapchain_desc& des
         return std::nullopt;
     }
     swapchain.format = *format;
-    const auto colorSpace = static_cast<std::int64_t>(desc.color_space);
-    if (colorSpace < static_cast<std::int64_t>(ColorSpace::Srgb) ||
-        colorSpace > static_cast<std::int64_t>(ColorSpace::DisplayNative)) {
-        error.format("color space {} is not one BFR has", colorSpace);
+    const auto colorSpace = enumIn<ColorSpace>(desc.color_space, "color space", error);
+    if (!colorSpace) {
         return std::nullopt;
     }
-    swapchain.colorSpace = static_cast<ColorSpace>(colorSpace);
+    swapchain.colorSpace = *colorSpace;
     switch (desc.alpha_mode) {
         case BFR_ALPHA_MODE_OPAQUE:
             swapchain.alphaMode = AlphaMode::Opaque;
@@ -327,21 +337,11 @@ std::optional<bfr::rhi::BufferDesc> bufferIn(const bfr_buffer_desc& desc, bfr::c
                       .sparseAliased = desc.sparse_aliased != BFR_FALSE,
                       .tileBytes = desc.tile_bytes,
                       .name = fromC(desc.name)};
-    switch (desc.memory) {
-        case BFR_BUFFER_MEMORY_DEVICE:
-            buffer.memory = BufferMemory::Device;
-            break;
-        case BFR_BUFFER_MEMORY_UPLOAD:
-            buffer.memory = BufferMemory::Upload;
-            break;
-        case BFR_BUFFER_MEMORY_READBACK:
-            buffer.memory = BufferMemory::Readback;
-            break;
-        case BFR_BUFFER_MEMORY_FORCE32:
-        default:
-            error.format("buffer memory {} is not one BFR has", static_cast<std::int64_t>(desc.memory));
-            return std::nullopt;
+    const auto memory = enumIn<BufferMemory>(desc.memory, "buffer memory", error);
+    if (!memory) {
+        return std::nullopt;
     }
+    buffer.memory = *memory;
     return buffer;
 }
 
@@ -362,20 +362,17 @@ static_assert(static_cast<int>(bfr::rhi::TextureAspect::Stencil) == BFR_TEXTURE_
 // BFR has; error says which.
 std::optional<bfr::rhi::TextureDesc> textureIn(const bfr_texture_desc& desc, bfr::core::Message& error) {
     using namespace bfr::rhi;
-    if (desc.dimension < BFR_TEXTURE_DIMENSION_D2 || desc.dimension > BFR_TEXTURE_DIMENSION_CUBE) {
-        error.format("texture dimension {} is not one BFR has", static_cast<std::int64_t>(desc.dimension));
+    const auto dimension = enumIn<TextureDimension>(desc.dimension, "texture dimension", error);
+    if (!dimension) {
         return std::nullopt;
     }
-    const auto format = static_cast<std::int64_t>(desc.format);
-    const auto* found = std::ranges::find_if(kFormats, [format](Format known) {
-        return static_cast<std::int64_t>(known) == format;
-    });
-    if (found == kFormats.end()) {
-        error.format("format {} is not one BFR has", format);
+    const std::optional<Format> format = knownFormat(static_cast<std::int64_t>(desc.format));
+    if (!format) {
+        error.format("format {} is not one BFR has", static_cast<std::int64_t>(desc.format));
         return std::nullopt;
     }
-    return TextureDesc{.dimension = static_cast<TextureDimension>(desc.dimension),
-                       .format = *found,
+    return TextureDesc{.dimension = *dimension,
+                       .format = *format,
                        .width = desc.width,
                        .height = desc.height,
                        .depth = desc.depth,
@@ -473,18 +470,6 @@ static_assert(static_cast<int>(bfr::rhi::BlendFactor::SrcAlphaSaturate) == BFR_B
 static_assert(static_cast<int>(bfr::rhi::BlendOp::Max) == BFR_BLEND_OP_MAX);
 static_assert(static_cast<int>(bfr::rhi::IndexType::Uint16) == BFR_INDEX_TYPE_UINT16);
 
-// value as the C++ enum E, whose values run from 0 to last; nothing when it is
-// not one of them, and error says which.
-template <class E, class C>
-std::optional<E> enumIn(C value, E last, const char* what, bfr::core::Message& error) {
-    const auto number = static_cast<std::int64_t>(value);
-    if (number < 0 || number > static_cast<std::int64_t>(last)) {
-        error.format("{} {} is not one BFR has", what, number);
-        return std::nullopt;
-    }
-    return static_cast<E>(number);
-}
-
 static_assert(static_cast<int>(bfr::rhi::QueueLevel::Realtime) == BFR_QUEUE_LEVEL_REALTIME);
 static_assert(static_cast<int>(bfr::rhi::SwapchainStatus::Suboptimal) == BFR_SWAPCHAIN_STATUS_SUBOPTIMAL);
 
@@ -499,7 +484,7 @@ std::optional<std::vector<bfr::rhi::QueueDesc>> queuesIn(const bfr_queue_desc* q
     std::vector<bfr::rhi::QueueDesc> out;
     out.reserve(count);
     for (const bfr_queue_desc& queue : std::span{queues, count}) {
-        const auto level = enumIn(queue.level, bfr::rhi::QueueLevel::Realtime, "queue level", error);
+        const auto level = enumIn<bfr::rhi::QueueLevel>(queue.level, "queue level", error);
         if (!level) {
             return std::nullopt;
         }
@@ -712,7 +697,7 @@ static_assert(sizeof(bfr_partition_translation_record) == sizeof(bfr::rhi::Parti
 std::optional<bfr::rhi::AccelerationStructureFlags> flagsIn(const bfr_acceleration_structure_flags& flags,
                                                             bfr::core::Message& error) {
     using namespace bfr::rhi;
-    const auto preference = enumIn(flags.preference, BuildPreference::FastBuild, "build preference", error);
+    const auto preference = enumIn<BuildPreference>(flags.preference, "build preference", error);
     if (!preference) {
         return std::nullopt;
     }
@@ -732,9 +717,9 @@ std::optional<bfr::rhi::AccelerationStructureFlags> flagsIn(const bfr_accelerati
 // one BFR has, and error says which.
 std::optional<bfr::rhi::ClusterInputs> clusterInputsIn(const bfr_cluster_inputs& inputs, bfr::core::Message& error) {
     using namespace bfr::rhi;
-    const auto operation = enumIn(inputs.operation, ClusterOperation::TemplateIndices, "cluster operation", error);
-    const auto mode = enumIn(inputs.mode, ClusterMode::ComputeSizes, "cluster mode", error);
-    const auto moved = enumIn(inputs.move.type, ClusterStructureType::Template, "cluster structure type", error);
+    const auto operation = enumIn<ClusterOperation>(inputs.operation, "cluster operation", error);
+    const auto mode = enumIn<ClusterMode>(inputs.mode, "cluster mode", error);
+    const auto moved = enumIn<ClusterStructureType>(inputs.move.type, "cluster structure type", error);
     const auto format = formatIn(inputs.triangles.vertex_format, "vertex format", error);
     const auto flags = flagsIn(inputs.flags, error);
     if (!operation || !mode || !moved || !format || !flags) {
@@ -826,8 +811,7 @@ std::optional<bfr::rhi::AccelerationStructureInputs> inputsIn(const bfr_accelera
                                                               bfr::core::Message& error) {
     using namespace bfr::rhi;
     limit = false;
-    const auto type = enumIn(inputs.type, AccelerationStructureType::PartitionedTop, "acceleration structure type",
-                             error);
+    const auto type = enumIn<AccelerationStructureType>(inputs.type, "acceleration structure type", error);
     const auto flags = flagsIn(inputs.flags, error);
     if (!type || !flags) {
         return std::nullopt;
@@ -885,9 +869,9 @@ std::optional<bfr::rhi::AccelerationStructureInputs> inputsIn(const bfr_accelera
     for (std::size_t i = 0; i < triangleOut.size(); ++i) {
         const bfr_triangle_geometry& from = std::span{inputs.triangles, inputs.triangle_count}[i];
         const auto format = formatIn(from.vertex_format, "vertex format", error);
-        const auto indexType = enumIn(from.index_type, IndexType::Uint16, "index type", error);
-        const auto micromapIndexType = enumIn(from.opacity_micromap.index_type, IndexType::Uint16,
-                                              "opacity micromap index type", error);
+        const auto indexType = enumIn<IndexType>(from.index_type, "index type", error);
+        const auto micromapIndexType = enumIn<IndexType>(from.opacity_micromap.index_type,
+                                                         "opacity micromap index type", error);
         if (!format || !indexType || !micromapIndexType) {
             return std::nullopt;
         }
@@ -942,14 +926,14 @@ static_assert(static_cast<int>(bfr::rhi::SamplerReduction::Maximum) == BFR_SAMPL
 // does not have; error says which.
 std::optional<bfr::rhi::SamplerDesc> samplerIn(const bfr_sampler_desc& desc, bfr::core::Message& error) {
     using namespace bfr::rhi;
-    const auto magFilter = enumIn(desc.mag_filter, Filter::Linear, "mag filter", error);
-    const auto minFilter = enumIn(desc.min_filter, Filter::Linear, "min filter", error);
-    const auto mipFilter = enumIn(desc.mip_filter, Filter::Linear, "mip filter", error);
-    const auto addressU = enumIn(desc.address_u, AddressMode::MirrorClampToEdge, "address mode u", error);
-    const auto addressV = enumIn(desc.address_v, AddressMode::MirrorClampToEdge, "address mode v", error);
-    const auto addressW = enumIn(desc.address_w, AddressMode::MirrorClampToEdge, "address mode w", error);
-    const auto reduction = enumIn(desc.reduction, SamplerReduction::Maximum, "sampler reduction", error);
-    const auto compare = enumIn(desc.compare_op, CompareOp::GreaterEqual, "compare op", error);
+    const auto magFilter = enumIn<Filter>(desc.mag_filter, "mag filter", error);
+    const auto minFilter = enumIn<Filter>(desc.min_filter, "min filter", error);
+    const auto mipFilter = enumIn<Filter>(desc.mip_filter, "mip filter", error);
+    const auto addressU = enumIn<AddressMode>(desc.address_u, "address mode u", error);
+    const auto addressV = enumIn<AddressMode>(desc.address_v, "address mode v", error);
+    const auto addressW = enumIn<AddressMode>(desc.address_w, "address mode w", error);
+    const auto reduction = enumIn<SamplerReduction>(desc.reduction, "sampler reduction", error);
+    const auto compare = enumIn<CompareOp>(desc.compare_op, "compare op", error);
     if (!magFilter || !minFilter || !mipFilter || !addressU || !addressV || !addressW || !reduction || !compare) {
         return std::nullopt;
     }
@@ -990,10 +974,10 @@ bfr::rhi::ComputePipelineDesc computePipelineIn(const bfr_compute_pipeline_desc&
 
 std::optional<bfr::rhi::StencilFace> stencilFaceIn(const bfr_stencil_face& face, bfr::core::Message& error) {
     using namespace bfr::rhi;
-    const auto fail = enumIn(face.fail, StencilOp::DecrementWrap, "stencil op", error);
-    const auto pass = enumIn(face.pass, StencilOp::DecrementWrap, "stencil op", error);
-    const auto depthFail = enumIn(face.depth_fail, StencilOp::DecrementWrap, "stencil op", error);
-    const auto compare = enumIn(face.compare, CompareOp::GreaterEqual, "compare op", error);
+    const auto fail = enumIn<StencilOp>(face.fail, "stencil op", error);
+    const auto pass = enumIn<StencilOp>(face.pass, "stencil op", error);
+    const auto depthFail = enumIn<StencilOp>(face.depth_fail, "stencil op", error);
+    const auto compare = enumIn<CompareOp>(face.compare, "compare op", error);
     if (!fail || !pass || !depthFail || !compare) {
         return std::nullopt;
     }
@@ -1007,12 +991,12 @@ std::optional<bfr::rhi::StencilFace> stencilFaceIn(const bfr_stencil_face& face,
 
 std::optional<bfr::rhi::BlendState> blendIn(const bfr_blend_state& blend, bfr::core::Message& error) {
     using namespace bfr::rhi;
-    const auto srcColor = enumIn(blend.src_color, BlendFactor::SrcAlphaSaturate, "blend factor", error);
-    const auto dstColor = enumIn(blend.dst_color, BlendFactor::SrcAlphaSaturate, "blend factor", error);
-    const auto colorOp = enumIn(blend.color_op, BlendOp::Max, "blend op", error);
-    const auto srcAlpha = enumIn(blend.src_alpha, BlendFactor::SrcAlphaSaturate, "blend factor", error);
-    const auto dstAlpha = enumIn(blend.dst_alpha, BlendFactor::SrcAlphaSaturate, "blend factor", error);
-    const auto alphaOp = enumIn(blend.alpha_op, BlendOp::Max, "blend op", error);
+    const auto srcColor = enumIn<BlendFactor>(blend.src_color, "blend factor", error);
+    const auto dstColor = enumIn<BlendFactor>(blend.dst_color, "blend factor", error);
+    const auto colorOp = enumIn<BlendOp>(blend.color_op, "blend op", error);
+    const auto srcAlpha = enumIn<BlendFactor>(blend.src_alpha, "blend factor", error);
+    const auto dstAlpha = enumIn<BlendFactor>(blend.dst_alpha, "blend factor", error);
+    const auto alphaOp = enumIn<BlendOp>(blend.alpha_op, "blend op", error);
     if (!srcColor || !dstColor || !colorOp || !srcAlpha || !dstAlpha || !alphaOp) {
         return std::nullopt;
     }
@@ -1031,12 +1015,12 @@ std::optional<bfr::rhi::BlendState> blendIn(const bfr_blend_state& blend, bfr::c
 std::optional<bfr::rhi::GraphicsPipelineDesc> graphicsPipelineIn(const bfr_graphics_pipeline_desc& desc,
                                                                  bfr::core::Message& error) {
     using namespace bfr::rhi;
-    const auto topology = enumIn(desc.topology, Topology::PointList, "topology", error);
-    const auto restart = enumIn(desc.primitive_restart, PrimitiveRestart::Index32, "primitive restart", error);
-    const auto cull = enumIn(desc.raster.cull, CullMode::Back, "cull mode", error);
-    const auto frontFace = enumIn(desc.raster.front_face, FrontFace::Clockwise, "front face", error);
-    const auto fill = enumIn(desc.raster.fill, FillMode::Wireframe, "fill mode", error);
-    const auto depthCompare = enumIn(desc.depth_stencil.depth_compare, CompareOp::GreaterEqual, "compare op", error);
+    const auto topology = enumIn<Topology>(desc.topology, "topology", error);
+    const auto restart = enumIn<PrimitiveRestart>(desc.primitive_restart, "primitive restart", error);
+    const auto cull = enumIn<CullMode>(desc.raster.cull, "cull mode", error);
+    const auto frontFace = enumIn<FrontFace>(desc.raster.front_face, "front face", error);
+    const auto fill = enumIn<FillMode>(desc.raster.fill, "fill mode", error);
+    const auto depthCompare = enumIn<CompareOp>(desc.depth_stencil.depth_compare, "compare op", error);
     const auto front = stencilFaceIn(desc.depth_stencil.front, error);
     const auto back = stencilFaceIn(desc.depth_stencil.back, error);
     const auto depthStencilFormat = formatIn(desc.depth_stencil_format, "depth-stencil format", error);
@@ -1156,7 +1140,7 @@ static_assert(sizeof(bfr_texture_copy) == sizeof(bfr::rhi::TextureCopy) &&
 // regions are read in place, so nothing else stops an unknown aspect.
 bfr_result checkAspects(std::span<const bfr_buffer_texture_copy> regions) {
     for (const bfr_buffer_texture_copy& region : regions) {
-        if (region.aspect < BFR_TEXTURE_ASPECT_COLOR || region.aspect > BFR_TEXTURE_ASPECT_STENCIL) {
+        if (!bfr::rhi::knownValue<bfr::rhi::TextureAspect>(region.aspect)) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "texture aspect {} is not one BFR has",
                         static_cast<std::int64_t>(region.aspect));
         }
@@ -1188,8 +1172,8 @@ std::optional<bfr::rhi::RenderingDesc> renderingIn(const bfr_rendering_desc& des
                             .occlusionQueries = fromC(desc.occlusion_queries)};
     for (std::uint32_t i = 0; i < desc.color_attachment_count; ++i) {
         const bfr_color_attachment& attachment = std::span{desc.color_attachments}[i];
-        const auto loadOp = enumIn(attachment.load_op, LoadOp::DontCare, "load op", error);
-        const auto storeOp = enumIn(attachment.store_op, StoreOp::DontCare, "store op", error);
+        const auto loadOp = enumIn<LoadOp>(attachment.load_op, "load op", error);
+        const auto storeOp = enumIn<StoreOp>(attachment.store_op, "store op", error);
         if (!loadOp || !storeOp) {
             return std::nullopt;
         }
@@ -1205,12 +1189,12 @@ std::optional<bfr::rhi::RenderingDesc> renderingIn(const bfr_rendering_desc& des
                                             .resolveTexture = fromC(attachment.resolve_texture)};
     }
     const bfr_depth_stencil_attachment& depth = desc.depth_stencil;
-    const auto depthLoad = enumIn(depth.depth_load_op, LoadOp::DontCare, "load op", error);
-    const auto depthStore = enumIn(depth.depth_store_op, StoreOp::DontCare, "store op", error);
-    const auto stencilLoad = enumIn(depth.stencil_load_op, LoadOp::DontCare, "load op", error);
-    const auto stencilStore = enumIn(depth.stencil_store_op, StoreOp::DontCare, "store op", error);
-    const auto depthResolve = enumIn(depth.depth_resolve, ResolveMode::Max, "resolve mode", error);
-    const auto stencilResolve = enumIn(depth.stencil_resolve, ResolveMode::Max, "resolve mode", error);
+    const auto depthLoad = enumIn<LoadOp>(depth.depth_load_op, "load op", error);
+    const auto depthStore = enumIn<StoreOp>(depth.depth_store_op, "store op", error);
+    const auto stencilLoad = enumIn<LoadOp>(depth.stencil_load_op, "load op", error);
+    const auto stencilStore = enumIn<StoreOp>(depth.stencil_store_op, "store op", error);
+    const auto depthResolve = enumIn<ResolveMode>(depth.depth_resolve, "resolve mode", error);
+    const auto stencilResolve = enumIn<ResolveMode>(depth.stencil_resolve, "resolve mode", error);
     if (!depthLoad || !depthStore || !stencilLoad || !stencilStore || !depthResolve || !stencilResolve) {
         return std::nullopt;
     }
@@ -2305,7 +2289,7 @@ bfr_result bfr_bind_index_buffer(bfr_device* device, bfr_command_list command_li
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
         }
         bfr::core::Message error;
-        const auto indexType = enumIn(type, bfr::rhi::IndexType::Uint16, "index type", error);
+        const auto indexType = enumIn<bfr::rhi::IndexType>(type, "index type", error);
         if (!indexType) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
@@ -2360,7 +2344,7 @@ bfr_result bfr_set_topology(bfr_device* device, bfr_command_list command_list, b
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
         }
         bfr::core::Message error;
-        const auto known = enumIn(topology, bfr::rhi::Topology::PointList, "topology", error);
+        const auto known = enumIn<bfr::rhi::Topology>(topology, "topology", error);
         if (!known) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
@@ -2499,7 +2483,7 @@ bfr_result bfr_texture_barrier(bfr_device* device, bfr_command_list command_list
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and range must not be null");
         }
         for (const bfr_texture_layout layout : {before, after}) {
-            if (layout < BFR_TEXTURE_LAYOUT_UNDEFINED || layout > BFR_TEXTURE_LAYOUT_RESOLVE_DST) {
+            if (!bfr::rhi::knownValue<bfr::rhi::TextureLayout>(layout)) {
                 return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "texture layout {} is not one BFR has",
                             static_cast<std::int64_t>(layout));
             }
@@ -3138,11 +3122,11 @@ bfr_result bfr_write_timestamp(bfr_device* device, bfr_command_list command_list
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
         }
         bfr::core::Message error;
-        const auto at = enumIn(stage, bfr::rhi::TimestampStage::AccelerationStructureBuild, "timestamp stage", error);
+        const auto at = enumIn<bfr::rhi::TimestampStage>(stage, "timestamp stage", error);
         if (!at) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
-        const auto how = enumIn(granularity, bfr::rhi::TimestampGranularity::Precise, "timestamp granularity", error);
+        const auto how = enumIn<bfr::rhi::TimestampGranularity>(granularity, "timestamp granularity", error);
         if (!how) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
@@ -3173,7 +3157,7 @@ bfr_result bfr_create_query_pool(bfr_device* device, const bfr_query_pool_desc* 
             return named;
         }
         bfr::core::Message error;
-        const auto type = enumIn(desc->type, bfr::rhi::QueryType::MeshPrimitivesGenerated, "query type", error);
+        const auto type = enumIn<bfr::rhi::QueryType>(desc->type, "query type", error);
         if (!type) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
@@ -3362,7 +3346,7 @@ bfr_result bfr_calibrate_timestamps(bfr_device* device, uint32_t queue, bfr_host
         }
         *timestamps = {};
         bfr::core::Message error;
-        const auto read = enumIn(clock, bfr::rhi::HostClock::PerformanceCounter, "host clock", error);
+        const auto read = enumIn<bfr::rhi::HostClock>(clock, "host clock", error);
         if (!read) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
@@ -3415,7 +3399,7 @@ bfr_result bfr_get_texture_tiling(bfr_device* device, bfr_texture texture, bfr_t
         }
         *tiling = {};
         bfr::core::Message error;
-        const auto read = enumIn(aspect, bfr::rhi::TextureAspect::Stencil, "texture aspect", error);
+        const auto read = enumIn<bfr::rhi::TextureAspect>(aspect, "texture aspect", error);
         if (!read) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
@@ -3475,7 +3459,7 @@ bfr_result bfr_get_sparse_format(bfr_device* device, const bfr_sparse_format_des
         if (!wanted) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
-        const auto aspect = enumIn(desc->aspect, bfr::rhi::TextureAspect::Stencil, "texture aspect", error);
+        const auto aspect = enumIn<bfr::rhi::TextureAspect>(desc->aspect, "texture aspect", error);
         if (!aspect) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
@@ -3578,8 +3562,7 @@ bfr_result bfr_create_acceleration_structure(bfr_device* device, const bfr_accel
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_acceleration_structure_desc takes no chained structs");
         }
         bfr::core::Message error;
-        const auto type = enumIn(desc->type, bfr::rhi::AccelerationStructureType::PartitionedTop,
-                                 "acceleration structure type", error);
+        const auto type = enumIn<bfr::rhi::AccelerationStructureType>(desc->type, "acceleration structure type", error);
         if (!type) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
@@ -3665,7 +3648,7 @@ namespace {
 std::optional<bfr::rhi::AccelerationStructureInstance> instanceIn(const bfr_acceleration_structure_instance& instance,
                                                                   bfr::core::Message& error) {
     using namespace bfr::rhi;
-    const auto opacity = enumIn(instance.opacity, InstanceOpacity::ForceNonOpaque, "instance opacity", error);
+    const auto opacity = enumIn<InstanceOpacity>(instance.opacity, "instance opacity", error);
     if (!opacity) {
         return std::nullopt;
     }
@@ -3766,7 +3749,7 @@ bfr_result bfr_write_motion_instances(bfr_device* device, const bfr_acceleration
                 const bfr_acceleration_structure_motion_instance& moving = from[done + i];
                 bfr::core::Message error;
                 const auto instance = instanceIn(moving.instance, error);
-                const auto motion = enumIn(moving.motion, InstanceMotion::Srt, "instance motion", error);
+                const auto motion = enumIn<InstanceMotion>(moving.motion, "instance motion", error);
                 if (!instance || !motion) {
                     return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
                 }
@@ -3974,7 +3957,7 @@ bfr_result bfr_create_ray_tracing_pipeline(bfr_device* device, const bfr_ray_tra
         std::vector<RayTracingShader> shaders;
         shaders.reserve(desc->shader_count);
         for (const bfr_ray_tracing_shader& shader : std::span{desc->shaders, desc->shader_count}) {
-            const auto stage = enumIn(shader.stage, RayTracingStage::Callable, "ray tracing stage", error);
+            const auto stage = enumIn<RayTracingStage>(shader.stage, "ray tracing stage", error);
             if (!stage) {
                 return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
             }
@@ -3983,7 +3966,7 @@ bfr_result bfr_create_ray_tracing_pipeline(bfr_device* device, const bfr_ray_tra
         std::vector<RayTracingGroup> groups;
         groups.reserve(desc->group_count);
         for (const bfr_ray_tracing_group& group : std::span{desc->groups, desc->group_count}) {
-            const auto type = enumIn(group.type, RayTracingGroupType::BoxHit, "ray tracing group type", error);
+            const auto type = enumIn<RayTracingGroupType>(group.type, "ray tracing group type", error);
             if (!type) {
                 return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
             }
@@ -4110,8 +4093,7 @@ bfr_result bfr_create_acceleration_structure_property_pool(bfr_device* device,
                         "bfr_acceleration_structure_property_pool_desc takes no chained structs");
         }
         bfr::core::Message error;
-        const auto property = enumIn(desc->property, bfr::rhi::AccelerationStructureProperty::CurrentSize, "property",
-                                     error);
+        const auto property = enumIn<bfr::rhi::AccelerationStructureProperty>(desc->property, "property", error);
         if (!property) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
@@ -4223,8 +4205,7 @@ bfr_result bfr_serialized_compatible(bfr_device* device, bfr_acceleration_struct
         }
         *compatible = BFR_FALSE;
         bfr::core::Message error;
-        const auto which = enumIn(type, bfr::rhi::AccelerationStructureType::PartitionedTop,
-                                  "acceleration structure type", error);
+        const auto which = enumIn<bfr::rhi::AccelerationStructureType>(type, "acceleration structure type", error);
         if (!which) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
@@ -4248,7 +4229,7 @@ bfr_result bfr_get_ray_tracing_stack_size(bfr_device* device, bfr_pipeline pipel
         }
         *stack_size = 0;
         bfr::core::Message error;
-        const auto which = enumIn(shader, bfr::rhi::RayTracingGroupShader::Intersection, "group shader", error);
+        const auto which = enumIn<bfr::rhi::RayTracingGroupShader>(shader, "group shader", error);
         if (!which) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }

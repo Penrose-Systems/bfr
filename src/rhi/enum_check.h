@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -151,17 +152,27 @@ constexpr std::pair<AccelerationStructureProperty, AccelerationStructureProperty
     return {AccelerationStructureProperty::CompactedSize, AccelerationStructureProperty::CurrentSize};
 }
 
+/// number as Enum when it is one Enum has; nothing otherwise. Takes the
+/// number wider than Enum, so a caller holding one, such as the C API's
+/// 32-bit enums, checks it before a cast that would cut it short.
+template <class Enum>
+[[nodiscard]] constexpr std::optional<Enum> knownValue(std::int64_t number) {
+    const auto [first, last] = rangeOf(Enum{});
+    if (number < std::to_underlying(first) || number > std::to_underlying(last)) {
+        return std::nullopt;
+    }
+    return static_cast<Enum>(number);
+}
+
 /// Fails with RhiInvalidCall when value is not one its enum has, such as a
 /// number cast to it; what names it in the message. Every backend's switch
 /// over an enum takes only its values, so each call that reads one checks it
 /// first, through the checks below.
 template <class Enum>
 [[nodiscard]] core::Result<void> checkKnown(Enum value, std::string_view what) {
-    const auto [first, last] = rangeOf(value);
-    const auto number = std::to_underlying(value);
-    if (number < std::to_underlying(first) || number > std::to_underlying(last)) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "{} {} is not one BFR has", what,
-                             static_cast<std::int64_t>(number));
+    const auto number = static_cast<std::int64_t>(std::to_underlying(value));
+    if (!knownValue<Enum>(number)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "{} {} is not one BFR has", what, number);
     }
     return {};
 }
