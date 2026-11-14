@@ -15,7 +15,6 @@
 
 #include <array>
 #include <cstddef>
-#include <cstdint>
 #include <format>
 #include <memory>
 #include <span>
@@ -72,8 +71,8 @@ core::Result<std::unique_ptr<Instance>> createOn(const InstanceDesc& desc, const
             return core::failure(core::ErrorCode::RhiBackendUnavailable, "backend {} is not in this build",
                                  name(desc.backend));
     }
-    return core::failure(core::ErrorCode::RhiBackendUnavailable, "backend {} is not one BFR has",
-                         static_cast<std::uint32_t>(desc.backend));
+    return core::failure(core::ErrorCode::RhiInvalidCall, "backend {} is not one BFR has",
+                         std::to_underlying(desc.backend));
 }
 
 } // namespace

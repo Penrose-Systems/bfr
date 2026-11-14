@@ -44,11 +44,11 @@ TEST_CASE("Instance fails with RhiBackendUnavailable for a backend this build la
     }
 }
 
-TEST_CASE("Instance fails with RhiBackendUnavailable for a value that is no backend", "[rhi][unit]") {
+TEST_CASE("Instance fails with RhiInvalidCall for a value that is no backend", "[rhi][unit]") {
     const auto rhi = Instance::create({.backend = static_cast<Backend>(0)}, {});
 
     REQUIRE_FALSE(rhi.has_value());
-    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiBackendUnavailable);
+    CHECK(rhi.error().code == bfr::core::ErrorCode::RhiInvalidCall);
     CHECK_THAT(rhi.error().message.text(), Catch::Matchers::Equals("backend 0 is not one BFR has"));
 }
 

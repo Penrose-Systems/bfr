@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bfr/bfr_enums.hpp"
 #include "bfr/core/error.h"
 #include "bfr/rhi/acceleration_structure.h"
 #include "bfr/rhi/buffer.h"
@@ -24,155 +25,16 @@
 
 namespace bfr::rhi {
 
-// The first and last value of each enum a caller passes in. Each enum's
-// values run from one to the other with none missing.
-constexpr std::pair<LoadOp, LoadOp> rangeOf(LoadOp /*unused*/) {
-    return {LoadOp::Load, LoadOp::DontCare};
-}
-constexpr std::pair<StoreOp, StoreOp> rangeOf(StoreOp /*unused*/) {
-    return {StoreOp::Store, StoreOp::DontCare};
-}
-constexpr std::pair<IndexType, IndexType> rangeOf(IndexType /*unused*/) {
-    return {IndexType::Uint32, IndexType::Uint16};
-}
-constexpr std::pair<BufferMemory, BufferMemory> rangeOf(BufferMemory /*unused*/) {
-    return {BufferMemory::Device, BufferMemory::Readback};
-}
-constexpr std::pair<ColorSpace, ColorSpace> rangeOf(ColorSpace /*unused*/) {
-    return {ColorSpace::Srgb, ColorSpace::DisplayNative};
-}
-constexpr std::pair<ResolveMode, ResolveMode> rangeOf(ResolveMode /*unused*/) {
-    return {ResolveMode::None, ResolveMode::Max};
-}
-constexpr std::pair<Topology, Topology> rangeOf(Topology /*unused*/) {
-    return {Topology::TriangleList, Topology::PointList};
-}
-constexpr std::pair<PrimitiveRestart, PrimitiveRestart> rangeOf(PrimitiveRestart /*unused*/) {
-    return {PrimitiveRestart::Off, PrimitiveRestart::Index32};
-}
-constexpr std::pair<CullMode, CullMode> rangeOf(CullMode /*unused*/) {
-    return {CullMode::None, CullMode::Back};
-}
-constexpr std::pair<FrontFace, FrontFace> rangeOf(FrontFace /*unused*/) {
-    return {FrontFace::CounterClockwise, FrontFace::Clockwise};
-}
-constexpr std::pair<FillMode, FillMode> rangeOf(FillMode /*unused*/) {
-    return {FillMode::Solid, FillMode::Wireframe};
-}
-constexpr std::pair<CompareOp, CompareOp> rangeOf(CompareOp /*unused*/) {
-    return {CompareOp::Always, CompareOp::GreaterEqual};
-}
-constexpr std::pair<StencilOp, StencilOp> rangeOf(StencilOp /*unused*/) {
-    return {StencilOp::Keep, StencilOp::DecrementWrap};
-}
-constexpr std::pair<BlendFactor, BlendFactor> rangeOf(BlendFactor /*unused*/) {
-    return {BlendFactor::Zero, BlendFactor::SrcAlphaSaturate};
-}
-constexpr std::pair<BlendOp, BlendOp> rangeOf(BlendOp /*unused*/) {
-    return {BlendOp::Add, BlendOp::Max};
-}
-constexpr std::pair<Filter, Filter> rangeOf(Filter /*unused*/) {
-    return {Filter::Nearest, Filter::Linear};
-}
-constexpr std::pair<AddressMode, AddressMode> rangeOf(AddressMode /*unused*/) {
-    return {AddressMode::Repeat, AddressMode::MirrorClampToEdge};
-}
-constexpr std::pair<SamplerReduction, SamplerReduction> rangeOf(SamplerReduction /*unused*/) {
-    return {SamplerReduction::WeightedAverage, SamplerReduction::Maximum};
-}
-constexpr std::pair<PresentMode, PresentMode> rangeOf(PresentMode /*unused*/) {
-    return {PresentMode::Fifo, PresentMode::Immediate};
-}
-constexpr std::pair<AlphaMode, AlphaMode> rangeOf(AlphaMode /*unused*/) {
-    return {AlphaMode::Opaque, AlphaMode::Inherit};
-}
-constexpr std::pair<TextureDimension, TextureDimension> rangeOf(TextureDimension /*unused*/) {
-    return {TextureDimension::D2, TextureDimension::Cube};
-}
-constexpr std::pair<TextureLayout, TextureLayout> rangeOf(TextureLayout /*unused*/) {
-    return {TextureLayout::Undefined, TextureLayout::ResolveDst};
-}
-constexpr std::pair<TextureAspect, TextureAspect> rangeOf(TextureAspect /*unused*/) {
-    return {TextureAspect::Color, TextureAspect::Stencil};
-}
-constexpr std::pair<QueueLevel, QueueLevel> rangeOf(QueueLevel /*unused*/) {
-    return {QueueLevel::Normal, QueueLevel::Realtime};
-}
-constexpr std::pair<TimestampStage, TimestampStage> rangeOf(TimestampStage /*unused*/) {
-    return {TimestampStage::End, TimestampStage::AccelerationStructureBuild};
-}
-constexpr std::pair<TimestampGranularity, TimestampGranularity> rangeOf(TimestampGranularity /*unused*/) {
-    return {TimestampGranularity::Relaxed, TimestampGranularity::Precise};
-}
-constexpr std::pair<QueryType, QueryType> rangeOf(QueryType /*unused*/) {
-    return {QueryType::Occlusion, QueryType::MeshPrimitivesGenerated};
-}
-constexpr std::pair<HostClock, HostClock> rangeOf(HostClock /*unused*/) {
-    return {HostClock::Monotonic, HostClock::PerformanceCounter};
-}
-constexpr std::pair<TileMapping, TileMapping> rangeOf(TileMapping /*unused*/) {
-    return {TileMapping::Map, TileMapping::Unmap};
-}
-constexpr std::pair<AccelerationStructureType, AccelerationStructureType> rangeOf(
-    AccelerationStructureType /*unused*/) {
-    return {AccelerationStructureType::Bottom, AccelerationStructureType::PartitionedTop};
-}
-constexpr std::pair<InstanceMotion, InstanceMotion> rangeOf(InstanceMotion /*unused*/) {
-    return {InstanceMotion::None, InstanceMotion::Srt};
-}
-constexpr std::pair<ClusterOperation, ClusterOperation> rangeOf(ClusterOperation /*unused*/) {
-    return {ClusterOperation::Move, ClusterOperation::TemplateIndices};
-}
-constexpr std::pair<ClusterMode, ClusterMode> rangeOf(ClusterMode /*unused*/) {
-    return {ClusterMode::ImplicitDestinations, ClusterMode::ComputeSizes};
-}
-constexpr std::pair<ClusterStructureType, ClusterStructureType> rangeOf(ClusterStructureType /*unused*/) {
-    return {ClusterStructureType::Bottom, ClusterStructureType::Template};
-}
-constexpr std::pair<OpacityMicromapFormat, OpacityMicromapFormat> rangeOf(OpacityMicromapFormat /*unused*/) {
-    return {OpacityMicromapFormat::TwoState, OpacityMicromapFormat::FourState};
-}
-constexpr std::pair<BuildPreference, BuildPreference> rangeOf(BuildPreference /*unused*/) {
-    return {BuildPreference::None, BuildPreference::FastBuild};
-}
-constexpr std::pair<InstanceOpacity, InstanceOpacity> rangeOf(InstanceOpacity /*unused*/) {
-    return {InstanceOpacity::AsGeometry, InstanceOpacity::ForceNonOpaque};
-}
-constexpr std::pair<RayTracingStage, RayTracingStage> rangeOf(RayTracingStage /*unused*/) {
-    return {RayTracingStage::RayGeneration, RayTracingStage::Callable};
-}
-constexpr std::pair<RayTracingGroupType, RayTracingGroupType> rangeOf(RayTracingGroupType /*unused*/) {
-    return {RayTracingGroupType::General, RayTracingGroupType::BoxHit};
-}
-constexpr std::pair<RayTracingGroupShader, RayTracingGroupShader> rangeOf(RayTracingGroupShader /*unused*/) {
-    return {RayTracingGroupShader::General, RayTracingGroupShader::Intersection};
-}
-constexpr std::pair<AccelerationStructureProperty, AccelerationStructureProperty> rangeOf(
-    AccelerationStructureProperty /*unused*/) {
-    return {AccelerationStructureProperty::CompactedSize, AccelerationStructureProperty::CurrentSize};
-}
-
-/// number as Enum when it is one Enum has; nothing otherwise. Takes the
-/// number wider than Enum, so a caller holding one, such as the C API's
-/// 32-bit enums, checks it before a cast that would cut it short.
-template <class Enum>
-[[nodiscard]] constexpr std::optional<Enum> knownValue(std::int64_t number) {
-    const auto [first, last] = rangeOf(Enum{});
-    if (number < std::to_underlying(first) || number > std::to_underlying(last)) {
-        return std::nullopt;
-    }
-    return static_cast<Enum>(number);
-}
-
 /// Fails with RhiInvalidCall when value is not one its enum has, such as a
 /// number cast to it; what names it in the message. Every backend's switch
 /// over an enum takes only its values, so each call that reads one checks it
 /// first, through the checks below.
 template <class Enum>
 [[nodiscard]] core::Result<void> checkKnown(Enum value, std::string_view what) {
-    const auto number = static_cast<std::int64_t>(std::to_underlying(value));
-    if (!knownValue<Enum>(number)) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "{} {} is not one BFR has", what, number);
+    // bfr_enums.hpp names every value its enum has, and no other.
+    if (name(value).empty()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "{} {} is not one BFR has", what,
+                             std::to_underlying(value));
     }
     return {};
 }
@@ -277,13 +139,16 @@ template <class Enum>
 
 /// Fails with RhiInvalidCall when one of desc's enums is not one BFR has.
 [[nodiscard]] inline core::Result<void> checkEnums(const SamplerDesc& desc) {
-    for (const Filter filter : {desc.magFilter, desc.minFilter, desc.mipFilter}) {
-        if (auto checked = checkKnown(filter, "filter"); !checked) {
+    for (const auto& [filter, what] : {std::pair{desc.magFilter, "mag filter"}, std::pair{desc.minFilter, "min filter"},
+                                       std::pair{desc.mipFilter, "mip filter"}}) {
+        if (auto checked = checkKnown(filter, what); !checked) {
             return checked;
         }
     }
-    for (const AddressMode mode : {desc.addressU, desc.addressV, desc.addressW}) {
-        if (auto checked = checkKnown(mode, "address mode"); !checked) {
+    for (const auto& [mode, what] :
+         {std::pair{desc.addressU, "address mode u"}, std::pair{desc.addressV, "address mode v"},
+          std::pair{desc.addressW, "address mode w"}}) {
+        if (auto checked = checkKnown(mode, what); !checked) {
             return checked;
         }
     }
