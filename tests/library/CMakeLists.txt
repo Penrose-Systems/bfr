@@ -89,7 +89,7 @@ bfr_apply_compiler_flags(bfr_tests)
 # library's private headers under src.
 target_include_directories(bfr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src
     ${PROJECT_SOURCE_DIR}/src/backends)
-target_link_libraries(bfr_tests PRIVATE bfr bfr_test_main bfr_sanitizer_options Catch2::Catch2)
+target_link_libraries(bfr_tests PRIVATE bfr bfr_cpp bfr_test_main bfr_sanitizer_options Catch2::Catch2)
 bfr_discover_tests(bfr_tests)
 
 if(NOT BFR_BACKEND_VULKAN)
