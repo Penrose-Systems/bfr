@@ -2,13 +2,8 @@
 // themselves, 0 for each limit of a feature the adapter lacks, an answer for
 // every format. Each case runs on every backend the build has.
 
-#include "bfr/core/error.h"
-#include "bfr/core/window.h"
-#include "bfr/rhi/caps.h"
-#include "bfr/rhi/device.h"
-#include "bfr/rhi/format.h"
-#include "bfr/rhi/instance.h"
-#include "rhi_test_support.h"
+#include "bfr.hpp"
+#include "bfr_test_support.h"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -18,19 +13,22 @@
 
 #include <algorithm>
 #include <array>
-#include <cstddef>
 #include <cstdint>
 #include <format>
 #include <initializer_list>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
 
 using namespace bfr;
-using namespace bfr::rhi;
-using namespace bfr::rhi::test;
+using namespace bfr::test;
 
 namespace {
+
+// The last Format bfr.yaml declares. A format declared after it is listed past
+// it, which formatProblems reports, until this names it.
+constexpr Format kLastFormat = Format::Astc12x12Float;
 
 // Each name in checks whose condition is false.
 std::vector<std::string> failing(std::initializer_list<std::pair<bool, std::string>> checks) {
@@ -53,15 +51,16 @@ bool granularityHolds(const CopyGranularity& granularity) {
 
 // Each way caps disagree with themselves.
 std::vector<std::string> inconsistencies(const Caps& caps) {
-    const auto& heaps = caps.memory.heaps;
-    const Queues& queues = caps.queues;
+    const CapsMemory& memory = caps.memory;
+    const CapsQueues& queues = caps.queues;
     return failing({
         // A range of 0, 0 is none reported.
         {(caps.compute.minSubgroupSize == 0 && caps.compute.maxSubgroupSize == 0) ||
              (caps.compute.minSubgroupSize <= caps.compute.subgroupSize &&
               caps.compute.subgroupSize <= caps.compute.maxSubgroupSize),
          "a subgroup size within its range, where one is reported"},
-        {std::ranges::all_of(caps.memory.types, [&heaps](const MemoryType& type) { return type.heap < heaps.size(); }),
+        {std::ranges::all_of(std::span{memory.types}.first(memory.typeCount),
+                             [&memory](const MemoryType& type) { return type.heap < memory.heapCount; }),
          "types in listed heaps"},
         {granularityHolds(queues.graphicsGranularity) && granularityHolds(queues.computeGranularity) &&
              granularityHolds(queues.copyGranularity),
@@ -71,7 +70,7 @@ std::vector<std::string> inconsistencies(const Caps& caps) {
 
 // Each limit caps reports for a feature it lacks that is not 0.
 std::vector<std::string> limitsWithoutFeatures(const Caps& caps) {
-    const Features& features = caps.features;
+    const CapsFeatures& features = caps.features;
     return failing({
         {features.meshShader || caps.mesh.maxMeshOutputVertices == 0, "mesh"},
         {features.taskShader || caps.mesh.maxTaskPayloadSize == 0, "task"},
@@ -112,35 +111,49 @@ std::vector<std::string> limitsWithoutFeatures(const Caps& caps) {
     });
 }
 
-// Each format whose query fails or answers about another format.
-std::vector<std::string> formatProblems(const Instance& rhi, std::size_t adapter) {
+// Each format the adapter's list fails on, lacks or holds out of place: it
+// lists every Format but Undefined, in the order Format declares them.
+std::vector<std::string> formatProblems(const Instance& instance, std::uint32_t adapter) {
+    const auto found = instance.formats(adapter);
+    if (!found) {
+        return {failureOf(found)};
+    }
     std::vector<std::string> failed;
-    for (const Format format : kFormats) {
-        const auto found = rhi.formatCaps(adapter, format);
-        if (!found || found->format != format) {
-            failed.push_back(std::to_string(static_cast<int>(format)) + " " + failureOf(found));
+    auto next = found->begin();
+    for (auto value = static_cast<std::int32_t>(Format::Undefined) + 1; value <= static_cast<std::int32_t>(kLastFormat);
+         ++value) {
+        const auto format = static_cast<Format>(value);
+        if (name(format).empty()) {
+            continue;
         }
+        if (next == found->end() || next->format != format) {
+            failed.push_back(std::format("{} {} is not listed in its place", value, name(format)));
+            continue;
+        }
+        ++next;
+    }
+    for (; next != found->end(); ++next) {
+        failed.push_back(std::format("{} is listed past the last format", static_cast<std::int32_t>(next->format)));
     }
     return failed;
 }
 
 // What is wrong with device's budget for memory: a heap whose budget is 0 or
 // more than the heap holds, or a failure other than the driver not saying.
-std::vector<std::string> budgetProblems(const Device& device, const Memory& memory) {
+std::vector<std::string> budgetProblems(const Device& device, const CapsMemory& memory) {
     const auto budget = device.budget();
     if (!budget) {
-        return budget.error().code == bfr::core::ErrorCode::RhiUnsupported
-                   ? std::vector<std::string>{}
-                   : std::vector<std::string>{failureOf(budget)};
+        return budget.error().code == Result::ErrorUnsupported ? std::vector<std::string>{}
+                                                               : std::vector<std::string>{failureOf(budget)};
     }
-    if (budget->heaps.size() != memory.heaps.size()) {
-        return {std::format("{} heaps, not {}", budget->heaps.size(), memory.heaps.size())};
+    if (budget->heapCount != memory.heapCount) {
+        return {std::format("{} heaps, not {}", budget->heapCount, memory.heapCount)};
     }
     std::vector<std::string> problems;
-    for (std::size_t heap = 0; heap < memory.heaps.size(); ++heap) {
-        const std::uint64_t bytes = budget->heaps[heap].budget;
-        if (bytes == 0 || bytes > memory.heaps[heap].size) {
-            problems.push_back(std::format("heap {}: budget {} of {}", heap, bytes, memory.heaps[heap].size));
+    for (std::uint32_t heap = 0; heap < memory.heapCount; ++heap) {
+        const std::uint64_t bytes = budget->heaps.at(heap).budget;
+        if (bytes == 0 || bytes > memory.heaps.at(heap).size) {
+            problems.push_back(std::format("heap {}: budget {} of {}", heap, bytes, memory.heaps.at(heap).size));
         }
     }
     return problems;
@@ -155,10 +168,12 @@ TEST_CASE("Instance reads each adapter's caps, consistent and 0 for each feature
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    for (const Adapter& adapter : (*rhi)->adapters()) {
-        INFO(adapter.name);
-        CHECK_THAT(inconsistencies(adapter.caps), Catch::Matchers::IsEmpty());
-        CHECK_THAT(limitsWithoutFeatures(adapter.caps), Catch::Matchers::IsEmpty());
+    const std::vector<AdapterInfo> adapters = adaptersOf(*rhi);
+    for (std::uint32_t adapter = 0; adapter < adapters.size(); ++adapter) {
+        INFO(adapters[adapter].name);
+        const Caps caps = capsOf(*rhi, adapter);
+        CHECK_THAT(inconsistencies(caps), Catch::Matchers::IsEmpty());
+        CHECK_THAT(limitsWithoutFeatures(caps), Catch::Matchers::IsEmpty());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -170,9 +185,10 @@ TEST_CASE("Instance reports what every adapter does with each format", "[rhi][ca
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    for (std::size_t adapter = 0; adapter < (*rhi)->adapters().size(); ++adapter) {
-        INFO((*rhi)->adapters()[adapter].name);
-        CHECK_THAT(formatProblems(**rhi, adapter), Catch::Matchers::IsEmpty());
+    const std::vector<AdapterInfo> adapters = adaptersOf(*rhi);
+    for (std::uint32_t adapter = 0; adapter < adapters.size(); ++adapter) {
+        INFO(adapters[adapter].name);
+        CHECK_THAT(formatProblems(*rhi, adapter), Catch::Matchers::IsEmpty());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -183,10 +199,10 @@ TEST_CASE("Instance reports what a swapchain for a headless window may be", "[rh
     const auto rhi = createInstance(recordingInto(backend, messages), kValidation);
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
-    const std::size_t adapter = headlessAdapter(**rhi);
+    const std::uint32_t adapter = headlessAdapter(*rhi);
 
-    const auto caps = (*rhi)->swapchainCaps(adapter, bfr::core::window::Headless{});
-    const auto formats = (*rhi)->swapchainFormats(adapter, bfr::core::window::Headless{});
+    const auto caps = rhi->swapchainCaps(adapter, {.window = kHeadless});
+    const auto formats = rhi->swapchainFormats(adapter, {.window = kHeadless});
 
     INFO(failureOf(caps) << ' ' << failureOf(formats));
     REQUIRE(caps.has_value());
@@ -203,16 +219,14 @@ TEST_CASE("Instance reports what a swapchain for a headless window may be", "[rh
 
 TEST_CASE("Instance refuses queries about an adapter it does not list", "[rhi][caps][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
-    const auto rhi = createInstance(describe(backend), {});
+    const auto rhi = Instance::create(describe(backend));
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
-    const std::size_t missing = (*rhi)->adapters().size();
+    const auto missing = static_cast<std::uint32_t>(adaptersOf(*rhi).size());
 
-    CHECK((*rhi)->formatCaps(missing, Format::Rgba8Unorm).error().code == bfr::core::ErrorCode::RhiAdapterOutOfRange);
-    CHECK((*rhi)->swapchainCaps(missing, bfr::core::window::Headless{}).error().code ==
-          bfr::core::ErrorCode::RhiAdapterOutOfRange);
-    CHECK((*rhi)->swapchainFormats(missing, bfr::core::window::Headless{}).error().code ==
-          bfr::core::ErrorCode::RhiAdapterOutOfRange);
+    CHECK(rhi->formats(missing).error().code == Result::ErrorInvalidArgument);
+    CHECK(rhi->swapchainCaps(missing, {.window = kHeadless}).error().code == Result::ErrorInvalidArgument);
+    CHECK(rhi->swapchainFormats(missing, {.window = kHeadless}).error().code == Result::ErrorInvalidArgument);
 }
 
 TEST_CASE("Device reports its memory budget heap by heap", "[rhi][caps][agnostic]") {
@@ -222,14 +236,15 @@ TEST_CASE("Device reports its memory budget heap by heap", "[rhi][caps][agnostic
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    for (std::size_t adapter = 0; adapter < (*rhi)->adapters().size(); ++adapter) {
-        const Adapter& listed = (*rhi)->adapters()[adapter];
-        INFO(listed.name);
-        const auto device = (*rhi)->createDevice(adapter, kNoWindow, kTestDevice);
+    const std::vector<AdapterInfo> adapters = adaptersOf(*rhi);
+    for (std::uint32_t adapter = 0; adapter < adapters.size(); ++adapter) {
+        INFO(adapters[adapter].name);
+        const CapsMemory memory = capsOf(*rhi, adapter).memory;
+        const auto device = rhi->createDevice(testDeviceOn(adapter, kNoWindow));
         INFO(failureOf(device));
         REQUIRE(device.has_value());
 
-        CHECK_THAT(budgetProblems(**device, listed.caps.memory), Catch::Matchers::IsEmpty());
+        CHECK_THAT(budgetProblems(*device, memory), Catch::Matchers::IsEmpty());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

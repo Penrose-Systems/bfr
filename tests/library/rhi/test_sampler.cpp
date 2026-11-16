@@ -1,21 +1,12 @@
-// What every backend does with samplers, through the interface alone: the
+// What every backend does with samplers, through the public API alone: the
 // slot each holds, stale handles, leftovers, and a texture sampled through
 // one. Each case runs on every backend the build has; the sampling case runs
 // the SPIR-V in tests/library/shaders, so it skips on a backend with none
 // checked in.
 
-#include "bfr/core/error.h"
-#include "bfr/core/log.h"
-#include "bfr/rhi/buffer.h"
-#include "bfr/rhi/caps.h"
-#include "bfr/rhi/command_list.h"
-#include "bfr/rhi/device.h"
-#include "bfr/rhi/format.h"
-#include "bfr/rhi/instance.h"
-#include "bfr/rhi/pipeline.h"
-#include "bfr/rhi/sampler.h"
-#include "bfr/rhi/texture.h"
-#include "rhi_test_support.h"
+#include "bfr.hpp"
+#include "bfr/bfr.h"
+#include "bfr_test_support.h"
 #include "shaders/spirv.h"
 
 #include <catch2/catch_message.hpp>
@@ -32,16 +23,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <memory>
+#include <expected>
 #include <span>
 #include <string>
 #include <utility>
 #include <vector>
 
 using namespace bfr;
-using namespace bfr::rhi;
-using namespace bfr::rhi::test;
-using bfr::core::ErrorCode;
+using namespace bfr::test;
 
 namespace {
 
@@ -53,33 +42,37 @@ struct SamplerDevice {
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         instance = std::move(*created);
-        auto made = instance->createDevice(0, kNoWindow, desc);
+        auto made = instance.createDevice(desc);
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         device = std::move(*made);
     }
 
-    std::unique_ptr<Instance> instance;
-    std::unique_ptr<Device> device;
+    Instance instance;
+    Device device;
 };
 
-SamplerHandle created(Device& device, const SamplerDesc& desc) {
-    const auto sampler = device.createSampler(desc);
+Sampler created(const Device& device, const SamplerDesc& desc) {
+    auto sampler = device.createSampler(desc);
     INFO(failureOf(sampler));
     REQUIRE(sampler.has_value());
-    return *sampler;
+    return std::move(*sampler);
 }
 
-BufferHandle created(Device& device, const BufferDesc& desc) {
-    const auto buffer = device.createBuffer(desc);
-    INFO(failureOf(buffer));
-    REQUIRE(buffer.has_value());
-    return *buffer;
+// buffer's slot in the storage buffer table.
+Expected<std::uint32_t> storageSlot(Buffer& buffer) {
+    const auto slots = buffer.bufferSlots();
+    if (!slots) {
+        return std::unexpected(slots.error());
+    }
+    return slots->storage;
 }
 
-// Whether backend takes the SPIR-V checked in, as test_pipeline.cpp says.
-bool takesSpirv(const TestBackend& backend) {
-    return backend.backend == Backend::Vulkan;
+// What bfr_get_sampler_slot says of a sampler handle, which may be stale:
+// bfr.hpp names a sampler only by a live Sampler.
+Result slotResult(const Device& device, bfr_sampler sampler) {
+    std::uint32_t slot = 0;
+    return resultOf(bfr_get_sampler_slot(device.get(), sampler, &slot));
 }
 
 // The push constants sample.comp declares.
@@ -100,10 +93,6 @@ constexpr float kUnormStep = 1.0F / 255.0F;
 // the way from the black texel's centre to the white one's.
 constexpr float kQuarterWhite = 0.25F;
 
-std::uint64_t alignUp(std::uint64_t value, std::uint64_t alignment) {
-    return (value + alignment - 1) / alignment * alignment;
-}
-
 } // namespace
 
 TEST_CASE("Device gives each sampler its own slot, and refuses one past the table with RhiLimitReached",
@@ -113,25 +102,26 @@ TEST_CASE("Device gives each sampler its own slot, and refuses one past the tabl
     std::vector<std::string> messages;
     {
         const SamplerDevice made{recordingInto(backend, messages),
-                                 testDeviceWith([](DeviceDesc& desc) { desc.maxBindlessSamplers = kSlots; })};
-        Device& device = *made.device;
-        const SamplerHandle first = created(device, SamplerDesc{});
-        const SamplerHandle second = created(device, {.magFilter = Filter::Linear, .minFilter = Filter::Linear});
-        const auto firstSlot = device.samplerSlot(first);
-        const auto secondSlot = device.samplerSlot(second);
+                                 testDeviceWith(kFirstAdapter, kNoWindow,
+                                                [](DeviceDesc& desc) { desc.maxBindlessSamplers = kSlots; })};
+        const Device& device = made.device;
+        Sampler first = created(device, SamplerDesc{});
+        Sampler second = created(device, {.magFilter = Filter::Linear, .minFilter = Filter::Linear});
+        const auto firstSlot = first.samplerSlot();
+        const auto secondSlot = second.samplerSlot();
         REQUIRE(firstSlot.has_value());
         REQUIRE(secondSlot.has_value());
         CHECK(*firstSlot != *secondSlot);
         CHECK(*firstSlot < kSlots);
         CHECK(*secondSlot < kSlots);
-        CHECK(device.createSampler({}).error().code == ErrorCode::RhiLimitReached);
+        CHECK(device.createSampler({}).error().code == Result::ErrorLimitReached);
 
         // No submit uses it, so its slot is free again once it is destroyed.
-        CHECK(device.destroySampler(first).has_value());
-        const SamplerHandle third = created(device, SamplerDesc{});
-        CHECK(device.samplerSlot(third).has_value());
-        CHECK(device.destroySampler(second).has_value());
-        CHECK(device.destroySampler(third).has_value());
+        CHECK(slotResult(device, destroyed(first)) == Result::ErrorInvalidHandle);
+        Sampler third = created(device, SamplerDesc{});
+        CHECK(third.samplerSlot().has_value());
+        CHECK(slotResult(device, destroyed(second)) == Result::ErrorInvalidHandle);
+        CHECK(slotResult(device, destroyed(third)) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -140,14 +130,16 @@ TEST_CASE("Device fails sampler calls with RhiInvalidHandle for a sampler that i
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const SamplerDevice made{recordingInto(backend, messages), kTestDevice};
-        Device& device = *made.device;
-        const SamplerHandle gone = created(device, SamplerDesc{});
-        REQUIRE(device.destroySampler(gone).has_value());
+        const SamplerDevice made{recordingInto(backend, messages), testDeviceOn(kFirstAdapter, kNoWindow)};
+        const Device& device = made.device;
+        Sampler sampler = created(device, SamplerDesc{});
+        const bfr_sampler gone = destroyed(sampler);
 
-        CHECK(device.samplerSlot(gone).error().code == ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroySampler(gone).error().code == ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroySampler({}).has_value());
+        CHECK(slotResult(device, gone) == Result::ErrorInvalidHandle);
+        // d1: stale destroy reported as an Error message (track B)
+        bfr_destroy_sampler(device.get(), gone);
+        // d1: null destroy: no message (track B)
+        bfr_destroy_sampler(device.get(), bfr_sampler{});
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -156,11 +148,15 @@ TEST_CASE("Device destroys the samplers left when it goes, and says so", "[rhi][
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const SamplerDevice made{recordingInto(backend, messages), kTestDevice};
-        static_cast<void>(created(*made.device, SamplerDesc{}));
+        const SamplerDevice made{recordingInto(backend, messages), testDeviceOn(kFirstAdapter, kNoWindow)};
+        // A Sampler keeps its Device alive, so one is left only through bfr.h:
+        // SamplerDesc{} as bfr_sampler_desc, never destroyed.
+        const bfr_sampler_desc desc{};
+        bfr_sampler left{};
+        REQUIRE(resultOf(bfr_create_sampler(made.device.get(), &desc, &left)) == Result::Success);
     }
 
-    const std::size_t warnings = bfr::core::kLoggingEnabled ? 1 : 0;
+    const std::size_t warnings = BFR_LOGGING_ENABLED ? 1 : 0;
     REQUIRE(messages.size() == warnings);
     for (const std::string& message : messages) {
         CHECK_THAT(message, Catch::Matchers::ContainsSubstring("1 samplers were left when the device went"));
@@ -174,64 +170,64 @@ TEST_CASE("Device samples a texture through a sampler's slot: nearest and linear
     }
     std::vector<std::string> messages;
     {
-        const SamplerDevice made{recordingInto(backend, messages), kTestDevice};
-        Device& device = *made.device;
-        const Limits& limits = made.instance->adapters().front().caps.limits;
+        const SamplerDevice made{recordingInto(backend, messages), testDeviceOn(kFirstAdapter, kNoWindow)};
+        const Device& device = made.device;
+        const CapsLimits limits = capsOf(made.instance, kFirstAdapter).limits;
 
-        const auto texture = device.createTexture({.dimension = TextureDimension::D2,
-                                                   .format = Format::R8Unorm,
-                                                   .width = kTexels,
-                                                   .height = 1,
-                                                   .depth = 1,
-                                                   .layers = 1,
-                                                   .mipLevels = 1,
-                                                   .samples = 1,
-                                                   .usage = {.copyDst = true, .sampled = true}});
+        auto texture = device.createTexture({.dimension = TextureDimension::D2,
+                                             .format = Format::R8Unorm,
+                                             .width = kTexels,
+                                             .height = 1,
+                                             .depth = 1,
+                                             .layers = 1,
+                                             .mipLevels = 1,
+                                             .samples = 1,
+                                             .usage = {.copyDst = true, .sampled = true}});
         INFO(failureOf(texture));
         REQUIRE(texture.has_value());
         const std::uint64_t bytesPerRow = alignUp(kTexels, std::max<std::uint64_t>(limits.copyRowPitchAlignment, 1));
-        const BufferHandle upload =
-            created(device, {.size = bytesPerRow, .memory = BufferMemory::Upload, .usage = {.copySrc = true}});
-        const auto mapped = device.mapBuffer(upload);
+        Buffer upload = created(device,
+                                {.size = bytesPerRow, .memory = BufferMemory::Upload, .usage = {.copySrc = true}});
+        const auto mapped = upload.map();
         REQUIRE(mapped.has_value());
-        std::memcpy(mapped->data(), kBlackWhite.data(), kBlackWhite.size());
+        std::memcpy(*mapped, kBlackWhite.data(), kBlackWhite.size());
 
         // Nearest, with an opaque white border: black inside, white before it.
-        const SamplerHandle bordered = created(device, {.addressU = AddressMode::ClampToBorder,
-                                                        .addressV = AddressMode::ClampToBorder,
-                                                        .addressW = AddressMode::ClampToBorder,
-                                                        .borderColor = {1, 1, 1, 1}});
+        Sampler bordered = created(device, {.addressU = AddressMode::ClampToBorder,
+                                            .addressV = AddressMode::ClampToBorder,
+                                            .addressW = AddressMode::ClampToBorder,
+                                            .borderColor = {1, 1, 1, 1}});
         // Linear, clamped to the edge: a quarter white inside, black before it.
-        const SamplerHandle edged = created(device, {.magFilter = Filter::Linear,
-                                                     .minFilter = Filter::Linear,
-                                                     .addressU = AddressMode::ClampToEdge,
-                                                     .addressV = AddressMode::ClampToEdge,
-                                                     .addressW = AddressMode::ClampToEdge});
+        Sampler edged = created(device, {.magFilter = Filter::Linear,
+                                         .minFilter = Filter::Linear,
+                                         .addressU = AddressMode::ClampToEdge,
+                                         .addressV = AddressMode::ClampToEdge,
+                                         .addressW = AddressMode::ClampToEdge});
         constexpr std::uint64_t kBytes = std::uint64_t{kSamples} * sizeof(float);
-        const BufferHandle borderedOut = created(device, {.size = kBytes, .usage = {.copySrc = true, .storage = true}});
-        const BufferHandle edgedOut = created(device, {.size = kBytes, .usage = {.copySrc = true, .storage = true}});
-        const BufferHandle readback =
-            created(device, {.size = 2 * kBytes, .memory = BufferMemory::Readback, .usage = {.copyDst = true}});
-        const auto pipeline = device.createComputePipeline(
-            {.compute = {.code = std::as_bytes(std::span{bfr::test::spirv::kSampleComp}), .entryPoint = "main"},
+        Buffer borderedOut = created(device, {.size = kBytes, .usage = {.copySrc = true, .storage = true}});
+        Buffer edgedOut = created(device, {.size = kBytes, .usage = {.copySrc = true, .storage = true}});
+        Buffer readback = created(device,
+                                  {.size = 2 * kBytes, .memory = BufferMemory::Readback, .usage = {.copyDst = true}});
+        auto pipeline = device.createComputePipeline(
+            {.compute = {.code = bfr::test::spirv::kSampleComp, .entryPoint = "main"},
              .workgroupSize = {kSamples, 1, 1}});
         INFO(failureOf(pipeline));
         REQUIRE(pipeline.has_value());
 
-        const auto textureSlots = device.textureSlots(*texture);
-        const auto borderedSlot = device.samplerSlot(bordered);
-        const auto edgedSlot = device.samplerSlot(edged);
-        const auto borderedTarget = storageSlot(device, borderedOut);
-        const auto edgedTarget = storageSlot(device, edgedOut);
+        const auto textureSlots = texture->textureSlots();
+        const auto borderedSlot = bordered.samplerSlot();
+        const auto edgedSlot = edged.samplerSlot();
+        const auto borderedTarget = storageSlot(borderedOut);
+        const auto edgedTarget = storageSlot(edgedOut);
         REQUIRE(textureSlots.has_value());
         REQUIRE(borderedSlot.has_value());
         REQUIRE(edgedSlot.has_value());
         REQUIRE(borderedTarget.has_value());
         REQUIRE(edgedTarget.has_value());
 
-        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists, .pushConstantUpdates = 2});
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists, .pushConstantUpdates = 2});
         REQUIRE(pool.has_value());
-        auto list = device.beginCommands(*pool);
+        auto list = pool->beginCommands();
         REQUIRE(list.has_value());
         CHECK(device.textureBarrier(*list, *texture, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
         const BufferTextureCopy region{.bufferOffset = 0,
@@ -252,7 +248,7 @@ TEST_CASE("Device samples a texture through a sampler's slot: nearest and linear
         for (const SamplePush& push :
              {SamplePush{.textureSlot = textureSlots->sampled, .samplerSlot = *borderedSlot, .target = *borderedTarget},
               SamplePush{.textureSlot = textureSlots->sampled, .samplerSlot = *edgedSlot, .target = *edgedTarget}}) {
-            const auto bytes = std::bit_cast<std::array<std::byte, sizeof(SamplePush)>>(push);
+            const auto bytes = std::bit_cast<std::array<std::uint8_t, sizeof(SamplePush)>>(push);
             CHECK(device.pushConstants(*list, bytes).has_value());
             CHECK(device.dispatch(*list, 1, 1, 1).has_value());
         }
@@ -266,23 +262,24 @@ TEST_CASE("Device samples a texture through a sampler's slot: nearest and linear
         REQUIRE(sent.has_value());
         REQUIRE(device.wait(*sent, kTestWait).has_value());
 
-        const auto read = device.mapBuffer(readback);
+        const auto read = readback.map();
         REQUIRE(read.has_value());
         std::array<float, std::size_t{2} * kSamples> values{};
-        std::memcpy(values.data(), read->data(), sizeof(values));
+        std::memcpy(values.data(), *read, sizeof(values));
         using Catch::Matchers::WithinAbs;
         CHECK_THAT(values[0], WithinAbs(0.0, 0.0));
         CHECK_THAT(values[1], WithinAbs(1.0, 0.0));
         CHECK_THAT(values[2], WithinAbs(kQuarterWhite, kUnormStep));
         CHECK_THAT(values[3], WithinAbs(0.0, 0.0));
-        CHECK(device.destroyPipeline(*pipeline).has_value());
-        CHECK(device.destroySampler(bordered).has_value());
-        CHECK(device.destroySampler(edged).has_value());
-        for (const BufferHandle buffer : {upload, borderedOut, edgedOut, readback}) {
-            CHECK(device.destroyBuffer(buffer).has_value());
+        const bfr_pipeline gonePipeline = destroyed(*pipeline);
+        CHECK(bindResult(device, 0, gonePipeline) == Result::ErrorInvalidHandle);
+        CHECK(slotResult(device, destroyed(bordered)) == Result::ErrorInvalidHandle);
+        CHECK(slotResult(device, destroyed(edged)) == Result::ErrorInvalidHandle);
+        for (Buffer* buffer : std::array{&upload, &borderedOut, &edgedOut, &readback}) {
+            CHECK(slotsResult(device, destroyed(*buffer)) == Result::ErrorInvalidHandle);
         }
-        CHECK(device.destroyTexture(*texture).has_value());
-        CHECK(device.destroyCommandPool(*pool).has_value());
+        CHECK(slotsResult(device, destroyed(*texture)) == Result::ErrorInvalidHandle);
+        CHECK(resetResult(device, destroyed(*pool)) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

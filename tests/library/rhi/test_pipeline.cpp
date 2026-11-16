@@ -3,15 +3,9 @@
 // from tests/library/shaders, which the Vulkan backend takes; a case
 // that needs code skips on a backend with none checked in.
 
-#include "bfr/core/error.h"
-#include "bfr/core/log.h"
-#include "bfr/rhi/caps.h"
-#include "bfr/rhi/command_list.h"
-#include "bfr/rhi/device.h"
-#include "bfr/rhi/format.h"
-#include "bfr/rhi/instance.h"
-#include "bfr/rhi/pipeline.h"
-#include "rhi_test_support.h"
+#include "bfr.hpp"
+#include "bfr/bfr.h"
+#include "bfr_test_support.h"
 #include "shaders/spirv.h"
 
 #include <catch2/catch_message.hpp>
@@ -24,46 +18,21 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <span>
 #include <string>
-#include <utility>
+#include <string_view>
 #include <vector>
 
 using namespace bfr;
-using namespace bfr::rhi;
-using namespace bfr::rhi::test;
-using bfr::core::ErrorCode;
+using namespace bfr::test;
 
 namespace {
 
 constexpr std::uint32_t kWorkgroup = 64;
-
-// An Instance and a device on its first adapter, presenting nowhere.
-struct PipelineDevice {
-    explicit PipelineDevice(const InstanceDesc& desc) {
-        auto created = createInstance(desc, kValidation);
-        INFO(failureOf(created));
-        REQUIRE(created.has_value());
-        instance = std::move(*created);
-        auto made = instance->createDevice(0, kNoWindow, kTestDevice);
-        INFO(failureOf(made));
-        REQUIRE(made.has_value());
-        device = std::move(*made);
-    }
-
-    std::unique_ptr<Instance> instance;
-    std::unique_ptr<Device> device;
-};
-
-// Whether backend takes the SPIR-V checked in: Vulkan does. A case that
-// needs code skips elsewhere.
-bool takesSpirv(const TestBackend& backend) {
-    return backend.backend == Backend::Vulkan;
-}
+constexpr std::string_view kEntryPoint = "main";
 
 ShaderCode spirv(std::span<const std::uint8_t> bytes) {
-    return {.code = std::as_bytes(bytes), .entryPoint = "main"};
+    return {.code = bytes, .entryPoint = kEntryPoint};
 }
 
 const ComputePipelineDesc kCompute{.compute = spirv(bfr::test::spirv::kBindlessComp),
@@ -107,30 +76,34 @@ TEST_CASE("Device creates and destroys compute and graphics pipelines", "[rhi][a
     }
     std::vector<std::string> messages;
     {
-        const PipelineDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
 
-        const auto compute = device.createComputePipeline(kCompute);
+        auto compute = device.createComputePipeline(kCompute);
         INFO(failureOf(compute));
         REQUIRE(compute.has_value());
-        const auto graphics = device.createGraphicsPipeline(graphicsDesc());
+        auto graphics = device.createGraphicsPipeline(graphicsDesc());
         INFO(failureOf(graphics));
         REQUIRE(graphics.has_value());
-        CHECK(*compute != *graphics);
+        CHECK(compute->get().bits != graphics->get().bits);
 
         // A vertex-only pipeline writes depth alone, to no color target.
         GraphicsPipelineDesc depthOnly = graphicsDesc();
         depthOnly.fragment = {};
         depthOnly.colorTargetCount = 0;
-        const auto depth = device.createGraphicsPipeline(depthOnly);
+        auto depth = device.createGraphicsPipeline(depthOnly);
         INFO(failureOf(depth));
         REQUIRE(depth.has_value());
 
-        CHECK(device.destroyPipeline(*compute).has_value());
-        CHECK(device.destroyPipeline(*graphics).has_value());
-        CHECK(device.destroyPipeline(*depth).has_value());
-        CHECK(device.destroyPipeline(*compute).error().code == ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyPipeline({}).has_value());
+        const bfr_pipeline stale = compute->get();
+        for (Pipeline* pipeline : std::array{&*compute, &*graphics, &*depth}) {
+            const bfr_pipeline gone = destroyed(*pipeline);
+            CHECK(bindResult(device, 0, gone) == Result::ErrorInvalidHandle);
+        }
+        // d1: stale destroy reported as an Error message (track B)
+        bfr_destroy_pipeline(device.get(), stale);
+        // d1: null destroy: no message (track B)
+        bfr_destroy_pipeline(device.get(), {});
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -142,63 +115,77 @@ TEST_CASE("Device keeps pipelines in a cache, and a cache made from its bytes ma
     }
     std::vector<std::string> messages;
     {
-        const PipelineDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const bool cached = made.instance->adapters()[0].caps.features.pipelineCache;
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        const bool cached = capsOf(made.instance, kFirstAdapter).features.pipelineCache;
 
-        const auto first = device.createPipelineCache({});
-        // Features::pipelineCache says whether caches are made.
+        auto first = device.createPipelineCache({});
+        // CapsFeatures::pipelineCache says whether caches are made.
         CHECK(first.has_value() == cached);
         if (!first) {
-            CHECK(first.error().code == ErrorCode::RhiUnsupported);
+            CHECK(first.error().code == Result::ErrorUnsupported);
             SKIP(failureOf(first));
         }
         ComputePipelineDesc compute = kCompute;
         compute.cache = *first;
         GraphicsPipelineDesc graphics = graphicsDesc();
         graphics.cache = *first;
-        const auto computeMade = device.createComputePipeline(compute);
+        auto computeMade = device.createComputePipeline(compute);
         INFO(failureOf(computeMade));
         REQUIRE(computeMade.has_value());
-        const auto graphicsMade = device.createGraphicsPipeline(graphics);
+        auto graphicsMade = device.createGraphicsPipeline(graphics);
         INFO(failureOf(graphicsMade));
         REQUIRE(graphicsMade.has_value());
 
-        const auto size = device.pipelineCacheSize(*first);
-        INFO(failureOf(size));
-        REQUIRE(size.has_value());
-        CHECK(*size > 0);
-        std::vector<std::byte> bytes(*size);
-        const auto written = device.pipelineCacheData(*first, bytes);
-        INFO(failureOf(written));
-        REQUIRE(written.has_value());
-        CHECK(written->written == *size);
-        CHECK(written->complete);
-        bytes.resize(written->written);
+        // bfr.hpp gives a cache's bytes whole; bfr.h gives their size, and
+        // whether a buffer of that size took them all.
+        std::size_t size = 0;
+        const bfr_result sized = bfr_get_pipeline_cache_data(device.get(), first->get(), &size, nullptr);
+        INFO(failureOf(resultOf(sized)));
+        REQUIRE(sized >= 0);
+        CHECK(size > 0);
+        std::vector<std::uint8_t> bytes(size);
+        std::size_t written = bytes.size();
+        const bfr_result wrote = bfr_get_pipeline_cache_data(device.get(), first->get(), &written, bytes.data());
+        INFO(failureOf(resultOf(wrote)));
+        REQUIRE(wrote >= 0);
+        CHECK(written == size);
+        CHECK(resultOf(wrote) != Result::Incomplete);
+        bytes.resize(written);
 
         // Pipelines made with a cache stay once it goes.
-        CHECK(device.destroyPipelineCache(*first).has_value());
-        CHECK(device.pipelineCacheSize(*first).error().code == ErrorCode::RhiInvalidHandle);
-        CHECK(device.createComputePipeline(compute).error().code == ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyPipelineCache(*first).error().code == ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyPipelineCache({}).has_value());
+        const bfr_pipeline_cache stale = first->get();
+        *first = {};
+        std::size_t staleSize = 0;
+        CHECK(resultOf(bfr_get_pipeline_cache_data(device.get(), stale, &staleSize, nullptr)) ==
+              Result::ErrorInvalidHandle);
+        CHECK(device.createComputePipeline(compute).error().code == Result::ErrorInvalidHandle);
+        // d1: stale destroy reported as an Error message (track B)
+        bfr_destroy_pipeline_cache(device.get(), stale);
+        // d1: null destroy: no message (track B)
+        bfr_destroy_pipeline_cache(device.get(), {});
 
-        const auto second = device.createPipelineCache({.data = bytes});
+        auto second = device.createPipelineCache({.data = bytes});
         INFO(failureOf(second));
         REQUIRE(second.has_value());
         compute.cache = *second;
         graphics.cache = *second;
-        const auto computeAgain = device.createComputePipeline(compute);
+        auto computeAgain = device.createComputePipeline(compute);
         INFO(failureOf(computeAgain));
         REQUIRE(computeAgain.has_value());
-        const auto graphicsAgain = device.createGraphicsPipeline(graphics);
+        auto graphicsAgain = device.createGraphicsPipeline(graphics);
         INFO(failureOf(graphicsAgain));
         REQUIRE(graphicsAgain.has_value());
 
-        for (const PipelineHandle pipeline : {*computeMade, *graphicsMade, *computeAgain, *graphicsAgain}) {
-            CHECK(device.destroyPipeline(pipeline).has_value());
+        for (Pipeline* pipeline : std::array{&*computeMade, &*graphicsMade, &*computeAgain, &*graphicsAgain}) {
+            const bfr_pipeline gone = destroyed(*pipeline);
+            CHECK(bindResult(device, 0, gone) == Result::ErrorInvalidHandle);
         }
-        CHECK(device.destroyPipelineCache(*second).has_value());
+        const bfr_pipeline_cache secondStale = second->get();
+        *second = {};
+        std::size_t secondStaleSize = 0;
+        CHECK(resultOf(bfr_get_pipeline_cache_data(device.get(), secondStale, &secondStaleSize, nullptr)) ==
+              Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -207,10 +194,10 @@ TEST_CASE("Device refuses more color targets than a pipeline holds with RhiInval
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const PipelineDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
         GraphicsPipelineDesc tooManyTargets = graphicsDesc();
-        tooManyTargets.colorTargetCount = kMaxColorTargets + 1;
-        CHECK(made.device->createGraphicsPipeline(tooManyTargets).error().code == ErrorCode::RhiInvalidCall);
+        tooManyTargets.colorTargetCount = BFR_MAX_COLOR_TARGETS + 1;
+        CHECK(made.device.createGraphicsPipeline(tooManyTargets).error().code == Result::ErrorInvalidArgument);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -222,13 +209,18 @@ TEST_CASE("Device destroys the pipelines left when it goes, and says so", "[rhi]
     }
     std::vector<std::string> messages;
     {
-        const PipelineDevice made{recordingInto(backend, messages)};
-        const auto pipeline = made.device->createComputePipeline(kCompute);
-        INFO(failureOf(pipeline));
-        REQUIRE(pipeline.has_value());
+        // A bfr.hpp Pipeline keeps its Device until it goes, so none is left
+        // through it; bfr.h makes the one left.
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const bfr_compute_pipeline_desc desc = detail::toC(kCompute, nullptr);
+        bfr_pipeline pipeline{};
+        const bfr_result created = bfr_create_compute_pipeline(made.device.get(), &desc, &pipeline);
+        INFO(failureOf(resultOf(created)));
+        REQUIRE(created >= 0);
     }
 
-    const std::size_t warnings = bfr::core::kLoggingEnabled ? 1 : 0;
+    // BFR_LOGGING_ENABLED: the bfr target's definition of whether BFR_LOG_* is compiled in.
+    const std::size_t warnings = BFR_LOGGING_ENABLED ? 1 : 0;
     REQUIRE(messages.size() == warnings);
     for (const std::string& message : messages) {
         CHECK_THAT(message, Catch::Matchers::ContainsSubstring("1 pipelines were left when the device went"));

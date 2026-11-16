@@ -1,13 +1,9 @@
-// What every backend does with buffers, through the interface alone. Each case
+// What every backend does with buffers, through the public API alone. Each case
 // runs on every backend the build has.
 
-#include "bfr/core/error.h"
-#include "bfr/core/log.h"
-#include "bfr/rhi/buffer.h"
-#include "bfr/rhi/command_list.h"
-#include "bfr/rhi/device.h"
-#include "bfr/rhi/instance.h"
-#include "rhi_test_support.h"
+#include "bfr.hpp"
+#include "bfr/bfr.h"
+#include "bfr_test_support.h"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -20,16 +16,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <span>
 #include <string>
-#include <utility>
 #include <vector>
 
 using namespace bfr;
-using namespace bfr::rhi;
-using namespace bfr::rhi::test;
-using bfr::core::ErrorCode;
+using namespace bfr::test;
 
 namespace {
 
@@ -42,28 +34,11 @@ constexpr BufferDesc kDeviceBuffer{.size = kSize,
 constexpr BufferDesc kUploadBuffer{.size = kSize, .memory = BufferMemory::Upload, .usage = {.copySrc = true}};
 constexpr BufferDesc kReadbackBuffer{.size = kSize, .memory = BufferMemory::Readback, .usage = {.copyDst = true}};
 
-// An Instance and a device on its first adapter, presenting nowhere.
-struct BufferDevice {
-    explicit BufferDevice(const InstanceDesc& desc) {
-        auto created = createInstance(desc, kValidation);
-        INFO(failureOf(created));
-        REQUIRE(created.has_value());
-        instance = std::move(*created);
-        auto made = instance->createDevice(0, kNoWindow, kTestDevice);
-        INFO(failureOf(made));
-        REQUIRE(made.has_value());
-        device = std::move(*made);
-    }
-
-    std::unique_ptr<Instance> instance;
-    std::unique_ptr<Device> device;
-};
-
-BufferHandle created(Device& device, const BufferDesc& desc) {
-    const auto buffer = device.createBuffer(desc);
-    INFO(failureOf(buffer));
-    REQUIRE(buffer.has_value());
-    return *buffer;
+// What bfr_map_buffer says of a buffer handle, which may be stale: bfr.hpp
+// names a buffer only by a live Buffer.
+Result mapResult(const Device& device, bfr_buffer buffer) {
+    void* data = nullptr;
+    return resultOf(bfr_map_buffer(device.get(), buffer, &data));
 }
 
 } // namespace
@@ -73,16 +48,15 @@ TEST_CASE("Device maps upload and readback buffers, whose bytes the CPU writes a
     const BufferDesc desc = GENERATE(kUploadBuffer, kReadbackBuffer);
     std::vector<std::string> messages;
     {
-        const BufferDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const BufferHandle buffer = created(device, desc);
-        const auto mapped = device.mapBuffer(buffer);
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        Buffer buffer = created(made.device, desc);
+        auto mapped = buffer.map();
         INFO(failureOf(mapped));
         REQUIRE(mapped.has_value());
-        REQUIRE(mapped->size() == kSize);
-        std::ranges::fill(*mapped, kPattern);
-        CHECK(std::ranges::all_of(*mapped, [](std::byte value) { return value == kPattern; }));
-        CHECK(device.destroyBuffer(buffer).has_value());
+        const std::span<std::byte> bytes = mappedBytes(*mapped, kSize);
+        std::ranges::fill(bytes, kPattern);
+        CHECK(std::ranges::all_of(bytes, [](std::byte value) { return value == kPattern; }));
+        CHECK(slotsResult(made.device, destroyed(buffer)) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -91,12 +65,11 @@ TEST_CASE("Device refuses to map a buffer in device memory", "[rhi][agnostic]") 
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const BufferDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const BufferHandle buffer = created(device, kDeviceBuffer);
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        Buffer buffer = created(made.device, kDeviceBuffer);
 
-        CHECK(device.mapBuffer(buffer).error().code == ErrorCode::RhiInvalidCall);
-        CHECK(device.destroyBuffer(buffer).has_value());
+        CHECK(buffer.map().error().code == Result::ErrorInvalidArgument);
+        CHECK(slotsResult(made.device, destroyed(buffer)) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -106,14 +79,16 @@ TEST_CASE("Device fails with RhiInvalidHandle on a destroyed buffer, and destroy
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const BufferDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const BufferHandle buffer = created(device, kUploadBuffer);
-        REQUIRE(device.destroyBuffer(buffer).has_value());
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        Buffer buffer = created(made.device, kUploadBuffer);
+        const bfr_buffer stale = destroyed(buffer);
+        REQUIRE(slotsResult(made.device, stale) == Result::ErrorInvalidHandle);
 
-        CHECK(device.mapBuffer(buffer).error().code == ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyBuffer(buffer).error().code == ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyBuffer({}).has_value());
+        CHECK(mapResult(made.device, stale) == Result::ErrorInvalidHandle);
+        // d1: stale destroy reported as an Error message (track B)
+        bfr_destroy_buffer(made.device.get(), stale);
+        // d1: null destroy: no message (track B)
+        bfr_destroy_buffer(made.device.get(), bfr_buffer{});
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -123,22 +98,23 @@ TEST_CASE("Device ends a buffer handle destroyed after a submit at once, and the
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const BufferDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const BufferHandle buffer = created(device, kDeviceBuffer);
-        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        Buffer buffer = created(device, kDeviceBuffer);
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(pool.has_value());
-        const auto commands = device.beginCommands(*pool);
+        const auto commands = pool->beginCommands();
         REQUIRE(commands.has_value());
-        const CommandListHandle list = *commands;
+        const CommandList list = *commands;
         const auto token = device.submit({.queue = 0, .commandLists = std::span{&list, 1}, .waits = {}});
         INFO(failureOf(token));
         REQUIRE(token.has_value());
 
-        CHECK(device.destroyBuffer(buffer).has_value());
-        CHECK(device.mapBuffer(buffer).error().code == ErrorCode::RhiInvalidHandle);
+        const bfr_buffer stale = destroyed(buffer);
+        CHECK(slotsResult(device, stale) == Result::ErrorInvalidHandle);
+        CHECK(mapResult(device, stale) == Result::ErrorInvalidHandle);
         CHECK(device.wait(*token, kTestWait).has_value());
-        CHECK(device.destroyCommandPool(*pool).has_value());
+        CHECK(resetResult(device, destroyed(*pool)) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -150,26 +126,27 @@ TEST_CASE("Device copies bytes through device memory to readback, in one list or
     constexpr std::uint64_t kHalf = kSize / 2;
     std::vector<std::string> messages;
     {
-        const BufferDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const BufferHandle upload = created(device, kUploadBuffer);
-        const BufferHandle middle = created(device, {.size = kSize,
-                                                     .memory = BufferMemory::Device,
-                                                     .usage = {.copySrc = true, .copyDst = true}});
-        const BufferHandle readback = created(device, kReadbackBuffer);
-        const auto written = device.mapBuffer(upload);
-        REQUIRE(written.has_value());
-        for (std::size_t index = 0; index < written->size(); ++index) {
-            (*written)[index] = static_cast<std::byte>(static_cast<unsigned char>(index));
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        Buffer upload = created(device, kUploadBuffer);
+        Buffer middle = created(device, {.size = kSize,
+                                         .memory = BufferMemory::Device,
+                                         .usage = {.copySrc = true, .copyDst = true}});
+        Buffer readback = created(device, kReadbackBuffer);
+        auto mappedUpload = upload.map();
+        REQUIRE(mappedUpload.has_value());
+        const std::span<std::byte> written = mappedBytes(*mappedUpload, kSize);
+        for (std::size_t index = 0; index < written.size(); ++index) {
+            written[index] = static_cast<std::byte>(static_cast<unsigned char>(index));
         }
-        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(pool.has_value());
 
         // Whole into device memory, then its halves swapped into readback.
         const BufferCopy whole{.srcOffset = 0, .dstOffset = 0, .size = kSize};
         const std::array swapped{BufferCopy{.srcOffset = 0, .dstOffset = kHalf, .size = kHalf},
                                  BufferCopy{.srcOffset = kHalf, .dstOffset = 0, .size = kHalf}};
-        auto first = device.beginCommands(*pool);
+        auto first = pool->beginCommands();
         REQUIRE(first.has_value());
         CHECK(device.copyBuffer(*first, upload, middle, std::span{&whole, 1}).has_value());
         Token token{};
@@ -177,7 +154,7 @@ TEST_CASE("Device copies bytes through device memory to readback, in one list or
             const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*first, 1}, .waits = {}});
             INFO(failureOf(sent));
             REQUIRE(sent.has_value());
-            auto second = device.beginCommands(*pool);
+            auto second = pool->beginCommands();
             REQUIRE(second.has_value());
             CHECK(device.copyBuffer(*second, middle, readback, swapped).has_value());
             const auto last = device.submit(
@@ -196,14 +173,15 @@ TEST_CASE("Device copies bytes through device memory to readback, in one list or
         }
         REQUIRE(device.wait(token, kTestWait).has_value());
 
-        const auto read = device.mapBuffer(readback);
-        REQUIRE(read.has_value());
-        CHECK(std::ranges::equal(read->first(kHalf), written->subspan(kHalf)));
-        CHECK(std::ranges::equal(read->subspan(kHalf), written->first(kHalf)));
-        for (const BufferHandle buffer : {upload, middle, readback}) {
-            CHECK(device.destroyBuffer(buffer).has_value());
+        auto mappedReadback = readback.map();
+        REQUIRE(mappedReadback.has_value());
+        const std::span<const std::byte> read = mappedBytes(*mappedReadback, kSize);
+        CHECK(std::ranges::equal(read.first(kHalf), written.subspan(kHalf)));
+        CHECK(std::ranges::equal(read.subspan(kHalf), written.first(kHalf)));
+        for (Buffer* buffer : std::array{&upload, &middle, &readback}) {
+            CHECK(slotsResult(device, destroyed(*buffer)) == Result::ErrorInvalidHandle);
         }
-        CHECK(device.destroyCommandPool(*pool).has_value());
+        CHECK(resetResult(device, destroyed(*pool)) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -213,25 +191,29 @@ TEST_CASE("Device fails a copy and a barrier with RhiInvalidHandle for a list or
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const BufferDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const BufferHandle upload = created(device, kUploadBuffer);
-        const BufferHandle gone = created(device, kReadbackBuffer);
-        REQUIRE(device.destroyBuffer(gone).has_value());
-        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        Buffer upload = created(device, kUploadBuffer);
+        Buffer goneBuffer = created(device, kReadbackBuffer);
+        const bfr_buffer gone = destroyed(goneBuffer);
+        REQUIRE(slotsResult(device, gone) == Result::ErrorInvalidHandle);
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(pool.has_value());
-        const auto list = device.beginCommands(*pool);
+        const auto list = pool->beginCommands();
         REQUIRE(list.has_value());
         const BufferCopy region{.srcOffset = 0, .dstOffset = 0, .size = kSize};
+        // bfr.hpp names a buffer only by a live Buffer, so the stale one goes
+        // through bfr.h, with region as bfr_buffer_copy.
+        const bfr_buffer_copy cRegion = detail::toC(region);
 
-        CHECK(device.copyBuffer(*list, upload, gone, std::span{&region, 1}).error().code ==
-              ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyCommandList(*list).has_value());
+        CHECK(resultOf(bfr_copy_buffer(device.get(), list->get(), upload.get(), gone, &cRegion, 1)) ==
+              Result::ErrorInvalidHandle);
+        device.destroyCommandList(*list);
         CHECK(device.copyBuffer(*list, upload, upload, std::span{&region, 1}).error().code ==
-              ErrorCode::RhiInvalidHandle);
-        CHECK(device.barrier(*list).error().code == ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyBuffer(upload).has_value());
-        CHECK(device.destroyCommandPool(*pool).has_value());
+              Result::ErrorInvalidHandle);
+        CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+        CHECK(slotsResult(device, destroyed(upload)) == Result::ErrorInvalidHandle);
+        CHECK(resetResult(device, destroyed(*pool)) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -242,17 +224,16 @@ TEST_CASE("Device passes on what the backend says of storage in upload memory", 
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const BufferDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
         BufferDesc desc = kUploadBuffer;
         desc.usage.storage = true;
-        const auto buffer = device.createBuffer(desc);
+        auto buffer = made.device.createBuffer(desc);
         if (buffer.has_value()) {
-            CHECK(device.mapBuffer(*buffer).has_value());
-            CHECK(device.destroyBuffer(*buffer).has_value());
+            CHECK(buffer->map().has_value());
+            CHECK(slotsResult(made.device, destroyed(*buffer)) == Result::ErrorInvalidHandle);
         }
         else {
-            CHECK(buffer.error().code == ErrorCode::RhiDeviceFailed);
+            CHECK(buffer.error().code == Result::ErrorDeviceFailed);
         }
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
@@ -262,11 +243,15 @@ TEST_CASE("Device destroys the buffers left when it goes, and says so", "[rhi][a
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const BufferDevice made{recordingInto(backend, messages)};
-        static_cast<void>(created(*made.device, kDeviceBuffer));
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        // A Buffer keeps its Device alive, so one is left only through bfr.h:
+        // kDeviceBuffer as bfr_buffer_desc, never destroyed.
+        const bfr_buffer_desc desc = detail::toC(kDeviceBuffer, nullptr);
+        bfr_buffer left{};
+        REQUIRE(resultOf(bfr_create_buffer(made.device.get(), &desc, &left)) == Result::Success);
     }
 
-    const std::size_t warnings = bfr::core::kLoggingEnabled ? 1 : 0;
+    const std::size_t warnings = BFR_LOGGING_ENABLED ? 1 : 0;
     REQUIRE(messages.size() == warnings);
     for (const std::string& message : messages) {
         CHECK_THAT(message, Catch::Matchers::ContainsSubstring("1 buffers were left when the device went"));
@@ -277,17 +262,17 @@ TEST_CASE("Device collects garbage of buffers destroyed after a submit the GPU h
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const BufferDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const BufferHandle buffer = created(device, kDeviceBuffer);
-        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        Buffer buffer = created(device, kDeviceBuffer);
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(pool.has_value());
-        const auto commands = device.beginCommands(*pool);
+        const auto commands = pool->beginCommands();
         REQUIRE(commands.has_value());
-        const CommandListHandle list = *commands;
+        const CommandList list = *commands;
         const auto token = device.submit({.queue = 0, .commandLists = std::span{&list, 1}, .waits = {}});
         REQUIRE(token.has_value());
-        REQUIRE(device.destroyBuffer(buffer).has_value());
+        REQUIRE(slotsResult(device, destroyed(buffer)) == Result::ErrorInvalidHandle);
 
         const auto pending = device.runGarbageCollection();
         INFO(failureOf(pending));
@@ -296,7 +281,7 @@ TEST_CASE("Device collects garbage of buffers destroyed after a submit the GPU h
         const auto passed = device.runGarbageCollection();
         INFO(failureOf(passed));
         CHECK(passed.has_value());
-        CHECK(device.destroyCommandPool(*pool).has_value());
+        CHECK(resetResult(device, destroyed(*pool)) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -309,18 +294,18 @@ TEST_CASE("Device holds as many buffers as its desc's maxBuffers, and fails with
         auto instance = createInstance(recordingInto(backend, messages), kValidation);
         INFO(failureOf(instance));
         REQUIRE(instance.has_value());
-        auto made = (*instance)->createDevice(0, kNoWindow,
-                                              testDeviceWith([](DeviceDesc& desc) { desc.maxBuffers = 1; }));
+        auto made = instance->createDevice(
+            testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& desc) { desc.maxBuffers = 1; }));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
-        Device& device = **made;
-        const BufferHandle buffer = created(device, kUploadBuffer);
-        CHECK(device.createBuffer(kUploadBuffer).error().code == ErrorCode::RhiLimitReached);
-        CHECK(device.destroyBuffer(buffer).has_value());
-        const auto again = device.createBuffer(kUploadBuffer);
+        const Device& device = *made;
+        Buffer buffer = created(device, kUploadBuffer);
+        CHECK(device.createBuffer(kUploadBuffer).error().code == Result::ErrorLimitReached);
+        CHECK(slotsResult(device, destroyed(buffer)) == Result::ErrorInvalidHandle);
+        auto again = device.createBuffer(kUploadBuffer);
         INFO(failureOf(again));
         REQUIRE(again.has_value());
-        CHECK(device.destroyBuffer(*again).has_value());
+        CHECK(slotsResult(device, destroyed(*again)) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -330,12 +315,12 @@ TEST_CASE("Device fails a uniform buffer with RhiLimitReached when it holds no u
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const BufferDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
         REQUIRE(kTestDevice.maxBindlessUniformBuffers == 0);
-        const auto uniform = made.device->createBuffer(
+        const auto uniform = made.device.createBuffer(
             {.size = kSize, .memory = BufferMemory::Upload, .usage = {.uniform = true}});
         REQUIRE_FALSE(uniform.has_value());
-        CHECK(uniform.error().code == ErrorCode::RhiLimitReached);
+        CHECK(uniform.error().code == Result::ErrorLimitReached);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

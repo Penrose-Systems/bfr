@@ -1,16 +1,9 @@
-// What every backend does with textures, through the interface alone. Each
+// What every backend does with textures, through the public API alone. Each
 // case runs on every backend the build has.
 
-#include "bfr/core/error.h"
-#include "bfr/core/log.h"
-#include "bfr/rhi/buffer.h"
-#include "bfr/rhi/caps.h"
-#include "bfr/rhi/command_list.h"
-#include "bfr/rhi/device.h"
-#include "bfr/rhi/format.h"
-#include "bfr/rhi/instance.h"
-#include "bfr/rhi/texture.h"
-#include "rhi_test_support.h"
+#include "bfr.hpp"
+#include "bfr/bfr.h"
+#include "bfr_test_support.h"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -24,7 +17,6 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <numeric>
 #include <span>
 #include <string>
@@ -32,9 +24,7 @@
 #include <vector>
 
 using namespace bfr;
-using namespace bfr::rhi;
-using namespace bfr::rhi::test;
-using bfr::core::ErrorCode;
+using namespace bfr::test;
 
 namespace {
 
@@ -53,35 +43,11 @@ constexpr TextureUsage kCopies{.copySrc = true, .copyDst = true};
 // A number Format has no value for.
 constexpr auto kNoSuchFormat = static_cast<Format>(0xffff);
 
-// An Instance and a device on its first adapter, presenting nowhere.
-struct TextureDevice {
-    explicit TextureDevice(const InstanceDesc& desc) {
-        auto created = createInstance(desc, kValidation);
-        INFO(failureOf(created));
-        REQUIRE(created.has_value());
-        instance = std::move(*created);
-        auto made = instance->createDevice(0, kNoWindow, kTestDevice);
-        INFO(failureOf(made));
-        REQUIRE(made.has_value());
-        device = std::move(*made);
-    }
-
-    std::unique_ptr<Instance> instance;
-    std::unique_ptr<Device> device;
-};
-
-TextureHandle created(Device& device, const TextureDesc& desc) {
-    const auto texture = device.createTexture(desc);
+Texture created(const Device& device, const TextureDesc& desc) {
+    auto texture = device.createTexture(desc);
     INFO(failureOf(texture));
     REQUIRE(texture.has_value());
-    return *texture;
-}
-
-BufferHandle created(Device& device, const BufferDesc& desc) {
-    const auto buffer = device.createBuffer(desc);
-    INFO(failureOf(buffer));
-    REQUIRE(buffer.has_value());
-    return *buffer;
+    return std::move(*texture);
 }
 
 // A format the copy runs in, with the size of its texel blocks, which the
@@ -97,10 +63,6 @@ struct CopyCase {
 constexpr std::uint32_t kRgba8Bytes = 4;
 constexpr std::uint32_t kBc1Bytes = 8;
 constexpr std::uint32_t kBc1Size = 4;
-
-std::uint64_t alignUp(std::uint64_t value, std::uint64_t alignment) {
-    return (value + alignment - 1) / alignment * alignment;
-}
 
 } // namespace
 
@@ -153,13 +115,15 @@ TEST_CASE("Device creates and destroys a texture of each dimension", "[rhi][agno
                                                   .usage = {.colorAttachment = true}});
     std::vector<std::string> messages;
     {
-        const TextureDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const TextureHandle texture = created(device, desc);
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        Texture texture = created(made.device, desc);
 
-        CHECK(device.destroyTexture(texture).has_value());
-        CHECK(device.destroyTexture(texture).error().code == ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyTexture({}).has_value());
+        const bfr_texture stale = destroyed(texture);
+        CHECK(slotsResult(made.device, stale) == Result::ErrorInvalidHandle);
+        // d1: stale destroy reported as an Error message (track B)
+        bfr_destroy_texture(made.device.get(), stale);
+        // d1: null destroy: no message (track B)
+        bfr_destroy_texture(made.device.get(), bfr_texture{});
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -185,9 +149,10 @@ TEST_CASE("Device copies texels from a buffer into a texture, to another texture
     INFO(copy.name);
     std::vector<std::string> messages;
     {
-        const TextureDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const auto formatCaps = made.instance->formatCaps(0, copy.format);
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        const auto formatCaps = formatCapsOf(made.instance, kFirstAdapter, copy.format);
+        INFO(failureOf(formatCaps));
         REQUIRE(formatCaps.has_value());
         if (!formatCaps->copySrc || !formatCaps->copyDst) {
             SKIP("the adapter does not copy this format");
@@ -196,29 +161,29 @@ TEST_CASE("Device copies texels from a buffer into a texture, to another texture
         const std::uint32_t depth = slices ? kSlices : 1;
         // The source is an array with mip levels, the region its second layer's
         // second level; or a 3D texture, the region two of its slices.
-        const TextureHandle source = created(device, {.dimension = copy.dimension,
-                                                      .format = copy.format,
-                                                      .width = kWidth,
-                                                      .height = kHeight,
-                                                      .depth = depth,
-                                                      .layers = slices ? 1 : kLayers,
-                                                      .mipLevels = slices ? 1 : kMips,
-                                                      .samples = 1,
-                                                      .usage = kCopies});
-        const TextureHandle target = created(device, {.dimension = copy.dimension,
-                                                      .format = copy.format,
-                                                      .width = kWidth,
-                                                      .height = kHeight,
-                                                      .depth = depth,
-                                                      .layers = 1,
-                                                      .mipLevels = 1,
-                                                      .samples = 1,
-                                                      .usage = kCopies});
+        Texture source = created(device, {.dimension = copy.dimension,
+                                          .format = copy.format,
+                                          .width = kWidth,
+                                          .height = kHeight,
+                                          .depth = depth,
+                                          .layers = slices ? 1 : kLayers,
+                                          .mipLevels = slices ? 1 : kMips,
+                                          .samples = 1,
+                                          .usage = kCopies});
+        Texture target = created(device, {.dimension = copy.dimension,
+                                          .format = copy.format,
+                                          .width = kWidth,
+                                          .height = kHeight,
+                                          .depth = depth,
+                                          .layers = 1,
+                                          .mipLevels = 1,
+                                          .samples = 1,
+                                          .usage = kCopies});
         const std::uint32_t mip = slices ? 0 : 1;
         const std::uint32_t layer = slices ? 0 : 1;
 
         // Rows and offsets keep the alignment the caps state and whole blocks.
-        const Limits& limits = made.instance->adapters()[0].caps.limits;
+        const CapsLimits limits = capsOf(made.instance, kFirstAdapter).limits;
         const std::uint64_t rowBytes = std::uint64_t{kRegionWidth / copy.blockSize} * copy.blockBytes;
         const std::uint64_t bytesPerRow = alignUp(rowBytes,
                                                   std::lcm(std::max<std::uint64_t>(limits.copyRowPitchAlignment, 1),
@@ -226,14 +191,15 @@ TEST_CASE("Device copies texels from a buffer into a texture, to another texture
         const std::uint64_t offset = std::lcm(std::max<std::uint64_t>(limits.copyOffsetAlignment, 1), copy.blockBytes);
         const std::uint32_t blockRows = kRegionHeight / copy.blockSize;
         const std::uint64_t size = offset + (bytesPerRow * blockRows * depth);
-        const BufferHandle upload =
-            created(device, BufferDesc{.size = size, .memory = BufferMemory::Upload, .usage = {.copySrc = true}});
-        const BufferHandle readback =
+        Buffer upload = created(device,
+                                BufferDesc{.size = size, .memory = BufferMemory::Upload, .usage = {.copySrc = true}});
+        Buffer readback =
             created(device, BufferDesc{.size = size, .memory = BufferMemory::Readback, .usage = {.copyDst = true}});
-        const auto written = device.mapBuffer(upload);
-        REQUIRE(written.has_value());
-        for (std::size_t index = 0; index < written->size(); ++index) {
-            (*written)[index] = static_cast<std::byte>(static_cast<unsigned char>(index));
+        const auto mappedUpload = upload.map();
+        REQUIRE(mappedUpload.has_value());
+        const std::span<std::byte> written = mappedBytes(*mappedUpload, size);
+        for (std::size_t index = 0; index < written.size(); ++index) {
+            written[index] = static_cast<std::byte>(static_cast<unsigned char>(index));
         }
 
         const BufferTextureCopy in{.bufferOffset = offset,
@@ -267,9 +233,9 @@ TEST_CASE("Device copies texels from a buffer into a texture, to another texture
         out.x = kInset;
         out.y = kInset;
 
-        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(pool.has_value());
-        const auto list = device.beginCommands(*pool);
+        const auto list = pool->beginCommands();
         REQUIRE(list.has_value());
         CHECK(device.textureBarrier(*list, source, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
         CHECK(device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
@@ -283,19 +249,20 @@ TEST_CASE("Device copies texels from a buffer into a texture, to another texture
         REQUIRE(token.has_value());
         REQUIRE(device.wait(*token, kTestWait).has_value());
 
-        const auto read = device.mapBuffer(readback);
-        REQUIRE(read.has_value());
+        const auto mappedReadback = readback.map();
+        REQUIRE(mappedReadback.has_value());
+        const std::span<const std::byte> read = mappedBytes(*mappedReadback, size);
         for (std::uint64_t row = 0; row < std::uint64_t{blockRows} * depth; ++row) {
             const std::uint64_t at = offset + (row * bytesPerRow);
             INFO("block row " << row);
-            CHECK(std::ranges::equal(read->subspan(at, rowBytes), written->subspan(at, rowBytes)));
+            CHECK(std::ranges::equal(read.subspan(at, rowBytes), written.subspan(at, rowBytes)));
         }
-        CHECK(device.destroyCommandPool(*pool).has_value());
-        for (const BufferHandle buffer : {upload, readback}) {
-            CHECK(device.destroyBuffer(buffer).has_value());
+        CHECK(resetResult(device, destroyed(*pool)) == Result::ErrorInvalidHandle);
+        for (Buffer* buffer : std::array{&upload, &readback}) {
+            CHECK(slotsResult(device, destroyed(*buffer)) == Result::ErrorInvalidHandle);
         }
-        for (const TextureHandle texture : {source, target}) {
-            CHECK(device.destroyTexture(texture).has_value());
+        for (Texture* texture : std::array{&source, &target}) {
+            CHECK(slotsResult(device, destroyed(*texture)) == Result::ErrorInvalidHandle);
         }
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
@@ -314,24 +281,24 @@ TEST_CASE("Device copies the depth and the stencil of a texture, each whole, fro
     const bool depth24 = format == Format::D24UnormS8Uint;
     std::vector<std::string> messages;
     {
-        const TextureDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const auto formatCaps = made.instance->formatCaps(0, format);
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        const auto formatCaps = formatCapsOf(made.instance, kFirstAdapter, format);
+        INFO(failureOf(formatCaps));
         REQUIRE(formatCaps.has_value());
         if (!formatCaps->copySrc || !formatCaps->copyDst || !formatCaps->depthStencil) {
             SKIP("the adapter does not copy this format");
         }
-        const TextureHandle texture = created(device,
-                                              {.dimension = TextureDimension::D2,
-                                               .format = format,
-                                               .width = kWidth,
-                                               .height = kHeight,
-                                               .depth = 1,
-                                               .layers = 1,
-                                               .mipLevels = 1,
-                                               .samples = 1,
-                                               .usage = {.copySrc = true, .copyDst = true, .depthStencil = true}});
-        const Limits& limits = made.instance->adapters()[0].caps.limits;
+        Texture texture = created(device, {.dimension = TextureDimension::D2,
+                                           .format = format,
+                                           .width = kWidth,
+                                           .height = kHeight,
+                                           .depth = 1,
+                                           .layers = 1,
+                                           .mipLevels = 1,
+                                           .samples = 1,
+                                           .usage = {.copySrc = true, .copyDst = true, .depthStencil = true}});
+        const CapsLimits limits = capsOf(made.instance, kFirstAdapter).limits;
         const std::uint64_t rowAlignment = std::lcm(std::max<std::uint64_t>(limits.copyRowPitchAlignment, 1), 4);
         const std::uint64_t offsetAlignment = std::lcm(std::max<std::uint64_t>(limits.copyOffsetAlignment, 1),
                                                        kAspectAlignment);
@@ -341,13 +308,14 @@ TEST_CASE("Device copies the depth and the stencil of a texture, each whole, fro
         const std::uint64_t depthAt = offsetAlignment;
         const std::uint64_t stencilAt = alignUp(depthAt + (depthPitch * kHeight), offsetAlignment);
         const std::uint64_t size = stencilAt + (stencilPitch * kHeight);
-        const BufferHandle upload =
-            created(device, BufferDesc{.size = size, .memory = BufferMemory::Upload, .usage = {.copySrc = true}});
-        const BufferHandle readback =
+        Buffer upload = created(device,
+                                BufferDesc{.size = size, .memory = BufferMemory::Upload, .usage = {.copySrc = true}});
+        Buffer readback =
             created(device, BufferDesc{.size = size, .memory = BufferMemory::Readback, .usage = {.copyDst = true}});
-        const auto written = device.mapBuffer(upload);
-        REQUIRE(written.has_value());
-        std::ranges::fill(*written, std::byte{0});
+        const auto mappedUpload = upload.map();
+        REQUIRE(mappedUpload.has_value());
+        const std::span<std::byte> written = mappedBytes(*mappedUpload, size);
+        std::ranges::fill(written, std::byte{0});
         for (std::uint32_t y = 0; y < kHeight; ++y) {
             for (std::uint32_t x = 0; x < kWidth; ++x) {
                 const std::uint32_t texel = (y * kWidth) + x;
@@ -355,8 +323,8 @@ TEST_CASE("Device copies the depth and the stencil of a texture, each whole, fro
                                                     : std::bit_cast<std::uint32_t>(static_cast<float>(texel) /
                                                                                    (kWidth * kHeight));
                 const auto bytes = std::bit_cast<std::array<std::byte, sizeof(value)>>(value);
-                std::ranges::copy(bytes, written->subspan(depthAt + (y * depthPitch) + (x * kDepthBytes)).begin());
-                (*written)[stencilAt + (y * stencilPitch) + x] = static_cast<std::byte>(texel);
+                std::ranges::copy(bytes, written.subspan(depthAt + (y * depthPitch) + (x * kDepthBytes)).begin());
+                written[stencilAt + (y * stencilPitch) + x] = static_cast<std::byte>(texel);
             }
         }
         const auto whole = [](std::uint64_t at, std::uint64_t pitch, TextureAspect aspect) {
@@ -376,9 +344,9 @@ TEST_CASE("Device copies the depth and the stencil of a texture, each whole, fro
         const std::array regions{whole(depthAt, depthPitch, TextureAspect::Depth),
                                  whole(stencilAt, stencilPitch, TextureAspect::Stencil)};
 
-        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(pool.has_value());
-        const auto list = device.beginCommands(*pool);
+        const auto list = pool->beginCommands();
         REQUIRE(list.has_value());
         CHECK(device.textureBarrier(*list, texture, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
         CHECK(device.copyBufferToTexture(*list, upload, texture, regions).has_value());
@@ -389,8 +357,9 @@ TEST_CASE("Device copies the depth and the stencil of a texture, each whole, fro
         REQUIRE(token.has_value());
         REQUIRE(device.wait(*token, kTestWait).has_value());
 
-        const auto read = device.mapBuffer(readback);
-        REQUIRE(read.has_value());
+        const auto mappedReadback = readback.map();
+        REQUIRE(mappedReadback.has_value());
+        const std::span<const std::byte> read = mappedBytes(*mappedReadback, size);
         const auto depthOf = [depth24](std::span<const std::byte> bytes, std::uint64_t at) {
             std::array<std::byte, sizeof(std::uint32_t)> texel{};
             std::ranges::copy(bytes.subspan(at, texel.size()), texel.begin());
@@ -402,14 +371,14 @@ TEST_CASE("Device copies the depth and the stencil of a texture, each whole, fro
             for (std::uint32_t x = 0; x < kWidth; ++x) {
                 const std::uint64_t depthTexel = depthAt + (y * depthPitch) + (x * kDepthBytes);
                 const std::uint64_t stencilTexel = stencilAt + (y * stencilPitch) + x;
-                CHECK(depthOf(*read, depthTexel) == depthOf(*written, depthTexel));
-                CHECK((*read)[stencilTexel] == (*written)[stencilTexel]);
+                CHECK(depthOf(read, depthTexel) == depthOf(written, depthTexel));
+                CHECK(read[stencilTexel] == written[stencilTexel]);
             }
         }
-        CHECK(device.destroyCommandPool(*pool).has_value());
-        CHECK(device.destroyBuffer(upload).has_value());
-        CHECK(device.destroyBuffer(readback).has_value());
-        CHECK(device.destroyTexture(texture).has_value());
+        CHECK(resetResult(device, destroyed(*pool)) == Result::ErrorInvalidHandle);
+        CHECK(slotsResult(device, destroyed(upload)) == Result::ErrorInvalidHandle);
+        CHECK(slotsResult(device, destroyed(readback)) == Result::ErrorInvalidHandle);
+        CHECK(slotsResult(device, destroyed(texture)) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -418,52 +387,61 @@ TEST_CASE("Device fails texture calls with RhiInvalidHandle for a texture or lis
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const TextureDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const TextureHandle texture = created(device, {.dimension = TextureDimension::D2,
-                                                       .format = Format::Rgba8Unorm,
-                                                       .width = kWidth,
-                                                       .height = kHeight,
-                                                       .depth = 1,
-                                                       .layers = 1,
-                                                       .mipLevels = 1,
-                                                       .samples = 1,
-                                                       .usage = kCopies});
-        const TextureHandle gone = created(device, {.dimension = TextureDimension::D2,
-                                                    .format = Format::Rgba8Unorm,
-                                                    .width = kWidth,
-                                                    .height = kHeight,
-                                                    .depth = 1,
-                                                    .layers = 1,
-                                                    .mipLevels = 1,
-                                                    .samples = 1,
-                                                    .usage = kCopies});
-        REQUIRE(device.destroyTexture(gone).has_value());
-        const BufferHandle buffer = created(device, BufferDesc{.size = std::uint64_t{kWidth} * kHeight * kRgba8Bytes,
-                                                               .memory = BufferMemory::Upload,
-                                                               .usage = {.copySrc = true}});
-        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        Texture texture = created(device, {.dimension = TextureDimension::D2,
+                                           .format = Format::Rgba8Unorm,
+                                           .width = kWidth,
+                                           .height = kHeight,
+                                           .depth = 1,
+                                           .layers = 1,
+                                           .mipLevels = 1,
+                                           .samples = 1,
+                                           .usage = kCopies});
+        Texture goneTexture = created(device, {.dimension = TextureDimension::D2,
+                                               .format = Format::Rgba8Unorm,
+                                               .width = kWidth,
+                                               .height = kHeight,
+                                               .depth = 1,
+                                               .layers = 1,
+                                               .mipLevels = 1,
+                                               .samples = 1,
+                                               .usage = kCopies});
+        const bfr_texture gone = destroyed(goneTexture);
+        REQUIRE(slotsResult(device, gone) == Result::ErrorInvalidHandle);
+        Buffer buffer = created(device, BufferDesc{.size = std::uint64_t{kWidth} * kHeight * kRgba8Bytes,
+                                                   .memory = BufferMemory::Upload,
+                                                   .usage = {.copySrc = true}});
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(pool.has_value());
-        const auto list = device.beginCommands(*pool);
+        const auto list = pool->beginCommands();
         REQUIRE(list.has_value());
-        const BufferTextureCopy region{};
-        const TextureCopy between{};
+        // bfr.hpp names a texture only by a live Texture, so the stale one goes
+        // through bfr.h, with TextureRange{}, BufferTextureCopy{} and
+        // TextureCopy{} as their C structs.
+        const bfr_texture_range range{.mip_level = 0,
+                                      .mip_count = BFR_REMAINING,
+                                      .layer = 0,
+                                      .layer_count = BFR_REMAINING};
+        const bfr_buffer_texture_copy region{};
+        const bfr_texture_copy between{};
 
-        CHECK(device.textureBarrier(*list, gone, TextureLayout::Undefined, TextureLayout::CopyDst, {}).error().code ==
-              ErrorCode::RhiInvalidHandle);
-        CHECK(device.copyBufferToTexture(*list, buffer, gone, std::span{&region, 1}).error().code ==
-              ErrorCode::RhiInvalidHandle);
-        CHECK(device.copyTextureToBuffer(*list, gone, buffer, std::span{&region, 1}).error().code ==
-              ErrorCode::RhiInvalidHandle);
-        CHECK(device.copyTexture(*list, texture, gone, std::span{&between, 1}).error().code ==
-              ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyCommandList(*list).has_value());
+        CHECK(resultOf(bfr_texture_barrier(device.get(), list->get(), gone, BFR_TEXTURE_LAYOUT_UNDEFINED,
+                                           BFR_TEXTURE_LAYOUT_COPY_DST, &range)) == Result::ErrorInvalidHandle);
+        CHECK(resultOf(bfr_copy_buffer_to_texture(device.get(), list->get(), buffer.get(), gone, &region, 1)) ==
+              Result::ErrorInvalidHandle);
+        CHECK(resultOf(bfr_copy_texture_to_buffer(device.get(), list->get(), gone, buffer.get(), &region, 1)) ==
+              Result::ErrorInvalidHandle);
+        CHECK(resultOf(bfr_copy_texture(device.get(), list->get(), texture.get(), gone, &between, 1)) ==
+              Result::ErrorInvalidHandle);
+        device.destroyCommandList(*list);
+        CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
         CHECK(
             device.textureBarrier(*list, texture, TextureLayout::Undefined, TextureLayout::CopyDst, {}).error().code ==
-            ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyCommandPool(*pool).has_value());
-        CHECK(device.destroyBuffer(buffer).has_value());
-        CHECK(device.destroyTexture(texture).has_value());
+            Result::ErrorInvalidHandle);
+        CHECK(resetResult(device, destroyed(*pool)) == Result::ErrorInvalidHandle);
+        CHECK(slotsResult(device, destroyed(buffer)) == Result::ErrorInvalidHandle);
+        CHECK(slotsResult(device, destroyed(texture)) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -472,7 +450,7 @@ TEST_CASE("Device refuses a texture or a format query of a format BFR does not h
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const TextureDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
         const Format format = GENERATE(Format::Undefined, kNoSuchFormat);
         const TextureDesc desc{.dimension = TextureDimension::D2,
                                .format = format,
@@ -484,8 +462,7 @@ TEST_CASE("Device refuses a texture or a format query of a format BFR does not h
                                .samples = 1,
                                .usage = kCopies};
 
-        CHECK(made.device->createTexture(desc).error().code == ErrorCode::RhiInvalidCall);
-        CHECK(made.instance->formatCaps(0, format).error().code == ErrorCode::RhiInvalidCall);
+        CHECK(made.device.createTexture(desc).error().code == Result::ErrorInvalidArgument);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -494,19 +471,24 @@ TEST_CASE("Device destroys the textures left when it goes, and says so", "[rhi][
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const TextureDevice made{recordingInto(backend, messages)};
-        static_cast<void>(created(*made.device, {.dimension = TextureDimension::D2,
-                                                 .format = Format::Rgba8Unorm,
-                                                 .width = kWidth,
-                                                 .height = kHeight,
-                                                 .depth = 1,
-                                                 .layers = 1,
-                                                 .mipLevels = 1,
-                                                 .samples = 1,
-                                                 .usage = kCopies}));
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        // A Texture keeps its Device alive, so one is left only through bfr.h,
+        // never destroyed.
+        constexpr TextureDesc kLeft{.dimension = TextureDimension::D2,
+                                    .format = Format::Rgba8Unorm,
+                                    .width = kWidth,
+                                    .height = kHeight,
+                                    .depth = 1,
+                                    .layers = 1,
+                                    .mipLevels = 1,
+                                    .samples = 1,
+                                    .usage = kCopies};
+        const bfr_texture_desc desc = detail::toC(kLeft, nullptr);
+        bfr_texture left{};
+        REQUIRE(resultOf(bfr_create_texture(made.device.get(), &desc, &left)) == Result::Success);
     }
 
-    const std::size_t warnings = bfr::core::kLoggingEnabled ? 1 : 0;
+    const std::size_t warnings = BFR_LOGGING_ENABLED ? 1 : 0;
     REQUIRE(messages.size() == warnings);
     for (const std::string& message : messages) {
         CHECK_THAT(message, Catch::Matchers::ContainsSubstring("1 textures were left when the device went"));

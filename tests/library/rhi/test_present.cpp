@@ -1,16 +1,9 @@
 // What every backend does from acquiring a swapchain image to presenting it,
-// through the interface alone. Each case runs on every backend the build has.
+// through the public API alone. Each case runs on every backend the build has.
 
-#include "bfr/core/error.h"
-#include "bfr/core/handle.h"
-#include "bfr/core/window.h"
-#include "bfr/rhi/caps.h"
-#include "bfr/rhi/command_list.h"
-#include "bfr/rhi/device.h"
-#include "bfr/rhi/instance.h"
-#include "bfr/rhi/swapchain.h"
-#include "bfr/rhi/texture.h"
-#include "rhi_test_support.h"
+#include "bfr.hpp"
+#include "bfr/bfr.h"
+#include "bfr_test_support.h"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -20,10 +13,7 @@
 
 #include <algorithm>
 #include <array>
-#include <cstddef>
 #include <cstdint>
-#include <limits>
-#include <memory>
 #include <span>
 #include <string>
 #include <thread>
@@ -31,8 +21,7 @@
 #include <vector>
 
 using namespace bfr;
-using namespace bfr::rhi;
-using namespace bfr::rhi::test;
+using namespace bfr::test;
 
 namespace {
 
@@ -40,7 +29,10 @@ constexpr std::uint32_t kWidth = 64;
 constexpr std::uint32_t kHeight = 48;
 constexpr int kFrames = 3;
 
-const bfr::core::window::NativeWindow kHeadless = bfr::core::window::Headless{};
+// The slots a handle can name: its index takes the low 24 of its bits. bfr.h
+// does not state it; a maximum past it needs it.
+constexpr unsigned kHandleIndexBits = 24;
+constexpr std::uint32_t kHandleIndices = std::uint32_t{1} << kHandleIndexBits;
 
 // The swapchain's image, cleared.
 constexpr RenderingDesc kClear{.colorAttachmentCount = 1,
@@ -51,43 +43,48 @@ constexpr RenderingDesc kClear{.colorAttachmentCount = 1,
                                .depthStencil = {},
                                .occlusionQueries = {}};
 
-bfr::core::Result<Token> submitOne(Device& device, CommandListHandle commandList, std::uint32_t queue = 0,
-                                   std::span<const Token> waits = {}) {
+Expected<Token> submitOne(const Device& device, CommandList commandList, std::uint32_t queue = 0,
+                          std::span<const Token> waits = {}) {
     return device.submit({.queue = queue, .commandLists = std::span{&commandList, 1}, .waits = waits});
 }
 
+// Members go in reverse: the pool, the swapchain, the device, the Instance.
 struct HeadlessSwapchain {
     explicit HeadlessSwapchain(const InstanceDesc& desc) {
         auto created = createInstance(desc, kValidation);
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         instance = std::move(*created);
-        device = presentingDevice(*instance, kHeadless);
-        auto made = device->createSwapchain(kHeadless, swapchainDesc(*instance));
+        device = presentingDevice(instance, kHeadless);
+        auto made = device.createSwapchain(swapchainDesc(instance));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
-        swapchain = *made;
-        const auto images = device->resizeSwapchain(swapchain, kWidth, kHeight);
+        swapchain = std::move(*made);
+        const auto images = swapchain.resize(kWidth, kHeight);
         INFO(failureOf(images));
         REQUIRE(images.has_value());
-        const auto madePool = device->createCommandPool({.queue = 0, .listCount = kPoolLists});
+        auto madePool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         INFO(failureOf(madePool));
         REQUIRE(madePool.has_value());
-        pool = *madePool;
+        pool = std::move(*madePool);
     }
     ~HeadlessSwapchain() {
-        CHECK(device->destroyCommandPool(pool).has_value());
-        CHECK(device->destroySwapchain(swapchain).has_value());
+        const CommandPoolRef destroyedPool = pool;
+        pool = {};
+        CHECK(resetResult(device, destroyedPool.get()) == Result::ErrorInvalidHandle);
+        const SwapchainRef destroyedSwapchain = swapchain;
+        swapchain = {};
+        CHECK(resizeResult(device, destroyedSwapchain.get(), kWidth, kHeight) == Result::ErrorInvalidHandle);
     }
     HeadlessSwapchain(const HeadlessSwapchain&) = delete;
     HeadlessSwapchain& operator=(const HeadlessSwapchain&) = delete;
     HeadlessSwapchain(HeadlessSwapchain&&) = delete;
     HeadlessSwapchain& operator=(HeadlessSwapchain&&) = delete;
 
-    std::unique_ptr<Instance> instance;
-    std::unique_ptr<Device> device;
-    SwapchainHandle swapchain;
-    CommandPoolHandle pool;
+    Instance instance;
+    Device device;
+    Swapchain swapchain;
+    CommandPool pool;
 };
 
 } // namespace
@@ -96,19 +93,19 @@ TEST_CASE("Device clears and presents a headless swapchain, frame after frame", 
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const HeadlessSwapchain headless{recordingInto(backend, messages)};
-        Device& device = *headless.device;
+        HeadlessSwapchain headless{recordingInto(backend, messages)};
+        const Device& device = headless.device;
         Token last;
         for (int frame = 0; frame < kFrames; ++frame) {
             INFO("frame " << frame);
             REQUIRE(device.wait(last, kTestWait).has_value());
-            const auto reset = device.resetCommandPool(headless.pool);
+            const auto reset = headless.pool.reset();
             INFO(failureOf(reset));
             REQUIRE(reset.has_value());
-            const auto acquired = device.acquire(headless.swapchain, kTestWait);
+            const auto acquired = headless.swapchain.acquire(kTestWait);
             INFO(failureOf(acquired));
             REQUIRE(acquired.has_value());
-            const auto commands = device.beginCommands(headless.pool);
+            const auto commands = headless.pool.beginCommands();
             INFO(failureOf(commands));
             REQUIRE(commands.has_value());
             CHECK(device.beginRendering(*commands, headless.swapchain, kClear).has_value());
@@ -118,7 +115,7 @@ TEST_CASE("Device clears and presents a headless swapchain, frame after frame", 
             REQUIRE(submitted.has_value());
             CHECK(submitted->value > last.value);
             last = *submitted;
-            const auto presented = device.present(headless.swapchain);
+            const auto presented = headless.swapchain.present();
             INFO(failureOf(presented));
             CHECK(presented.has_value());
         }
@@ -132,30 +129,31 @@ TEST_CASE("Device resolves a multisampled texture into a swapchain's image and p
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const HeadlessSwapchain headless{recordingInto(backend, messages)};
-        Device& device = *headless.device;
-        const Format format = swapchainDesc(*headless.instance).format;
+        HeadlessSwapchain headless{recordingInto(backend, messages)};
+        const Device& device = headless.device;
+        const Format format = swapchainDesc(headless.instance).format;
         constexpr std::uint32_t kSamples = 4;
-        const auto caps = headless.instance->formatCaps(headlessAdapter(*headless.instance), format);
+        const auto caps = formatCapsOf(headless.instance, headlessAdapter(headless.instance), format);
+        INFO(failureOf(caps));
         REQUIRE(caps.has_value());
         if ((caps->sampleCounts & kSamples) == 0 || !caps->resolve) {
             SKIP("the adapter does not resolve the swapchain's format from 4 samples");
         }
-        const auto texture = device.createTexture({.dimension = TextureDimension::D2,
-                                                   .format = format,
-                                                   .width = kWidth,
-                                                   .height = kHeight,
-                                                   .depth = 1,
-                                                   .layers = 1,
-                                                   .mipLevels = 1,
-                                                   .samples = kSamples,
-                                                   .usage = {.colorAttachment = true}});
+        auto texture = device.createTexture({.dimension = TextureDimension::D2,
+                                             .format = format,
+                                             .width = kWidth,
+                                             .height = kHeight,
+                                             .depth = 1,
+                                             .layers = 1,
+                                             .mipLevels = 1,
+                                             .samples = kSamples,
+                                             .usage = {.colorAttachment = true}});
         INFO(failureOf(texture));
         REQUIRE(texture.has_value());
-        const auto acquired = device.acquire(headless.swapchain, kTestWait);
+        const auto acquired = headless.swapchain.acquire(kTestWait);
         INFO(failureOf(acquired));
         REQUIRE(acquired.has_value());
-        const auto commands = device.beginCommands(headless.pool);
+        const auto commands = headless.pool.beginCommands();
         REQUIRE(commands.has_value());
         CHECK(device.textureBarrier(*commands, *texture, TextureLayout::Undefined, TextureLayout::ColorTarget, {})
                   .has_value());
@@ -169,11 +167,13 @@ TEST_CASE("Device resolves a multisampled texture into a swapchain's image and p
         const auto submitted = submitOne(device, *commands);
         INFO(failureOf(submitted));
         REQUIRE(submitted.has_value());
-        const auto presented = device.present(headless.swapchain);
+        const auto presented = headless.swapchain.present();
         INFO(failureOf(presented));
         CHECK(presented.has_value());
         CHECK(device.wait(*submitted, kTestWait).has_value());
-        CHECK(device.destroyTexture(*texture).has_value());
+        const TextureRef destroyedTexture = *texture;
+        *texture = {};
+        CHECK(slotsResult(device, destroyedTexture.get()) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -182,14 +182,13 @@ TEST_CASE("Device refuses to acquire from a swapchain with no images, and says t
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const HeadlessSwapchain headless{recordingInto(backend, messages)};
-        Device& device = *headless.device;
-        REQUIRE(device.resizeSwapchain(headless.swapchain, 0, 0).has_value());
+        HeadlessSwapchain headless{recordingInto(backend, messages)};
+        REQUIRE(headless.swapchain.resize(0, 0).has_value());
 
-        const auto acquired = device.acquire(headless.swapchain, kTestWait);
+        const auto acquired = headless.swapchain.acquire(kTestWait);
 
         REQUIRE_FALSE(acquired.has_value());
-        CHECK(acquired.error().code == bfr::core::ErrorCode::RhiOutOfDate);
+        CHECK(acquired.error().code == Result::ErrorOutOfDate);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -198,26 +197,28 @@ TEST_CASE("Device refuses a swapchain call with no image acquired with RhiInvali
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const HeadlessSwapchain headless{recordingInto(backend, messages)};
-        Device& device = *headless.device;
-        const auto commands = device.beginCommands(headless.pool);
+        HeadlessSwapchain headless{recordingInto(backend, messages)};
+        const Device& device = headless.device;
+        const auto commands = headless.pool.beginCommands();
         REQUIRE(commands.has_value());
 
         // Rendering to a swapchain, or presenting it, needs an acquired image.
         CHECK(device.beginRendering(*commands, headless.swapchain, kClear).error().code ==
-              bfr::core::ErrorCode::RhiInvalidCall);
-        CHECK(device.present(headless.swapchain).error().code == bfr::core::ErrorCode::RhiInvalidCall);
+              Result::ErrorInvalidArgument);
+        CHECK(headless.swapchain.present().error().code == Result::ErrorInvalidArgument);
 
-        REQUIRE(device.acquire(headless.swapchain, kTestWait).has_value());
+        REQUIRE(headless.swapchain.acquire(kTestWait).has_value());
         REQUIRE(device.beginRendering(*commands, headless.swapchain, kClear).has_value());
         REQUIRE(device.endRendering(*commands).has_value());
         REQUIRE(submitOne(device, *commands).has_value());
-        CHECK(device.present(headless.swapchain).has_value());
+        CHECK(headless.swapchain.present().has_value());
 
         // A submitted list is gone.
-        CHECK(submitOne(device, *commands).error().code == bfr::core::ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyCommandList(*commands).error().code == bfr::core::ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyCommandList({}).has_value());
+        CHECK(submitOne(device, *commands).error().code == Result::ErrorInvalidHandle);
+        // d1: stale destroy reported as an Error message (track B)
+        device.destroyCommandList(*commands);
+        // d1: null destroy: no message (track B)
+        device.destroyCommandList({});
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -228,18 +229,17 @@ TEST_CASE("Device completes a default token at once, and has not passed one no s
     std::vector<std::string> messages;
     {
         const HeadlessSwapchain headless{recordingInto(backend, messages)};
-        Device& device = *headless.device;
+        const Device& device = headless.device;
 
         CHECK(device.poll(Token{}).value_or(false));
         CHECK(device.wait(Token{}, kTestWait).has_value());
-        CHECK(device.wait(Token{.queue = 1, .value = 0}, kTestWait).error().code ==
-              bfr::core::ErrorCode::RhiInvalidCall);
+        CHECK(device.wait(Token{.queue = 1, .value = 0}, kTestWait).error().code == Result::ErrorInvalidArgument);
         const auto ahead = device.poll(Token{.queue = 0, .value = 1});
         INFO(failureOf(ahead));
         CHECK_FALSE(ahead.value_or(true));
         const auto waited = device.wait(Token{.queue = 0, .value = 1}, kNoWait);
         REQUIRE_FALSE(waited.has_value());
-        CHECK(waited.error().code == bfr::core::ErrorCode::RhiTimeout);
+        CHECK(waited.error().code == Result::ErrorTimeout);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -248,44 +248,54 @@ TEST_CASE("Device resets a command pool once the GPU has run its lists", "[rhi][
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const HeadlessSwapchain headless{recordingInto(backend, messages)};
-        Device& device = *headless.device;
+        HeadlessSwapchain headless{recordingInto(backend, messages)};
+        const Device& device = headless.device;
 
-        const auto commands = device.beginCommands(headless.pool);
+        const auto commands = headless.pool.beginCommands();
         REQUIRE(commands.has_value());
         // Vulkan's reset ends a list still recording; D3D12 and Metal refuse it.
         if (backend.backend == Backend::Vulkan) {
-            CHECK(device.resetCommandPool(headless.pool).has_value());
-            CHECK(device.destroyCommandList(*commands).error().code == bfr::core::ErrorCode::RhiInvalidHandle);
+            CHECK(headless.pool.reset().has_value());
+            CHECK(submitOne(device, *commands).error().code == Result::ErrorInvalidHandle);
+            // d1: stale destroy reported as an Error message (track B)
+            device.destroyCommandList(*commands);
         }
         else {
-            CHECK(device.resetCommandPool(headless.pool).error().code == bfr::core::ErrorCode::RhiInvalidCall);
-            REQUIRE(device.destroyCommandList(*commands).has_value());
-            CHECK(device.resetCommandPool(headless.pool).has_value());
+            CHECK(headless.pool.reset().error().code == Result::ErrorInvalidArgument);
+            device.destroyCommandList(*commands);
+            REQUIRE(submitOne(device, *commands).error().code == Result::ErrorInvalidHandle);
+            CHECK(headless.pool.reset().has_value());
         }
 
-        REQUIRE(device.acquire(headless.swapchain, kTestWait).has_value());
-        const auto frame = device.beginCommands(headless.pool);
+        REQUIRE(headless.swapchain.acquire(kTestWait).has_value());
+        const auto frame = headless.pool.beginCommands();
         REQUIRE(frame.has_value());
         REQUIRE(device.beginRendering(*frame, headless.swapchain, kClear).has_value());
         REQUIRE(device.endRendering(*frame).has_value());
         const auto token = submitOne(device, *frame);
         REQUIRE(token.has_value());
-        REQUIRE(device.present(headless.swapchain).has_value());
+        REQUIRE(headless.swapchain.present().has_value());
         REQUIRE(device.wait(*token, kTestWait).has_value());
         CHECK(device.poll(*token).value_or(false));
-        CHECK(device.resetCommandPool(headless.pool).has_value());
+        CHECK(headless.pool.reset().has_value());
 
-        const auto other = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        auto other = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(other.has_value());
-        const auto orphan = device.beginCommands(*other);
+        const auto orphan = other->beginCommands();
         REQUIRE(orphan.has_value());
-        REQUIRE(device.destroyCommandPool(*other).has_value());
-        CHECK(device.beginCommands(*other).error().code == bfr::core::ErrorCode::RhiInvalidHandle);
-        CHECK(device.resetCommandPool(*other).error().code == bfr::core::ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyCommandPool(*other).error().code == bfr::core::ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyCommandPool({}).has_value());
-        CHECK(device.destroyCommandList(*orphan).error().code == bfr::core::ErrorCode::RhiInvalidHandle);
+        const CommandPoolRef destroyedOther = *other;
+        *other = {};
+        bfr_command_list list{};
+        CHECK(resultOf(bfr_begin_commands(device.get(), destroyedOther.get(), &list)) == Result::ErrorInvalidHandle);
+        CHECK(resetResult(device, destroyedOther.get()) == Result::ErrorInvalidHandle);
+        // d1: stale destroy reported as an Error message (track B)
+        bfr_destroy_command_pool(device.get(), destroyedOther.get());
+        // d1: null destroy: no message (track B)
+        bfr_destroy_command_pool(device.get(), CommandPoolRef{}.get());
+        // The destroyed pool's lists went with it.
+        CHECK(submitOne(device, *orphan).error().code == Result::ErrorInvalidHandle);
+        // d1: stale destroy reported as an Error message (track B)
+        device.destroyCommandList(*orphan);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -295,16 +305,16 @@ TEST_CASE("Device refuses a pool, a submit and a token on a queue it does not ha
     std::vector<std::string> messages;
     {
         const HeadlessSwapchain headless{recordingInto(backend, messages)};
-        Device& device = *headless.device;
+        const Device& device = headless.device;
         constexpr std::uint32_t kMissing = 7;
 
         CHECK(device.createCommandPool({.queue = kMissing, .listCount = kPoolLists}).error().code ==
-              bfr::core::ErrorCode::RhiInvalidCall);
+              Result::ErrorInvalidArgument);
         CHECK(device.submit({.queue = kMissing, .commandLists = {}, .waits = {}}).error().code ==
-              bfr::core::ErrorCode::RhiInvalidCall);
+              Result::ErrorInvalidArgument);
         CHECK(device.wait(Token{.queue = kMissing, .value = 0}, kTestWait).error().code ==
-              bfr::core::ErrorCode::RhiInvalidCall);
-        CHECK(device.poll(Token{.queue = kMissing, .value = 0}).error().code == bfr::core::ErrorCode::RhiInvalidCall);
+              Result::ErrorInvalidArgument);
+        CHECK(device.poll(Token{.queue = kMissing, .value = 0}).error().code == Result::ErrorInvalidArgument);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -313,12 +323,12 @@ TEST_CASE("Device submits several lists at once and each waits only on what it i
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const HeadlessSwapchain headless{recordingInto(backend, messages)};
-        Device& device = *headless.device;
+        HeadlessSwapchain headless{recordingInto(backend, messages)};
+        const Device& device = headless.device;
 
-        REQUIRE(device.acquire(headless.swapchain, kTestWait).has_value());
-        const auto first = device.beginCommands(headless.pool);
-        const auto second = device.beginCommands(headless.pool);
+        REQUIRE(headless.swapchain.acquire(kTestWait).has_value());
+        const auto first = headless.pool.beginCommands();
+        const auto second = headless.pool.beginCommands();
         REQUIRE(first.has_value());
         REQUIRE(second.has_value());
         REQUIRE(device.beginRendering(*second, headless.swapchain, kClear).has_value());
@@ -327,10 +337,10 @@ TEST_CASE("Device submits several lists at once and each waits only on what it i
         const auto token = device.submit({.queue = 0, .commandLists = lists, .waits = {}});
         INFO(failureOf(token));
         REQUIRE(token.has_value());
-        REQUIRE(device.present(headless.swapchain).has_value());
+        REQUIRE(headless.swapchain.present().has_value());
 
         // A later submit waits on an earlier token.
-        const auto third = device.beginCommands(headless.pool);
+        const auto third = headless.pool.beginCommands();
         REQUIRE(third.has_value());
         const auto later = submitOne(device, *third, 0, std::span{&*token, 1});
         INFO(failureOf(later));
@@ -338,7 +348,10 @@ TEST_CASE("Device submits several lists at once and each waits only on what it i
         CHECK(later->value > token->value);
         REQUIRE(device.wait(*later, kTestWait).has_value());
         CHECK(device.poll(*token).value_or(false));
-        CHECK(device.destroyCommandList(*first).error().code == bfr::core::ErrorCode::RhiInvalidHandle);
+        // A list submitted beside another is gone with it.
+        CHECK(submitOne(device, *first).error().code == Result::ErrorInvalidHandle);
+        // d1: stale destroy reported as an Error message (track B)
+        device.destroyCommandList(*first);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -349,37 +362,37 @@ TEST_CASE("Device runs a compute queue beside graphics when the adapter has one"
     {
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
-        Instance& rhi = **created;
-        const std::size_t adapter = headlessAdapter(rhi);
-        const std::uint32_t computeQueues = std::min<std::uint32_t>(rhi.adapters()[adapter].caps.queues.compute, 1);
-        auto opened = rhi.createDevice(adapter, kHeadless, testDeviceWith([&](DeviceDesc& desc) {
-                                           desc.compute = std::span{kTestQueues}.first(computeQueues);
-                                       }));
+        const Instance& rhi = *created;
+        const std::uint32_t adapter = headlessAdapter(rhi);
+        const std::uint32_t computeQueues = std::min<std::uint32_t>(capsOf(rhi, adapter).queues.compute, 1);
+        auto opened = rhi.createDevice(testDeviceWith(adapter, kHeadless, [&](DeviceDesc& desc) {
+            desc.computeQueues = std::span{kTestQueues}.first(computeQueues);
+        }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
-        Device& device = **opened;
+        const Device& device = *opened;
         if (computeQueues == 0) {
             CHECK(device.createCommandPool({.queue = 1, .listCount = kPoolLists}).error().code ==
-                  bfr::core::ErrorCode::RhiInvalidCall);
+                  Result::ErrorInvalidArgument);
             return;
         }
 
-        const auto graphicsPool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
-        const auto computePool = device.createCommandPool({.queue = 1, .listCount = kPoolLists});
+        auto graphicsPool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        auto computePool = device.createCommandPool({.queue = 1, .listCount = kPoolLists});
         REQUIRE(graphicsPool.has_value());
         REQUIRE(computePool.has_value());
-        const auto graphics = device.beginCommands(*graphicsPool);
-        const auto compute = device.beginCommands(*computePool);
+        const auto graphics = graphicsPool->beginCommands();
+        const auto compute = computePool->beginCommands();
         REQUIRE(graphics.has_value());
         REQUIRE(compute.has_value());
 
         // A compute list neither renders nor goes to the graphics queue.
-        auto swapchain = device.createSwapchain(kHeadless, swapchainDesc(rhi));
+        auto swapchain = device.createSwapchain(swapchainDesc(rhi));
         REQUIRE(swapchain.has_value());
-        REQUIRE(device.resizeSwapchain(*swapchain, kWidth, kHeight).has_value());
-        REQUIRE(device.acquire(*swapchain, kTestWait).has_value());
-        CHECK(device.beginRendering(*compute, *swapchain, kClear).error().code == bfr::core::ErrorCode::RhiInvalidCall);
-        CHECK(submitOne(device, *compute, 0).error().code == bfr::core::ErrorCode::RhiInvalidCall);
+        REQUIRE(swapchain->resize(kWidth, kHeight).has_value());
+        REQUIRE(swapchain->acquire(kTestWait).has_value());
+        CHECK(device.beginRendering(*compute, *swapchain, kClear).error().code == Result::ErrorInvalidArgument);
+        CHECK(submitOne(device, *compute, 0).error().code == Result::ErrorInvalidArgument);
 
         // Compute waits on graphics across queues, and both tokens complete.
         REQUIRE(device.beginRendering(*graphics, *swapchain, kClear).has_value());
@@ -387,18 +400,24 @@ TEST_CASE("Device runs a compute queue beside graphics when the adapter has one"
         const auto rendered = submitOne(device, *graphics, 0);
         INFO(failureOf(rendered));
         REQUIRE(rendered.has_value());
-        REQUIRE(device.present(*swapchain).has_value());
+        REQUIRE(swapchain->present().has_value());
         const auto computed = submitOne(device, *compute, 1, std::span{&*rendered, 1});
         INFO(failureOf(computed));
         REQUIRE(computed.has_value());
         CHECK(computed->queue == 1);
         REQUIRE(device.wait(*computed, kTestWait).has_value());
         CHECK(device.poll(*rendered).value_or(false));
-        CHECK(device.resetCommandPool(*computePool).has_value());
-        CHECK(device.resetCommandPool(*graphicsPool).has_value());
-        CHECK(device.destroyCommandPool(*computePool).has_value());
-        CHECK(device.destroyCommandPool(*graphicsPool).has_value());
-        CHECK(device.destroySwapchain(*swapchain).has_value());
+        CHECK(computePool->reset().has_value());
+        CHECK(graphicsPool->reset().has_value());
+        const CommandPoolRef destroyedCompute = *computePool;
+        *computePool = {};
+        CHECK(resetResult(device, destroyedCompute.get()) == Result::ErrorInvalidHandle);
+        const CommandPoolRef destroyedGraphics = *graphicsPool;
+        *graphicsPool = {};
+        CHECK(resetResult(device, destroyedGraphics.get()) == Result::ErrorInvalidHandle);
+        const SwapchainRef destroyedSwapchain = *swapchain;
+        *swapchain = {};
+        CHECK(resizeResult(device, destroyedSwapchain.get(), kWidth, kHeight) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -409,17 +428,17 @@ TEST_CASE("Device frees a pool destroyed while the GPU runs its lists once the G
     {
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
-        Instance& rhi = **created;
-        auto opened = rhi.createDevice(headlessAdapter(rhi), kHeadless, testDeviceWith([](DeviceDesc& desc) {
-                                           desc.maxCommandLists = kPoolLists;
-                                           desc.maxCommandPools = 1;
-                                       }));
+        const Instance& rhi = *created;
+        auto opened = rhi.createDevice(testDeviceWith(headlessAdapter(rhi), kHeadless, [](DeviceDesc& desc) {
+            desc.maxCommandLists = kPoolLists;
+            desc.maxCommandPools = 1;
+        }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
-        Device& device = **opened;
-        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        const Device& device = *opened;
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(pool.has_value());
-        const auto list = device.beginCommands(*pool);
+        const auto list = pool->beginCommands();
         REQUIRE(list.has_value());
         const auto token = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
         INFO(failureOf(token));
@@ -427,13 +446,16 @@ TEST_CASE("Device frees a pool destroyed while the GPU runs its lists once the G
 
         // Destroyed before the GPU is known to be done, the pool is gone from
         // the caller at once, and its room is back once the GPU has passed it.
-        REQUIRE(device.destroyCommandPool(*pool).has_value());
-        CHECK(device.resetCommandPool(*pool).error().code == bfr::core::ErrorCode::RhiInvalidHandle);
+        const CommandPoolRef destroyedPool = *pool;
+        *pool = {};
+        CHECK(resetResult(device, destroyedPool.get()) == Result::ErrorInvalidHandle);
         REQUIRE(device.wait(*token, kTestWait).has_value());
-        const auto next = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        auto next = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         INFO(failureOf(next));
         REQUIRE(next.has_value());
-        CHECK(device.destroyCommandPool(*next).has_value());
+        const CommandPoolRef destroyedNext = *next;
+        *next = {};
+        CHECK(resetResult(device, destroyedNext.get()) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -450,14 +472,14 @@ TEST_CASE("Device serves pools made, submitted, waited on and destroyed from sev
     {
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
-        Instance& rhi = **created;
-        auto opened = rhi.createDevice(headlessAdapter(rhi), kHeadless, testDeviceWith([](DeviceDesc& desc) {
-                                           desc.maxCommandLists = kThreads * kPoolLists;
-                                           desc.maxCommandPools = kThreads;
-                                       }));
+        const Instance& rhi = *created;
+        auto opened = rhi.createDevice(testDeviceWith(headlessAdapter(rhi), kHeadless, [](DeviceDesc& desc) {
+            desc.maxCommandLists = kThreads * kPoolLists;
+            desc.maxCommandPools = kThreads;
+        }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
-        Device& device = **opened;
+        const Device& device = *opened;
 
         std::array<std::string, kThreads> failures;
         {
@@ -466,12 +488,12 @@ TEST_CASE("Device serves pools made, submitted, waited on and destroyed from sev
             for (std::string& failure : failures) {
                 threads.emplace_back([&device, &failure] {
                     for (int round = 0; round < kRounds && failure.empty(); ++round) {
-                        const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+                        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
                         if (!pool) {
                             failure = "createCommandPool: " + pool.error().message.text();
                             return;
                         }
-                        const auto list = device.beginCommands(*pool);
+                        const auto list = pool->beginCommands();
                         if (!list) {
                             failure = "beginCommands: " + list.error().message.text();
                             return;
@@ -486,8 +508,11 @@ TEST_CASE("Device serves pools made, submitted, waited on and destroyed from sev
                             failure = "wait: " + waited.error().message.text();
                             return;
                         }
-                        if (const auto destroyed = device.destroyCommandPool(*pool); !destroyed) {
-                            failure = "destroyCommandPool: " + destroyed.error().message.text();
+                        const CommandPoolRef destroyedPool = *pool;
+                        *pool = {};
+                        if (const Result reset = resetResult(device, destroyedPool.get());
+                            reset != Result::ErrorInvalidHandle) {
+                            failure = "a destroyed pool reset with result " + std::to_string(std::to_underlying(reset));
                             return;
                         }
                     }
@@ -499,15 +524,17 @@ TEST_CASE("Device serves pools made, submitted, waited on and destroyed from sev
         }
 
         // Every pool's room is back once the threads are done.
-        std::vector<CommandPoolHandle> pools;
+        std::vector<CommandPool> pools;
         for (std::uint32_t index = 0; index < kThreads; ++index) {
-            const auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+            auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
             INFO(failureOf(pool));
             REQUIRE(pool.has_value());
-            pools.push_back(*pool);
+            pools.push_back(std::move(*pool));
         }
-        for (const CommandPoolHandle pool : pools) {
-            CHECK(device.destroyCommandPool(pool).has_value());
+        for (CommandPool& pool : pools) {
+            const CommandPoolRef destroyedPool = pool;
+            pool = {};
+            CHECK(resetResult(device, destroyedPool.get()) == Result::ErrorInvalidHandle);
         }
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
@@ -519,32 +546,30 @@ TEST_CASE("Device opens the graphics queues it is asked for, numbered from 0", "
     {
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
-        Instance& rhi = **created;
+        const Instance& rhi = *created;
         constexpr std::uint32_t kGraphics = 2;
-        const auto adapters = rhi.adapters();
-        const auto found = std::ranges::find_if(adapters, [](const Adapter& adapter) {
-            return adapter.caps.queues.graphics >= kGraphics;
-        });
-        if (found == adapters.end()) {
+        const auto adapter = adapterWhere(rhi, [](const Caps& caps) { return caps.queues.graphics >= kGraphics; });
+        if (!adapter) {
             SKIP("no adapter has " << kGraphics << " graphics queues");
         }
-        const auto adapter = static_cast<std::size_t>(found - adapters.begin());
-        auto opened = rhi.createDevice(adapter, kNoWindow, testDeviceWith([](DeviceDesc& desc) {
-                                           desc.graphics = std::span{kTestQueues}.first(kGraphics);
-                                       }));
+        auto opened = rhi.createDevice(testDeviceWith(*adapter, kNoWindow, [](DeviceDesc& desc) {
+            desc.graphicsQueues = std::span{kTestQueues}.first(kGraphics);
+        }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
-        Device& device = **opened;
+        const Device& device = *opened;
         // Queue 1 is the second graphics queue: its lists submit to it.
-        const auto pool = device.createCommandPool({.queue = 1, .listCount = kPoolLists});
+        auto pool = device.createCommandPool({.queue = 1, .listCount = kPoolLists});
         REQUIRE(pool.has_value());
-        const auto list = device.beginCommands(*pool);
+        const auto list = pool->beginCommands();
         REQUIRE(list.has_value());
         const auto token = device.submit({.queue = 1, .commandLists = std::span{&*list, 1}, .waits = {}});
         INFO(failureOf(token));
         REQUIRE(token.has_value());
         CHECK(device.wait(*token, kTestWait).has_value());
-        CHECK(device.destroyCommandPool(*pool).has_value());
+        const CommandPoolRef destroyedPool = *pool;
+        *pool = {};
+        CHECK(resetResult(device, destroyedPool.get()) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -556,28 +581,26 @@ TEST_CASE("Device ranks its queues where the backend does, and fails with RhiUns
     {
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
-        Instance& rhi = **created;
-        const auto adapters = rhi.adapters();
-        const auto found = std::ranges::find_if(adapters, [](const Adapter& adapter) {
-            return adapter.caps.queues.graphics != 0 && adapter.caps.queues.compute != 0;
+        const Instance& rhi = *created;
+        const auto adapter = adapterWhere(rhi, [](const Caps& caps) {
+            return caps.queues.graphics != 0 && caps.queues.compute != 0;
         });
-        if (found == adapters.end()) {
+        if (!adapter) {
             SKIP("no adapter has a graphics and a compute queue to rank");
         }
-        const auto adapter = static_cast<std::size_t>(found - adapters.begin());
-        const Queues& queues = found->caps.queues;
+        const CapsQueues queues = capsOf(rhi, *adapter).queues;
         constexpr std::array kLow{QueueDesc{.rank = 0, .level = QueueLevel::Normal}};
         constexpr std::array kHigh{QueueDesc{.rank = 1, .level = QueueLevel::Normal}};
 
-        auto opened = rhi.createDevice(adapter, kNoWindow, testDeviceWith([&](DeviceDesc& desc) {
-                                           desc.graphics = kLow;
-                                           desc.compute = kHigh;
-                                       }));
+        auto opened = rhi.createDevice(testDeviceWith(*adapter, kNoWindow, [&](DeviceDesc& desc) {
+            desc.graphicsQueues = kLow;
+            desc.computeQueues = kHigh;
+        }));
 
         INFO(failureOf(opened));
         if (queues.ranks == 0) {
             REQUIRE_FALSE(opened.has_value());
-            CHECK(opened.error().code == bfr::core::ErrorCode::RhiUnsupported);
+            CHECK(opened.error().code == Result::ErrorUnsupported);
         }
         else {
             CHECK(opened.has_value());
@@ -593,21 +616,21 @@ TEST_CASE("Device opens queues at normal, and fails with RhiUnsupported for a le
     {
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
-        Instance& rhi = **created;
-        const std::size_t adapter = headlessAdapter(rhi);
-        const QueueLevels& levels = rhi.adapters()[adapter].caps.queues.graphicsLevels;
+        const Instance& rhi = *created;
+        const std::uint32_t adapter = headlessAdapter(rhi);
+        const QueueLevels levels = capsOf(rhi, adapter).queues.graphicsLevels;
         constexpr std::array kNormal{QueueDesc{.rank = 0, .level = QueueLevel::Normal}};
         constexpr std::array kHigh{QueueDesc{.rank = 0, .level = QueueLevel::High}};
 
-        const auto normal = rhi.createDevice(adapter, kNoWindow,
-                                             testDeviceWith([&](DeviceDesc& desc) { desc.graphics = kNormal; }));
+        const auto normal = rhi.createDevice(
+            testDeviceWith(adapter, kNoWindow, [&](DeviceDesc& desc) { desc.graphicsQueues = kNormal; }));
         INFO(failureOf(normal));
         CHECK(normal.has_value());
         if (!levels.normal && !levels.low && !levels.high && !levels.realtime) {
-            const auto high = rhi.createDevice(adapter, kNoWindow,
-                                               testDeviceWith([&](DeviceDesc& desc) { desc.graphics = kHigh; }));
+            const auto high = rhi.createDevice(
+                testDeviceWith(adapter, kNoWindow, [&](DeviceDesc& desc) { desc.graphicsQueues = kHigh; }));
             REQUIRE_FALSE(high.has_value());
-            CHECK(high.error().code == bfr::core::ErrorCode::RhiUnsupported);
+            CHECK(high.error().code == Result::ErrorUnsupported);
         }
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
@@ -619,17 +642,17 @@ TEST_CASE("Device fails with RhiInvalidCall for a swapchain on a queue it lacks"
     {
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
-        Instance& rhi = **created;
-        auto opened = rhi.createDevice(headlessAdapter(rhi), kHeadless, kTestDevice);
+        const Instance& rhi = *created;
+        auto opened = rhi.createDevice(testDeviceOn(headlessAdapter(rhi), kHeadless));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
         SwapchainDesc desc = swapchainDesc(rhi);
         desc.queue = 1;
 
-        const auto swapchain = (*opened)->createSwapchain(kHeadless, desc);
+        const auto swapchain = opened->createSwapchain(desc);
 
         REQUIRE_FALSE(swapchain.has_value());
-        CHECK(swapchain.error().code == bfr::core::ErrorCode::RhiInvalidCall);
+        CHECK(swapchain.error().code == Result::ErrorInvalidArgument);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -640,62 +663,67 @@ TEST_CASE("Device holds the lists, pools and swapchains it was opened for, and n
     {
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
-        Instance& rhi = **created;
-        const std::size_t adapter = headlessAdapter(rhi);
+        const Instance& rhi = *created;
+        const std::uint32_t adapter = headlessAdapter(rhi);
         constexpr std::uint32_t kLists = 2;
         // A maximum a handle cannot name is refused; 0 is none.
-        CHECK(rhi.createDevice(adapter, kHeadless, testDeviceWith([](DeviceDesc& desc) {
-                                   desc.maxCommandLists = bfr::core::Handle<void>::kMaxIndices + 1;
-                               }))
+        CHECK(rhi.createDevice(testDeviceWith(adapter, kHeadless,
+                                              [](DeviceDesc& desc) { desc.maxCommandLists = kHandleIndices + 1; }))
                   .error()
-                  .code == bfr::core::ErrorCode::RhiInvalidCall);
-        auto opened = rhi.createDevice(adapter, kHeadless, testDeviceWith([](DeviceDesc& desc) {
-                                           desc.maxCommandLists = kLists;
-                                           desc.maxCommandPools = 1;
-                                           desc.maxSwapchains = 1;
-                                       }));
+                  .code == Result::ErrorInvalidArgument);
+        auto opened = rhi.createDevice(testDeviceWith(adapter, kHeadless, [](DeviceDesc& desc) {
+            desc.maxCommandLists = kLists;
+            desc.maxCommandPools = 1;
+            desc.maxSwapchains = 1;
+        }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
-        Device& device = **opened;
+        const Device& device = *opened;
 
-        const auto swapchain = device.createSwapchain(kHeadless, swapchainDesc(rhi));
+        auto swapchain = device.createSwapchain(swapchainDesc(rhi));
         REQUIRE(swapchain.has_value());
-        CHECK(device.createSwapchain(kHeadless, swapchainDesc(rhi)).error().code ==
-              bfr::core::ErrorCode::RhiLimitReached);
+        CHECK(device.createSwapchain(swapchainDesc(rhi)).error().code == Result::ErrorLimitReached);
 
         CHECK(device.createCommandPool({.queue = 0, .listCount = kLists + 1}).error().code ==
-              bfr::core::ErrorCode::RhiLimitReached);
-        const auto pool = device.createCommandPool({.queue = 0, .listCount = kLists});
+              Result::ErrorLimitReached);
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kLists});
         INFO(failureOf(pool));
         REQUIRE(pool.has_value());
-        CHECK(device.createCommandPool({.queue = 0, .listCount = 0}).error().code ==
-              bfr::core::ErrorCode::RhiLimitReached);
+        CHECK(device.createCommandPool({.queue = 0, .listCount = 0}).error().code == Result::ErrorLimitReached);
 
         // The pool hands out each of its lists once until it is reset.
-        const auto first = device.beginCommands(*pool);
-        const auto second = device.beginCommands(*pool);
+        const auto first = pool->beginCommands();
+        const auto second = pool->beginCommands();
         REQUIRE(first.has_value());
         REQUIRE(second.has_value());
-        CHECK(device.beginCommands(*pool).error().code == bfr::core::ErrorCode::RhiLimitReached);
+        CHECK(pool->beginCommands().error().code == Result::ErrorLimitReached);
         const std::array lists{*first, *second};
         const auto token = device.submit({.queue = 0, .commandLists = lists, .waits = {}});
         INFO(failureOf(token));
         REQUIRE(token.has_value());
         REQUIRE(device.wait(*token, kTestWait).has_value());
-        REQUIRE(device.resetCommandPool(*pool).has_value());
-        const auto again = device.beginCommands(*pool);
+        REQUIRE(pool->reset().has_value());
+        const auto again = pool->beginCommands();
         REQUIRE(again.has_value());
-        CHECK(*again != *first);
-        CHECK(*again != *second);
-        REQUIRE(device.destroyCommandList(*again).has_value());
+        // CommandList's defaulted == is deleted: bfr_command_list has none.
+        CHECK(again->get().bits != first->get().bits);
+        CHECK(again->get().bits != second->get().bits);
+        device.destroyCommandList(*again);
+        REQUIRE(submitOne(device, *again).error().code == Result::ErrorInvalidHandle);
 
         // A destroyed pool's lists and room come back for the next pool.
-        REQUIRE(device.destroyCommandPool(*pool).has_value());
-        const auto next = device.createCommandPool({.queue = 0, .listCount = kLists});
+        const CommandPoolRef destroyedPool = *pool;
+        *pool = {};
+        REQUIRE(resetResult(device, destroyedPool.get()) == Result::ErrorInvalidHandle);
+        auto next = device.createCommandPool({.queue = 0, .listCount = kLists});
         INFO(failureOf(next));
         REQUIRE(next.has_value());
-        CHECK(device.destroyCommandPool(*next).has_value());
-        CHECK(device.destroySwapchain(*swapchain).has_value());
+        const CommandPoolRef destroyedNext = *next;
+        *next = {};
+        CHECK(resetResult(device, destroyedNext.get()) == Result::ErrorInvalidHandle);
+        const SwapchainRef destroyedSwapchain = *swapchain;
+        *swapchain = {};
+        CHECK(resizeResult(device, destroyedSwapchain.get(), kWidth, kHeight) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

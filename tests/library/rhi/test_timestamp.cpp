@@ -2,17 +2,9 @@
 // interface alone. Each case runs on every backend the build has, and writes
 // only what the adapter's caps list.
 
-#include "bfr/core/error.h"
-#include "bfr/core/log.h"
-#include "bfr/rhi/buffer.h"
-#include "bfr/rhi/call_timing.h"
-#include "bfr/rhi/caps.h"
-#include "bfr/rhi/command_list.h"
-#include "bfr/rhi/device.h"
-#include "bfr/rhi/instance.h"
-#include "bfr/rhi/texture.h"
-#include "bfr/rhi/timestamp.h"
-#include "rhi_test_support.h"
+#include "bfr.hpp"
+#include "bfr/bfr.h"
+#include "bfr_test_support.h"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -22,11 +14,9 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <memory>
 #include <span>
 #include <string>
 #include <tuple>
@@ -34,9 +24,7 @@
 #include <vector>
 
 using namespace bfr;
-using namespace bfr::rhi;
-using namespace bfr::rhi::test;
-using bfr::core::ErrorCode;
+using namespace bfr::test;
 
 namespace {
 
@@ -50,16 +38,16 @@ struct TimestampDevice {
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         instance = std::move(*created);
-        auto made = instance->createDevice(0, kNoWindow, kTestDevice);
+        auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         device = std::move(*made);
     }
 
-    [[nodiscard]] const Timestamps& caps() const { return instance->adapters()[0].caps.timestamps; }
+    [[nodiscard]] CapsTimestamps caps() const { return capsOf(instance, kFirstAdapter).timestamps; }
 
-    std::unique_ptr<Instance> instance;
-    std::unique_ptr<Device> device;
+    Instance instance;
+    Device device;
 };
 
 // Each stage that stages lists.
@@ -94,8 +82,8 @@ TEST_CASE("Device writes a timestamp at each stage the caps list, in rendering a
     std::vector<std::string> messages;
     {
         const TimestampDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const Timestamps& caps = made.caps();
+        const Device& device = made.device;
+        const CapsTimestamps caps = made.caps();
         if (!caps.graphics) {
             SKIP("the adapter's graphics queues write no timestamps");
         }
@@ -105,25 +93,25 @@ TEST_CASE("Device writes a timestamp at each stage the caps list, in rendering a
         // The outside stages, then the inside ones, then one more outside
         // after rendering, which no earlier timestamp comes after.
         const auto count = static_cast<std::uint32_t>(outside.size() + inside.size() + 1);
-        const auto pool = device.createTimestampPool({.queue = 0, .count = count});
+        auto pool = device.createTimestampPool({.queue = 0, .count = count});
         INFO(failureOf(pool));
         REQUIRE(pool.has_value());
-        const auto readback = device.createBuffer(
+        auto readback = device.createBuffer(
             {.size = kReadbackBytes, .memory = BufferMemory::Readback, .usage = {.copyDst = true}});
         REQUIRE(readback.has_value());
-        const auto target = device.createTexture({.dimension = TextureDimension::D2,
-                                                  .format = Format::Rgba8Unorm,
-                                                  .width = kSide,
-                                                  .height = kSide,
-                                                  .depth = 1,
-                                                  .layers = 1,
-                                                  .mipLevels = 1,
-                                                  .samples = 1,
-                                                  .usage = {.colorAttachment = true}});
+        auto target = device.createTexture({.dimension = TextureDimension::D2,
+                                            .format = Format::Rgba8Unorm,
+                                            .width = kSide,
+                                            .height = kSide,
+                                            .depth = 1,
+                                            .layers = 1,
+                                            .mipLevels = 1,
+                                            .samples = 1,
+                                            .usage = {.colorAttachment = true}});
         REQUIRE(target.has_value());
-        const auto commands = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        auto commands = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(commands.has_value());
-        auto list = device.beginCommands(*commands);
+        auto list = commands->beginCommands();
         REQUIRE(list.has_value());
 
         CHECK(device.resetTimestamps(*list, *pool, 0, count).has_value());
@@ -154,19 +142,29 @@ TEST_CASE("Device writes a timestamp at each stage the caps list, in rendering a
         REQUIRE(sent.has_value());
         REQUIRE(device.wait(*sent, kTestWait).has_value());
 
-        const auto bytes = device.mapBuffer(*readback);
-        REQUIRE(bytes.has_value());
-        const std::vector<std::uint64_t> ticks = ticksIn(*bytes, caps.entryBytes, count);
+        const auto mapped = readback->map();
+        REQUIRE(mapped.has_value());
+        const std::span bytes{static_cast<const std::byte*>(*mapped), kReadbackBytes};
+        const std::vector<std::uint64_t> ticks = ticksIn(bytes, caps.entryBytes, count);
         // The last waits for all the work before it, the first for none.
         CHECK(ticks[last] >= ticks[0]);
         CHECK(ticks[last] != 0);
 
-        CHECK(device.destroyCommandPool(*commands).has_value());
-        CHECK(device.destroyTexture(*target).has_value());
-        CHECK(device.destroyBuffer(*readback).has_value());
-        CHECK(device.destroyTimestampPool(*pool).has_value());
-        CHECK(device.destroyTimestampPool(*pool).error().code == ErrorCode::RhiInvalidHandle);
-        CHECK(device.destroyTimestampPool({}).has_value());
+        const bfr_command_pool staleCommands = commands->get();
+        *commands = {};
+        CHECK(resetResult(device, staleCommands) == Result::ErrorInvalidHandle);
+        const bfr_texture staleTarget = target->get();
+        *target = {};
+        CHECK(slotsResult(device, staleTarget) == Result::ErrorInvalidHandle);
+        const bfr_buffer staleReadback = readback->get();
+        *readback = {};
+        CHECK(slotsResult(device, staleReadback) == Result::ErrorInvalidHandle);
+        const bfr_timestamp_pool stale = destroyed(*pool);
+        CHECK(resetTimestampsResult(device, 0, stale) == Result::ErrorInvalidHandle);
+        // d1: stale destroy reported as an Error message (track B)
+        bfr_destroy_timestamp_pool(device.get(), stale);
+        // d1: null destroy: no message (track B)
+        bfr_destroy_timestamp_pool(device.get(), {});
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -180,11 +178,11 @@ TEST_CASE("Device gives a queue's timestamp rate in the backend's one unit, and 
         if (!made.caps().graphics) {
             SKIP("the adapter's graphics queues write no timestamps");
         }
-        const auto rate = made.device->timestampRate(0);
+        const auto rate = made.device.timestampRate(0);
         INFO(failureOf(rate));
         REQUIRE(rate.has_value());
         CHECK((rate->periodNs > 0) != (rate->frequency != 0));
-        CHECK(made.device->timestampRate(1).error().code == ErrorCode::RhiInvalidCall);
+        CHECK(made.device.timestampRate(1).error().code == Result::ErrorInvalidArgument);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -195,14 +193,14 @@ TEST_CASE("Device reads each host clock the caps list beside a GPU timestamp, an
     std::vector<std::string> messages;
     {
         const TimestampDevice made{recordingInto(backend, messages)};
-        const HostClocks& clocks = made.caps().hostClocks;
+        const HostClocks clocks = made.caps().hostClocks;
         for (const auto& [has, clock] : {std::pair{clocks.monotonic, HostClock::Monotonic},
                                          std::pair{clocks.monotonicRaw, HostClock::MonotonicRaw},
                                          std::pair{clocks.performanceCounter, HostClock::PerformanceCounter}}) {
             INFO("host clock " << static_cast<int>(clock));
-            const auto taken = made.device->calibrateTimestamps(0, clock);
+            const auto taken = made.device.calibrateTimestamps(0, clock);
             if (!has) {
-                CHECK(taken.error().code == ErrorCode::RhiUnsupported);
+                CHECK(taken.error().code == Result::ErrorUnsupported);
                 continue;
             }
             INFO(failureOf(taken));
@@ -210,8 +208,8 @@ TEST_CASE("Device reads each host clock the caps list beside a GPU timestamp, an
             CHECK(taken->gpu != 0);
             CHECK(taken->host != 0);
         }
-        CHECK(made.device->calibrateTimestamps(0, static_cast<HostClock>(99)).error().code ==
-              ErrorCode::RhiInvalidCall);
+        CHECK(made.device.calibrateTimestamps(0, static_cast<HostClock>(99)).error().code ==
+              Result::ErrorInvalidArgument);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -221,25 +219,29 @@ TEST_CASE("Device refuses a timestamp stage or granularity BFR doesn't have", "[
     std::vector<std::string> messages;
     {
         const TimestampDevice made{recordingInto(backend, messages)};
-        Device& device = *made.device;
-        const auto pool = device.createTimestampPool({.queue = 0, .count = 1});
+        const Device& device = made.device;
+        auto pool = device.createTimestampPool({.queue = 0, .count = 1});
         REQUIRE(pool.has_value());
-        const auto commands = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        auto commands = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(commands.has_value());
-        auto list = device.beginCommands(*commands);
+        auto list = commands->beginCommands();
         REQUIRE(list.has_value());
 
         constexpr auto kPast = 99;
         CHECK(device.writeTimestamp(*list, *pool, 0, static_cast<TimestampStage>(kPast), TimestampGranularity::Relaxed)
                   .error()
-                  .code == ErrorCode::RhiInvalidCall);
+                  .code == Result::ErrorInvalidArgument);
         CHECK(device.writeTimestamp(*list, *pool, 0, TimestampStage::End, static_cast<TimestampGranularity>(kPast))
                   .error()
-                  .code == ErrorCode::RhiInvalidCall);
-        CHECK(device.createTimestampPool({.queue = 1, .count = 1}).error().code == ErrorCode::RhiInvalidCall);
-        CHECK(device.destroyCommandList(*list).has_value());
-        CHECK(device.destroyCommandPool(*commands).has_value());
-        CHECK(device.destroyTimestampPool(*pool).has_value());
+                  .code == Result::ErrorInvalidArgument);
+        CHECK(device.createTimestampPool({.queue = 1, .count = 1}).error().code == Result::ErrorInvalidArgument);
+        device.destroyCommandList(*list);
+        CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+        const bfr_command_pool staleCommands = commands->get();
+        *commands = {};
+        CHECK(resetResult(device, staleCommands) == Result::ErrorInvalidHandle);
+        const bfr_timestamp_pool gone = destroyed(*pool);
+        CHECK(resetTimestampsResult(device, 0, gone) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -253,32 +255,33 @@ TEST_CASE("Device counts the CPU time of each call when the InstanceDesc asks fo
         InstanceDesc desc = recordingInto(backend, messages);
         desc.callTimings = true;
         const TimestampDevice made{desc};
-        Device& device = *made.device;
+        const Device& device = made.device;
         for (std::uint64_t round = 0; round < kBuffers; ++round) {
-            const auto buffer = device.createBuffer(
+            auto buffer = device.createBuffer(
                 {.size = kReadbackBytes, .memory = BufferMemory::Readback, .usage = {.copyDst = true}});
             REQUIRE(buffer.has_value());
-            CHECK(device.destroyBuffer(*buffer).has_value());
+            const bfr_buffer stale = buffer->get();
+            *buffer = {};
+            CHECK(slotsResult(device, stale) == Result::ErrorInvalidHandle);
         }
 
-        std::array<CallTiming, kCallCount> timings{};
-        REQUIRE(device.callTimings(timings).has_value());
-        const CallTiming& creates = timings.at(static_cast<std::size_t>(Call::CreateBuffer));
+        const auto timings = device.callTimings();
+        REQUIRE(timings.has_value());
+        const CallTiming& creates = timings->at(static_cast<std::size_t>(Call::CreateBuffer));
         CHECK(creates.count == kBuffers);
         CHECK(creates.totalNs >= creates.maxNs);
         CHECK(creates.maxNs != 0);
-        CHECK(timings.at(static_cast<std::size_t>(Call::DestroyBuffer)).count == kBuffers);
-        CHECK(timings.at(static_cast<std::size_t>(Call::Draw)).count == 0);
+        CHECK(timings->at(static_cast<std::size_t>(Call::DestroyBuffer)).count == kBuffers);
+        CHECK(timings->at(static_cast<std::size_t>(Call::Draw)).count == 0);
 
-        std::array<CallTiming, kCallCount> own{};
-        REQUIRE(made.instance->callTimings(own).has_value());
-        CHECK(own.at(static_cast<std::size_t>(Call::InstanceCreateDevice)).count == 1);
+        const auto own = made.instance.instanceCallTimings();
+        REQUIRE(own.has_value());
+        CHECK(own->at(static_cast<std::size_t>(Call::InstanceCreateDevice)).count == 1);
     }
     {
         const TimestampDevice untimed{recordingInto(backend, messages)};
-        std::array<CallTiming, kCallCount> timings{};
-        CHECK(untimed.device->callTimings(timings).error().code == ErrorCode::RhiInvalidCall);
-        CHECK(untimed.instance->callTimings(timings).error().code == ErrorCode::RhiInvalidCall);
+        CHECK(untimed.device.callTimings().error().code == Result::ErrorInvalidArgument);
+        CHECK(untimed.instance.instanceCallTimings().error().code == Result::ErrorInvalidArgument);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -290,7 +293,7 @@ TEST_CASE("Device writes a timestamp at each stage a compute or copy queue's cap
         auto instance = createInstance(recordingInto(backend, messages), kValidation);
         INFO(failureOf(instance));
         REQUIRE(instance.has_value());
-        const Caps& caps = (*instance)->adapters()[0].caps;
+        const Caps caps = capsOf(*instance, kFirstAdapter);
         if (caps.queues.compute == 0 || caps.queues.copy == 0) {
             SKIP("the adapter has no compute or no copy queue");
         }
@@ -298,13 +301,13 @@ TEST_CASE("Device writes a timestamp at each stage a compute or copy queue's cap
         constexpr std::uint32_t kGraphics = 0;
         constexpr std::uint32_t kCompute = 1;
         constexpr std::uint32_t kCopy = 2;
-        auto opened = (*instance)->createDevice(0, kNoWindow, testDeviceWith([](DeviceDesc& desc) {
-                                                    desc.compute = std::span{kTestQueues}.first(1);
-                                                    desc.copy = std::span{kTestQueues}.first(1);
-                                                }));
+        auto opened = instance->createDevice(testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& desc) {
+            desc.computeQueues = std::span{kTestQueues}.first(1);
+            desc.copyQueues = std::span{kTestQueues}.first(1);
+        }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
-        Device& device = **opened;
+        const Device& device = *opened;
         const auto [queue, writes,
                     stages] = GENERATE_COPY(std::tuple{kCompute, caps.timestamps.compute,
                                                        caps.timestamps.computeStages},
@@ -318,23 +321,23 @@ TEST_CASE("Device writes a timestamp at each stage a compute or copy queue's cap
                                          TimestampStage::Fragment, TimestampStage::Compute, TimestampStage::Copy,
                                          TimestampStage::Task,     TimestampStage::Mesh};
         constexpr auto kStages = static_cast<std::uint32_t>(kEveryStage.size());
-        const auto pool = device.createTimestampPool({.queue = queue, .count = kStages});
+        auto pool = device.createTimestampPool({.queue = queue, .count = kStages});
         REQUIRE(pool.has_value());
         // Where this kind of queue resets no timestamps, the graphics queue
         // resets them first.
         const bool resets = queue == kCompute ? caps.timestamps.computeResets : caps.timestamps.copyResets;
-        const auto resetting = device.createCommandPool({.queue = kGraphics, .listCount = kPoolLists});
+        auto resetting = device.createCommandPool({.queue = kGraphics, .listCount = kPoolLists});
         REQUIRE(resetting.has_value());
-        const auto reset = device.beginCommands(*resetting);
+        const auto reset = resetting->beginCommands();
         REQUIRE(reset.has_value());
         CHECK(device.resetTimestamps(*reset, *pool, 0, kStages).has_value());
         const auto sent = device.submit({.queue = kGraphics, .commandLists = std::span{&*reset, 1}, .waits = {}});
         INFO(failureOf(sent));
         REQUIRE(sent.has_value());
         REQUIRE(device.wait(*sent, kTestWait).has_value());
-        const auto commands = device.createCommandPool({.queue = queue, .listCount = kPoolLists});
+        auto commands = device.createCommandPool({.queue = queue, .listCount = kPoolLists});
         REQUIRE(commands.has_value());
-        const auto list = device.beginCommands(*commands);
+        const auto list = commands->beginCommands();
         REQUIRE(list.has_value());
         if (resets) {
             CHECK(device.resetTimestamps(*list, *pool, 0, 0).has_value());
@@ -346,10 +349,16 @@ TEST_CASE("Device writes a timestamp at each stage a compute or copy queue's cap
                 CHECK(device.writeTimestamp(*list, *pool, index, stage, TimestampGranularity::Relaxed).has_value());
             }
         }
-        CHECK(device.destroyCommandList(*list).has_value());
-        CHECK(device.destroyCommandPool(*commands).has_value());
-        CHECK(device.destroyCommandPool(*resetting).has_value());
-        CHECK(device.destroyTimestampPool(*pool).has_value());
+        device.destroyCommandList(*list);
+        CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+        const bfr_command_pool staleCommands = commands->get();
+        *commands = {};
+        CHECK(resetResult(device, staleCommands) == Result::ErrorInvalidHandle);
+        const bfr_command_pool staleResetting = resetting->get();
+        *resetting = {};
+        CHECK(resetResult(device, staleResetting) == Result::ErrorInvalidHandle);
+        const bfr_timestamp_pool gone = destroyed(*pool);
+        CHECK(resetTimestampsResult(device, kGraphics, gone) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

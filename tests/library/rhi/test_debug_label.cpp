@@ -2,17 +2,9 @@
 // Each case runs on every backend the build has, and labels only what the
 // adapter's caps list.
 
-#include "bfr/core/error.h"
-#include "bfr/rhi/buffer.h"
-#include "bfr/rhi/caps.h"
-#include "bfr/rhi/command_list.h"
-#include "bfr/rhi/debug_label.h"
-#include "bfr/rhi/device.h"
-#include "bfr/rhi/format.h"
-#include "bfr/rhi/instance.h"
-#include "bfr/rhi/texture.h"
-#include "bfr/rhi/timestamp.h"
-#include "rhi_test_support.h"
+#include "bfr.hpp"
+#include "bfr/bfr.h"
+#include "bfr_test_support.h"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -21,7 +13,6 @@
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
 
 #include <cstdint>
-#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -29,9 +20,7 @@
 #include <vector>
 
 using namespace bfr;
-using namespace bfr::rhi;
-using namespace bfr::rhi::test;
-using bfr::core::ErrorCode;
+using namespace bfr::test;
 
 namespace {
 
@@ -51,18 +40,19 @@ struct LabelDevice {
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         instance = std::move(*created);
-        auto made = instance->createDevice(0, kNoWindow, testDeviceWith([longest](DeviceDesc& device) {
-                                               device.maxDebugLabelLength = longest;
-                                           }));
+        auto made = instance.createDevice(testDeviceWith(kFirstAdapter, kNoWindow, [longest](DeviceDesc& device) {
+            device.maxDebugLabelLength = longest;
+        }));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         device = std::move(*made);
     }
 
-    [[nodiscard]] const Features& features() const { return instance->adapters()[0].caps.features; }
+    // The first adapter's features; the test fails when the caps can't be read.
+    [[nodiscard]] CapsFeatures features() const { return capsOf(instance, kFirstAdapter).features; }
 
-    std::unique_ptr<Instance> instance;
-    std::unique_ptr<Device> device;
+    Instance instance;
+    Device device;
 };
 
 } // namespace
@@ -73,10 +63,10 @@ TEST_CASE("Device labels a list's work and a queue's where the caps say so, and 
     std::vector<std::string> messages;
     {
         const LabelDevice made{recordingInto(backend, messages), kLongest};
-        Device& device = *made.device;
-        const auto commands = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        const Device& device = made.device;
+        auto commands = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         REQUIRE(commands.has_value());
-        auto list = device.beginCommands(*commands);
+        auto list = commands->beginCommands();
         REQUIRE(list.has_value());
 
         if (made.features().debugLabels) {
@@ -87,17 +77,17 @@ TEST_CASE("Device labels a list's work and a queue's where the caps say so, and 
             CHECK(device.endDebugLabel(*list).has_value());
         }
         else {
-            CHECK(device.beginDebugLabel(*list, {.name = "frame"}).error().code == ErrorCode::RhiUnsupported);
-            CHECK(device.endDebugLabel(*list).error().code == ErrorCode::RhiUnsupported);
-            CHECK(device.insertDebugLabel(*list, {.name = "frame"}).error().code == ErrorCode::RhiUnsupported);
+            CHECK(device.beginDebugLabel(*list, {.name = "frame"}).error().code == Result::ErrorUnsupported);
+            CHECK(device.endDebugLabel(*list).error().code == Result::ErrorUnsupported);
+            CHECK(device.insertDebugLabel(*list, {.name = "frame"}).error().code == Result::ErrorUnsupported);
         }
         if (made.features().queueDebugLabels) {
             CHECK(device.beginQueueDebugLabel(0, {.name = "submit", .color = {0.0F, 1.0F, 0.0F, 1.0F}}).has_value());
         }
         else {
-            CHECK(device.beginQueueDebugLabel(0, {.name = "submit"}).error().code == ErrorCode::RhiUnsupported);
-            CHECK(device.endQueueDebugLabel(0).error().code == ErrorCode::RhiUnsupported);
-            CHECK(device.insertQueueDebugLabel(0, {.name = "submit"}).error().code == ErrorCode::RhiUnsupported);
+            CHECK(device.beginQueueDebugLabel(0, {.name = "submit"}).error().code == Result::ErrorUnsupported);
+            CHECK(device.endQueueDebugLabel(0).error().code == Result::ErrorUnsupported);
+            CHECK(device.insertQueueDebugLabel(0, {.name = "submit"}).error().code == Result::ErrorUnsupported);
         }
         const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
         INFO(failureOf(sent));
@@ -107,7 +97,9 @@ TEST_CASE("Device labels a list's work and a queue's where the caps say so, and 
             CHECK(device.endQueueDebugLabel(0).has_value());
         }
         REQUIRE(device.wait(*sent, kTestWait).has_value());
-        CHECK(device.destroyCommandPool(*commands).has_value());
+        const bfr_command_pool stale = commands->get();
+        *commands = {};
+        CHECK(resetResult(device, stale) == Result::ErrorInvalidHandle);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -119,26 +111,28 @@ TEST_CASE("Device refuses a label longer than its room or holding a '\\0', a sta
     if (!made.features().debugLabels || !made.features().queueDebugLabels) {
         SKIP("the adapter takes no debug labels");
     }
-    Device& device = *made.device;
-    const auto commands = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+    const Device& device = made.device;
+    auto commands = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
     REQUIRE(commands.has_value());
-    auto list = device.beginCommands(*commands);
+    auto list = commands->beginCommands();
     REQUIRE(list.has_value());
     constexpr std::string_view kHoldsEnd{"a\0b", 3};
 
-    CHECK(device.beginDebugLabel(*list, {.name = kTooLong}).error().code == ErrorCode::RhiLimitReached);
-    CHECK(device.insertDebugLabel(*list, {.name = kTooLong}).error().code == ErrorCode::RhiLimitReached);
-    CHECK(device.beginDebugLabel(*list, {.name = kHoldsEnd}).error().code == ErrorCode::RhiInvalidCall);
-    CHECK(device.insertDebugLabel(*list, {.name = kHoldsEnd}).error().code == ErrorCode::RhiInvalidCall);
-    CHECK(device.beginQueueDebugLabel(0, {.name = kTooLong}).error().code == ErrorCode::RhiLimitReached);
-    CHECK(device.insertQueueDebugLabel(0, {.name = kHoldsEnd}).error().code == ErrorCode::RhiInvalidCall);
-    CHECK(device.beginQueueDebugLabel(kNoQueue, {.name = "submit"}).error().code == ErrorCode::RhiInvalidCall);
-    CHECK(device.endQueueDebugLabel(kNoQueue).error().code == ErrorCode::RhiInvalidCall);
-    CHECK(device.insertQueueDebugLabel(kNoQueue, {.name = "submit"}).error().code == ErrorCode::RhiInvalidCall);
-    CHECK(device.beginDebugLabel({}, {.name = "frame"}).error().code == ErrorCode::RhiInvalidHandle);
-    CHECK(device.endDebugLabel({}).error().code == ErrorCode::RhiInvalidHandle);
-    CHECK(device.insertDebugLabel({}, {.name = "frame"}).error().code == ErrorCode::RhiInvalidHandle);
-    CHECK(device.destroyCommandPool(*commands).has_value());
+    CHECK(device.beginDebugLabel(*list, {.name = kTooLong}).error().code == Result::ErrorLimitReached);
+    CHECK(device.insertDebugLabel(*list, {.name = kTooLong}).error().code == Result::ErrorLimitReached);
+    CHECK(device.beginDebugLabel(*list, {.name = kHoldsEnd}).error().code == Result::ErrorInvalidArgument);
+    CHECK(device.insertDebugLabel(*list, {.name = kHoldsEnd}).error().code == Result::ErrorInvalidArgument);
+    CHECK(device.beginQueueDebugLabel(0, {.name = kTooLong}).error().code == Result::ErrorLimitReached);
+    CHECK(device.insertQueueDebugLabel(0, {.name = kHoldsEnd}).error().code == Result::ErrorInvalidArgument);
+    CHECK(device.beginQueueDebugLabel(kNoQueue, {.name = "submit"}).error().code == Result::ErrorInvalidArgument);
+    CHECK(device.endQueueDebugLabel(kNoQueue).error().code == Result::ErrorInvalidArgument);
+    CHECK(device.insertQueueDebugLabel(kNoQueue, {.name = "submit"}).error().code == Result::ErrorInvalidArgument);
+    CHECK(device.beginDebugLabel({}, {.name = "frame"}).error().code == Result::ErrorInvalidHandle);
+    CHECK(device.endDebugLabel({}).error().code == Result::ErrorInvalidHandle);
+    CHECK(device.insertDebugLabel({}, {.name = "frame"}).error().code == Result::ErrorInvalidHandle);
+    const bfr_command_pool stale = commands->get();
+    *commands = {};
+    CHECK(resetResult(device, stale) == Result::ErrorInvalidHandle);
 }
 
 TEST_CASE("Device with no room for labels takes only empty names", "[rhi][agnostic]") {
@@ -147,15 +141,17 @@ TEST_CASE("Device with no room for labels takes only empty names", "[rhi][agnost
     if (!made.features().debugLabels) {
         SKIP("the adapter takes no debug labels");
     }
-    Device& device = *made.device;
-    const auto commands = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+    const Device& device = made.device;
+    auto commands = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
     REQUIRE(commands.has_value());
-    auto list = device.beginCommands(*commands);
+    auto list = commands->beginCommands();
     REQUIRE(list.has_value());
 
     CHECK(device.insertDebugLabel(*list, {.name = ""}).has_value());
-    CHECK(device.insertDebugLabel(*list, {.name = "a"}).error().code == ErrorCode::RhiLimitReached);
-    CHECK(device.destroyCommandPool(*commands).has_value());
+    CHECK(device.insertDebugLabel(*list, {.name = "a"}).error().code == Result::ErrorLimitReached);
+    const bfr_command_pool stale = commands->get();
+    *commands = {};
+    CHECK(resetResult(device, stale) == Result::ErrorInvalidHandle);
 }
 
 TEST_CASE("Device names the objects it makes where the caps say so, and refuses a name it can't take",
@@ -164,7 +160,7 @@ TEST_CASE("Device names the objects it makes where the caps say so, and refuses 
     std::vector<std::string> messages;
     {
         const LabelDevice made{recordingInto(backend, messages), 0};
-        Device& device = *made.device;
+        const Device& device = made.device;
         constexpr std::uint64_t kBytes = 256;
         constexpr std::string_view kHoldsEnd{"a\0b", 3};
         const BufferDesc named{.size = kBytes, .usage = {.copyDst = true}, .name = "vertices"};
@@ -179,46 +175,55 @@ TEST_CASE("Device names the objects it makes where the caps say so, and refuses 
                                   .usage = {.sampled = true, .colorAttachment = true},
                                   .name = "albedo"};
         if (!made.features().objectNames) {
-            CHECK(device.createBuffer(named).error().code == ErrorCode::RhiUnsupported);
-            CHECK(device.createTexture(texture).error().code == ErrorCode::RhiUnsupported);
+            CHECK(device.createBuffer(named).error().code == Result::ErrorUnsupported);
+            CHECK(device.createTexture(texture).error().code == Result::ErrorUnsupported);
             CHECK(device.createTimestampPool({.queue = 0, .count = 1, .name = "frame"}).error().code ==
-                  ErrorCode::RhiUnsupported);
-            const auto unnamed = device.createBuffer({.size = kBytes, .usage = {.copyDst = true}});
+                  Result::ErrorUnsupported);
+            auto unnamed = device.createBuffer({.size = kBytes, .usage = {.copyDst = true}});
             REQUIRE(unnamed.has_value());
-            CHECK(device.destroyBuffer(*unnamed).has_value());
+            const bfr_buffer stale = unnamed->get();
+            *unnamed = {};
+            CHECK(slotsResult(device, stale) == Result::ErrorInvalidHandle);
         }
         else {
-            const auto buffer = device.createBuffer(named);
+            auto buffer = device.createBuffer(named);
             INFO(failureOf(buffer));
             REQUIRE(buffer.has_value());
-            const auto image = device.createTexture(texture);
+            auto image = device.createTexture(texture);
             INFO(failureOf(image));
             REQUIRE(image.has_value());
-            const auto timestamps = device.createTimestampPool({.queue = 0, .count = 1, .name = "frame"});
+            auto timestamps = device.createTimestampPool({.queue = 0, .count = 1, .name = "frame"});
             INFO(failureOf(timestamps));
             REQUIRE(timestamps.has_value());
             CHECK(device.createBuffer({.size = kBytes, .usage = {.copyDst = true}, .name = kHoldsEnd}).error().code ==
-                  ErrorCode::RhiInvalidCall);
+                  Result::ErrorInvalidArgument);
             // A 3D color target with levels, whose deeper levels have fewer
             // slices to draw to.
             if (made.features().volumeColorTargets) {
-                const auto volume = device.createTexture({.dimension = TextureDimension::D3,
-                                                          .format = Format::Rgba8Unorm,
-                                                          .width = kVolumeSide,
-                                                          .height = kVolumeSide,
-                                                          .depth = kVolumeSide,
-                                                          .layers = 1,
-                                                          .mipLevels = kVolumeLevels,
-                                                          .samples = 1,
-                                                          .usage = {.colorAttachment = true},
-                                                          .name = "voxels"});
+                auto volume = device.createTexture({.dimension = TextureDimension::D3,
+                                                    .format = Format::Rgba8Unorm,
+                                                    .width = kVolumeSide,
+                                                    .height = kVolumeSide,
+                                                    .depth = kVolumeSide,
+                                                    .layers = 1,
+                                                    .mipLevels = kVolumeLevels,
+                                                    .samples = 1,
+                                                    .usage = {.colorAttachment = true},
+                                                    .name = "voxels"});
                 INFO(failureOf(volume));
                 REQUIRE(volume.has_value());
-                CHECK(device.destroyTexture(*volume).has_value());
+                const bfr_texture staleVolume = volume->get();
+                *volume = {};
+                CHECK(slotsResult(device, staleVolume) == Result::ErrorInvalidHandle);
             }
-            CHECK(device.destroyTimestampPool(*timestamps).has_value());
-            CHECK(device.destroyTexture(*image).has_value());
-            CHECK(device.destroyBuffer(*buffer).has_value());
+            const bfr_timestamp_pool goneTimestamps = destroyed(*timestamps);
+            CHECK(resetTimestampsResult(device, 0, goneTimestamps) == Result::ErrorInvalidHandle);
+            const bfr_texture staleImage = image->get();
+            *image = {};
+            CHECK(slotsResult(device, staleImage) == Result::ErrorInvalidHandle);
+            const bfr_buffer staleBuffer = buffer->get();
+            *buffer = {};
+            CHECK(slotsResult(device, staleBuffer) == Result::ErrorInvalidHandle);
         }
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
