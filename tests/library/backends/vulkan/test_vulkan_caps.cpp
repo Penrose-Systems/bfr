@@ -1,13 +1,8 @@
 // What the Vulkan backend reports about its adapters: what the driver says,
 // and how each failed query comes back.
 
-#include "bfr/core/error.h"
-#include "bfr/core/window.h"
-#include "bfr/rhi/caps.h"
-#include "bfr/rhi/device.h"
-#include "bfr/rhi/format.h"
-#include "bfr/rhi/instance.h"
-#include "rhi/rhi_test_support.h"
+#include "bfr.hpp"
+#include "rhi/bfr_test_support.h"
 #include "scoped_env.h"
 #include "vulkan_test_support.h"
 
@@ -20,20 +15,19 @@
 #include <vulkan/vulkan_core.h>
 
 #include <algorithm>
-#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
 
 using namespace bfr;
-using namespace bfr::rhi;
-using namespace bfr::rhi::vulkan::test;
+using namespace bfr::test;
+using namespace bfr::test::vulkan;
 
 namespace {
 
 // Each thing Vulkan promises about an adapter's info that info lacks.
-std::vector<std::string> missingVulkanInfo(const AdapterInfo& info) {
+std::vector<std::string> missingVulkanInfo(const CapsInfo& info) {
     std::vector<std::string> missing;
     if (info.apiMajor != 1 || info.apiMinor < 2) {
         missing.emplace_back("Vulkan 1.2");
@@ -55,13 +49,14 @@ std::vector<std::string> missingVulkanInfo(const AdapterInfo& info) {
 TEST_CASE("Vulkan lists only adapters at 1.2 or newer, each with a vendor, a driver name and a device UUID",
           "[vulkan][caps][gpu]") {
     std::vector<std::string> messages;
-    const auto rhi = Instance::create(recordingInto(messages), kValidation);
+    const auto rhi = createInstance(recordingInto(messages), kValidation);
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    for (const Adapter& adapter : (*rhi)->adapters()) {
-        INFO(adapter.name);
-        CHECK_THAT(missingVulkanInfo(adapter.caps.info), Catch::Matchers::IsEmpty());
+    const std::vector<AdapterInfo> adapters = adaptersOf(*rhi);
+    for (std::uint32_t adapter = 0; adapter < adapters.size(); ++adapter) {
+        INFO(adapters[adapter].name);
+        CHECK_THAT(missingVulkanInfo(capsOf(*rhi, adapter).info), Catch::Matchers::IsEmpty());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -71,14 +66,16 @@ TEST_CASE("Vulkan reports what the driver says about an adapter", "[vulkan][caps
     const ScopedEnv vendor("BFR_ADAPTER_VENDOR_ID", "0x1234");
     const ScopedEnv noFloat16("BFR_ADAPTER_NO_FEATURE", "shaderFloat16");
 
-    const auto rhi = Instance::create(vulkanDesc(), {});
+    const auto rhi = Instance::create(vulkanDesc());
 
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
-    for (const Adapter& adapter : (*rhi)->adapters()) {
-        INFO(adapter.name);
-        CHECK(adapter.caps.info.vendorId == 0x1234);
-        CHECK_FALSE(adapter.caps.features.shaderFloat16);
+    const std::vector<AdapterInfo> adapters = adaptersOf(*rhi);
+    for (std::uint32_t adapter = 0; adapter < adapters.size(); ++adapter) {
+        INFO(adapters[adapter].name);
+        const Caps caps = capsOf(*rhi, adapter);
+        CHECK(caps.info.vendorId == 0x1234);
+        CHECK_FALSE(caps.features.shaderFloat16);
     }
 }
 
@@ -88,18 +85,18 @@ TEST_CASE("Vulkan reports LOD bias on a portability driver as the driver answers
     const bool answer = GENERATE(false, true);
     const ScopedEnv lodBias("BFR_ADAPTER_LOD_BIAS", answer ? "1" : "0");
     std::vector<std::string> errors;
-    const auto rhi = Instance::create(recordingErrorsInto(errors), kValidation);
+    const auto rhi = createInstance(recordingErrorsInto(errors), kValidation);
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
-    const std::size_t adapter = cpuAdapter(**rhi);
+    const std::uint32_t adapter = cpuAdapter(*rhi);
 
-    CHECK((*rhi)->adapters()[adapter].caps.features.samplerLodBias == answer);
+    CHECK(capsOf(*rhi, adapter).features.samplerLodBias == answer);
     if (answer) {
-        const auto device = (*rhi)->createDevice(adapter, kNoWindow, kTestDevice);
+        const auto device = rhi->createDevice(testDeviceOn(adapter, kNoWindow));
         INFO(failureOf(device));
         REQUIRE(device.has_value());
         constexpr float kLodBias = 1;
-        CHECK((*device)->createSampler({.lodBias = kLodBias}).has_value());
+        CHECK(device->createSampler({.lodBias = kLodBias}).has_value());
         CHECK_THAT(errors, Catch::Matchers::IsEmpty());
     }
 }
@@ -108,11 +105,11 @@ TEST_CASE("Vulkan reports no sample counts for a format the API says it can't re
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv failing("BFR_FAIL", "vkGetPhysicalDeviceImageFormatProperties2");
     const ScopedEnv unsupported("BFR_FAIL_RESULT", "VK_ERROR_FORMAT_NOT_SUPPORTED");
-    const auto rhi = Instance::create(vulkanDesc(), {});
+    const auto rhi = Instance::create(vulkanDesc());
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto rgba8 = (*rhi)->formatCaps(0, Format::Rgba8Unorm);
+    const auto rgba8 = formatCapsOf(*rhi, kFirstAdapter, Format::Rgba8Unorm);
 
     INFO(failureOf(rgba8));
     REQUIRE(rgba8.has_value());
@@ -121,16 +118,16 @@ TEST_CASE("Vulkan reports no sample counts for a format the API says it can't re
 }
 
 TEST_CASE("Vulkan reports a failed format query as the failure it is", "[vulkan][caps][gpu]") {
-    const auto [name, code] = GENERATE(std::pair{"VK_ERROR_UNKNOWN", bfr::core::ErrorCode::RhiQueryFailed},
-                                       std::pair{"VK_ERROR_OUT_OF_HOST_MEMORY", bfr::core::ErrorCode::RhiOutOfMemory});
+    const auto [name, code] = GENERATE(std::pair{"VK_ERROR_UNKNOWN", Result::ErrorQueryFailed},
+                                       std::pair{"VK_ERROR_OUT_OF_HOST_MEMORY", Result::ErrorOutOfMemory});
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv failing("BFR_FAIL", "vkGetPhysicalDeviceImageFormatProperties2");
     const ScopedEnv result("BFR_FAIL_RESULT", name);
-    const auto rhi = Instance::create(vulkanDesc(), {});
+    const auto rhi = Instance::create(vulkanDesc());
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto rgba8 = (*rhi)->formatCaps(0, Format::Rgba8Unorm);
+    const auto rgba8 = formatCapsOf(*rhi, kFirstAdapter, Format::Rgba8Unorm);
 
     INFO(name);
     REQUIRE_FALSE(rgba8.has_value());
@@ -144,20 +141,20 @@ TEST_CASE("Vulkan reports a failed surface query as the failure it is", "[vulkan
                                           "vkGetPhysicalDeviceSurfaceFormatsKHR");
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv failing("BFR_FAIL", function);
-    const auto rhi = Instance::create(vulkanDesc(), {});
+    const auto rhi = Instance::create(vulkanDesc());
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
-    const std::size_t adapter = cpuAdapter(**rhi);
+    const std::uint32_t adapter = cpuAdapter(*rhi);
 
-    const auto caps = (*rhi)->swapchainCaps(adapter, bfr::core::window::Headless{});
-    const auto formats = (*rhi)->swapchainFormats(adapter, bfr::core::window::Headless{});
+    const auto caps = rhi->swapchainCaps(adapter, {.window = kHeadless});
+    const auto formats = rhi->swapchainFormats(adapter, {.window = kHeadless});
 
     INFO(function);
     const bool capsFail = function == "vkGetPhysicalDeviceSurfaceCapabilitiesKHR";
     REQUIRE(caps.has_value() != capsFail);
     REQUIRE(formats.has_value() == capsFail);
-    const bfr::core::Error& failed = capsFail ? caps.error() : formats.error();
-    CHECK(failed.code == bfr::core::ErrorCode::RhiWindowFailed);
+    const Error& failed = capsFail ? caps.error() : formats.error();
+    CHECK(failed.code == Result::ErrorWindowFailed);
     CHECK_THAT(failed.message.text(), Catch::Matchers::Equals(function + ": VK_ERROR_UNKNOWN"));
 }
 
@@ -166,14 +163,14 @@ TEST_CASE("Vulkan doesn't ask NVIDIA's driver about a headless window's swapchai
     const LoaderVersion loader{"1.4.318"};
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv nvidia("BFR_ADAPTER_DRIVER_ID", std::to_string(VK_DRIVER_ID_NVIDIA_PROPRIETARY));
-    const auto rhi = Instance::create(vulkanDesc(), {});
+    const auto rhi = Instance::create(vulkanDesc());
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto caps = (*rhi)->swapchainCaps(cpuAdapter(**rhi), bfr::core::window::Headless{});
+    const auto caps = rhi->swapchainCaps(cpuAdapter(*rhi), {.window = kHeadless});
 
     REQUIRE_FALSE(caps.has_value());
-    CHECK(caps.error().code == bfr::core::ErrorCode::RhiPresentUnsupported);
+    CHECK(caps.error().code == Result::ErrorPresentUnsupported);
     CHECK_THAT(caps.error().message.text(), Catch::Matchers::ContainsSubstring("can't present to this window"));
     CHECK_THAT(caps.error().message.text(), !Catch::Matchers::ContainsSubstring("loader"));
 }
@@ -181,16 +178,16 @@ TEST_CASE("Vulkan doesn't ask NVIDIA's driver about a headless window's swapchai
 TEST_CASE("Vulkan device without VK_EXT_memory_budget fails with RhiUnsupported", "[vulkan][caps][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv hidden("BFR_ADAPTER_HIDE", "VK_EXT_memory_budget");
-    const auto rhi = Instance::create(vulkanDesc(), {});
+    const auto rhi = Instance::create(vulkanDesc());
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
-    const auto device = (*rhi)->createDevice(0, kNoWindow, kTestDevice);
+    const auto device = rhi->createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
     INFO(failureOf(device));
     REQUIRE(device.has_value());
 
-    const auto budget = (*device)->budget();
+    const auto budget = device->budget();
 
     REQUIRE_FALSE(budget.has_value());
-    CHECK(budget.error().code == bfr::core::ErrorCode::RhiUnsupported);
+    CHECK(budget.error().code == Result::ErrorUnsupported);
     CHECK_THAT(budget.error().message.text(), Catch::Matchers::ContainsSubstring("VK_EXT_memory_budget"));
 }

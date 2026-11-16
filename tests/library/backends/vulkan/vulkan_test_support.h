@@ -1,25 +1,25 @@
 #pragma once
 
 // Helpers for the Vulkan backend's tests: the layers they load and the
-// environment they set, on top of the RHI tests' helpers.
+// environment they set, on top of the public API tests' helpers.
 
-#include "bfr/rhi/instance.h"
-#include "rhi/rhi_test_support.h"
+#include "bfr.hpp"
+#include "rhi/bfr_test_support.h"
 #include "scoped_env.h"
 
+#include <catch2/catch_message.hpp>
+#include <catch2/catch_test_macros.hpp>
+
 #include <algorithm>
-#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <string>
 #include <vector>
 
-namespace bfr::rhi::vulkan::test {
-
-using namespace bfr::rhi::test; // NOLINT(google-build-using-namespace)
+namespace bfr::test::vulkan {
 
 /// A description on the Vulkan backend at the version the tests ask for, with
-/// no logger.
+/// no message callback.
 inline InstanceDesc vulkanDesc() {
     return describe(Backend::Vulkan);
 }
@@ -34,22 +34,22 @@ inline InstanceDesc vulkanAt(std::uint32_t major, std::uint32_t minor) {
 
 /// recordingInto on the Vulkan backend.
 inline InstanceDesc recordingInto(std::vector<std::string>& messages) {
-    return bfr::rhi::test::recordingInto(Backend::Vulkan, messages);
+    return bfr::test::recordingInto(Backend::Vulkan, messages);
 }
 
 /// recordingErrorsInto on the Vulkan backend.
 inline InstanceDesc recordingErrorsInto(std::vector<std::string>& errors) {
-    return bfr::rhi::test::recordingErrorsInto(Backend::Vulkan, errors);
+    return bfr::test::recordingErrorsInto(Backend::Vulkan, errors);
 }
 
 /// The CPU adapter, lavapipe, which every Vulkan test machine has. Tests of
 /// what the backend does with a driver's answers use it: the adapter override
 /// layer changes what it reports, and it has one queue family.
-inline std::size_t cpuAdapter(const Instance& rhi) {
-    const auto adapters = rhi.adapters();
-    const auto found = std::ranges::find(adapters, AdapterType::Cpu, &Adapter::type);
+inline std::uint32_t cpuAdapter(const Instance& instance) {
+    const std::vector<AdapterInfo> adapters = adaptersOf(instance);
+    const auto found = std::ranges::find(adapters, AdapterType::Cpu, &AdapterInfo::type);
     REQUIRE(found != adapters.end());
-    return static_cast<std::size_t>(found - adapters.begin());
+    return static_cast<std::uint32_t>(found - adapters.begin());
 }
 
 /// For one scope, the loader reports itself as version ("1.4.319"), through
@@ -74,4 +74,4 @@ struct AdapterOverrideLayer {
     ScopedEnv enable;
 };
 
-} // namespace bfr::rhi::vulkan::test
+} // namespace bfr::test::vulkan
