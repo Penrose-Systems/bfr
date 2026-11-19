@@ -246,7 +246,12 @@ class Plan:
                                     "numbers, which pass to C without a copy")
                 continue
             if member.get("pointer"):
-                raise SpecError(f"{where}: the C++ generator does not yet handle pointer members")
+                # Laid out as its C type, so the caller's value is passed as it
+                # is, as an array member's elements are.
+                if member.get("pointer") != "in" or name in self.out_structs or not self.is_mirror(kind):
+                    raise SpecError(f"{where}: the C++ generator handles a pointer member only passed in, to a "
+                                    "number or a struct laid out as its C type")
+                continue
             if kind in api.callbacks:
                 if name in self.out_structs:
                     raise SpecError(f"{where}: a callback is passed in, not out")
@@ -294,7 +299,7 @@ class Plan:
         # Ref or plain class, a fixed array of numbers a std::array, and a
         # struct member one laid out so too, each laid out as the C member.
         return struct is not None and not struct.get("extensible") and not struct.get("extends") and all(
-            (m["type"] in MIRRORED or m["type"] in api.enums or m["type"] in api.handles
+            (m["type"] in MIRRORED or m["type"] == "opaque" or m["type"] in api.enums or m["type"] in api.handles
              or (m["type"] in api.structs and not m.get("fixed") and self.is_mirror(m["type"])))
             and (not m.get("fixed") or m["type"] in MIRRORED) and not m.get("array") and not m.get("pointer")
             for m in struct["members"])
@@ -327,6 +332,8 @@ def member_type(api: Api, member: dict[str, Any], out: bool) -> str:
     """A struct member's C++ type: a std::array for a fixed one, and a Ref,
     null for none, for a handle the caller owns."""
     kind = value_type(api, member["type"]) if member["type"] in api.handles else cpp_type(api, member["type"], out)
+    if member.get("pointer"):
+        return f"const {kind}*"
     return f"std::array<{kind}, {api.fixed_text(member)}>" if member.get("fixed") else kind
 
 
@@ -564,6 +571,8 @@ class Renderer:
             member_doc = member.get("doc", "")
             if member.get("optional") and member["type"] in api.callbacks:
                 member_doc = (member_doc + " May be empty.").strip()
+            if member.get("optional") and member.get("pointer") and not member.get("array"):
+                member_doc = (member_doc + " May be null.").strip()
             if member_doc:
                 self.emit(*doc(member_doc, "    "))
             if member.get("array"):
@@ -574,7 +583,7 @@ class Renderer:
                 continue
             self.emit(f"    {member_type(api, member, out)} {camel(member['name'])}{{}};")
         self.emit("};")
-        arrays = [m for s in api.structs.values() for m in s["members"] if m.get("array")]
+        arrays = [m for s in api.structs.values() for m in s["members"] if m.get("array") or m.get("pointer")]
         arrays += [p for f in api.functions.values() for p in f["params"]
                    if p.get("array") and p.get("pointer") == "in"]
         if any(self.plan.is_mirror(m["type"]) and m["type"] == name for m in arrays):
@@ -651,6 +660,9 @@ class Renderer:
                 # the caller's array is passed as it is: no copy, no allocation.
                 fields.append(f".{member['name']} = reinterpret_cast<const {c_type(member['type'])}*>("
                               f"value.{camel(member['name'])}.data())")
+            elif member.get("pointer"):
+                fields.append(f".{member['name']} = reinterpret_cast<const {c_type(member['type'])}*>("
+                              f"value.{camel(member['name'])})")
             elif member["name"] in counts:
                 array = counts[member["name"]]
                 fields.append(f".{member['name']} = static_cast<{c_type(member['type'])}>("

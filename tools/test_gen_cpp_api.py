@@ -458,6 +458,41 @@ class PlacementTests(unittest.TestCase):
 
         self.assert_rejected(change, "only passed in")
 
+    def test_a_pointer_member_to_a_struct_laid_out_as_c_passes_as_it_is(self) -> None:
+        spec = with_more(MINIMAL)
+        spec["structs"]["target"] = {
+            "doc": "A target.",
+            "members": [{"name": "native", "type": "opaque"}, {"name": "weight", "type": "u32"}],
+        }
+        spec["structs"]["query"] = {
+            "doc": "A query.",
+            "members": [{"name": "target", "type": "target", "pointer": "in", "optional": True, "doc": "Where."}],
+        }
+        spec["functions"]["device_ask"] = {
+            "doc": "Asks.",
+            "returns": "result",
+            "params": [{"name": "device", "type": "device"}, {"name": "query", "type": "query", "pointer": "in"}],
+        }
+        rendered = render(Api(spec))
+        self.assertIn("    /// Where. May be null.\n    const Target* target{};", rendered)
+        self.assertIn(".target = reinterpret_cast<const bfr_target*>(value.target)", rendered)
+        self.assertIn("static_assert(offsetof(Target, native) == offsetof(bfr_target, native));", rendered)
+
+    def test_a_pointer_member_that_would_need_a_copy_is_rejected(self) -> None:
+        def change(spec: dict) -> None:
+            spec["structs"]["label"] = {"doc": "A label.", "members": [{"name": "text", "type": "string"}]}
+            spec["structs"]["query"] = {
+                "doc": "A query.",
+                "members": [{"name": "label", "type": "label", "pointer": "in", "optional": True}],
+            }
+            spec["functions"]["device_ask"] = {
+                "doc": "Asks.",
+                "returns": "result",
+                "params": [{"name": "device", "type": "device"}, {"name": "query", "type": "query", "pointer": "in"}],
+            }
+
+        self.assert_rejected(change, "pointer member only passed in")
+
     def test_a_struct_of_numbers_may_pass_in_and_out(self) -> None:
         spec = with_more(MINIMAL)
         spec["functions"]["device_set_format"] = {
