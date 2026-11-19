@@ -520,11 +520,16 @@ auto VulkanInstance::askAboutSurface(std::size_t adapter, const core::window::Na
     if (!surface) {
         return std::unexpected(surface.error());
     }
+    // The other surface queries need a surface the adapter presents to
+    // (VUID-vkGetPhysicalDeviceSurfaceCapabilitiesKHR-surface-06211,
+    // VUID-vkGetPhysicalDeviceSurfaceFormatsKHR-surface-06525,
+    // VUID-vkGetPhysicalDeviceSurfacePresentModesKHR-surface-06525).
     VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
-    if (presentQueryCrashes(physicalDevice, *surface)) {
-        BFR_LOG_INFO(logger(),
-                     "{} does not present to headless surfaces; not asked, since loader {} would crash its driver",
-                     adapters_[adapter].name, versionName(loaderVersion_));
+    const auto presenting = presentingOn(adapter, queueFamilies(vk_, physicalDevice).size(), *surface);
+    if (!presenting) {
+        return std::unexpected(presenting.error());
+    }
+    if (std::ranges::none_of(*presenting, [](VkBool32 presents) { return presents == VK_TRUE; })) {
         return core::failure(core::ErrorCode::RhiPresentUnsupported, "{} can't present to this window",
                              adapters_[adapter].name);
     }
@@ -543,15 +548,20 @@ core::Result<std::vector<VkBool32>> VulkanInstance::presentingFamilies(
     if (!surface) {
         return std::unexpected(surface.error());
     }
+    return presentingOn(adapter, familyCount, *surface);
+}
+
+core::Result<std::vector<VkBool32>> VulkanInstance::presentingOn(std::size_t adapter, std::size_t familyCount,
+                                                                 const VulkanSurface& surface) const {
     VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
-    if (presentQueryCrashes(physicalDevice, *surface)) {
+    if (presentQueryCrashes(physicalDevice, surface)) {
         BFR_LOG_INFO(logger(),
                      "{} does not present to headless surfaces; not asked, since loader {} would crash its driver",
                      adapters_[adapter].name, versionName(loaderVersion_));
     }
-    presenting.resize(familyCount);
+    std::vector<VkBool32> presenting(familyCount);
     for (std::uint32_t family = 0; family < presenting.size(); ++family) {
-        const auto answer = presents(physicalDevice, family, *surface);
+        const auto answer = presents(physicalDevice, family, surface);
         if (!answer) {
             return std::unexpected(answer.error());
         }

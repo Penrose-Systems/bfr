@@ -82,8 +82,8 @@ private:
     // Fails with RhiAdapterOutOfRange when adapter is not an index into adapters_.
     [[nodiscard]] core::Result<void> checkAdapter(std::size_t adapter) const;
     // What query, given adapters()[adapter] and a surface on window, answers.
-    // Fails as the query does, as surfaceFor does, and with
-    // RhiPresentUnsupported for a driver the query would crash.
+    // Fails as the query does, as surfaceFor and presentingOn do, and with
+    // RhiPresentUnsupported when no queue family presents to the surface.
     template <class Query>
     [[nodiscard]] auto askAboutSurface(std::size_t adapter, const core::window::NativeWindow& window, Query query) const
         -> std::invoke_result_t<Query, const InstanceTable&, VkPhysicalDevice, VkSurfaceKHR>;
@@ -91,6 +91,10 @@ private:
     // presentTo, index-aligned; empty without a window.
     [[nodiscard]] core::Result<std::vector<VkBool32>> presentingFamilies(
         std::size_t adapter, std::size_t familyCount, const core::window::NativeWindow& presentTo) const;
+    // Which of adapters()[adapter]'s familyCount queue families present to
+    // surface, index-aligned. Fails as presents does.
+    [[nodiscard]] core::Result<std::vector<VkBool32>> presentingOn(std::size_t adapter, std::size_t familyCount,
+                                                                   const VulkanSurface& surface) const;
     // Whether asking adapter about surface would crash its driver.
     [[nodiscard]] bool presentQueryCrashes(VkPhysicalDevice adapter, const VulkanSurface& surface) const;
 
