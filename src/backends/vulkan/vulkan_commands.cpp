@@ -6,6 +6,7 @@
 #include "rhi/enum_check.h"
 #include "rhi/pipeline_check.h"
 #include "rhi/ray_tracing_check.h"
+#include "vulkan/vulkan_buffer.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_pipeline.h"
 
