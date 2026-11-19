@@ -112,10 +112,14 @@ class RenderTests(unittest.TestCase):
         self.assertIn("inline Expected<void> Buffer::fill() {", header)
 
     def test_a_static_create_keeps_its_callback_alive_with_what_it_makes(self) -> None:
-        self.assertIn("using Log = std::function<void(std::string_view text)>;", self.header)
-        self.assertIn("    auto log = desc.log ? std::make_shared<Log>(desc.log) : nullptr;", self.header)
+        self.assertIn("using Log = void (*)(std::string_view text, void* userData);", self.header)
+        self.assertIn(
+            "    auto log = desc.log != nullptr ? std::make_shared<detail::LogState>("
+            "detail::LogState{desc.log, desc.logUserData}) : nullptr;",
+            self.header,
+        )
         self.assertIn("    return Device{device, std::move(log)};", self.header)
-        self.assertIn("callQuietly([&] { (*static_cast<const Log*>(user_data))(text(text)); });", self.header)
+        self.assertIn("callQuietly([&] { state.callback(text(text), state.userData); });", self.header)
 
     def test_a_listing_returns_a_vector_and_asks_again_while_it_grows(self) -> None:
         self.assertIn("    [[nodiscard]] Expected<std::vector<Format>> formats() const;", self.header)
