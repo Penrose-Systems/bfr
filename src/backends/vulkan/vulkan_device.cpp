@@ -218,6 +218,7 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       device_(device),
       hasBudget_(setup.hasBudget),
       hasSwapchain_(setup.hasSwapchain),
+      pushConstantsSize_(setup.pushConstantsSize),
       timestampPeriod_(setup.timestampPeriod),
       timestamps_(setup.timestamps),
       features_(setup.features),

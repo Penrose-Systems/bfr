@@ -123,6 +123,16 @@ core::Result<void> VulkanDevice::pushConstants(CommandListHandle commandList, st
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
+    if (auto checked = checkPushConstants(data, pushConstantsSize_); !checked) {
+        return checked;
+    }
+    if (auto checked = checkPushConstantValues(data); !checked) {
+        return checked;
+    }
+    // Vulkan takes no empty write (VUID-vkCmdPushConstants-size-arraylength).
+    if (data.empty()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "Vulkan takes no push constants write of 0 bytes");
+    }
     table_.vkCmdPushConstants((*list)->buffer, layout_.pipelineLayout(), VK_SHADER_STAGE_ALL, 0,
                               static_cast<std::uint32_t>(data.size()), data.data());
     return {};

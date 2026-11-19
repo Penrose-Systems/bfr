@@ -219,3 +219,28 @@ TEST_CASE("Device destroys the pipelines left when it goes, and says so", "[rhi]
         CHECK_THAT(message, Catch::Matchers::ContainsSubstring("1 pipelines were left when the device went"));
     }
 }
+
+TEST_CASE("Device refuses push constants past their size, and on Vulkan and D3D12 ones not whole 4-byte values",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        constexpr std::uint32_t kGraphicsQueue = 0;
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const std::uint32_t size = capsOf(made.instance, kFirstAdapter).limits.maxPushConstantsSize;
+        const std::vector<std::uint8_t> tooMany(size + sizeof(std::uint32_t));
+        constexpr std::size_t kPartValue = 2;
+        const std::vector<std::uint8_t> partValue(kPartValue);
+        const auto push = [&made](std::span<const std::uint8_t> data) {
+            return inList(made.device, kGraphicsQueue, [data](const Device& on, CommandList recording) {
+                return bfr_push_constants(on.get(), recording.get(), data.data(),
+                                          static_cast<std::uint32_t>(data.size()));
+            });
+        };
+
+        CHECK(push(tooMany) == Result::ErrorInvalidArgument);
+        const bool takesWholeValues = backend.backend == Backend::Vulkan || backend.backend == Backend::D3d12;
+        CHECK(push(partValue) == (takesWholeValues ? Result::ErrorInvalidArgument : Result{}));
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}

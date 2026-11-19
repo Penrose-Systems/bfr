@@ -98,12 +98,27 @@ namespace bfr::rhi {
 }
 
 /// Fails with RhiInvalidCall when data is more than the size bytes the push
-/// constants hold. Metal's pushConstants calls it first, since it copies
-/// data into an entry of that size in its pool's ring.
+/// constants hold. Every backend's pushConstants calls it first: past it,
+/// Vulkan's behaviour is undefined (VUID-vkCmdPushConstants-size-00371),
+/// D3D12 writes past its root constants, and Metal past its ring's entry.
 [[nodiscard]] inline core::Result<void> checkPushConstants(std::span<const std::byte> data, std::uint32_t size) {
     if (data.size() > size) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "{} bytes of push constants; there are {}", data.size(),
                              size);
+    }
+    return {};
+}
+
+/// Fails with RhiInvalidCall when data is not whole 4-byte values: Vulkan
+/// takes only those (VUID-vkCmdPushConstants-size-00369), and D3D12 sets root
+/// constants as a count of them (ID3D12GraphicsCommandList::
+/// SetGraphicsRoot32BitConstants). Metal copies any bytes, so it doesn't call
+/// this.
+[[nodiscard]] inline core::Result<void> checkPushConstantValues(std::span<const std::byte> data) {
+    constexpr std::size_t kValueSize = sizeof(std::uint32_t);
+    if (data.size() % kValueSize != 0) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "{} bytes of push constants is not a whole number of 4-byte values", data.size());
     }
     return {};
 }

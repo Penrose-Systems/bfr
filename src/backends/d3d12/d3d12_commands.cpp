@@ -148,6 +148,12 @@ core::Result<void> D3D12Device::pushConstants(CommandListHandle commandList, std
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
+    if (auto checked = checkPushConstants(data, kPushConstantsSize); !checked) {
+        return checked;
+    }
+    if (auto checked = checkPushConstantValues(data); !checked) {
+        return checked;
+    }
     D3D12CommandPool* pool = commandPools_.find((*list)->pool);
     if (pool == nullptr) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the list's pool is gone");

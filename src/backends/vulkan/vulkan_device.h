@@ -493,6 +493,8 @@ private:
     VolkDeviceTable table_{};
     bool hasBudget_;
     bool hasSwapchain_;
+    // The bytes of push constants the pipeline layout holds.
+    std::uint32_t pushConstantsSize_;
     float timestampPeriod_;
     Timestamps timestamps_;
     Features features_;
