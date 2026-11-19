@@ -26,6 +26,7 @@ struct MetalTexture {
     std::uint32_t height = 0;
     std::uint32_t depth = 0;
     std::uint32_t layers = 0;
+    std::uint32_t mipLevels = 0;
     std::optional<MTL::SparsePageSize> page;
     TextureTiling tiling;
     /// Its places in the tables, which the device gives back when the texture

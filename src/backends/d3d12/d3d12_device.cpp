@@ -15,6 +15,7 @@
 #include "d3d12/d3d12_pipeline.h"
 #include "d3d12/d3d12_result.h"
 #include "d3d12/d3d12_swapchain.h"
+#include "rhi/barrier_check.h"
 #include "rhi/clear_color.h"
 #include "rhi/command_check.h"
 #include "rhi/device_limits.h"
@@ -1212,6 +1213,9 @@ core::Result<void> D3D12Device::textureBarrier(CommandListHandle commandList, Te
     auto found = textureFor(texture);
     if (!found) {
         return std::unexpected(std::move(found.error()));
+    }
+    if (auto checked = checkTextureRange(range, (*found)->mipLevels, (*found)->layers); !checked) {
+        return checked;
     }
     const auto global = fullBarrierFor(**list);
     if (!global) {

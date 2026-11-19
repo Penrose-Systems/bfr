@@ -7,6 +7,7 @@
 #include "bfr/rhi/sparse.h"
 #include "bfr/rhi/texture.h"
 #include "core/slot_chains.h"
+#include "rhi/barrier_check.h"
 #include "rhi/bindless_slots.h"
 #include "rhi/copy_check.h"
 #include "rhi/enum_check.h"
@@ -509,6 +510,9 @@ core::Result<void> VulkanDevice::textureBarrier(CommandListHandle commandList, T
     auto found = textureFor(texture);
     if (!found) {
         return std::unexpected(std::move(found.error()));
+    }
+    if (auto checked = checkTextureRange(range, (*found)->mipLevels(), (*found)->layers()); !checked) {
+        return checked;
     }
     VkImageMemoryBarrier2 barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;

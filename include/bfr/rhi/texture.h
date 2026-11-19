@@ -37,9 +37,10 @@ inline constexpr std::uint32_t kNoSlot = BFR_NO_SLOT;
 inline constexpr std::uint32_t kRemaining = BFR_REMAINING;
 
 /// The mip levels and layers of a texture a barrier moves: mipCount levels
-/// from mipLevel, and layerCount layers from layer, in every plane. Counts
-/// pass through as given; 0 is no count Vulkan takes. A 3D texture has one
-/// layer, so a barrier moves every depth slice of its levels.
+/// from mipLevel, and layerCount layers from layer, in every plane. A count of
+/// 0, or a level or layer the texture does not have, fails with
+/// RhiInvalidCall on every backend. A 3D texture has one layer, so a barrier
+/// moves every depth slice of its levels.
 struct TextureRange {
     std::uint32_t mipLevel = 0;
     std::uint32_t mipCount = kRemaining;

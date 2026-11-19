@@ -1063,8 +1063,9 @@ struct TextureSlots {
 };
 
 /// The mip levels and layers of a texture a barrier moves: mip_count levels from mip_level, and
-/// layer_count layers from layer, in every plane. Counts pass through as given; 0 is no count
-/// Vulkan takes. A 3D texture has one layer, so a barrier moves every depth slice of its levels.
+/// layer_count layers from layer, in every plane. A count of 0, or a level or layer the texture
+/// does not have, fails with error_invalid_argument on every backend. A 3D texture has one layer,
+/// so a barrier moves every depth slice of its levels.
 struct TextureRange {
     std::uint32_t mipLevel{};
     std::uint32_t mipCount = BFR_REMAINING;

@@ -54,6 +54,8 @@ public:
     /// The whole texture's size in texels, its depth or 1.
     [[nodiscard]] VkExtent3D size() const { return size_; }
     [[nodiscard]] const VulkanSparseTiling& tiling() const { return tiling_; }
+    [[nodiscard]] std::uint32_t mipLevels() const { return mipLevels_; }
+    [[nodiscard]] std::uint32_t layers() const { return layers_; }
     /// The view a rendering draws to mipLevel through, from layer to the last
     /// layer, a 3D texture's depth slice; VK_NULL_HANDLE past the texture's
     /// levels or layers, or where it has none.

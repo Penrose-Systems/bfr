@@ -438,6 +438,43 @@ TEST_CASE("Device fails texture calls with RhiInvalidHandle for a texture or lis
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
+TEST_CASE("Device refuses a texture barrier's range past the texture, or of no levels or layers", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        Texture texture = created(device, {.dimension = TextureDimension::D2,
+                                           .format = Format::Rgba8Unorm,
+                                           .width = kWidth,
+                                           .height = kHeight,
+                                           .depth = 1,
+                                           .layers = kLayers,
+                                           .mipLevels = kMips,
+                                           .samples = 1,
+                                           .usage = kCopies});
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = pool->beginCommands();
+        REQUIRE(list.has_value());
+        const TextureRange range = GENERATE(TextureRange{.mipLevel = kMips},
+                                            TextureRange{.mipLevel = 1, .mipCount = kMips}, TextureRange{.mipCount = 0},
+                                            TextureRange{.layer = kLayers},
+                                            TextureRange{.layer = 1, .layerCount = kLayers},
+                                            TextureRange{.layerCount = 0});
+        INFO(range.mipLevel << ' ' << range.mipCount << ' ' << range.layer << ' ' << range.layerCount);
+
+        CHECK(device.textureBarrier(*list, texture, TextureLayout::Undefined, TextureLayout::CopyDst, range)
+                  .error()
+                  .code == Result::ErrorInvalidArgument);
+        CHECK(device
+                  .textureBarrier(*list, texture, TextureLayout::Undefined, TextureLayout::CopyDst,
+                                  {.mipLevel = kMips - 1, .mipCount = 1, .layer = kLayers - 1, .layerCount = 1})
+                  .has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
 TEST_CASE("Device refuses a texture or a format query of a format BFR does not have", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
