@@ -38,9 +38,8 @@ private:
 };
 
 /// A surface on window, made with instance, which has enabled extensions.
-/// Fails with RhiWindowFailed when there is no window, when its window
-/// system's surface extension is unavailable, or when the API refuses the
-/// surface.
+/// window is not empty. Fails with RhiWindowFailed when its window system's
+/// surface extension is unavailable or when the API refuses the surface.
 [[nodiscard]] core::Result<VulkanSurface> createSurface(VkInstance instance, const InstanceTable& vk,
                                                         std::span<const char* const> extensions,
                                                         const core::window::NativeWindow& window);

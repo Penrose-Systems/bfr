@@ -184,7 +184,7 @@ TEST_CASE("Device destroying a null swapchain does nothing", "[rhi][agnostic]") 
     bfr_destroy_swapchain(headless.device.get(), SwapchainRef{}.get());
 }
 
-TEST_CASE("Device fails with RhiWindowFailed for a swapchain without a window", "[rhi][agnostic]") {
+TEST_CASE("Device fails with ErrorInvalidArgument for a swapchain without a window", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     const HeadlessDevice headless{recordingInto(backend, messages)};
@@ -194,8 +194,8 @@ TEST_CASE("Device fails with RhiWindowFailed for a swapchain without a window", 
     const auto swapchain = headless.device.createSwapchain(desc);
 
     REQUIRE_FALSE(swapchain.has_value());
-    CHECK(swapchain.error().code == Result::ErrorWindowFailed);
-    CHECK_THAT(swapchain.error().message.text(), Catch::Matchers::ContainsSubstring("no window"));
+    CHECK(swapchain.error().code == Result::ErrorInvalidArgument);
+    CHECK_THAT(swapchain.error().message.text(), Catch::Matchers::ContainsSubstring("needs a window"));
 }
 
 TEST_CASE("Device fails with RhiInvalidHandle for a forged swapchain handle", "[rhi][agnostic]") {

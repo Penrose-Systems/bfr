@@ -64,9 +64,8 @@ public:
     Maker(VkInstance instance, std::span<const char* const> extensions)
         : instance_(instance), extensions_(extensions) {}
 
-    Made operator()(std::monostate /*none*/) const {
-        return core::failure(core::ErrorCode::RhiWindowFailed, "there is no window");
-    }
+    // createSurface's precondition rules out no window.
+    [[noreturn]] Made operator()(std::monostate /*none*/) const { std::unreachable(); }
 
 #ifdef VK_USE_PLATFORM_XLIB_KHR
     Made operator()(const core::window::Xlib& window) const {

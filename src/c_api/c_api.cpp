@@ -1516,13 +1516,14 @@ std::optional<bfr_result> checkAdapter(const bfr_instance& instance, std::uint32
     return std::nullopt;
 }
 
-// unusable one.
-std::optional<NativeWindow> surfaceWindow(const bfr_swapchain_query& desc, bfr_result& failed) {
+// The window a swapchain is on, or the result for none or an unusable one; the
+// backends take it as Device::createSwapchain requires.
+std::optional<NativeWindow> surfaceWindow(const bfr_window& from, bfr_result& failed) {
     bfr::core::Message error;
-    auto window = windowIn(desc.window, error);
+    auto window = windowIn(from, error);
     if (window && std::holds_alternative<std::monostate>(*window)) {
         window.reset();
-        error = "bfr_swapchain_query needs a window";
+        error = "a swapchain needs a window";
     }
     if (!window) {
         failed = fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
@@ -1739,13 +1740,10 @@ bfr_result bfr_create_swapchain(bfr_device* device, const bfr_swapchain_desc* de
         if (desc->next != nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_swapchain_desc takes no chained structs");
         }
-        bfr::core::Message error;
-        const auto window = windowIn(desc->window, error);
+        bfr_result failed = BFR_RESULT_SUCCESS;
+        const auto window = surfaceWindow(desc->window, failed);
         if (!window) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
-        }
-        if (std::holds_alternative<std::monostate>(*window)) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_swapchain_desc needs a window");
+            return failed;
         }
         const auto made = swapchainIn(*desc);
         const auto created = device->device->createSwapchain(*window, made);
@@ -2386,7 +2384,7 @@ bfr_result bfr_get_swapchain_caps(bfr_instance* instance, uint32_t adapter, cons
             return *failed;
         }
         bfr_result failed = BFR_RESULT_SUCCESS;
-        const auto window = surfaceWindow(*desc, failed);
+        const auto window = surfaceWindow(desc->window, failed);
         if (!window) {
             return failed;
         }
@@ -2409,7 +2407,7 @@ bfr_result bfr_get_swapchain_formats(bfr_instance* instance, uint32_t adapter, c
             return *failed;
         }
         bfr_result failed = BFR_RESULT_SUCCESS;
-        const auto window = surfaceWindow(*desc, failed);
+        const auto window = surfaceWindow(desc->window, failed);
         if (!window) {
             return failed;
         }

@@ -35,9 +35,10 @@ public:
     Device& operator=(Device&&) = delete;
 
     /// An empty swapchain on window, which must stay open until the swapchain
-    /// is destroyed; resizeSwapchain builds its images. Fails with
-    /// RhiWindowFailed when there is no window, when its window system's
-    /// surface extension is unavailable, or when the API refuses the window,
+    /// is destroyed; resizeSwapchain builds its images. window is not empty
+    /// and its handle is set; the C entry point refuses either. Fails with
+    /// RhiWindowFailed when its window system's surface extension is
+    /// unavailable or when the API refuses the window,
     /// RhiPresentUnsupported when the device has no swapchain extension,
     /// RhiInvalidCall when the device has no queue desc.queue or an enum
     /// in desc is not one BFR has, and RhiLimitReached when the device holds

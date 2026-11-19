@@ -27,16 +27,10 @@ namespace {
 
 // Each window system a swapchain can be made on, or why not.
 struct Checker {
-    core::Result<void> operator()(std::monostate /*none*/) const {
-        return core::failure(core::ErrorCode::RhiWindowFailed, "there is no window");
-    }
+    // Device::createSwapchain's precondition rules out no window.
+    [[noreturn]] core::Result<void> operator()(std::monostate /*none*/) const { std::unreachable(); }
 
-    core::Result<void> operator()(const core::window::Metal& window) const {
-        if (window.layer == nullptr) {
-            return core::failure(core::ErrorCode::RhiWindowFailed, "the Metal window has no layer");
-        }
-        return {};
-    }
+    core::Result<void> operator()(const core::window::Metal& /*window*/) const { return {}; }
 
     core::Result<void> operator()(const core::window::Headless& /*window*/) const { return {}; }
 
