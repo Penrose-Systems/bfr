@@ -306,3 +306,25 @@ TEST_CASE("Device makes a sampler with each setting its features have, and refus
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
+
+TEST_CASE("Vulkan refuses an unnormalized-coordinate sampler it doesn't take", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    if (backend.backend != Backend::Vulkan) {
+        SKIP("the rules are Vulkan's");
+    }
+    std::vector<std::string> messages;
+    {
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        if (!capsOf(made.instance, kFirstAdapter).features.samplerUnnormalizedCoordinates) {
+            SKIP("the device has no unnormalized coordinates");
+        }
+        SamplerDesc repeating{};
+        repeating.unnormalizedCoordinates = true;
+        CHECK(made.device.createSampler(repeating).error().code == Result::ErrorInvalidArgument);
+        SamplerDesc clamped = repeating;
+        clamped.addressU = AddressMode::ClampToEdge;
+        clamped.addressV = AddressMode::ClampToEdge;
+        CHECK(made.device.createSampler(clamped).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}

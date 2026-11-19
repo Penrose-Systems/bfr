@@ -1976,7 +1976,10 @@ typedef struct bfr_sampler_desc {
     bfr_bool border_integer;
     // Red, green, blue and alpha bits; a signed format reads them as int32.
     uint32_t border_color_integer[4];
-    // Coordinates in texels, not 0 to 1; bfr_caps_features.sampler_unnormalized_coordinates.
+    // Coordinates in texels, not 0 to 1; bfr_caps_features.sampler_unnormalized_coordinates. Vulkan
+    // takes such a sampler only with equal min and mag filters, a nearest mip filter, LODs of 0, U
+    // and V clamped to the edge or border, no anisotropy and no compare, and refuses others with
+    // error_invalid_argument.
     bfr_bool unnormalized_coordinates;
     // The LOD averaged across a quad; bfr_caps_features.sampler_lod_average.
     bfr_bool lod_average;

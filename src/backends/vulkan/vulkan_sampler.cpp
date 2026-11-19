@@ -63,6 +63,27 @@ VkBorderColor borderFor(BorderPreset preset, bool integer) {
     }
 }
 
+// Fails with RhiInvalidCall for an unnormalized-coordinate sampler Vulkan
+// doesn't take (VUID-VkSamplerCreateInfo-unnormalizedCoordinates-01072 to
+// -01077): equal min and mag filters, a nearest mip filter, both LODs 0, U and
+// V clamped to the edge or border, no anisotropy and no compare.
+core::Result<void> checkUnnormalized(const SamplerDesc& desc) {
+    if (!desc.unnormalizedCoordinates) {
+        return {};
+    }
+    const auto clamps = [](AddressMode mode) {
+        return mode == AddressMode::ClampToEdge || mode == AddressMode::ClampToBorder;
+    };
+    if (desc.minFilter != desc.magFilter || desc.mipFilter != Filter::Nearest || desc.minLod != 0 || desc.maxLod != 0 ||
+        !clamps(desc.addressU) || !clamps(desc.addressV) || desc.maxAnisotropy != 0 ||
+        desc.reduction == SamplerReduction::Compare) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "an unnormalized-coordinate sampler takes equal min and mag filters, a nearest mip "
+                             "filter, LODs of 0, U and V clamped to the edge or border, no anisotropy and no compare");
+    }
+    return {};
+}
+
 } // namespace
 
 VulkanSampler::VulkanSampler(const VolkDeviceTable& table, VkDevice device, VkSampler sampler, std::uint32_t slot)
@@ -82,6 +103,9 @@ VulkanSampler::~VulkanSampler() {
 
 core::Result<VulkanSampler> createVulkanSampler(const VolkDeviceTable& table, VkDevice device, const SamplerDesc& desc,
                                                 std::uint32_t slot) {
+    if (auto checked = checkUnnormalized(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     const BorderPreset preset = borderPreset(desc);
     VkSamplerCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;

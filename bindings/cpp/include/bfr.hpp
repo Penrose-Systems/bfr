@@ -977,6 +977,9 @@ struct SamplerDesc {
     /// Red, green, blue and alpha bits; a signed format reads them as int32.
     std::array<std::uint32_t, 4> borderColorInteger{};
     /// Coordinates in texels, not 0 to 1; bfr_caps_features.sampler_unnormalized_coordinates.
+    /// Vulkan takes such a sampler only with equal min and mag filters, a nearest mip filter, LODs
+    /// of 0, U and V clamped to the edge or border, no anisotropy and no compare, and refuses
+    /// others with error_invalid_argument.
     bool unnormalizedCoordinates{};
     /// The LOD averaged across a quad; bfr_caps_features.sampler_lod_average.
     bool lodAverage{};
