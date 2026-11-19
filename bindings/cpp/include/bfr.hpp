@@ -856,7 +856,9 @@ struct TextureSlots {
     /// reads its depth on every backend (Vulkan's view of the depth aspect, D3D12's plane 0,
     /// Metal's depth); shaders read no stencil through it.
     std::uint32_t sampled{};
-    /// Its index in the storage texture table; only with storage usage.
+    /// Its index in the storage texture table; only with storage usage. On Vulkan and D3D12 shaders
+    /// reach its mip level 0 through it: Vulkan offsets a storage access by the view's base level,
+    /// which is 0 (spec, SPIR-V Image Access), and D3D12's view names MipSlice 0.
     std::uint32_t storage{};
 };
 

@@ -64,7 +64,8 @@ struct TextureSlots {
     /// Its index in the texture table; only with sampled usage. A
     /// depth-stencil texture's slot reads its depth; no stencil.
     std::uint32_t sampled = kNoSlot;
-    /// Its index in the storage texture table; only with storage usage.
+    /// Its index in the storage texture table; only with storage usage. On
+    /// Vulkan and D3D12 shaders reach its mip level 0 through it.
     std::uint32_t storage = kNoSlot;
 };
 
