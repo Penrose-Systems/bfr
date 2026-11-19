@@ -2582,3 +2582,32 @@ TEST_CASE("Device counts the primitives and invocations of a mesh draw, where it
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
+
+TEST_CASE("Vulkan refuses indirect arguments it doesn't take: offset, stride, or draws past the buffer",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    if (backend.backend != Backend::Vulkan) {
+        SKIP("the rules are Vulkan's");
+    }
+    std::vector<std::string> messages;
+    {
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        constexpr std::uint64_t kDrawBytes = 16;
+        constexpr std::uint32_t kTwoDraws = 2;
+        constexpr std::uint64_t kUnaligned = 2;
+        constexpr std::uint32_t kShortStride = 8;
+        Buffer arguments = created(device, BufferDesc{.size = kDrawBytes * kTwoDraws, .usage = {.indirect = true}});
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = pool->beginCommands();
+        REQUIRE(list.has_value());
+
+        CHECK(device.drawIndirect(*list, arguments, kUnaligned, 1, 0).error().code == Result::ErrorInvalidArgument);
+        CHECK(device.drawIndirect(*list, arguments, 0, kTwoDraws, kShortStride).error().code ==
+              Result::ErrorInvalidArgument);
+        CHECK(device.drawIndirect(*list, arguments, kDrawBytes, kTwoDraws, kDrawBytes).error().code ==
+              Result::ErrorInvalidArgument);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}

@@ -25,6 +25,51 @@ namespace bfr::rhi::vulkan {
 // state draws and dispatches take, and the draws and dispatches. Each makes
 // the usage checks every backend makes, then records one call.
 
+namespace {
+
+// Fails with RhiInvalidCall for indirect arguments Vulkan doesn't take: an
+// offset that isn't a multiple of 4 (VUID-vkCmdDrawIndirect-offset-02710 and
+// its kin); with more than one draw, or for a count draw any number, a stride
+// that isn't a multiple of 4 or holds less than the arguments
+// (-drawCount-00476, -00528, -07088; -stride-03110, -03142, -07096); and
+// draws that run past the buffer (-drawCount-00487, -00488, -00539, -00540,
+// -07089, -07090; -maxDrawCount-03111, -03143, -07097;
+// VUID-vkCmdDispatchIndirect-offset-00407). draws is drawCount, or a count
+// draw's maxDrawCount.
+core::Result<void> checkIndirect(const VulkanBuffer& buffer, std::uint64_t offset, std::uint32_t draws,
+                                 std::uint32_t stride, std::uint64_t argumentBytes, bool counted) {
+    constexpr std::uint64_t kAlignment = 4;
+    if (offset % kAlignment != 0) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "indirect offset {} is not a multiple of 4", offset);
+    }
+    if ((counted || draws > 1) && (stride % kAlignment != 0 || stride < argumentBytes)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "indirect stride {} is not a multiple of 4 of at least the {} bytes of arguments", stride,
+                             argumentBytes);
+    }
+    if (draws >= 1 && (std::uint64_t{stride} * (draws - 1)) + offset + argumentBytes > buffer.size()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "{} indirect draws of stride {} from offset {} run past the buffer's {} bytes", draws,
+                             stride, offset, buffer.size());
+    }
+    return {};
+}
+
+// Fails with RhiInvalidCall for a draw count Vulkan doesn't take at
+// countOffset of count (VUID-vkCmdDrawIndirectCount-countBufferOffset-02716,
+// -04129, and their kin).
+core::Result<void> checkDrawCountAt(const VulkanBuffer& count, std::uint64_t countOffset) {
+    constexpr std::uint64_t kAlignment = 4;
+    if (countOffset % kAlignment != 0 || countOffset + sizeof(std::uint32_t) > count.size()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "a draw count at offset {} is not 4-aligned within the count buffer's {} bytes",
+                             countOffset, count.size());
+    }
+    return {};
+}
+
+} // namespace
+
 core::Result<void> VulkanDevice::setViewport(CommandListHandle commandList, const Viewport& viewport) {
     auto list = commandListFor(commandList);
     if (!list) {
@@ -202,6 +247,10 @@ core::Result<void> VulkanDevice::drawIndirect(CommandListHandle commandList, Buf
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
+    if (auto checked = checkIndirect(**found, offset, drawCount, stride, sizeof(VkDrawIndirectCommand), false);
+        !checked) {
+        return checked;
+    }
     table_.vkCmdDrawIndirect((*list)->buffer, (*found)->buffer(), offset, drawCount, stride);
     return {};
 }
@@ -216,6 +265,10 @@ core::Result<void> VulkanDevice::drawIndexedIndirect(CommandListHandle commandLi
     auto found = bufferFor(buffer);
     if (!found) {
         return std::unexpected(std::move(found.error()));
+    }
+    if (auto checked = checkIndirect(**found, offset, drawCount, stride, sizeof(VkDrawIndexedIndirectCommand), false);
+        !checked) {
+        return checked;
     }
     table_.vkCmdDrawIndexedIndirect((*list)->buffer, (*found)->buffer(), offset, drawCount, stride);
     return {};
@@ -236,6 +289,13 @@ core::Result<void> VulkanDevice::drawIndirectCount(CommandListHandle commandList
     auto count = bufferFor(countBuffer);
     if (!count) {
         return std::unexpected(std::move(count.error()));
+    }
+    if (auto checked = checkIndirect(**found, offset, maxDrawCount, stride, sizeof(VkDrawIndirectCommand), true);
+        !checked) {
+        return checked;
+    }
+    if (auto checked = checkDrawCountAt(**count, countOffset); !checked) {
+        return checked;
     }
     table_.vkCmdDrawIndirectCount((*list)->buffer, (*found)->buffer(), offset, (*count)->buffer(), countOffset,
                                   maxDrawCount, stride);
@@ -258,6 +318,13 @@ core::Result<void> VulkanDevice::drawIndexedIndirectCount(CommandListHandle comm
     if (!count) {
         return std::unexpected(std::move(count.error()));
     }
+    if (auto checked = checkIndirect(**found, offset, maxDrawCount, stride, sizeof(VkDrawIndexedIndirectCommand), true);
+        !checked) {
+        return checked;
+    }
+    if (auto checked = checkDrawCountAt(**count, countOffset); !checked) {
+        return checked;
+    }
     table_.vkCmdDrawIndexedIndirectCount((*list)->buffer, (*found)->buffer(), offset, (*count)->buffer(), countOffset,
                                          maxDrawCount, stride);
     return {};
@@ -272,6 +339,9 @@ core::Result<void> VulkanDevice::dispatchIndirect(CommandListHandle commandList,
     auto found = bufferFor(buffer);
     if (!found) {
         return std::unexpected(std::move(found.error()));
+    }
+    if (auto checked = checkIndirect(**found, offset, 1, 0, sizeof(VkDispatchIndirectCommand), false); !checked) {
+        return checked;
     }
     table_.vkCmdDispatchIndirect((*list)->buffer, (*found)->buffer(), offset);
     return {};
@@ -303,6 +373,11 @@ core::Result<void> VulkanDevice::drawMeshIndirect(CommandListHandle commandList,
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
+    if (auto checked = checkIndirect(**found, offset, drawCount, stride, sizeof(VkDrawMeshTasksIndirectCommandEXT),
+                                     false);
+        !checked) {
+        return checked;
+    }
     table_.vkCmdDrawMeshTasksIndirectEXT((*list)->buffer, (*found)->buffer(), offset, drawCount, stride);
     return {};
 }
@@ -325,6 +400,14 @@ core::Result<void> VulkanDevice::drawMeshIndirectCount(CommandListHandle command
     auto count = bufferFor(countBuffer);
     if (!count) {
         return std::unexpected(std::move(count.error()));
+    }
+    if (auto checked = checkIndirect(**found, offset, maxDrawCount, stride, sizeof(VkDrawMeshTasksIndirectCommandEXT),
+                                     true);
+        !checked) {
+        return checked;
+    }
+    if (auto checked = checkDrawCountAt(**count, countOffset); !checked) {
+        return checked;
     }
     table_.vkCmdDrawMeshTasksIndirectCountEXT((*list)->buffer, (*found)->buffer(), offset, (*count)->buffer(),
                                               countOffset, maxDrawCount, stride);
