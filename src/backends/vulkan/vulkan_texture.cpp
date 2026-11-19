@@ -34,6 +34,7 @@
 #include <memory>
 #include <span>
 #include <utility>
+#include <vector>
 
 namespace bfr::rhi::vulkan {
 
@@ -181,16 +182,18 @@ VkImageCreateFlags sparseFlags(const TextureDesc& desc) {
            (desc.sparseAliased ? VkImageCreateFlags{VK_IMAGE_CREATE_SPARSE_ALIASED_BIT} : 0U);
 }
 
-// What Vulkan says of a sparse image's tiles, each aspect's requirements up to
-// the most an image has.
+// What Vulkan says of a sparse image's tiles, every aspect's requirements.
 VulkanSparseTiling sparseTilingOf(const VolkDeviceTable& table, VkDevice device, VkImage image) {
     VkMemoryRequirements requirements{};
     table.vkGetImageMemoryRequirements(device, image, &requirements);
-    VulkanSparseTiling tiling{.tileBytes = requirements.alignment, .memoryTypes = requirements.memoryTypeBits};
+    VulkanSparseTiling tiling{.tileBytes = requirements.alignment,
+                              .memoryTypes = requirements.memoryTypeBits,
+                              .aspects = {}};
     std::uint32_t count = 0;
     table.vkGetImageSparseMemoryRequirements(device, image, &count, nullptr);
-    tiling.count = std::min(count, kMaxSparseAspects);
-    table.vkGetImageSparseMemoryRequirements(device, image, &tiling.count, tiling.aspects.data());
+    tiling.aspects.resize(count);
+    table.vkGetImageSparseMemoryRequirements(device, image, &count, tiling.aspects.data());
+    tiling.aspects.resize(count);
     return tiling;
 }
 
@@ -691,7 +694,7 @@ namespace {
 // The sparse requirements of tiling's aspect, null where it has none.
 const VkSparseImageMemoryRequirements* requirementsOf(const VulkanSparseTiling& tiling, TextureAspect aspect) {
     const VkImageAspectFlags wanted = aspectFor(aspect);
-    const auto aspects = std::span{tiling.aspects}.first(tiling.count);
+    const std::span<const VkSparseImageMemoryRequirements> aspects = tiling.aspects;
     const auto found = std::ranges::find_if(aspects, [wanted](const VkSparseImageMemoryRequirements& entry) {
         return (entry.formatProperties.aspectMask & wanted) != 0;
     });
@@ -746,14 +749,13 @@ core::Result<SparseFormat> VulkanDevice::sparseFormat(const SparseFormatDesc& de
     info.samples = static_cast<VkSampleCountFlagBits>(desc.samples);
     info.usage = usageFor(desc.usage);
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    std::array<VkSparseImageFormatProperties2, kMaxSparseAspects> properties{};
-    for (VkSparseImageFormatProperties2& entry : properties) {
-        entry.sType = VK_STRUCTURE_TYPE_SPARSE_IMAGE_FORMAT_PROPERTIES_2;
-    }
     const InstanceTable& vk = instance_->instanceTable();
     std::uint32_t count = 0;
     vk.vkGetPhysicalDeviceSparseImageFormatProperties2(adapter_, &info, &count, nullptr);
-    count = std::min(count, kMaxSparseAspects);
+    std::vector<VkSparseImageFormatProperties2> properties(
+        count, VkSparseImageFormatProperties2{.sType = VK_STRUCTURE_TYPE_SPARSE_IMAGE_FORMAT_PROPERTIES_2,
+                                              .pNext = nullptr,
+                                              .properties = {}});
     vk.vkGetPhysicalDeviceSparseImageFormatProperties2(adapter_, &info, &count, properties.data());
     const VkImageAspectFlags wanted = aspectFor(desc.aspect);
     const auto listed = std::span{properties}.first(count);

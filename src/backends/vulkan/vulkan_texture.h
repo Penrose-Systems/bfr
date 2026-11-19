@@ -15,18 +15,13 @@
 
 namespace bfr::rhi::vulkan {
 
-/// The most VkSparseImageMemoryRequirements an image has: one per aspect,
-/// color or depth and stencil, and one for metadata.
-inline constexpr std::uint32_t kMaxSparseAspects = 4;
-
 /// What a sparse image's tiles are, read when it is made, so mapping reads
 /// nothing back: its memory requirements' alignment, which is a tile's bytes,
-/// and memoryTypeBits, and its sparse requirements, count of them.
+/// and memoryTypeBits, and its sparse requirements, as many as the image has.
 struct VulkanSparseTiling {
     VkDeviceSize tileBytes = 0;
     std::uint32_t memoryTypes = 0;
-    std::uint32_t count = 0;
-    std::array<VkSparseImageMemoryRequirements, kMaxSparseAspects> aspects{};
+    std::vector<VkSparseImageMemoryRequirements> aspects;
 };
 
 /// A VkImage and the memory VMA placed it in, which it frees when it goes:
