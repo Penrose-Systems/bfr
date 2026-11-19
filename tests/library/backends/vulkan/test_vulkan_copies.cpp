@@ -39,7 +39,7 @@ TEST_CASE("Vulkan device refuses a copy whose rows are not whole texels or whose
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         const Instance instance = std::move(*created);
-        auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+        auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         const Device& device = *made;

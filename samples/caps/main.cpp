@@ -170,11 +170,34 @@ void printMemory(const bfr::CapsMemory& memory) {
     row("Memory", heaps);
 }
 
+// "graphics compute copy" for what a family's queues run, "nothing" for none.
+std::string runs(const bfr::QueueFamily& family) {
+    std::string names;
+    for (const auto& [name, set] : {std::pair{"graphics", family.graphics}, std::pair{"compute", family.compute},
+                                    std::pair{"copy", family.copy}, std::pair{"sparse", family.sparse}}) {
+        if (set) {
+            names += names.empty() ? name : std::format(" {}", name);
+        }
+    }
+    return names.empty() ? std::string{"nothing"} : names;
+}
+
+// "16 of" a family's queues, or "any number of" where the backend has no count.
+std::string queueCount(const bfr::QueueFamily& family) {
+    return family.count == 0 ? std::string{"any number of"} : std::format("{} of", family.count);
+}
+
+void printQueues(const std::vector<bfr::QueueFamily>& families) {
+    std::vector<std::string> items;
+    items.reserve(families.size());
+    for (const bfr::QueueFamily& family : families) {
+        items.push_back(std::format("{} {}", queueCount(family), runs(family)));
+    }
+    row("Queues", items);
+}
+
 void printLimits(const bfr::Caps& caps) {
     const bfr::CapsLimits& l = caps.limits;
-    const bfr::CapsQueues& q = caps.queues;
-    row("Queues",
-        {std::format("{} graphics", q.graphics), std::format("{} compute", q.compute), std::format("{} copy", q.copy)});
     row("Textures", {std::format("2D {}", l.maxTexture2d), std::format("3D {}", l.maxTexture3d),
                      std::format("cube {}", l.maxTextureCube), std::format("{} layers", l.maxTextureLayers)});
     row("Buffers",
@@ -374,9 +397,15 @@ void printSurface(const bfr::Instance& instance, std::uint32_t adapter) {
 
 // The budget needs a device, so this opens one.
 void printBudget(const bfr::Instance& instance, std::uint32_t adapter, const bfr::CapsMemory& memory) {
-    // A device needs a queue on Vulkan without maintenance9.
-    constexpr std::array<bfr::QueueDesc, 1> kOneQueue{};
-    const auto device = instance.createDevice({.adapter = adapter, .graphicsQueues = kOneQueue});
+    // A device needs a queue on Vulkan without maintenance9: one of the
+    // adapter's first family, whatever it runs.
+    const auto family = instance.findQueueFamily(adapter, {});
+    if (!family) {
+        row("Budget", "can't open a device: " + family.error().message.text());
+        return;
+    }
+    const std::array<bfr::QueueDesc, 1> queue{bfr::QueueDesc{.family = *family}};
+    const auto device = instance.createDevice({.adapter = adapter, .queues = queue});
     if (!device) {
         row("Budget", "can't open a device: " + device.error().message.text());
         return;
@@ -635,19 +664,9 @@ void printAllMemory(const bfr::Caps& caps) {
                field("hostCoherent", at.hostCoherent), field("hostCached", at.hostCached),
                field("lazilyAllocated", at.lazilyAllocated)});
     }
-    const bfr::CapsQueues& q = caps.queues;
-    group("queues",
-          {field("graphics", q.graphics), field("compute", q.compute), field("copy", q.copy),
-           field("graphicsTimestampBits", q.graphicsTimestampBits),
-           field("computeTimestampBits", q.computeTimestampBits), field("copyTimestampBits", q.copyTimestampBits),
-           field("ranks", q.ranks), field("graphicsLevels", levelNames(q.graphicsLevels)),
-           field("computeLevels", levelNames(q.computeLevels)), field("copyLevels", levelNames(q.copyLevels)),
-           field("graphicsGranularity", granularityOf(q.graphicsGranularity)),
-           field("computeGranularity", granularityOf(q.computeGranularity)),
-           field("copyGranularity", granularityOf(q.copyGranularity))});
+    group("queues", {field("ranks", caps.queueRanks)});
     const bfr::CapsTimestamps& t = caps.timestamps;
-    group("timestamps", {field("graphics", t.graphics), field("compute", t.compute), field("copy", t.copy),
-                         field("granularity", t.granularity), field("entryBytes", t.entryBytes),
+    group("timestamps", {field("granularity", t.granularity), field("entryBytes", t.entryBytes),
                          field("monotonic", t.hostClocks.monotonic), field("monotonicRaw", t.hostClocks.monotonicRaw),
                          field("performanceCounter", t.hostClocks.performanceCounter)});
     const bfr::CapsSparse& s = caps.sparse;
@@ -671,21 +690,30 @@ void printAllMemory(const bfr::Caps& caps) {
                      field("addressSpaceBytes", s.addressSpaceBytes),
                      field("addressBitsPerResource", s.addressBitsPerResource),
                      field("addressBitsPerProcess", s.addressBitsPerProcess),
-                     field("tileByteCount", s.tileByteCount),
-                     field("graphicsSparse", q.graphicsSparse),
-                     field("computeSparse", q.computeSparse),
-                     field("copySparse", q.copySparse)});
+                     field("tileByteCount", s.tileByteCount)});
     const bfr::CapsResolve& r = caps.resolve;
     group("resolve", {field("depthModes", r.depthModes), field("stencilModes", r.stencilModes),
                       field("independent", r.independent), field("independentNone", r.independentNone)});
 }
 
-void printAll(const bfr::Caps& caps) {
+void printAllQueues(const std::vector<bfr::QueueFamily>& families) {
+    for (std::size_t index = 0; index < families.size(); ++index) {
+        const bfr::QueueFamily& f = families[index];
+        group(std::format("queueFamilies[{}]", index),
+              {field("graphics", f.graphics), field("compute", f.compute), field("copy", f.copy),
+               field("sparse", f.sparse), field("count", f.count), field("timestampBits", f.timestampBits),
+               field("timestamps", f.timestamps), field("timestampResets", f.timestampResets),
+               field("levels", levelNames(f.levels)), field("granularity", granularityOf(f.granularity))});
+    }
+}
+
+void printAll(const bfr::Caps& caps, const std::vector<bfr::QueueFamily>& families) {
     printAllInfo(caps);
     printAllLimits(caps.limits);
     printAllShaders(caps);
     printAllFeatures(caps.features);
     printAllMemory(caps);
+    printAllQueues(families);
 }
 
 void printAdapter(const bfr::Instance& instance, std::uint32_t adapter, const Options& options) {
@@ -694,8 +722,14 @@ void printAdapter(const bfr::Instance& instance, std::uint32_t adapter, const Op
         print(std::format("Adapter {}: can't read its caps: {}\n", adapter, caps.error().message.text()));
         return;
     }
+    const auto families = instance.queueFamilies(adapter);
+    if (!families) {
+        print(std::format("Adapter {}: can't list its queue families: {}\n", adapter, families.error().message.text()));
+        return;
+    }
     printHeading(caps->info);
     printMemory(caps->memory);
+    printQueues(*families);
     printLimits(*caps);
     printShaders(*caps);
     printFeatures(caps->features, caps->sparse);
@@ -705,7 +739,7 @@ void printAdapter(const bfr::Instance& instance, std::uint32_t adapter, const Op
     }
     printBudget(instance, adapter, caps->memory);
     if (options.all) {
-        printAll(*caps);
+        printAll(*caps, *families);
     }
 }
 

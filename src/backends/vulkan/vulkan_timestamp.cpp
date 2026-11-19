@@ -121,12 +121,12 @@ core::Result<void> VulkanDevice::destroyTimestampPool(TimestampPoolHandle pool) 
     return {};
 }
 
-core::Result<QueueType> VulkanDevice::queueTypeOf(const VulkanCommandList& list) {
+core::Result<const VulkanQueue*> VulkanDevice::queueOf(const VulkanCommandList& list) {
     const VulkanCommandPool* commands = commandPools_.find(list.pool);
     if (commands == nullptr) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the list's pool is gone");
     }
-    return queues_[commands->queue]->type;
+    return queues_[commands->queue].get();
 }
 
 core::Result<void> VulkanDevice::resetTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
@@ -135,9 +135,8 @@ core::Result<void> VulkanDevice::resetTimestamps(CommandListHandle commandList, 
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    const auto type = queueTypeOf(**list);
-    if (!type) {
-        return std::unexpected(std::move(type.error()));
+    if (auto queue = queueOf(**list); !queue) {
+        return std::unexpected(std::move(queue.error()));
     }
     const VulkanTimestampPool* found = timestampPools_.find(pool);
     if (found == nullptr) {
@@ -161,10 +160,10 @@ core::Result<void> VulkanDevice::writeTimestamp(CommandListHandle commandList, T
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    // Each kind of queue takes the stages its caps list (Caps::timestamps).
-    const auto type = queueTypeOf(**list);
-    if (!type) {
-        return std::unexpected(std::move(type.error()));
+    // Each family's queues take the stages its caps list
+    // (QueueFamily::timestampStages).
+    if (auto queue = queueOf(**list); !queue) {
+        return std::unexpected(std::move(queue.error()));
     }
     const VulkanTimestampPool* found = timestampPools_.find(pool);
     if (found == nullptr) {

@@ -44,13 +44,14 @@ public:
 
     [[nodiscard]] std::span<const Adapter> adapters() const override { return adapters_; }
     [[nodiscard]] core::Result<std::unique_ptr<Device>> createDevice(std::size_t adapter,
-                                                                     const core::window::NativeWindow& presentTo,
                                                                      const DeviceDesc& desc) override;
     [[nodiscard]] core::Result<FormatCaps> formatCaps(std::size_t adapter, Format format) const override;
     [[nodiscard]] core::Result<SwapchainCaps> swapchainCaps(std::size_t adapter,
                                                             const core::window::NativeWindow& window) const override;
     [[nodiscard]] core::Result<std::vector<SwapchainFormat>> swapchainFormats(
         std::size_t adapter, const core::window::NativeWindow& window) const override;
+    [[nodiscard]] core::Result<bool> queueFamilyPresents(std::size_t adapter, std::uint32_t family,
+                                                         const core::window::NativeWindow& window) const override;
 
     using Instance::config;
 

@@ -125,7 +125,6 @@ if(BFR_BACKEND_VULKAN)
     find_package(VulkanMemoryAllocator CONFIG REQUIRED)
     target_sources(bfr_objects PRIVATE
         src/backends/vulkan/instance_table.cpp
-        src/backends/vulkan/queue_families.cpp
         src/backends/vulkan/swapchain_settings.cpp
         src/backends/vulkan/vulkan_buffer.cpp
         src/backends/vulkan/vulkan_caps.cpp

@@ -4,6 +4,7 @@
 #include "bfr/core/window.h"
 #include "bfr/rhi/call_timing.h"
 #include "bfr/rhi/caps.h"
+#include "bfr/rhi/command_list.h"
 #include "bfr/rhi/device.h"
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/query.h"
@@ -651,11 +652,8 @@ std::span<const Adapter> TimedInstance::adapters() const {
     return counters_.time(Call::InstanceAdapters, [&] { return instance_->adapters(); });
 }
 
-core::Result<std::unique_ptr<Device>> TimedInstance::createDevice(std::size_t adapter,
-                                                                  const core::window::NativeWindow& presentTo,
-                                                                  const DeviceDesc& desc) {
-    auto made = counters_.time(Call::InstanceCreateDevice,
-                               [&] { return instance_->createDevice(adapter, presentTo, desc); });
+core::Result<std::unique_ptr<Device>> TimedInstance::createDevice(std::size_t adapter, const DeviceDesc& desc) {
+    auto made = counters_.time(Call::InstanceCreateDevice, [&] { return instance_->createDevice(adapter, desc); });
     if (!made) {
         return made;
     }
@@ -674,6 +672,12 @@ core::Result<SwapchainCaps> TimedInstance::swapchainCaps(std::size_t adapter,
 core::Result<std::vector<SwapchainFormat>> TimedInstance::swapchainFormats(
     std::size_t adapter, const core::window::NativeWindow& window) const {
     return counters_.time(Call::InstanceSwapchainFormats, [&] { return instance_->swapchainFormats(adapter, window); });
+}
+
+core::Result<bool> TimedInstance::queueFamilyPresents(std::size_t adapter, std::uint32_t family,
+                                                      const core::window::NativeWindow& window) const {
+    return counters_.time(Call::InstanceQueueFamilyPresents,
+                          [&] { return instance_->queueFamilyPresents(adapter, family, window); });
 }
 
 core::Result<void> TimedInstance::callTimings(std::span<CallTiming> timings) const {

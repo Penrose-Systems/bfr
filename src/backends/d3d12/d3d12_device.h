@@ -85,7 +85,6 @@ struct D3D12RetiredPool {
 /// queue, when the device is created, sized from the device's maximums, so
 /// neither touches the heap.
 struct D3D12Queue {
-    QueueType type = QueueType::Graphics;
     D3D12_COMMAND_LIST_TYPE listType = D3D12_COMMAND_LIST_TYPE_DIRECT;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
     Microsoft::WRL::ComPtr<ID3D12Fence> fence;

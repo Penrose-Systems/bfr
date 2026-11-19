@@ -27,22 +27,25 @@ struct CommandList;
 
 using CommandListHandle = core::Handle<CommandList>;
 
-/// One queue a device opens. rank, 0 to 1, is its priority against the
-/// device's other queues, higher first, passed to the backend as given; where
-/// Queues::ranks is 0 the backend doesn't rank a device's queues, so queues of
-/// different ranks fail the device with RhiUnsupported. A level the backend
-/// has no setting for fails it the same way, as do different levels in one
-/// kind on Vulkan, which sets one level for all of a kind's queues.
+/// One queue a device opens, of family, an index into Caps::queueFamilies;
+/// one past them fails the device with RhiInvalidCall, as do more queues of a
+/// family than its count where that is not 0. rank, 0 to 1, is its priority
+/// against the device's other queues, higher first, passed to the backend as
+/// given; where Caps::queueRanks is 0 the backend doesn't rank a device's
+/// queues, so queues of different ranks fail the device with RhiUnsupported. A
+/// level the backend has no setting for fails it the same way, as do
+/// different levels in one family on Vulkan, which sets one level for all of a
+/// family's queues.
 struct QueueDesc {
+    std::uint32_t family = 0;
     float rank = 0;
     QueueLevel level = QueueLevel::Normal;
 };
 
 /// How to open a device: the queues it opens, how many command lists, command
 /// pools and swapchains it holds at once, and how many slots each bindless
-/// table has. The queue spans are read during createDevice only. The device's
-/// queues are numbered: the graphics queues from 0, then the compute queues,
-/// then the copy queues, each in its span's order. Room for
+/// table has. The queue span is read during createDevice only. The device's
+/// queues are numbered from 0 in its order. Room for
 /// every list, pool, swapchain and slot is made with the device, so nothing on
 /// the frame path allocates; past a maximum, calls fail with RhiLimitReached,
 /// except a submit of more than maxCommandLists lists, which fails with
@@ -53,17 +56,18 @@ struct QueueDesc {
 /// tables in one heap, so there they fail with RhiLimitReached when together
 /// they are more than it holds.
 ///
-/// A graphics queue's lists run every call. A compute queue's run all but
-/// rendering, draws, the calls that set their state or bind a graphics
-/// pipeline or an index buffer, and resolveTexture; a copy queue's run only
-/// copies, barriers, writeTimestamp and the debug label calls. A copy between a buffer and a
-/// texture's depth or stencil runs only in a graphics queue's lists, and one
-/// in a copy queue's has a bufferOffset that is a multiple of 4.
-/// TextureLayout says which layouts each kind's lists move a texture between.
+/// The calls a queue's lists run follow its family's flags: rendering, draws,
+/// the calls that set their state or bind a graphics pipeline or an index
+/// buffer, and resolveTexture where it runs graphics; dispatches, ray traces,
+/// acceleration structure builds and the calls that bind a compute or ray
+/// tracing pipeline where it runs compute; copies where it runs copies;
+/// barriers, writeTimestamp and the debug label calls on any. A copy between a
+/// buffer and a texture's depth or stencil runs only where the family runs
+/// graphics, and one where it runs copies but neither graphics nor compute has
+/// a bufferOffset that is a multiple of 4. TextureLayout says which layouts
+/// each family's lists move a texture between.
 struct DeviceDesc {
-    std::span<const QueueDesc> graphics;
-    std::span<const QueueDesc> compute;
-    std::span<const QueueDesc> copy;
+    std::span<const QueueDesc> queues;
     std::uint32_t maxCommandLists = 0;
     std::uint32_t maxCommandPools = 0;
     std::uint32_t maxSwapchains = 0;

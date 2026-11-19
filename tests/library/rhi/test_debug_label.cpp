@@ -40,9 +40,9 @@ struct LabelDevice {
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         instance = std::move(*created);
-        auto made = instance.createDevice(testDeviceWith(kFirstAdapter, kNoWindow, [longest](DeviceDesc& device) {
-            device.maxDebugLabelLength = longest;
-        }));
+        auto made = instance.createDevice(
+            testDeviceWith(instance, kFirstAdapter, kNoWindow,
+                           [longest](DeviceDesc& device) { device.maxDebugLabelLength = longest; }));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         device = std::move(*made);

@@ -17,6 +17,7 @@
 #include <limits>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace bfr::rhi::metal {
 
@@ -178,30 +179,30 @@ Features featuresOf(MTL::Device* device) {
     return features;
 }
 
-// BFR opens as many graphics, compute and copy queues as DeviceDesc asks,
-// each an MTL4CommandQueue. Metal has no call for how many a
-// device has and states no limit, so createDevice takes any count. Metal has
-// no queue priority, so there are no ranks or levels. Tile mappings are
-// calls on every MTL4CommandQueue (MTL4CommandQueue.hpp:144-146), and Metal
-// has no device query to gate them on, as D3D12 gates its on the tiled tier.
-// Metal states no copy granularity.
-Queues queuesOf() {
-    return {.graphics = 0,
-            .compute = 0,
-            .copy = 0,
-            .graphicsTimestampBits = 0,
-            .computeTimestampBits = 0,
-            .copyTimestampBits = 0,
-            .ranks = 0,
-            .graphicsLevels = {},
-            .computeLevels = {},
-            .copyLevels = {},
-            .graphicsSparse = true,
-            .computeSparse = true,
-            .copySparse = true,
-            .graphicsGranularity = {},
-            .computeGranularity = {},
-            .copyGranularity = {}};
+// Metal has no queue families: every queue is an MTL4CommandQueue, which
+// runs render, compute and copy work, Metal 4's copies through the compute
+// encoder, so BFR lists one family. Metal has no call for how many queues a
+// device has and states no limit, so its count is 0 and createDevice takes
+// any number. Metal has no queue priority, so there are no ranks or levels.
+// Tile mappings are calls on every MTL4CommandQueue
+// (MTL4CommandQueue.hpp:144-146), and Metal has no device query to gate them
+// on, as D3D12 gates its on the tiled tier. Between encoders a timestamp
+// marks the end of the work before it (timestampsOf), on any queue where
+// timestamps says the device makes a timestamp heap; resetTimestamps records
+// nothing, so every queue takes it. Metal states no valid bits and no copy
+// granularity.
+std::vector<QueueFamily> queueFamiliesOf(bool timestamps) {
+    return {{.graphics = true,
+             .compute = true,
+             .copy = true,
+             .sparse = true,
+             .count = 0,
+             .timestampBits = 0,
+             .timestamps = timestamps,
+             .timestampStages = {.end = timestamps},
+             .timestampResets = true,
+             .levels = {},
+             .granularity = {}}};
 }
 
 // Metal has no device query for sparse support: the tiers are only on
@@ -282,33 +283,29 @@ std::string belowMinimum(MTL::Device* device) {
 
 namespace {
 
-// Metal 4 writes timestamps into a counter heap: between encoders through the
-// command buffer, which takes no stage and marks the end of the work before
-// it, and in rendering through the render encoder, after its vertex or
-// fragment stage and at a granularity. Any queue writes them, where the
-// device makes a timestamp heap. sampleTimestamps (MTLDevice.hpp) reads a CPU
-// clock that metal-cpp doesn't name, so no host clock is listed.
-Timestamps timestampsOf(MTL::Device* device) {
+// Whether device makes a timestamp counter heap, which Metal 4 writes
+// timestamps into.
+bool makesTimestampHeap(MTL::Device* device) {
     const AutoreleasePool pool;
     const Ref<MTL4::CounterHeapDescriptor> descriptor = adopt(MTL4::CounterHeapDescriptor::alloc()->init());
     descriptor->setType(MTL4::CounterHeapTypeTimestamp);
     descriptor->setCount(1);
     NS::Error* error = nullptr;
     const Ref<MTL4::CounterHeap> heap = adopt(device->newCounterHeap(descriptor.get(), &error));
-    if (!heap) {
+    return static_cast<bool>(heap);
+}
+
+// Metal 4 writes timestamps into a counter heap, where timestamps says the
+// device makes one: between encoders through the command buffer
+// (queueFamiliesOf), and in rendering through the render encoder, after its
+// vertex or fragment stage and at a granularity. sampleTimestamps
+// (MTLDevice.hpp) reads a CPU clock that metal-cpp doesn't name, so no host
+// clock is listed.
+Timestamps timestampsOf(MTL::Device* device, bool timestamps) {
+    if (!timestamps) {
         return {};
     }
-    return {.graphics = true,
-            .compute = true,
-            .copy = true,
-            .outsideRendering = {.end = true},
-            .insideRendering = {.vertex = true, .fragment = true},
-            .computeStages = {.end = true},
-            .copyStages = {.end = true},
-            // resetTimestamps records nothing, so every queue takes it.
-            .graphicsResets = true,
-            .computeResets = true,
-            .copyResets = true,
+    return {.insideRendering = {.vertex = true, .fragment = true},
             .granularity = true,
             .entryBytes = clampTo32(device->sizeOfCounterHeapEntry(MTL4::CounterHeapTypeTimestamp)),
             .hostClocks = {}};
@@ -324,8 +321,9 @@ Caps readCaps(MTL::Device* device) {
     caps.bindless = bindlessOf(device);
     caps.features = featuresOf(device);
     caps.memory = memoryOf(device);
-    caps.queues = queuesOf();
-    caps.timestamps = timestampsOf(device);
+    const bool timestamps = makesTimestampHeap(device);
+    caps.queueFamilies = queueFamiliesOf(timestamps);
+    caps.timestamps = timestampsOf(device, timestamps);
     caps.sparse = sparseOf(device);
     caps.resolve = resolveCapsOf(device);
     return caps;

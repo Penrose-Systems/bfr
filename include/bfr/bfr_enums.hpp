@@ -767,6 +767,7 @@ enum class Call : std::int32_t {
     BeginQueueDebugLabel = BFR_CALL_BEGIN_QUEUE_DEBUG_LABEL,
     EndQueueDebugLabel = BFR_CALL_END_QUEUE_DEBUG_LABEL,
     InsertQueueDebugLabel = BFR_CALL_INSERT_QUEUE_DEBUG_LABEL,
+    InstanceQueueFamilyPresents = BFR_CALL_INSTANCE_QUEUE_FAMILY_PRESENTS,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -894,12 +895,13 @@ enum class Call : std::int32_t {
     case Call::BeginQueueDebugLabel: return "begin_queue_debug_label";
     case Call::EndQueueDebugLabel: return "end_queue_debug_label";
     case Call::InsertQueueDebugLabel: return "insert_queue_debug_label";
+    case Call::InstanceQueueFamilyPresents: return "instance_queue_family_presents";
     }
     return {};
 }
 
-/// The point in a list's work a timestamp is written at. Which ones a backend takes, inside and
-/// outside rendering, is in bfr_caps_timestamps.
+/// The point in a list's work a timestamp is written at. Which ones a write takes is in
+/// bfr_caps_timestamps inside rendering, and in its queue's bfr_queue_family outside it.
 enum class TimestampStage : std::int32_t {
     /// Once all the work recorded before it is done.
     End = BFR_TIMESTAMP_STAGE_END,
@@ -1038,8 +1040,8 @@ enum class HostClock : std::int32_t {
     return {};
 }
 
-/// A queue's priority against every queue on the system, other processes' included. Which levels
-/// each kind of queue takes is in bfr_caps_queues; one above normal may need privileges the process
+/// A queue's priority against every queue on the system, other processes' included. Which levels a
+/// family's queues take is in bfr_queue_family; one above normal may need privileges the process
 /// lacks, and then fails as the backend says.
 enum class QueueLevel : std::int32_t {
     /// The system's default, which a backend's queues have when none is set.
@@ -1167,10 +1169,12 @@ enum class TextureDimension : std::int32_t {
 }
 
 /// How a texture's memory is arranged for what the GPU does with it next. bfr_texture_barrier moves
-/// a texture between layouts; BFR keeps no record of the one it is in. A copy queue's lists move a
-/// texture only between undefined, copy_src and copy_dst, and a compute queue's never to or from
-/// color_target, depth_stencil_target, depth_stencil_read, resolve_src or resolve_dst, as D3D12's
-/// layouts for those queues allow; so a texture crosses between queues in a layout both kinds take.
+/// a texture between layouts; BFR keeps no record of the one it is in. The lists of a queue whose
+/// family runs copies but neither graphics nor compute move a texture only between undefined,
+/// copy_src and copy_dst, and those of one whose family runs compute but not graphics never to or
+/// from color_target, depth_stencil_target, depth_stencil_read, resolve_src or resolve_dst, as
+/// D3D12's layouts for its copy and compute queues allow; so a texture crosses between queues in a
+/// layout both families take.
 enum class TextureLayout : std::int32_t {
     /// Its contents are not kept. Only a layout to move from.
     Undefined = BFR_TEXTURE_LAYOUT_UNDEFINED,

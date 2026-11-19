@@ -84,18 +84,16 @@ public:
 
     [[nodiscard]] virtual std::span<const Adapter> adapters() const = 0;
 
-    /// A device on adapters()[adapter] with the queues desc asks for,
-    /// destroyed before this Instance. With a window in presentTo, a backend
-    /// that picks queue families picks ones that present to it where it can.
-    /// Fails with
+    /// A device on adapters()[adapter] with the queues desc asks for, each of
+    /// the family it names, destroyed before this Instance. Fails with
     /// RhiAdapterOutOfRange when adapter is not an index into adapters(),
-    /// RhiInvalidCall when a maximum in desc is more than a handle names or a
-    /// queue's level is not one BFR has, RhiWindowFailed as
-    /// Device::createSwapchain describes, RhiUnsupported when the backend
-    /// can't set the ranks or levels asked for, and RhiDeviceFailed when the
-    /// API refuses the device.
-    [[nodiscard]] virtual core::Result<std::unique_ptr<Device>> createDevice(
-        std::size_t adapter, const core::window::NativeWindow& presentTo, const DeviceDesc& desc) = 0;
+    /// RhiInvalidCall when a maximum in desc is more than a handle names, a
+    /// queue's level is not one BFR has, its family is not one of
+    /// Caps::queueFamilies or a family is asked for more queues than its
+    /// count, RhiUnsupported when the backend can't set the ranks or levels
+    /// asked for, and RhiDeviceFailed when the API refuses the device.
+    [[nodiscard]] virtual core::Result<std::unique_ptr<Device>> createDevice(std::size_t adapter,
+                                                                             const DeviceDesc& desc) = 0;
 
     // The queries below fail with RhiAdapterOutOfRange when adapter is not an
     // index into adapters(). The API answers each afresh.
@@ -116,6 +114,15 @@ public:
     /// as swapchainCaps does.
     [[nodiscard]] virtual core::Result<std::vector<SwapchainFormat>> swapchainFormats(
         std::size_t adapter, const core::window::NativeWindow& window) const = 0;
+
+    /// Whether the queues of family, an index into adapters()[adapter]'s
+    /// Caps::queueFamilies, present to window, as the backend answers now.
+    /// window is as Device::createSwapchain requires. Fails with
+    /// RhiInvalidCall when the adapter has no such family, RhiWindowFailed as
+    /// Device::createSwapchain describes or when the query fails, and
+    /// RhiUnsupported, naming why, when the backend can't be asked.
+    [[nodiscard]] virtual core::Result<bool> queueFamilyPresents(std::size_t adapter, std::uint32_t family,
+                                                                 const core::window::NativeWindow& window) const = 0;
 
     /// The CPU time spent in each of the Instance's own calls since it was
     /// made, written to timings by Call, as many as it holds; its devices

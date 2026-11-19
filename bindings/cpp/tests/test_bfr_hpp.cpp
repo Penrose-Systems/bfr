@@ -43,13 +43,28 @@ constexpr std::uint32_t kDeviceSwapchains = 4;
 constexpr std::uint32_t kDeviceTableSlots = 256;
 constexpr std::uint32_t kDeviceSamplers = 16;
 constexpr std::uint32_t kDeviceObjects = 256;
-// One queue at rank 0 and level normal.
-constexpr std::array<bfr::QueueDesc, 1> kOneQueue{};
+// The queue families a test's queue may be of, more than any adapter the
+// tests run on has.
+constexpr std::uint32_t kFamilies = 16;
+// One queue of each family at rank 0 and level normal: storage that outlives
+// every DeviceDesc naming it.
+constexpr auto kQueues = [] {
+    std::array<bfr::QueueDesc, kFamilies> queues{};
+    for (std::uint32_t family = 0; family < kFamilies; ++family) {
+        queues.at(family).family = family;
+    }
+    return queues;
+}();
 
-bfr::DeviceDesc testDevice(std::uint32_t adapter) {
+// The tests' device on adapter, with one queue of the first family that runs
+// graphics, compute and copies and presents to a headless window.
+bfr::DeviceDesc testDevice(const bfr::Instance& instance, std::uint32_t adapter) {
+    const auto family =
+        instance.findQueueFamily(adapter, {.graphics = true, .compute = true, .copy = true, .presents = &kHeadless});
+    REQUIRE(family.has_value());
+    REQUIRE(*family < kFamilies);
     return {.adapter = adapter,
-            .window = kHeadless,
-            .graphicsQueues = kOneQueue,
+            .queues = std::span{kQueues}.subspan(*family, 1),
             .maxCommandLists = kDeviceLists,
             .maxCommandPools = kDevicePools,
             .maxSwapchains = kDeviceSwapchains,
@@ -147,7 +162,7 @@ std::uint32_t fewestImages(const bfr::Instance& instance) {
 
 // A device on the first adapter that presents headless.
 bfr::Device headlessDevice(const bfr::Instance& instance) {
-    auto device = instance.createDevice(testDevice(headlessAdapter(instance)));
+    auto device = instance.createDevice(testDevice(instance, headlessAdapter(instance)));
     INFO((device.has_value() ? std::string{} : std::string{device.error().message.text()}));
     REQUIRE(device.has_value());
     return std::move(*device);
@@ -655,7 +670,7 @@ TEST_CASE("C++ API gives a device's memory budget or says the driver can't", "[c
         const auto adapter = headlessAdapter(instance);
         const auto caps = instance.caps(adapter);
         REQUIRE(caps.has_value());
-        auto device = instance.createDevice(testDevice(adapter));
+        auto device = instance.createDevice(testDevice(instance, adapter));
         INFO(failureOf(device));
         REQUIRE(device.has_value());
 

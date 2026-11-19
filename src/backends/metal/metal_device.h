@@ -102,7 +102,6 @@ struct MetalRetiredPool {
 /// The buffers they name are owned by their slots, which outlive the GPU's
 /// use of them.
 struct MetalQueue {
-    QueueType type = QueueType::Graphics;
     Ref<MTL4::CommandQueue> queue;
     Ref<MTL::SharedEvent> event;
     std::atomic<std::uint64_t> submitted{0};

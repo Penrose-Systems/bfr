@@ -13,7 +13,6 @@
 #include "core/submissions.h"
 #include "rhi/bindless_slots.h"
 #include "rhi/command_check.h"
-#include "vulkan/queue_families.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_acceleration_structure.h"
 #include "vulkan/vulkan_buffer.h"
@@ -116,10 +115,11 @@ struct VulkanRetiredPool {
 /// than building vectors. They are made with the queue, when the device is
 /// created, sized from the device's maximums, so no submit touches the heap.
 struct VulkanQueue {
-    QueueType type = QueueType::Graphics;
     std::uint32_t family = 0;
     /// The family reports VK_QUEUE_SPARSE_BINDING_BIT.
     bool sparse = false;
+    /// The family reports VK_QUEUE_GRAPHICS_BIT.
+    bool graphics = false;
     /// The family reports VK_QUEUE_COMPUTE_BIT.
     bool compute = false;
     VkQueue queue = VK_NULL_HANDLE;
@@ -159,10 +159,8 @@ struct VulkanCommandList {
 
 class VulkanDevice final : public Device {
 public:
-    /// A device over device, which rhi made on adapter with desc.graphics
-    /// queues on families.graphics, desc.compute on families.compute and
-    /// desc.copy on families.transfer, each family set where desc asks for its
-    /// queues; rhi outlives it.
+    /// A device over device, which rhi made on adapter with desc.queues, each
+    /// on the family it names, opened in desc's order; rhi outlives it.
     /// hasBudget says whether adapter has VK_EXT_memory_budget; hasSwapchain
     /// whether device enabled VK_KHR_swapchain;
     /// pushConstantsSize is the adapter's maxPushConstantsSize; desc's
@@ -171,7 +169,6 @@ public:
     /// bindless layout, and RhiLimitReached when it cannot hold the layout.
     [[nodiscard]] static core::Result<std::unique_ptr<VulkanDevice>> create(VulkanInstance& rhi,
                                                                             VkPhysicalDevice adapter, VkDevice device,
-                                                                            const QueueFamilies& families,
                                                                             const DeviceDesc& desc,
                                                                             const VulkanDeviceSetup& setup);
 
@@ -389,7 +386,7 @@ public:
     [[nodiscard]] core::Result<std::uint64_t> bufferAddress(BufferHandle buffer) override;
 
 private:
-    [[nodiscard]] core::Result<void> openQueues(const QueueFamilies& families, const DeviceDesc& desc);
+    [[nodiscard]] core::Result<void> openQueues(const DeviceDesc& desc);
     [[nodiscard]] core::Result<std::uint64_t> completedValue(const VulkanQueue& queue) const;
     [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
     [[nodiscard]] core::Result<void> checkToken(Token token) const;
@@ -410,9 +407,9 @@ private:
     [[nodiscard]] core::Result<VulkanSwapchain*> swapchainFor(SwapchainHandle swapchain);
     [[nodiscard]] core::Result<VulkanCommandPool*> commandPoolFor(CommandPoolHandle commandPool);
     [[nodiscard]] core::Result<VulkanCommandList*> commandListFor(CommandListHandle commandList);
-    // The kind of queue list records for. Fails with RhiInvalidHandle when its
-    // pool is gone.
-    [[nodiscard]] core::Result<QueueType> queueTypeOf(const VulkanCommandList& list);
+    // The queue list records for. Fails with RhiInvalidHandle when its pool is
+    // gone.
+    [[nodiscard]] core::Result<const VulkanQueue*> queueOf(const VulkanCommandList& list);
     // The pool a handle names; RhiInvalidHandle when it is gone.
     [[nodiscard]] core::Result<const VulkanQueryPool*> queryPoolFor(QueryPoolHandle pool);
     // The list or queue a label call records on. Fail with RhiUnsupported

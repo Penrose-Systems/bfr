@@ -308,15 +308,16 @@ D3D12Device::D3D12Device(D3D12Instance& rhi, ComPtr<ID3D12Device> device, ComPtr
       pipelines_("pipelines", desc.maxPipelines, desc.maxPipelines, rhi.logger()) {}
 
 core::Result<void> D3D12Device::open(const DeviceDesc& desc) {
-    const auto open = [this, &desc](QueueType type, D3D12_COMMAND_LIST_TYPE listType,
-                                    const QueueDesc& wanted) -> core::Result<void> {
+    // Each queue is of the list type its family stands for, which
+    // checkQueueFamilies has seen is one of kQueueFamilyTypes.
+    for (const QueueDesc& wanted : desc.queues) {
+        const D3D12_COMMAND_LIST_TYPE listType = kQueueFamilyTypes.at(wanted.family);
         const auto priority = d3d12Priority(wanted.level);
         if (!priority) {
             return core::failure(core::ErrorCode::RhiUnsupported, "D3D12 has no queue level {}",
                                  std::to_underlying(wanted.level));
         }
         auto queue = std::make_unique<D3D12Queue>();
-        queue->type = type;
         queue->listType = listType;
         // A submit's arrays, made now at the device's maximums. Every pool
         // may be destroyed before the GPU is done with it.
@@ -342,22 +343,6 @@ core::Result<void> D3D12Device::open(const DeviceDesc& desc) {
             return core::failure(core::ErrorCode::RhiDeviceFailed, "CreateEventW: error {}", GetLastError());
         }
         queues_.push_back(std::move(queue));
-        return {};
-    };
-    for (const QueueDesc& queue : desc.graphics) {
-        if (auto opened = open(QueueType::Graphics, D3D12_COMMAND_LIST_TYPE_DIRECT, queue); !opened) {
-            return opened;
-        }
-    }
-    for (const QueueDesc& queue : desc.compute) {
-        if (auto opened = open(QueueType::Compute, D3D12_COMMAND_LIST_TYPE_COMPUTE, queue); !opened) {
-            return opened;
-        }
-    }
-    for (const QueueDesc& queue : desc.copy) {
-        if (auto opened = open(QueueType::Copy, D3D12_COMMAND_LIST_TYPE_COPY, queue); !opened) {
-            return opened;
-        }
     }
     return {};
 }
@@ -556,6 +541,10 @@ core::Result<SwapchainHandle> D3D12Device::createSwapchain(const core::window::N
     }
     if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
+    }
+    if (!presents(queues_[desc.queue]->listType)) {
+        return core::failure(core::ErrorCode::RhiPresentUnsupported,
+                             "queue {} is not a direct queue, which alone presents on D3D12", desc.queue);
     }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, ComPtr<IDXGIFactory2>{instance_->factory()},
                                                           queues_[desc.queue]->queue, window, desc,

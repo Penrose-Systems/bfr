@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace bfr::rhi::d3d12 {
 
@@ -330,28 +331,40 @@ QueueLevels levelsOf(ID3D12Device* device, D3D12_COMMAND_LIST_TYPE type) {
             .realtime = takes(D3D12_COMMAND_QUEUE_PRIORITY_GLOBAL_REALTIME)};
 }
 
-// D3D12 has no count of queues: CreateCommandQueue makes as many of each type
-// as asked. D3D12Device::open makes as many graphics, compute and copy queues
-// as DeviceDesc asks, so any count it holds is taken. It doesn't rank a
-// device's queues. D3D12 has no query for which queues map tiles:
-// UpdateTileMappings is an ID3D12CommandQueue call, so every kind maps them
-// where the device has tiled resources (sparse.binding), as Diligent marks
-// every queue (EngineFactoryD3D12.cpp, COMMAND_QUEUE_TYPE_SPARSE_BINDING).
-// D3D12 states no copy granularity for any queue type.
-Queues queuesOf(ID3D12Device* device, const Sparse& sparse) {
-    return {.graphics = 0,
-            .compute = 0,
-            .copy = 0,
-            .ranks = 0,
-            .graphicsLevels = levelsOf(device, D3D12_COMMAND_LIST_TYPE_DIRECT),
-            .computeLevels = levelsOf(device, D3D12_COMMAND_LIST_TYPE_COMPUTE),
-            .copyLevels = levelsOf(device, D3D12_COMMAND_LIST_TYPE_COPY),
-            .graphicsSparse = sparse.binding,
-            .computeSparse = sparse.binding,
-            .copySparse = sparse.binding,
-            .graphicsGranularity = {},
-            .computeGranularity = {},
-            .copyGranularity = {}};
+// One family for each type in kQueueFamilyTypes: a direct queue runs
+// graphics, compute and copies, a compute queue compute and copies, a copy
+// queue copies. D3D12 has no count of queues: CreateCommandQueue makes as
+// many of each type as asked, so each count is 0. D3D12 has no query for
+// which queues map tiles: UpdateTileMappings is an ID3D12CommandQueue call, so
+// every type maps them where the device has tiled resources (sparse.binding),
+// as Diligent marks every queue (EngineFactoryD3D12.cpp,
+// COMMAND_QUEUE_TYPE_SPARSE_BINDING). D3D12 writes a timestamp with EndQuery,
+// which takes no stage and marks the end of the work before it; direct and
+// compute queues write them, a copy queue where OPTIONS3 says so, into a
+// COPY_QUEUE_TIMESTAMP heap (d3d12.h, D3D12_QUERY_HEAP_TYPE); D3D12 states no
+// valid bits. resetTimestamps records nothing, so every queue takes it. D3D12
+// states no copy granularity for any queue type.
+std::vector<QueueFamily> queueFamiliesOf(ID3D12Device* device, const Sparse& sparse) {
+    D3D12_FEATURE_DATA_D3D12_OPTIONS3 options3{};
+    const bool copyTimestamps = query(device, D3D12_FEATURE_D3D12_OPTIONS3, options3) &&
+                                options3.CopyQueueTimestampQueriesSupported != FALSE;
+    std::vector<QueueFamily> families;
+    families.reserve(kQueueFamilyTypes.size());
+    for (const D3D12_COMMAND_LIST_TYPE type : kQueueFamilyTypes) {
+        const bool timestamps = type != D3D12_COMMAND_LIST_TYPE_COPY || copyTimestamps;
+        families.push_back({.graphics = type == D3D12_COMMAND_LIST_TYPE_DIRECT,
+                            .compute = type != D3D12_COMMAND_LIST_TYPE_COPY,
+                            .copy = true,
+                            .sparse = sparse.binding,
+                            .count = 0,
+                            .timestampBits = 0,
+                            .timestamps = timestamps,
+                            .timestampStages = {.end = timestamps},
+                            .timestampResets = true,
+                            .levels = levelsOf(device, type),
+                            .granularity = {}});
+    }
+    return families;
 }
 
 } // namespace
@@ -464,26 +477,11 @@ std::string nameOf(const DXGI_ADAPTER_DESC1& desc) {
 namespace {
 
 // D3D12 writes a timestamp with EndQuery, which takes no stage or
-// granularity and marks the end of the work before it, in rendering and out.
-// Direct and compute queues write them; a copy queue where OPTIONS3 says so,
-// into a COPY_QUEUE_TIMESTAMP heap (d3d12.h, D3D12_QUERY_HEAP_TYPE). Each
-// resolves as a UINT64. GetClockCalibration reads QueryPerformanceCounter.
-Timestamps timestampsOf(ID3D12Device* device) {
-    D3D12_FEATURE_DATA_D3D12_OPTIONS3 options3{};
-    const bool copy = query(device, D3D12_FEATURE_D3D12_OPTIONS3, options3) &&
-                      options3.CopyQueueTimestampQueriesSupported != FALSE;
-    constexpr TimestampStages kEnd{.end = true};
-    return {.graphics = true,
-            .compute = true,
-            .copy = copy,
-            .outsideRendering = kEnd,
-            .insideRendering = kEnd,
-            .computeStages = kEnd,
-            .copyStages = copy ? kEnd : TimestampStages{},
-            // resetTimestamps records nothing, so every queue takes it.
-            .graphicsResets = true,
-            .computeResets = true,
-            .copyResets = true,
+// granularity and marks the end of the work before it, in rendering as out of
+// it (queueFamiliesOf). Each resolves as a UINT64. GetClockCalibration reads
+// QueryPerformanceCounter.
+Timestamps timestampsOf() {
+    return {.insideRendering = {.end = true},
             .granularity = false,
             .entryBytes = sizeof(UINT64),
             .hostClocks = {.performanceCounter = true}};
@@ -509,8 +507,9 @@ Caps readCaps(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
     caps.features = featuresOf(device, sampler);
     caps.memory = memoryOf(desc, device);
     caps.sparse = sparseOf(device);
-    caps.queues = queuesOf(device, caps.sparse);
-    caps.timestamps = timestampsOf(device);
+    caps.queueFamilies = queueFamiliesOf(device, caps.sparse);
+    // D3D12 doesn't rank a device's queues, so caps.queueRanks stays 0.
+    caps.timestamps = timestampsOf();
     // caps.resolve stays 0. ResolveSubresourceRegion takes MIN, MAX and
     // AVERAGE modes (d3d12.h:7284, :3378-3386), but no D3D12 query says which
     // depth or stencil formats it resolves, and no engine resolves them:

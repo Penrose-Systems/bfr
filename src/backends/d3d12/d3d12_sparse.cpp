@@ -136,8 +136,8 @@ core::Result<Token> D3D12Device::updateTileMappings(const TileMappingDesc& desc)
         return core::failure(core::ErrorCode::RhiInvalidCall, "a mapping takes at most {} regions of each kind",
                              desc_.maxTileMappings);
     }
-    // Every kind of queue maps tiles where the device has tiled resources
-    // (sparseOf's Queues).
+    // A queue of every family maps tiles where the device has tiled resources
+    // (queueFamiliesOf).
     if (!sparse_.binding) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "the device has no tiled resources, so queue {} maps none", desc.queue);

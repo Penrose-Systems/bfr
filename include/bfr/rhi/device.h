@@ -39,8 +39,11 @@ public:
     /// and its handle is set; the C entry point refuses either. Fails with
     /// RhiWindowFailed when its window system's surface extension is
     /// unavailable or when the API refuses the window,
-    /// RhiPresentUnsupported when the device has no swapchain extension,
-    /// RhiInvalidCall when the device has no queue desc.queue or an enum
+    /// RhiPresentUnsupported when the device has no swapchain extension or
+    /// desc.queue's family doesn't present to the window, as
+    /// Instance::queueFamilyPresents answers, RhiUnsupported when the backend
+    /// can't be asked, RhiInvalidCall when the device has no queue desc.queue
+    /// or an enum
     /// in desc is not one BFR has, and RhiLimitReached when the device holds
     /// maxSwapchains already.
     [[nodiscard]] virtual core::Result<SwapchainHandle> createSwapchain(const core::window::NativeWindow& window,
@@ -729,7 +732,7 @@ public:
         std::span<const AccelerationStructureMotionInstance> instances, std::span<const MotionKeyframe> keyframes,
         std::span<std::byte> out) = 0;
 
-    /// Records build, outside rendering, on a queue whose kind runs compute.
+    /// Records build, outside rendering, on a queue whose family runs compute.
     /// A barrier orders the work that wrote its inputs before it, and its
     /// readers and any reuse of its scratch after. Fails with RhiUnsupported
     /// where Features::accelerationStructure is false, RhiInvalidCall for
@@ -768,7 +771,7 @@ public:
     [[nodiscard]] virtual core::Result<AccelerationStructureSizes> clusterSizes(const ClusterInputs& inputs) = 0;
 
     /// Records build, a cluster operation, outside rendering, on a queue whose
-    /// kind runs compute: the GPU reads its records and count as it runs. A
+    /// family runs compute: the GPU reads its records and count as it runs. A
     /// barrier orders the work that wrote its records, count and the
     /// structures it reads before it, and their readers and any reuse of its
     /// scratch after. Traces reach the cluster bottom structures it builds
@@ -810,7 +813,7 @@ public:
 
     /// Records a reset of count entries from first, which a backend that
     /// needs one before an entry is written, the first time too, is given;
-    /// the others record nothing. Outside rendering, on a queue whose kind
+    /// the others record nothing. Outside rendering, on a queue whose family
     /// runs compute. Fails with RhiInvalidHandle for a list or pool that is
     /// gone.
     [[nodiscard]] virtual core::Result<void> resetAccelerationStructureProperties(
@@ -818,7 +821,7 @@ public:
         std::uint32_t count) = 0;
 
     /// Records writes of structures' property into the pool's entries from
-    /// first, in order, outside rendering, on a queue whose kind runs
+    /// first, in order, outside rendering, on a queue whose family runs
     /// compute. A barrier orders their builds before it. A CompactedSize is of
     /// structures built with allowCompaction, a SerializedBottomCount of top
     /// ones. Fails with RhiInvalidCall for more structures than the pool
@@ -832,7 +835,7 @@ public:
     /// Records a copy of count entries from first into buffer at offset, a
     /// multiple of 8, as RayTracingLimits::propertyEntryBytes each, once the
     /// GPU has written them. buffer has copyDst usage. Outside rendering, on a
-    /// queue whose kind runs compute. Fails with RhiInvalidHandle for a list,
+    /// queue whose family runs compute. Fails with RhiInvalidHandle for a list,
     /// pool or buffer that is gone.
     [[nodiscard]] virtual core::Result<void> resolveAccelerationStructureProperties(
         CommandListHandle commandList, AccelerationStructurePropertyPoolHandle pool, std::uint32_t first,
@@ -928,7 +931,7 @@ public:
                                                                       std::span<std::byte> out) = 0;
 
     /// Records a trace of desc's rays with the bound ray tracing pipeline,
-    /// outside rendering, on a queue whose kind runs compute; commands after
+    /// outside rendering, on a queue whose family runs compute; commands after
     /// a barrier see what it wrote. Fails with RhiUnsupported where
     /// Features::rayTracingPipeline is false, RhiInvalidCall for a table
     /// buffer with no address, and

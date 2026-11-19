@@ -68,8 +68,7 @@ TEST_CASE("Device gives each sampler its own slot, and refuses one past the tabl
     std::vector<std::string> messages;
     {
         const FirstAdapterDevice made{recordingInto(backend, messages),
-                                      testDeviceWith(kFirstAdapter, kNoWindow,
-                                                     [](DeviceDesc& desc) { desc.maxBindlessSamplers = kSlots; })};
+                                      [](DeviceDesc& desc) { desc.maxBindlessSamplers = kSlots; }};
         const Device& device = made.device;
         Sampler first = created(device, SamplerDesc{});
         Sampler second = created(device, {.magFilter = Filter::Linear, .minFilter = Filter::Linear});

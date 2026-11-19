@@ -29,7 +29,6 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace bfr::rhi::d3d12 {
@@ -233,9 +232,7 @@ core::Result<void> D3D12Instance::checkAdapter(std::size_t adapter) const {
     return {};
 }
 
-core::Result<std::unique_ptr<Device>> D3D12Instance::createDevice(std::size_t adapter,
-                                                                  const core::window::NativeWindow& presentTo,
-                                                                  const DeviceDesc& desc) {
+core::Result<std::unique_ptr<Device>> D3D12Instance::createDevice(std::size_t adapter, const DeviceDesc& desc) {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -245,15 +242,11 @@ core::Result<std::unique_ptr<Device>> D3D12Instance::createDevice(std::size_t ad
     if (auto checked = checkTables(desc, adapters_[adapter].caps); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    if (auto checked = checkUnranked(desc, "D3D12"); !checked) {
+    if (auto checked = checkQueueFamilies(desc, adapters_[adapter].caps.queueFamilies); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Every device presents to a Win32 window or to none, so a window only has
-    // to be one of those.
-    if (!std::holds_alternative<std::monostate>(presentTo)) {
-        if (auto checked = checkWindow(presentTo); !checked) {
-            return std::unexpected(std::move(checked.error()));
-        }
+    if (auto checked = checkUnranked(desc, "D3D12"); !checked) {
+        return std::unexpected(std::move(checked.error()));
     }
     const D3D12Adapter& native = native_[adapter];
     const Caps& caps = adapters_[adapter].caps;
@@ -292,6 +285,23 @@ core::Result<std::vector<SwapchainFormat>> D3D12Instance::swapchainFormats(
         return std::unexpected(std::move(checked.error()));
     }
     return d3d12::swapchainFormats(native_[adapter].device.Get());
+}
+
+core::Result<bool> D3D12Instance::queueFamilyPresents(std::size_t adapter, std::uint32_t family,
+                                                      const core::window::NativeWindow& window) const {
+    if (auto checked = checkAdapter(adapter); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (family >= kQueueFamilyTypes.size()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "D3D12 adapters have {} queue families; family {} was "
+                             "asked about",
+                             kQueueFamilyTypes.size(), family);
+    }
+    if (auto checked = checkWindow(window); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    return presents(kQueueFamilyTypes[family]);
 }
 
 } // namespace bfr::rhi::d3d12

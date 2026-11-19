@@ -50,19 +50,32 @@ inline constexpr std::uint32_t kTestSamplers = 16;
 inline constexpr std::uint32_t kTestTimestampPools = 4;
 inline constexpr std::uint32_t kTestQueryPools = 4;
 inline constexpr std::uint32_t kTestObjects = 1024;
-// Queues at rank 0 and level normal, as many as a test opens.
-inline constexpr std::array<QueueDesc, 4> kTestQueues{};
+// The queue families a test's queues may be of, more than any adapter the
+// tests run on has; a family past them fails the test.
+inline constexpr std::uint32_t kTestFamilies = 16;
+// The most queues of one family a test opens.
+inline constexpr std::size_t kTestFamilyQueues = 4;
+// For each family, queues of it at rank 0 and level normal, as many as a test
+// opens: storage that outlives every DeviceDesc naming it.
+inline constexpr auto kTestQueues = [] {
+    std::array<std::array<QueueDesc, kTestFamilyQueues>, kTestFamilies> queues{};
+    for (std::uint32_t family = 0; family < kTestFamilies; ++family) {
+        for (QueueDesc& queue : queues.at(family)) {
+            queue.family = family;
+        }
+    }
+    return queues;
+}();
 // The longest wait there is, so a slow GPU never fails a test.
 inline constexpr std::uint64_t kTestWait = std::numeric_limits<std::uint64_t>::max();
 
-/// For a device that presents to no window yet: all zero opens it without asking.
+/// No window: testDeviceOn asks nothing of presenting.
 inline constexpr Window kNoWindow{};
 inline constexpr Window kHeadless{.system = WindowSystem::Headless};
 
 /// What the tests' devices hold; testDeviceOn and testDeviceWith name the
-/// adapter and window.
-inline constexpr DeviceDesc kTestDevice{.graphicsQueues = std::span{kTestQueues}.first(1),
-                                        .maxCommandLists = kTestLists,
+/// adapter and the queue.
+inline constexpr DeviceDesc kTestDevice{.maxCommandLists = kTestLists,
                                         .maxCommandPools = kTestPools,
                                         .maxSwapchains = kTestSwapchains,
                                         .maxBindlessTextures = kTestTableSlots,
@@ -78,18 +91,69 @@ inline constexpr DeviceDesc kTestDevice{.graphicsQueues = std::span{kTestQueues}
                                         .maxPipelineCaches = kTestObjects,
                                         .maxAccelerationStructures = kTestObjects};
 
-/// kTestDevice on adapter, presenting to window.
-inline DeviceDesc testDeviceOn(std::uint32_t adapter, const Window& window) {
+/// The code and message of a failed result, for INFO; empty on success.
+template <class T>
+std::string failureOf(const Expected<T>& result) {
+    return result.has_value() ? std::string{}
+                              : std::string{bfr::name(result.error().code)} + ": " + result.error().message.text();
+}
+
+/// count queues of family, at rank 0 and level normal.
+inline std::span<const QueueDesc> testQueues(std::uint32_t family, std::size_t count = 1) {
+    INFO("family " << family << " is past the tests' queue storage");
+    REQUIRE(family < kTestFamilies);
+    return std::span{kTestQueues.at(family)}.first(count);
+}
+
+/// The first family of adapter that runs graphics, compute and copies and,
+/// unless window is kNoWindow, presents to window; the test fails when there
+/// is none.
+inline std::uint32_t testFamily(const Instance& instance, std::uint32_t adapter, const Window& window) {
+    const bool none = window.window == nullptr && window.display == nullptr && window.system == WindowSystem{};
+    const auto family = instance.findQueueFamily(
+        adapter, {.graphics = true, .compute = true, .copy = true, .presents = none ? nullptr : &window});
+    INFO(failureOf(family));
+    REQUIRE(family.has_value());
+    return *family;
+}
+
+/// The queue families adapter of instance lists; the test fails when it can't
+/// list them.
+inline std::vector<QueueFamily> queueFamiliesOf(const Instance& instance, std::uint32_t adapter) {
+    auto families = instance.queueFamilies(adapter);
+    INFO(failureOf(families));
+    REQUIRE(families.has_value());
+    return std::move(*families);
+}
+
+/// The first family of adapter for which wanted is true, if any.
+template <class Wanted>
+std::optional<std::uint32_t> familyWhere(const Instance& instance, std::uint32_t adapter, Wanted wanted) {
+    const std::vector<QueueFamily> families = queueFamiliesOf(instance, adapter);
+    const auto found = std::ranges::find_if(families, wanted);
+    if (found == families.end()) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(found - families.begin());
+}
+
+/// What testFamily's family on adapter is, presenting nowhere.
+inline QueueFamily testQueueFamily(const Instance& instance, std::uint32_t adapter) {
+    return queueFamiliesOf(instance, adapter).at(testFamily(instance, adapter, kNoWindow));
+}
+
+/// kTestDevice on adapter, with one queue of testFamily's.
+inline DeviceDesc testDeviceOn(const Instance& instance, std::uint32_t adapter, const Window& window) {
     DeviceDesc desc = kTestDevice;
     desc.adapter = adapter;
-    desc.window = window;
+    desc.queues = testQueues(testFamily(instance, adapter, window));
     return desc;
 }
 
 /// testDeviceOn with change made to it.
 template <class Change>
-DeviceDesc testDeviceWith(std::uint32_t adapter, const Window& window, Change change) {
-    DeviceDesc desc = testDeviceOn(adapter, window);
+DeviceDesc testDeviceWith(const Instance& instance, std::uint32_t adapter, const Window& window, Change change) {
+    DeviceDesc desc = testDeviceOn(instance, adapter, window);
     change(desc);
     return desc;
 }
@@ -167,13 +231,6 @@ inline InstanceDesc recordingErrorsInto(Backend backend, std::vector<std::string
     return Instance::create(desc);
 }
 
-/// The code and message of a failed result, for INFO; empty on success.
-template <class T>
-std::string failureOf(const Expected<T>& result) {
-    return result.has_value() ? std::string{}
-                              : std::string{bfr::name(result.error().code)} + ": " + result.error().message.text();
-}
-
 /// The code of a failed bfr.h call and the calling thread's last failure
 /// message, for INFO straight after that call; empty when result is no error.
 inline std::string failureOf(Result result) {
@@ -215,7 +272,7 @@ inline std::uint32_t headlessAdapter(const Instance& instance) {
 
 /// A device on the first adapter that presents to window.
 inline Device presentingDevice(const Instance& instance, const Window& window) {
-    auto device = instance.createDevice(testDeviceOn(presentingAdapter(instance, window), window));
+    auto device = instance.createDevice(testDeviceOn(instance, presentingAdapter(instance, window), window));
     INFO(failureOf(device));
     REQUIRE(device.has_value());
     return std::move(*device);
@@ -236,17 +293,20 @@ struct HeadlessDevice {
     Device device;
 };
 
-/// An Instance as desc says, with validation on, and a device as deviceDesc
-/// says: by default the tests' device on the first adapter, presenting
-/// nowhere. The device goes before its Instance.
+/// An Instance as desc says, with validation on, and the tests' device on the
+/// first adapter, presenting nowhere, with change made to its desc. The device
+/// goes before its Instance.
 struct FirstAdapterDevice {
-    explicit FirstAdapterDevice(const InstanceDesc& desc,
-                                const DeviceDesc& deviceDesc = testDeviceOn(kFirstAdapter, kNoWindow)) {
+    explicit FirstAdapterDevice(const InstanceDesc& desc)
+        : FirstAdapterDevice(desc, [](DeviceDesc& /*unchanged*/) {}) {}
+
+    template <class Change>
+    FirstAdapterDevice(const InstanceDesc& desc, Change change) {
         auto created = createInstance(desc, kValidation);
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         instance = std::move(*created);
-        auto made = instance.createDevice(deviceDesc);
+        auto made = instance.createDevice(testDeviceWith(instance, kFirstAdapter, kNoWindow, change));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         device = std::move(*made);

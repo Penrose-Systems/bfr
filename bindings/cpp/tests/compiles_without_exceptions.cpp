@@ -21,15 +21,20 @@ namespace {
                                            .apiMajor = kMajor,
                                            .apiMinor = kMinor,
                                            .validation = false,
-                                           .messageCallback = [](bfr::MessageSeverity, std::string_view, void*) {
-                                           }});
+                                           .messageCallback = [](bfr::MessageSeverity, std::string_view, void*) {}});
     if (!instance) {
         return false;
     }
     const auto adapters = instance->adapters();
     const bfr::Window headlessWindow{.system = bfr::WindowSystem::Headless};
-    constexpr std::array<bfr::QueueDesc, 1> kOneQueue{};
-    auto device = instance->createDevice({.adapter = 0, .window = headlessWindow, .graphicsQueues = kOneQueue});
+    const auto families = instance->queueFamilies(0);
+    const auto family = instance->findQueueFamily(0, {.graphics = true, .presents = &headlessWindow});
+    const auto presents = instance->queueFamilyPresents(0, 0, {.window = headlessWindow});
+    if (!families || !family || !presents) {
+        return false;
+    }
+    const std::array<bfr::QueueDesc, 1> queue{bfr::QueueDesc{.family = *family}};
+    auto device = instance->createDevice({.adapter = 0, .queues = queue});
     if (!adapters || !device) {
         return false;
     }

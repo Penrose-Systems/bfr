@@ -453,11 +453,13 @@ enums:
       begin_queue_debug_label: {value: 119}
       end_queue_debug_label: {value: 120}
       insert_queue_debug_label: {value: 121}
+      instance_queue_family_presents: {value: 122}
 
   timestamp_stage:
     doc: >-
       The point in a list's work a timestamp is written at. Which ones a
-      backend takes, inside and outside rendering, is in bfr_caps_timestamps.
+      write takes is in bfr_caps_timestamps inside rendering, and in its
+      queue's bfr_queue_family outside it.
     values:
       end: {value: 0, doc: Once all the work recorded before it is done.}
       start: {value: 1, doc: Once the work recorded before it has started.}
@@ -514,7 +516,7 @@ enums:
   queue_level:
     doc: >-
       A queue's priority against every queue on the system, other processes'
-      included. Which levels each kind of queue takes is in bfr_caps_queues;
+      included. Which levels a family's queues take is in bfr_queue_family;
       one above normal may need privileges the process lacks, and then fails
       as the backend says.
     values:
@@ -567,12 +569,13 @@ enums:
     doc: >-
       How a texture's memory is arranged for what the GPU does with it next.
       bfr_texture_barrier moves a texture between layouts; BFR keeps no record
-      of the one it is in. A copy queue's lists move a texture only between
-      undefined, copy_src and copy_dst, and a compute queue's never to or from
-      color_target, depth_stencil_target, depth_stencil_read, resolve_src or
-      resolve_dst, as D3D12's
-      layouts for those queues allow; so a texture crosses between queues in a
-      layout both kinds take.
+      of the one it is in. The lists of a queue whose family runs copies but
+      neither graphics nor compute move a texture only between undefined,
+      copy_src and copy_dst, and those of one whose family runs compute but
+      not graphics never to or from color_target, depth_stencil_target,
+      depth_stencil_read, resolve_src or resolve_dst, as D3D12's layouts for
+      its copy and compute queues allow; so a texture crosses between queues
+      in a layout both families take.
     values:
       undefined: {value: 0, doc: Its contents are not kept. Only a layout to move from.}
       copy_src: {value: 1, doc: Copies read it.}
@@ -1095,63 +1098,51 @@ structs:
   queue_desc:
     doc: One queue a device opens.
     members:
+      - name: family
+        type: u32
+        doc: >-
+          The family it is of, an index into bfr_get_queue_families. One past them fails the device
+          with error_invalid_argument, as do more queues of a family than its count where that is
+          not 0.
       - name: rank
         type: f32
         doc: >-
           0 to 1: its priority against the device's other queues, higher first; passed to the
-          backend as given. Where bfr_caps_queues.ranks is 0 the backend doesn't rank a device's
+          backend as given. Where bfr_caps.queue_ranks is 0 the backend doesn't rank a device's
           queues, so queues of different ranks fail the device with error_unsupported.
       - name: level
         type: queue_level
         doc: >-
           Its priority against every queue on the system; 0 is normal. A level the backend has no
           setting for fails the device with error_unsupported. Vulkan sets one level for all the
-          queues of a kind, so there different levels in one kind fail the same way.
+          queues of a family, so there different levels in one family fail the same way.
 
   device_desc:
     doc: >-
-      How to open an adapter. The device's queues are numbered: the graphics
-      queues from 0, then the compute queues, then the copy queues, in the
-      order asked for here. A graphics queue's lists run every call. A compute
-      queue's run all but rendering, draws, the calls that set their state or
-      bind a graphics pipeline or an index buffer, and bfr_resolve_texture; a
-      copy queue's run only copies, barriers and bfr_write_timestamp. A copy
-      between a buffer and a texture's depth or stencil runs only in a
-      graphics queue's lists, and one in a copy queue's has a buffer_offset
-      that is a multiple of 4. bfr_texture_layout says which layouts each
-      kind's lists move a texture between.
+      How to open an adapter. The device's queues are numbered from 0 in the
+      order queues asks for them. The calls a queue's lists run follow its
+      family's flags: rendering, draws, the calls that set their state or bind
+      a graphics pipeline or an index buffer, and bfr_resolve_texture where it
+      runs graphics; dispatches, ray traces, acceleration structure builds and
+      the calls that bind a compute or ray tracing pipeline where it runs
+      compute; copies where it runs copies; barriers, bfr_write_timestamp and
+      the debug label calls on any. A copy between a buffer and a texture's
+      depth or stencil runs only where the family runs graphics, and one where
+      it runs copies but neither graphics nor compute has a buffer_offset that
+      is a multiple of 4. bfr_texture_layout says which layouts each family's
+      lists move a texture between.
     extensible: true
     members:
       - {name: adapter, type: u32, doc: Index into the instance's adapter list.}
-      - name: window
-        type: window
-        doc: >-
-          The window one of the device's queues must be able to present to, else it fails with
-          error_present_unsupported; all zero opens it without asking.
-      - name: graphics_queues
+      - name: queues
         type: queue_desc
-        array: graphics_queue_count
+        array: queue_count
         pointer: in
         optional: true
         doc: >-
-          The graphics queues to open, read during the call only; none is none. Fails with
-          error_unsupported when the adapter has fewer; bfr_caps.queues says how many it has.
-      - {name: graphics_queue_count, type: u32}
-      - name: compute_queues
-        type: queue_desc
-        array: compute_queue_count
-        pointer: in
-        optional: true
-        doc: >-
-          The compute queues to open, as graphics_queues says.
-      - {name: compute_queue_count, type: u32}
-      - name: copy_queues
-        type: queue_desc
-        array: copy_queue_count
-        pointer: in
-        optional: true
-        doc: The copy queues to open, as graphics_queues says.
-      - {name: copy_queue_count, type: u32}
+          The queues to open, each of the family it names, read during the call only; none is
+          none.
+      - {name: queue_count, type: u32}
       - name: max_command_lists
         type: u32
         doc: >-
@@ -1267,7 +1258,8 @@ structs:
         type: u32
         doc: >-
           The device's queue that presents its images; one the device lacks fails with
-          error_invalid_argument.
+          error_invalid_argument, and one whose family doesn't present to the window, as
+          bfr_get_queue_family_presents answers, with error_present_unsupported.
       - name: image_count
         type: u32
         doc: >-
@@ -2890,7 +2882,7 @@ structs:
       - name: uniform_buffer_non_uniform_indexing
         type: bool
         doc: The uniform buffer table indexed by a value that differs within a shader's invocation group.
-      - {name: timestamps_on_all_queues, type: bool, doc: Every graphics and compute queue writes timestamps.}
+      - {name: timestamps_on_all_queues, type: bool, doc: Every queue whose family runs graphics or compute writes timestamps.}
       - {name: queries, type: bool, doc: "bfr_create_query_pool makes occlusion pools, and pipeline_statistics and mesh_primitives_generated ones where pipeline_statistics and mesh_statistics say."}
       - {name: pipeline_statistics, type: bool}
       - {name: occlusion_query_precise, type: bool}
@@ -2925,7 +2917,7 @@ structs:
       - {name: unified, type: bool, doc: The GPU and CPU share one memory.}
 
   queue_levels:
-    doc: The bfr_queue_level values a kind of queue takes; each true where the backend says so.
+    doc: The bfr_queue_level values a family's queues take; each true where the backend says so.
     members:
       - {name: normal, type: bool}
       - {name: low, type: bool}
@@ -2935,7 +2927,7 @@ structs:
   copy_granularity:
     doc: >-
       How a copy between a buffer and a texture, or between two textures,
-      lines up in a kind of queue's lists, in texels, or texel blocks for a
+      lines up in the lists of a family's queues, in texels, or texel blocks for a
       compressed format: its offsets are multiples of width, height and depth,
       and each size is a multiple too or reaches the edge of the mip level.
       With whole_levels it copies whole mip levels only, from 0. All 0 and
@@ -2945,35 +2937,6 @@ structs:
       - {name: height, type: u32}
       - {name: depth, type: u32}
       - {name: whole_levels, type: bool}
-
-  caps_queues:
-    doc: >-
-      How many queues of each type the adapter has, and what they do, for a
-      device opened without a window. On Vulkan a window may move a type to
-      another family that presents to it, with its own counts, timestamp bits
-      and levels. The counts are 0 where the backend has no count of queues;
-      bfr_create_device then takes any number of each.
-    members:
-      - {name: graphics, type: u32, doc: Queues that run graphics.}
-      - {name: compute, type: u32, doc: Queues that run compute but not graphics (async compute).}
-      - {name: copy, type: u32, doc: Queues that only copy.}
-      - {name: graphics_timestamp_bits, type: u32, doc: Valid bits in a graphics queue's timestamps; 0 without timestamps.}
-      - {name: compute_timestamp_bits, type: u32}
-      - {name: copy_timestamp_bits, type: u32}
-      - name: ranks
-        type: u32
-        doc: >-
-          The distinct priorities the backend gives a device's queues by their bfr_queue_desc.rank;
-          0 where it doesn't rank them.
-      - {name: graphics_levels, type: queue_levels, doc: Levels a graphics queue takes; none set where the backend has no setting.}
-      - {name: compute_levels, type: queue_levels}
-      - {name: copy_levels, type: queue_levels}
-      - {name: graphics_sparse, type: bool, doc: Graphics queues run bfr_update_tile_mappings.}
-      - {name: compute_sparse, type: bool}
-      - {name: copy_sparse, type: bool}
-      - {name: graphics_granularity, type: copy_granularity, doc: How a graphics queue's copies line up.}
-      - {name: compute_granularity, type: copy_granularity}
-      - {name: copy_granularity, type: copy_granularity}
 
   timestamp_stages:
     doc: The bfr_timestamp_stage values a timestamp write takes; each true where the backend says so.
@@ -2989,6 +2952,44 @@ structs:
       - {name: ray_tracing, type: bool}
       - {name: acceleration_structure_build, type: bool}
 
+  queue_family:
+    doc: >-
+      A family of an adapter's queues, as the backend gives it: what its
+      queues run and how many it has. bfr_get_queue_families lists them, every
+      one the backend has, those that run none of these calls included.
+    members:
+      - {name: graphics, type: bool, doc: "Its queues run rendering, draws and their state."}
+      - {name: compute, type: bool, doc: Its queues run dispatches.}
+      - {name: copy, type: bool, doc: Its queues run copies.}
+      - {name: sparse, type: bool, doc: Its queues run bfr_update_tile_mappings.}
+      - name: count
+        type: u32
+        doc: >-
+          Queues it has; 0 where the backend has no count of queues, and bfr_create_device then
+          takes any number.
+      - {name: timestamp_bits, type: u32, doc: "Valid bits in its timestamps where the backend states them; 0 otherwise."}
+      - {name: timestamps, type: bool, doc: Its queues write timestamps.}
+      - {name: timestamp_stages, type: timestamp_stages, doc: The stages a write on one of its queues outside rendering takes.}
+      - name: timestamp_resets
+        type: bool
+        doc: >-
+          Its queues record bfr_reset_timestamps. A pool written on a queue whose family can't is
+          reset on one whose family can, ordered before the writes by a submit's wait.
+      - {name: levels, type: queue_levels, doc: Levels its queues take; none set where the backend has no setting.}
+      - {name: granularity, type: copy_granularity, doc: How its queues' copies line up.}
+
+  queue_family_query:
+    doc: What bfr_find_queue_family looks for.
+    members:
+      - {name: graphics, type: bool, doc: The family must run graphics.}
+      - {name: compute, type: bool, doc: The family must run compute.}
+      - {name: copy, type: bool, doc: The family must run copies.}
+      - name: presents
+        type: window
+        pointer: in
+        optional: true
+        doc: The window the family must present to, read during the call only; null asks nothing of presenting.
+
   host_clocks:
     doc: The bfr_host_clock values bfr_calibrate_timestamps reads beside a GPU timestamp.
     members:
@@ -2997,23 +2998,14 @@ structs:
       - {name: performance_counter, type: bool}
 
   caps_timestamps:
-    doc: What the adapter's GPU timestamps are.
+    doc: What the adapter's GPU timestamps are, on every family alike.
     members:
-      - {name: graphics, type: bool, doc: Graphics queues write timestamps.}
-      - {name: compute, type: bool, doc: Compute queues write timestamps.}
-      - {name: copy, type: bool, doc: Copy queues write timestamps.}
-      - {name: outside_rendering, type: timestamp_stages, doc: The stages a write on a graphics queue outside rendering takes.}
-      - {name: inside_rendering, type: timestamp_stages, doc: The stages a write between bfr_begin_rendering and bfr_end_rendering takes.}
-      - {name: compute_stages, type: timestamp_stages, doc: The stages a write on a compute queue takes.}
-      - {name: copy_stages, type: timestamp_stages, doc: The stages a write on a copy queue takes.}
-      - name: graphics_resets
-        type: bool
+      - name: inside_rendering
+        type: timestamp_stages
         doc: >-
-          Graphics queues record bfr_reset_timestamps. A pool written on a kind
-          of queue that can't is reset on one that can, ordered before the
-          writes by a submit's wait.
-      - {name: compute_resets, type: bool, doc: Compute queues record bfr_reset_timestamps.}
-      - {name: copy_resets, type: bool, doc: Copy queues record bfr_reset_timestamps.}
+          The stages a write between bfr_begin_rendering and bfr_end_rendering takes on every family
+          that runs graphics. Which families' queues write timestamps, and the stages they take
+          outside rendering, are in bfr_queue_family.
       - {name: granularity, type: bool, doc: The backend takes a bfr_timestamp_granularity; where false the value is unused.}
       - {name: entry_bytes, type: u32, doc: What one timestamp takes in a buffer bfr_resolve_timestamps writes.}
       - {name: host_clocks, type: host_clocks, doc: The clocks bfr_calibrate_timestamps reads.}
@@ -3067,7 +3059,11 @@ structs:
       - {name: ray_tracing, type: caps_ray_tracing}
       - {name: features, type: caps_features}
       - {name: memory, type: caps_memory}
-      - {name: queues, type: caps_queues}
+      - name: queue_ranks
+        type: u32
+        doc: >-
+          The distinct priorities the backend gives a device's queues by their bfr_queue_desc.rank;
+          0 where it doesn't rank them. The queues themselves are in bfr_get_queue_families.
       - {name: timestamps, type: caps_timestamps}
       - {name: sparse, type: caps_sparse}
       - {name: resolve, type: caps_resolve}
@@ -3226,6 +3222,49 @@ functions:
       - {name: count, type: u32, pointer: inout}
       - {name: formats, type: swapchain_format, array: count, pointer: out, optional: true}
 
+  get_queue_families:
+    doc: >-
+      Lists an adapter's queue families, every one the backend has, in its
+      order; a bfr_queue_desc names one by its index here. With families
+      null, writes how many there are to count. Otherwise writes up to count
+      of them, sets count to how many it wrote, and returns incomplete if
+      there were more.
+    returns: result
+    params:
+      - {name: instance, type: instance}
+      - {name: adapter, type: u32}
+      - {name: count, type: u32, pointer: inout}
+      - {name: families, type: queue_family, array: count, pointer: out, optional: true}
+
+  get_queue_family_presents:
+    doc: >-
+      Writes whether the queues of an adapter's family present to the window
+      in desc, as the backend answers each time. Fails with invalid_argument
+      for a family the adapter doesn't have, window_failed as
+      bfr_create_swapchain does, and unsupported when the backend can't be
+      asked, naming why.
+    returns: result
+    params:
+      - {name: instance, type: instance}
+      - {name: adapter, type: u32}
+      - {name: family, type: u32, doc: Index into bfr_get_queue_families.}
+      - {name: desc, type: swapchain_query, pointer: in}
+      - {name: presents, type: bool, pointer: out}
+
+  find_queue_family:
+    doc: >-
+      Writes the first family of an adapter, in bfr_get_queue_families'
+      order, that has everything query asks for, asking
+      bfr_get_queue_family_presents only of those with its flags. Fails with
+      unsupported, naming what was asked, when none has, and as those two
+      calls do when they fail.
+    returns: result
+    params:
+      - {name: instance, type: instance}
+      - {name: adapter, type: u32}
+      - {name: query, type: queue_family_query, pointer: in}
+      - {name: family, type: u32, pointer: out}
+
   get_budget:
     doc: >-
       Writes how much memory the device's process may use and uses now. Fails
@@ -3237,8 +3276,8 @@ functions:
 
   create_device:
     doc: >-
-      Opens an adapter with the queues desc asks for, preferring queue
-      families that present to the window in desc, if any.
+      Opens an adapter with the queues desc asks for, each of the family it
+      names.
     returns: result
     params:
       - {name: instance, type: instance}
@@ -3254,9 +3293,9 @@ functions:
 
   create_swapchain:
     doc: >-
-      Creates a swapchain for the window in desc, which the device
-      must be able to present to. It has no images until the first
-      bfr_resize_swapchain gives it a size.
+      Creates a swapchain for the window in desc, which the family of the
+      device's queue in desc must present to. It has no images until the
+      first bfr_resize_swapchain gives it a size.
     returns: result
     params:
       - {name: device, type: device}
@@ -4452,7 +4491,7 @@ functions:
 
   build_acceleration_structure:
     doc: >-
-      Records build, outside rendering, on a queue whose kind runs compute. A
+      Records build, outside rendering, on a queue whose family runs compute. A
       barrier orders the work that wrote its inputs before it, and its readers
       and any reuse of its scratch after. Fails with error_unsupported where
       bfr_caps_features.acceleration_structure is false,
@@ -4508,7 +4547,7 @@ functions:
   build_clusters:
     doc: >-
       Records build, a cluster operation, outside rendering, on a queue whose
-      kind runs compute: the GPU reads its records and count as it runs. A
+      family runs compute: the GPU reads its records and count as it runs. A
       barrier orders the work that wrote its records, count and the
       structures it reads before it, and their readers and any reuse of its
       scratch after. Traces reach the cluster bottom structures it builds
@@ -4621,7 +4660,7 @@ functions:
   trace_rays:
     doc: >-
       Records a trace of desc's rays with the bound ray tracing pipeline,
-      outside rendering, on a queue whose kind runs compute; commands after a
+      outside rendering, on a queue whose family runs compute; commands after a
       barrier see what it wrote. Fails with error_unsupported where
       bfr_caps_features.ray_tracing_pipeline is false,
       error_invalid_argument for a table buffer with no address, and
@@ -4689,7 +4728,7 @@ functions:
     doc: >-
       Records a reset of count entries from first, which a backend that needs
       one before an entry is written, the first time too, is given; the others
-      record nothing. Outside rendering, on a queue whose kind runs compute.
+      record nothing. Outside rendering, on a queue whose family runs compute.
     returns: result
     params:
       - {name: device, type: device}
@@ -4701,7 +4740,7 @@ functions:
   write_acceleration_structure_properties:
     doc: >-
       Records writes of structures' property into the pool's entries from
-      first, in order, outside rendering, on a queue whose kind runs compute.
+      first, in order, outside rendering, on a queue whose family runs compute.
       A barrier orders their builds before it. A compacted_size is of
       structures built with allow_compaction, a serialized_bottom_count of top
       ones. Fails with error_invalid_argument for more structures than the
@@ -4722,7 +4761,7 @@ functions:
       Records a copy of count entries from first into buffer at offset, a
       multiple of 8, as bfr_caps_ray_tracing.property_entry_bytes each, once
       the GPU has written them. buffer has copy_dst usage. Outside rendering,
-      on a queue whose kind runs compute.
+      on a queue whose family runs compute.
     returns: result
     params:
       - {name: device, type: device}

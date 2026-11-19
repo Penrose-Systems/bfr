@@ -149,9 +149,10 @@ core::Result<void> MetalDevice::open(const DeviceDesc& desc) {
                              error != nullptr ? error->localizedDescription()->utf8String() : "no reason given");
     }
     residency_ = adopt(set);
-    const auto open = [this, &desc](QueueType type) -> core::Result<void> {
+    // Every queue is of Metal's one family, which checkQueueFamilies has seen
+    // each names.
+    for (std::size_t index = 0; index < desc.queues.size(); ++index) {
         auto queue = std::make_unique<MetalQueue>();
-        queue->type = type;
         // A submit's and a tile mapping's arrays, made now at the device's
         // maximums. Every pool may be destroyed before the GPU is done with it.
         queue->buffers = core::FixedVector<const MTL4::CommandBuffer*>{desc.maxCommandLists};
@@ -171,22 +172,6 @@ core::Result<void> MetalDevice::open(const DeviceDesc& desc) {
         }
         queue->event = adopt(event);
         queues_.push_back(std::move(queue));
-        return {};
-    };
-    for (std::size_t index = 0; index < desc.graphics.size(); ++index) {
-        if (auto opened = open(QueueType::Graphics); !opened) {
-            return opened;
-        }
-    }
-    for (std::size_t index = 0; index < desc.compute.size(); ++index) {
-        if (auto opened = open(QueueType::Compute); !opened) {
-            return opened;
-        }
-    }
-    for (std::size_t index = 0; index < desc.copy.size(); ++index) {
-        if (auto opened = open(QueueType::Copy); !opened) {
-            return opened;
-        }
     }
     const Ref<MTL4::CompilerDescriptor> compilerDesc = adopt(MTL4::CompilerDescriptor::alloc()->init());
     MTL4::Compiler* compiler = device_->newCompiler(compilerDesc.get(), &error);

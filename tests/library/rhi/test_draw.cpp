@@ -443,11 +443,12 @@ TEST_CASE("Device gives a uniform buffer a slot in its table, which shaders read
         if (caps.bindless.maxUniformBuffers == 0) {
             // No table to give slots in.
             const auto refused = instance.createDevice(
-                testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& desc) { desc.maxBindlessUniformBuffers = 1; }));
+                testDeviceWith(instance, kFirstAdapter, kNoWindow,
+                               [](DeviceDesc& desc) { desc.maxBindlessUniformBuffers = 1; }));
             CHECK(refused.error().code == Result::ErrorLimitReached);
             SKIP("the adapter has no uniform buffer table");
         }
-        auto made = instance.createDevice(testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& desc) {
+        auto made = instance.createDevice(testDeviceWith(instance, kFirstAdapter, kNoWindow, [](DeviceDesc& desc) {
             desc.maxBindlessUniformBuffers = kUniforms;
         }));
         INFO(failureOf(made));
@@ -518,17 +519,23 @@ TEST_CASE("Device hands work across queues: compute writes and copy reads it, co
         auto instance = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(instance.has_value());
         const Caps caps = capsOf(*instance, kFirstAdapter);
-        if (caps.queues.compute == 0 || caps.queues.copy == 0) {
-            SKIP("the adapter has no compute or no copy queue");
+        const auto computeFamily = familyWhere(*instance, kFirstAdapter, [](const QueueFamily& family) {
+            return family.compute && !family.graphics;
+        });
+        const auto copyFamily = familyWhere(*instance, kFirstAdapter, [](const QueueFamily& family) {
+            return family.copy && !family.graphics && !family.compute;
+        });
+        if (!computeFamily || !copyFamily) {
+            SKIP("the adapter has no family that runs compute but not graphics, or none that runs copies alone");
         }
-        // Queue 0 is graphics, 1 compute and 2 copy, as DeviceDesc numbers them.
+        // Queue 0 runs graphics, 1 compute and 2 copies, as DeviceDesc numbers them.
         constexpr std::uint32_t kGraphics = 0;
         constexpr std::uint32_t kCompute = 1;
         constexpr std::uint32_t kCopy = 2;
-        auto opened = instance->createDevice(testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& desc) {
-            desc.computeQueues = std::span{kTestQueues}.first(1);
-            desc.copyQueues = std::span{kTestQueues}.first(1);
-        }));
+        const std::array queues{testQueues(testFamily(*instance, kFirstAdapter, kNoWindow)).front(),
+                                testQueues(*computeFamily).front(), testQueues(*copyFamily).front()};
+        auto opened = instance->createDevice(
+            testDeviceWith(*instance, kFirstAdapter, kNoWindow, [&queues](DeviceDesc& desc) { desc.queues = queues; }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
         const Device& device = *opened;
@@ -1469,8 +1476,7 @@ TEST_CASE("Device draws indirectly the arguments a buffer holds, many at a strid
     std::vector<std::string> messages;
     {
         const FirstAdapterDevice made{recordingInto(backend, messages),
-                                      testDeviceWith(kFirstAdapter, kNoWindow,
-                                                     [](DeviceDesc& desc) { desc.indirectStrides = kStrides; })};
+                                      [](DeviceDesc& desc) { desc.indirectStrides = kStrides; }};
         const Device& device = made.device;
         const Caps caps = capsOf(made.instance, kFirstAdapter);
         // The top half of clip space, then the bottom half.
@@ -1905,9 +1911,8 @@ TEST_CASE("Device tests depth, and resolves a multisampled attachment as renderi
             GraphicsPipelineDesc desc = colorPipeline();
             desc.sampleMask = 0;
             Pipeline masked = created(device, desc);
-            const Rendered image{device, caps.limits, [&](CommandList commands) {
-                                     draw(commands, masked, near, {1, 0, 0, 1});
-                                 }};
+            const Rendered image{device, caps.limits,
+                                 [&](CommandList commands) { draw(commands, masked, near, {1, 0, 0, 1}); }};
             CHECK(image.at(kSide / 2, kSide / 2) == kBlack);
             CHECK(bindResult(device, 0, destroyed(masked)) == Result::ErrorInvalidHandle);
         }

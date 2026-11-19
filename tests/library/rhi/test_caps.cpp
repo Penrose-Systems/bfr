@@ -49,10 +49,15 @@ bool granularityHolds(const CopyGranularity& granularity) {
     return granularity.wholeLevels ? none : none || sized;
 }
 
-// Each way caps disagree with themselves.
-std::vector<std::string> inconsistencies(const Caps& caps) {
+// Whether stages lists any stage.
+bool anyStage(const TimestampStages& stages) {
+    return stages.end || stages.start || stages.vertex || stages.fragment || stages.compute || stages.copy ||
+           stages.task || stages.mesh || stages.rayTracing || stages.accelerationStructureBuild;
+}
+
+// Each way caps and the adapter's queue families disagree with themselves.
+std::vector<std::string> inconsistencies(const Caps& caps, const std::vector<QueueFamily>& families) {
     const CapsMemory& memory = caps.memory;
-    const CapsQueues& queues = caps.queues;
     return failing({
         // A range of 0, 0 is none reported.
         {(caps.compute.minSubgroupSize == 0 && caps.compute.maxSubgroupSize == 0) ||
@@ -62,9 +67,16 @@ std::vector<std::string> inconsistencies(const Caps& caps) {
         {std::ranges::all_of(std::span{memory.types}.first(memory.typeCount),
                              [&memory](const MemoryType& type) { return type.heap < memory.heapCount; }),
          "types in listed heaps"},
-        {granularityHolds(queues.graphicsGranularity) && granularityHolds(queues.computeGranularity) &&
-             granularityHolds(queues.copyGranularity),
+        {std::ranges::all_of(families, [](const QueueFamily& family) { return granularityHolds(family.granularity); }),
          "copy granularities of whole levels or of every size"},
+        {std::ranges::all_of(
+             families, [](const QueueFamily& family) { return (!family.graphics && !family.compute) || family.copy; }),
+         "families that run graphics or compute copy too"},
+        {std::ranges::all_of(families,
+                             [](const QueueFamily& family) {
+                                 return family.timestamps || !anyStage(family.timestampStages);
+                             }),
+         "no timestamp stages on a family that writes no timestamps"},
     });
 }
 
@@ -172,7 +184,7 @@ TEST_CASE("Instance reads each adapter's caps, consistent and 0 for each feature
     for (std::uint32_t adapter = 0; adapter < adapters.size(); ++adapter) {
         INFO(adapters[adapter].name);
         const Caps caps = capsOf(*rhi, adapter);
-        CHECK_THAT(inconsistencies(caps), Catch::Matchers::IsEmpty());
+        CHECK_THAT(inconsistencies(caps, queueFamiliesOf(*rhi, adapter)), Catch::Matchers::IsEmpty());
         CHECK_THAT(limitsWithoutFeatures(caps), Catch::Matchers::IsEmpty());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
@@ -225,6 +237,9 @@ TEST_CASE("Instance refuses queries about an adapter it does not list", "[rhi][c
     const auto missing = static_cast<std::uint32_t>(adaptersOf(*rhi).size());
 
     CHECK(rhi->formats(missing).error().code == Result::ErrorInvalidArgument);
+    CHECK(rhi->queueFamilies(missing).error().code == Result::ErrorInvalidArgument);
+    CHECK(rhi->queueFamilyPresents(missing, 0, {.window = kHeadless}).error().code == Result::ErrorInvalidArgument);
+    CHECK(rhi->findQueueFamily(missing, {}).error().code == Result::ErrorInvalidArgument);
     CHECK(rhi->swapchainCaps(missing, {.window = kHeadless}).error().code == Result::ErrorInvalidArgument);
     CHECK(rhi->swapchainFormats(missing, {.window = kHeadless}).error().code == Result::ErrorInvalidArgument);
 }
@@ -240,7 +255,7 @@ TEST_CASE("Device reports its memory budget heap by heap", "[rhi][caps][agnostic
     for (std::uint32_t adapter = 0; adapter < adapters.size(); ++adapter) {
         INFO(adapters[adapter].name);
         const CapsMemory memory = capsOf(*rhi, adapter).memory;
-        const auto device = rhi->createDevice(testDeviceOn(adapter, kNoWindow));
+        const auto device = rhi->createDevice(testDeviceOn(*rhi, adapter, kNoWindow));
         INFO(failureOf(device));
         REQUIRE(device.has_value());
 

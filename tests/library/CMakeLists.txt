@@ -106,7 +106,6 @@ target_sources(bfr_test_main INTERFACE $<TARGET_OBJECTS:bfr_test_vulkan_environm
 
 # The Vulkan backend's tests, which reach its private headers.
 target_sources(bfr_tests PRIVATE
-    backends/vulkan/test_queue_families.cpp
     backends/vulkan/test_swapchain_settings.cpp
     backends/vulkan/test_vulkan_caps.cpp
     backends/vulkan/test_vulkan_copies.cpp

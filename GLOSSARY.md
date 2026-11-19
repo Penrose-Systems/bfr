@@ -127,10 +127,15 @@ stay the same.
 ## Work and synchronization
 
 **Queue**:
-Where submitted work runs, in order. Types: graphics, compute, copy. A device's
-queues are numbered: graphics is 0, then the compute queues, then the copy
-queues it was opened with.
-_Avoid_: queue family (a backend's grouping)
+Where submitted work runs, in order. Each is of a queue family, which says
+what it runs. A device's queues are numbered from 0 in the order it was opened
+with them.
+
+**Queue family**:
+A group of an adapter's queues as the backend gives it: whether they run
+graphics, compute and copies, and how many there are. D3D12 and Metal have
+none of their own; BFR lists D3D12's three command list types, and Metal's
+one kind of command queue, as their families.
 
 **Timeline**:
 A queue's counter, which the GPU advances as work finishes. The one primitive

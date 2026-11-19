@@ -13,7 +13,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
@@ -86,6 +88,20 @@ struct HeadlessSwapchain {
     Swapchain swapchain;
     CommandPool pool;
 };
+
+// The first adapter whose test family has room for count queues, and that
+// family; none where no adapter has.
+std::optional<std::pair<std::uint32_t, std::uint32_t>> roomFor(const Instance& rhi, std::uint32_t count) {
+    const auto adapters = static_cast<std::uint32_t>(adaptersOf(rhi).size());
+    for (std::uint32_t adapter = 0; adapter < adapters; ++adapter) {
+        const std::uint32_t family = testFamily(rhi, adapter, kNoWindow);
+        const std::uint32_t has = queueFamiliesOf(rhi, adapter).at(family).count;
+        if (has == 0 || has >= count) {
+            return std::pair{adapter, family};
+        }
+    }
+    return std::nullopt;
+}
 
 } // namespace
 
@@ -356,7 +372,8 @@ TEST_CASE("Device submits several lists at once and each waits only on what it i
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Device runs a compute queue beside graphics when the adapter has one", "[rhi][agnostic]") {
+TEST_CASE("Device runs a queue of a family without graphics beside graphics when the adapter has one",
+          "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
@@ -364,14 +381,19 @@ TEST_CASE("Device runs a compute queue beside graphics when the adapter has one"
         REQUIRE(created.has_value());
         const Instance& rhi = *created;
         const std::uint32_t adapter = headlessAdapter(rhi);
-        const std::uint32_t computeQueues = std::min<std::uint32_t>(capsOf(rhi, adapter).queues.compute, 1);
-        auto opened = rhi.createDevice(testDeviceWith(adapter, kHeadless, [&](DeviceDesc& desc) {
-            desc.computeQueues = std::span{kTestQueues}.first(computeQueues);
-        }));
+        const auto computeFamily = familyWhere(rhi, adapter, [](const QueueFamily& family) {
+            return family.compute && !family.graphics;
+        });
+        std::vector<QueueDesc> queues{testQueues(testFamily(rhi, adapter, kHeadless)).front()};
+        if (computeFamily) {
+            queues.push_back(testQueues(*computeFamily).front());
+        }
+        auto opened = rhi.createDevice(
+            testDeviceWith(rhi, adapter, kHeadless, [&queues](DeviceDesc& desc) { desc.queues = queues; }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
         const Device& device = *opened;
-        if (computeQueues == 0) {
+        if (!computeFamily) {
             CHECK(device.createCommandPool({.queue = 1, .listCount = kPoolLists}).error().code ==
                   Result::ErrorInvalidArgument);
             return;
@@ -429,7 +451,7 @@ TEST_CASE("Device frees a pool destroyed while the GPU runs its lists once the G
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
         const Instance& rhi = *created;
-        auto opened = rhi.createDevice(testDeviceWith(headlessAdapter(rhi), kHeadless, [](DeviceDesc& desc) {
+        auto opened = rhi.createDevice(testDeviceWith(rhi, headlessAdapter(rhi), kHeadless, [](DeviceDesc& desc) {
             desc.maxCommandLists = kPoolLists;
             desc.maxCommandPools = 1;
         }));
@@ -473,7 +495,7 @@ TEST_CASE("Device serves pools made, submitted, waited on and destroyed from sev
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
         const Instance& rhi = *created;
-        auto opened = rhi.createDevice(testDeviceWith(headlessAdapter(rhi), kHeadless, [](DeviceDesc& desc) {
+        auto opened = rhi.createDevice(testDeviceWith(rhi, headlessAdapter(rhi), kHeadless, [](DeviceDesc& desc) {
             desc.maxCommandLists = kThreads * kPoolLists;
             desc.maxCommandPools = kThreads;
         }));
@@ -540,25 +562,25 @@ TEST_CASE("Device serves pools made, submitted, waited on and destroyed from sev
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Device opens the graphics queues it is asked for, numbered from 0", "[rhi][agnostic]") {
+TEST_CASE("Device opens the queues of a family it is asked for, numbered from 0", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
         const Instance& rhi = *created;
-        constexpr std::uint32_t kGraphics = 2;
-        const auto adapter = adapterWhere(rhi, [](const Caps& caps) { return caps.queues.graphics >= kGraphics; });
-        if (!adapter) {
-            SKIP("no adapter has " << kGraphics << " graphics queues");
+        constexpr std::uint32_t kQueues = 2;
+        const auto found = roomFor(rhi, kQueues);
+        if (!found) {
+            SKIP("no adapter's family that runs graphics has " << kQueues << " queues");
         }
-        auto opened = rhi.createDevice(testDeviceWith(*adapter, kNoWindow, [](DeviceDesc& desc) {
-            desc.graphicsQueues = std::span{kTestQueues}.first(kGraphics);
-        }));
+        const std::span<const QueueDesc> queues = testQueues(found->second, kQueues);
+        auto opened = rhi.createDevice(
+            testDeviceWith(rhi, found->first, kNoWindow, [queues](DeviceDesc& desc) { desc.queues = queues; }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
         const Device& device = *opened;
-        // Queue 1 is the second graphics queue: its lists submit to it.
+        // Queue 1 is the family's second queue: its lists submit to it.
         auto pool = device.createCommandPool({.queue = 1, .listCount = kPoolLists});
         REQUIRE(pool.has_value());
         const auto list = pool->beginCommands();
@@ -582,23 +604,20 @@ TEST_CASE("Device ranks its queues where the backend does, and fails with RhiUns
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
         const Instance& rhi = *created;
-        const auto adapter = adapterWhere(rhi, [](const Caps& caps) {
-            return caps.queues.graphics != 0 && caps.queues.compute != 0;
-        });
-        if (!adapter) {
-            SKIP("no adapter has a graphics and a compute queue to rank");
+        constexpr std::uint32_t kQueues = 2;
+        const auto found = roomFor(rhi, kQueues);
+        if (!found) {
+            SKIP("no adapter's family that runs graphics has " << kQueues << " queues to rank");
         }
-        const CapsQueues queues = capsOf(rhi, *adapter).queues;
-        constexpr std::array kLow{QueueDesc{.rank = 0, .level = QueueLevel::Normal}};
-        constexpr std::array kHigh{QueueDesc{.rank = 1, .level = QueueLevel::Normal}};
+        const auto [adapter, family] = *found;
+        const std::array ranked{QueueDesc{.family = family, .rank = 0, .level = QueueLevel::Normal},
+                                QueueDesc{.family = family, .rank = 1, .level = QueueLevel::Normal}};
 
-        auto opened = rhi.createDevice(testDeviceWith(*adapter, kNoWindow, [&](DeviceDesc& desc) {
-            desc.graphicsQueues = kLow;
-            desc.computeQueues = kHigh;
-        }));
+        auto opened = rhi.createDevice(
+            testDeviceWith(rhi, adapter, kNoWindow, [&ranked](DeviceDesc& desc) { desc.queues = ranked; }));
 
         INFO(failureOf(opened));
-        if (queues.ranks == 0) {
+        if (capsOf(rhi, adapter).queueRanks == 0) {
             REQUIRE_FALSE(opened.has_value());
             CHECK(opened.error().code == Result::ErrorUnsupported);
         }
@@ -618,20 +637,129 @@ TEST_CASE("Device opens queues at normal, and fails with RhiUnsupported for a le
         REQUIRE(created.has_value());
         const Instance& rhi = *created;
         const std::uint32_t adapter = headlessAdapter(rhi);
-        const QueueLevels levels = capsOf(rhi, adapter).queues.graphicsLevels;
-        constexpr std::array kNormal{QueueDesc{.rank = 0, .level = QueueLevel::Normal}};
-        constexpr std::array kHigh{QueueDesc{.rank = 0, .level = QueueLevel::High}};
+        const std::uint32_t family = testFamily(rhi, adapter, kNoWindow);
+        const QueueLevels levels = queueFamiliesOf(rhi, adapter).at(family).levels;
+        const std::array normalQueue{QueueDesc{.family = family, .rank = 0, .level = QueueLevel::Normal}};
+        const std::array highQueue{QueueDesc{.family = family, .rank = 0, .level = QueueLevel::High}};
 
         const auto normal = rhi.createDevice(
-            testDeviceWith(adapter, kNoWindow, [&](DeviceDesc& desc) { desc.graphicsQueues = kNormal; }));
+            testDeviceWith(rhi, adapter, kNoWindow, [&](DeviceDesc& desc) { desc.queues = normalQueue; }));
         INFO(failureOf(normal));
         CHECK(normal.has_value());
         if (!levels.normal && !levels.low && !levels.high && !levels.realtime) {
             const auto high = rhi.createDevice(
-                testDeviceWith(adapter, kNoWindow, [&](DeviceDesc& desc) { desc.graphicsQueues = kHigh; }));
+                testDeviceWith(rhi, adapter, kNoWindow, [&](DeviceDesc& desc) { desc.queues = highQueue; }));
             REQUIRE_FALSE(high.has_value());
             CHECK(high.error().code == Result::ErrorUnsupported);
         }
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Instance lists each adapter's queue families and finds one by what it runs and where it presents",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        auto created = createInstance(recordingInto(backend, messages), kValidation);
+        REQUIRE(created.has_value());
+        const Instance& rhi = *created;
+        const std::uint32_t adapter = headlessAdapter(rhi);
+        const std::vector<QueueFamily> families = queueFamiliesOf(rhi, adapter);
+        REQUIRE_FALSE(families.empty());
+
+        const auto any = rhi.findQueueFamily(adapter, {});
+        const auto presenting = rhi.findQueueFamily(adapter, {.graphics = true, .presents = &kHeadless});
+
+        INFO(failureOf(any) << ' ' << failureOf(presenting));
+        REQUIRE(any.has_value());
+        CHECK(*any == 0);
+        REQUIRE(presenting.has_value());
+        CHECK(families.at(*presenting).graphics);
+        const auto presents = rhi.queueFamilyPresents(adapter, *presenting, {.window = kHeadless});
+        INFO(failureOf(presents));
+        REQUIRE(presents.has_value());
+        CHECK(*presents);
+        // No family before it both runs graphics and presents.
+        for (std::uint32_t family = 0; family < *presenting; ++family) {
+            const auto earlier = rhi.queueFamilyPresents(adapter, family, {.window = kHeadless});
+            REQUIRE(earlier.has_value());
+            CHECK_FALSE((families.at(family).graphics && *earlier));
+        }
+        const auto past = static_cast<std::uint32_t>(families.size());
+        CHECK(rhi.queueFamilyPresents(adapter, past, {.window = kHeadless}).error().code ==
+              Result::ErrorInvalidArgument);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device fails with RhiInvalidCall for a queue of a family the adapter lacks, or more than a family has",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        auto created = createInstance(recordingInto(backend, messages), kValidation);
+        REQUIRE(created.has_value());
+        const Instance& rhi = *created;
+        const std::vector<QueueFamily> families = queueFamiliesOf(rhi, kFirstAdapter);
+        const auto past = static_cast<std::uint32_t>(families.size());
+
+        const auto lacked = rhi.createDevice(testDeviceWith(rhi, kFirstAdapter, kNoWindow, [past](DeviceDesc& desc) {
+            desc.queues = testQueues(past);
+        }));
+
+        REQUIRE_FALSE(lacked.has_value());
+        CHECK(lacked.error().code == Result::ErrorInvalidArgument);
+        const auto counted = std::ranges::find_if(families, [](const QueueFamily& family) {
+            return family.count != 0 && family.count < kTestFamilyQueues;
+        });
+        if (counted == families.end()) {
+            SKIP("no family counts fewer queues than the tests open");
+        }
+        const auto family = static_cast<std::uint32_t>(counted - families.begin());
+        const auto tooMany = rhi.createDevice(testDeviceWith(rhi, kFirstAdapter, kNoWindow, [&](DeviceDesc& desc) {
+            desc.queues = testQueues(family, std::size_t{counted->count} + 1);
+        }));
+        REQUIRE_FALSE(tooMany.has_value());
+        CHECK(tooMany.error().code == Result::ErrorInvalidArgument);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device fails with RhiPresentUnsupported for a swapchain on a queue whose family doesn't present",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        auto created = createInstance(recordingInto(backend, messages), kValidation);
+        REQUIRE(created.has_value());
+        const Instance& rhi = *created;
+        // A family of an adapter that presents headless whose own answer is
+        // no, if the backend has one.
+        const std::uint32_t adapter = headlessAdapter(rhi);
+        const auto families = static_cast<std::uint32_t>(queueFamiliesOf(rhi, adapter).size());
+        std::optional<std::uint32_t> silent;
+        for (std::uint32_t family = 0; family < families && !silent; ++family) {
+            const auto presents = rhi.queueFamilyPresents(adapter, family, {.window = kHeadless});
+            INFO(failureOf(presents));
+            REQUIRE(presents.has_value());
+            if (!*presents) {
+                silent = family;
+            }
+        }
+        if (!silent) {
+            SKIP("every family of the adapter presents to a headless window");
+        }
+        auto opened = rhi.createDevice(testDeviceWith(rhi, adapter, kNoWindow, [&silent](DeviceDesc& desc) {
+            desc.queues = testQueues(*silent);
+        }));
+        INFO(failureOf(opened));
+        REQUIRE(opened.has_value());
+
+        const auto swapchain = opened->createSwapchain(swapchainDesc(rhi));
+
+        REQUIRE_FALSE(swapchain.has_value());
+        CHECK(swapchain.error().code == Result::ErrorPresentUnsupported);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
@@ -643,7 +771,7 @@ TEST_CASE("Device fails with RhiInvalidCall for a swapchain on a queue it lacks"
         auto created = createInstance(recordingInto(backend, messages), kValidation);
         REQUIRE(created.has_value());
         const Instance& rhi = *created;
-        auto opened = rhi.createDevice(testDeviceOn(headlessAdapter(rhi), kHeadless));
+        auto opened = rhi.createDevice(testDeviceOn(rhi, headlessAdapter(rhi), kHeadless));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
         SwapchainDesc desc = swapchainDesc(rhi);
@@ -667,11 +795,11 @@ TEST_CASE("Device holds the lists, pools and swapchains it was opened for, and n
         const std::uint32_t adapter = headlessAdapter(rhi);
         constexpr std::uint32_t kLists = 2;
         // A maximum a handle cannot name is refused; 0 is none.
-        CHECK(rhi.createDevice(testDeviceWith(adapter, kHeadless,
+        CHECK(rhi.createDevice(testDeviceWith(rhi, adapter, kHeadless,
                                               [](DeviceDesc& desc) { desc.maxCommandLists = kHandleIndices + 1; }))
                   .error()
                   .code == Result::ErrorInvalidArgument);
-        auto opened = rhi.createDevice(testDeviceWith(adapter, kHeadless, [](DeviceDesc& desc) {
+        auto opened = rhi.createDevice(testDeviceWith(rhi, adapter, kHeadless, [](DeviceDesc& desc) {
             desc.maxCommandLists = kLists;
             desc.maxCommandPools = 1;
             desc.maxSwapchains = 1;

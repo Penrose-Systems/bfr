@@ -7,6 +7,7 @@
 #include "bfr/rhi/command_list.h"
 #include "rhi/enum_check.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -20,9 +21,8 @@ namespace bfr::rhi {
 
 /// Fails with RhiInvalidCall when a maximum in desc is more than a handle can
 /// name, so a device holds exactly what it was asked for, 0 being none, when
-/// its graphics, compute and copy queues together are more than a uint32_t
-/// counts, or when a queue's level is not one BFR has. Each backend's
-/// createDevice calls it first.
+/// its queues are more than a uint32_t counts, or when a queue's level is not
+/// one BFR has. Each backend's createDevice calls it first.
 [[nodiscard]] inline core::Result<void> checkLimits(const DeviceDesc& desc) {
     constexpr std::uint32_t kMost = core::Handle<void>::kMaxIndices;
     for (const auto& [name, value] :
@@ -52,17 +52,35 @@ namespace bfr::rhi {
             return core::failure(core::ErrorCode::RhiInvalidCall, "{} is {}; it is at most {}", name, value, kMost);
         }
     }
-    const std::uint64_t queues = std::uint64_t{desc.graphics.size()} + desc.compute.size() + desc.copy.size();
-    if (!std::in_range<std::uint32_t>(queues)) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "{} graphics, {} compute and {} copy queues are more than BFR counts",
-                             desc.graphics.size(), desc.compute.size(), desc.copy.size());
+    if (!std::in_range<std::uint32_t>(desc.queues.size())) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "{} queues are more than BFR counts", desc.queues.size());
     }
-    for (const std::span<const QueueDesc> kind : {desc.graphics, desc.compute, desc.copy}) {
-        for (const QueueDesc& queue : kind) {
-            if (auto checked = checkKnown(queue.level, "queue level"); !checked) {
-                return checked;
-            }
+    for (const QueueDesc& queue : desc.queues) {
+        if (auto checked = checkKnown(queue.level, "queue level"); !checked) {
+            return checked;
+        }
+    }
+    return {};
+}
+
+/// Fails with RhiInvalidCall when a queue in desc names a family not in
+/// families, the adapter's, or a family is asked for more queues than its
+/// count where that is not 0: no backend has such a family to open, and
+/// Vulkan leaves both undefined (VUID-VkDeviceQueueCreateInfo-queueFamilyIndex-00381,
+/// VUID-VkDeviceQueueCreateInfo-queueCount-00382). Each backend's createDevice
+/// calls it.
+[[nodiscard]] inline core::Result<void> checkQueueFamilies(const DeviceDesc& desc,
+                                                           std::span<const QueueFamily> families) {
+    for (const QueueDesc& queue : desc.queues) {
+        if (queue.family >= families.size()) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "a queue names family {}; the adapter has {}",
+                                 queue.family, families.size());
+        }
+        const QueueFamily& family = families[queue.family];
+        const auto asked = static_cast<std::size_t>(std::ranges::count(desc.queues, queue.family, &QueueDesc::family));
+        if (family.count != 0 && asked > family.count) {
+            return core::failure(core::ErrorCode::RhiInvalidCall, "{} queues of family {} were asked for; it has {}",
+                                 asked, queue.family, family.count);
         }
     }
     return {};
@@ -97,15 +115,13 @@ namespace bfr::rhi {
 
 /// How many queues desc opens, which checkLimits has seen a uint32_t counts.
 [[nodiscard]] inline std::uint32_t queueCount(const DeviceDesc& desc) {
-    return static_cast<std::uint32_t>(desc.graphics.size() + desc.compute.size() + desc.copy.size());
+    return static_cast<std::uint32_t>(desc.queues.size());
 }
 
 /// The part of desc a device keeps: its spans point into the caller's memory,
 /// which lives only for createDevice.
 [[nodiscard]] inline DeviceDesc heldPart(DeviceDesc desc) {
-    desc.graphics = {};
-    desc.compute = {};
-    desc.copy = {};
+    desc.queues = {};
     desc.indirectStrides = {};
     return desc;
 }
@@ -113,17 +129,11 @@ namespace bfr::rhi {
 /// Fails with RhiUnsupported, naming backend, when desc's queues have
 /// different ranks, for a backend that doesn't rank a device's queues.
 [[nodiscard]] inline core::Result<void> checkUnranked(const DeviceDesc& desc, std::string_view backend) {
-    std::optional<float> first;
-    for (const std::span<const QueueDesc> kind : {desc.graphics, desc.compute, desc.copy}) {
-        for (const QueueDesc& queue : kind) {
-            if (!first) {
-                first = queue.rank;
-            }
-            if (queue.rank != *first) {
-                return core::failure(core::ErrorCode::RhiUnsupported,
-                                     "{} doesn't rank a device's queues; they were given ranks {} and {}", backend,
-                                     *first, queue.rank);
-            }
+    for (const QueueDesc& queue : desc.queues) {
+        if (queue.rank != desc.queues.front().rank) {
+            return core::failure(core::ErrorCode::RhiUnsupported,
+                                 "{} doesn't rank a device's queues; they were given ranks {} and {}", backend,
+                                 desc.queues.front().rank, queue.rank);
         }
     }
     return {};
@@ -132,12 +142,10 @@ namespace bfr::rhi {
 /// Fails with RhiUnsupported, saying why, when a queue in desc asks for a
 /// level other than normal, for a backend with no level to set.
 [[nodiscard]] inline core::Result<void> checkNormalLevels(const DeviceDesc& desc, std::string_view why) {
-    for (const std::span<const QueueDesc> kind : {desc.graphics, desc.compute, desc.copy}) {
-        for (const QueueDesc& queue : kind) {
-            if (queue.level != QueueLevel::Normal) {
-                return core::failure(core::ErrorCode::RhiUnsupported, "a queue asks for level {}, but {}",
-                                     std::to_underlying(queue.level), why);
-            }
+    for (const QueueDesc& queue : desc.queues) {
+        if (queue.level != QueueLevel::Normal) {
+            return core::failure(core::ErrorCode::RhiUnsupported, "a queue asks for level {}, but {}",
+                                 std::to_underlying(queue.level), why);
         }
     }
     return {};

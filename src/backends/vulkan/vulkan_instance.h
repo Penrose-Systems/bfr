@@ -45,13 +45,14 @@ public:
 
     [[nodiscard]] std::span<const Adapter> adapters() const override;
     [[nodiscard]] core::Result<std::unique_ptr<Device>> createDevice(std::size_t adapter,
-                                                                     const core::window::NativeWindow& presentTo,
                                                                      const DeviceDesc& wanted) override;
     [[nodiscard]] core::Result<FormatCaps> formatCaps(std::size_t adapter, Format format) const override;
     [[nodiscard]] core::Result<SwapchainCaps> swapchainCaps(std::size_t adapter,
                                                             const core::window::NativeWindow& window) const override;
     [[nodiscard]] core::Result<std::vector<SwapchainFormat>> swapchainFormats(
         std::size_t adapter, const core::window::NativeWindow& window) const override;
+    [[nodiscard]] core::Result<bool> queueFamilyPresents(std::size_t adapter, std::uint32_t family,
+                                                         const core::window::NativeWindow& window) const override;
 
     using Instance::config;
 
@@ -68,8 +69,9 @@ public:
     /// Device::createSwapchain describes.
     [[nodiscard]] core::Result<VulkanSurface> surfaceFor(const core::window::NativeWindow& window) const;
 
-    /// Whether family on adapter presents to surface. A driver the query would
-    /// crash is not asked and counts as no. Fails as the query does.
+    /// Whether family on adapter presents to surface. Fails with
+    /// RhiUnsupported, naming the loader, for a driver the query would crash,
+    /// which is not asked, and with RhiWindowFailed when the query fails.
     [[nodiscard]] core::Result<bool> presents(VkPhysicalDevice adapter, std::uint32_t family,
                                               const VulkanSurface& surface) const;
 
@@ -88,11 +90,8 @@ private:
     [[nodiscard]] auto askAboutSurface(std::size_t adapter, const core::window::NativeWindow& window, Query query) const
         -> std::invoke_result_t<Query, const InstanceTable&, VkPhysicalDevice, VkSurfaceKHR>;
     // Which of adapters()[adapter]'s familyCount queue families present to
-    // presentTo, index-aligned; empty without a window.
-    [[nodiscard]] core::Result<std::vector<VkBool32>> presentingFamilies(
-        std::size_t adapter, std::size_t familyCount, const core::window::NativeWindow& presentTo) const;
-    // Which of adapters()[adapter]'s familyCount queue families present to
-    // surface, index-aligned. Fails as presents does.
+    // surface, index-aligned; none, unasked, for a driver the query would
+    // crash. Fails as presents does.
     [[nodiscard]] core::Result<std::vector<VkBool32>> presentingOn(std::size_t adapter, std::size_t familyCount,
                                                                    const VulkanSurface& surface) const;
     // Whether asking adapter about surface would crash its driver.

@@ -37,7 +37,13 @@ if (!instance) {
 }
 // The handles your windowing code gave you: HWND, X11 Window, CAMetalLayer* and so on.
 const bfr::Window window{.window = nativeWindow, .display = nativeDisplay};
-auto device = instance->createDevice({.adapter = 0, .window = window});
+// A queue of the first family that draws and presents to the window.
+auto family = instance->findQueueFamily(0, {.graphics = true, .presents = &window});
+if (!family) {
+    return report(family.error());
+}
+const std::array queues{bfr::QueueDesc{.family = *family}};
+auto device = instance->createDevice({.adapter = 0, .queues = queues});
 if (!device) {
     return report(device.error());
 }
@@ -51,9 +57,10 @@ auto images = swapchain->resize(1280, 720);
 A swapchain borrows the device that made it, so destroy it first.
 
 Ask what an adapter can do before opening it: `caps` returns its limits,
-features, memory and queues in one struct; `formats`, `swapchainCaps`,
-`swapchainFormats` answer the rest, and a device's `budget` gives
-its memory use now.
+features and memory in one struct; `queueFamilies` lists its queue families
+as the backend gives them, `queueFamilyPresents` says whether one presents to
+a window, `formats`, `swapchainCaps` and `swapchainFormats` answer the rest,
+and a device's `budget` gives its memory use now.
 
 ```cpp
 auto caps = instance->caps(0);
@@ -132,7 +139,8 @@ flowchart TB
    features. Nothing is opened yet. Every adapter that meets BFR's minimum
    requirements, which each backend value in `api/bfr.yaml` states, is
    listed.
-3. **Create a device** from one adapter, naming the queues you want. It
+3. **Create a device** from one adapter, naming the queues you want, each
+   of a queue family the adapter lists. It
    turns on what the adapter has at your version; caps say what that is, and
    a call that needs what the device lacks fails with RhiUnsupported.
 4. **Create a swapchain** per window from a native window handle and the

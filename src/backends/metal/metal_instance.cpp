@@ -22,13 +22,13 @@
 #include <TargetConditionals.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <expected>
 #include <format>
 #include <memory>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace bfr::rhi::metal {
@@ -96,9 +96,7 @@ core::Result<void> MetalInstance::checkAdapter(std::size_t adapter) const {
     return {};
 }
 
-core::Result<std::unique_ptr<Device>> MetalInstance::createDevice(std::size_t adapter,
-                                                                  const core::window::NativeWindow& presentTo,
-                                                                  const DeviceDesc& desc) {
+core::Result<std::unique_ptr<Device>> MetalInstance::createDevice(std::size_t adapter, const DeviceDesc& desc) {
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
@@ -108,17 +106,14 @@ core::Result<std::unique_ptr<Device>> MetalInstance::createDevice(std::size_t ad
     if (auto checked = checkTables(desc, adapters_[adapter].caps); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkQueueFamilies(desc, adapters_[adapter].caps.queueFamilies); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     if (auto checked = checkUnranked(desc, "Metal"); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkNormalLevels(desc, "Metal has no queue levels"); !checked) {
         return std::unexpected(std::move(checked.error()));
-    }
-    // Every device presents to a CAMetalLayer, so a window only has to be one.
-    if (!std::holds_alternative<std::monostate>(presentTo)) {
-        if (auto checked = checkWindow(presentTo); !checked) {
-            return std::unexpected(std::move(checked.error()));
-        }
     }
     const Caps& caps = adapters_[adapter].caps;
     return MetalDevice::create(*this, devices_[adapter], caps.features, caps.resolve, desc);
@@ -155,6 +150,25 @@ core::Result<std::vector<SwapchainFormat>> MetalInstance::swapchainFormats(
     }
     const auto formats = metal::swapchainFormats();
     return std::vector<SwapchainFormat>(formats.begin(), formats.end());
+}
+
+core::Result<bool> MetalInstance::queueFamilyPresents(std::size_t adapter, std::uint32_t family,
+                                                      const core::window::NativeWindow& window) const {
+    if (auto checked = checkAdapter(adapter); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    const std::size_t families = adapters_[adapter].caps.queueFamilies.size();
+    if (family >= families) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "Metal adapters have {} queue family; family {} was asked about", families, family);
+    }
+    if (auto checked = checkWindow(window); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    // Metal has no query: every MTL4CommandQueue presents, signalling a
+    // layer's drawable once its work is done (MTL4CommandQueue.hpp:140,
+    // signalDrawable).
+    return true;
 }
 
 } // namespace bfr::rhi::metal

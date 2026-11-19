@@ -4,6 +4,7 @@
 #include "bfr/bfr.h"
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
+#include "bfr/core/text.h"
 #include "bfr/core/window.h"
 #include "bfr/rhi/acceleration_structure.h"
 #include "bfr/rhi/buffer.h"
@@ -364,15 +365,15 @@ bfr::rhi::PipelineCacheHandle fromC(bfr_pipeline_cache handle) {
 // count queues from queues, which may be null only when count is 0. Nothing
 // when it is null otherwise; error says so.
 std::optional<std::vector<bfr::rhi::QueueDesc>> queuesIn(const bfr_queue_desc* queues, std::uint32_t count,
-                                                         const char* what, bfr::core::Message& error) {
+                                                         bfr::core::Message& error) {
     if (queues == nullptr && count != 0) {
-        error.format("{} is null with a count of {}", what, count);
+        error.format("queues is null with a count of {}", count);
         return std::nullopt;
     }
     std::vector<bfr::rhi::QueueDesc> out;
     out.reserve(count);
     for (const bfr_queue_desc& queue : std::span{queues, count}) {
-        out.push_back({.rank = queue.rank, .level = static_cast<bfr::QueueLevel>(queue.level)});
+        out.push_back({.family = queue.family, .rank = queue.rank, .level = static_cast<bfr::QueueLevel>(queue.level)});
     }
     return out;
 }
@@ -434,7 +435,7 @@ static_assert(sizeof(bfr_buffer_tile_region) == sizeof(bfr::rhi::BufferTileRegio
               offsetof(bfr_buffer_tile_region, tiles) == offsetof(bfr::rhi::BufferTileRegion, tiles) &&
               offsetof(bfr_buffer_tile_region, memory_tile) == offsetof(bfr::rhi::BufferTileRegion, memoryTile));
 
-static_assert(bfr::rhi::kCallCount == BFR_CALL_INSERT_QUEUE_DEBUG_LABEL + 1);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_INSTANCE_QUEUE_FAMILY_PRESENTS + 1);
 static_assert(bfr::rhi::kPipelineStatistics == BFR_PIPELINE_STATISTIC_MESH_INVOCATIONS + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
@@ -1360,16 +1361,7 @@ bfr_timestamp_stages toC(const bfr::rhi::TimestampStages& stages) {
 
 bfr_caps_timestamps toC(const bfr::rhi::Timestamps& timestamps) {
     const bfr::rhi::HostClocks& clocks = timestamps.hostClocks;
-    return {.graphics = toC(timestamps.graphics),
-            .compute = toC(timestamps.compute),
-            .copy = toC(timestamps.copy),
-            .outside_rendering = toC(timestamps.outsideRendering),
-            .inside_rendering = toC(timestamps.insideRendering),
-            .compute_stages = toC(timestamps.computeStages),
-            .copy_stages = toC(timestamps.copyStages),
-            .graphics_resets = toC(timestamps.graphicsResets),
-            .compute_resets = toC(timestamps.computeResets),
-            .copy_resets = toC(timestamps.copyResets),
+    return {.inside_rendering = toC(timestamps.insideRendering),
             .granularity = toC(timestamps.granularity),
             .entry_bytes = timestamps.entryBytes,
             .host_clocks = {.monotonic = toC(clocks.monotonic),
@@ -1399,24 +1391,19 @@ bfr_copy_granularity toC(const bfr::rhi::CopyGranularity& granularity) {
             .whole_levels = toC(granularity.wholeLevels)};
 }
 
-bfr_caps_queues toC(const bfr::rhi::Queues& queues) {
+bfr_queue_family toC(const bfr::rhi::QueueFamily& family) {
     return {
-        .graphics = queues.graphics,
-        .compute = queues.compute,
-        .copy = queues.copy,
-        .graphics_timestamp_bits = queues.graphicsTimestampBits,
-        .compute_timestamp_bits = queues.computeTimestampBits,
-        .copy_timestamp_bits = queues.copyTimestampBits,
-        .ranks = queues.ranks,
-        .graphics_levels = toC(queues.graphicsLevels),
-        .compute_levels = toC(queues.computeLevels),
-        .copy_levels = toC(queues.copyLevels),
-        .graphics_sparse = toC(queues.graphicsSparse),
-        .compute_sparse = toC(queues.computeSparse),
-        .copy_sparse = toC(queues.copySparse),
-        .graphics_granularity = toC(queues.graphicsGranularity),
-        .compute_granularity = toC(queues.computeGranularity),
-        .copy_granularity = toC(queues.copyGranularity),
+        .graphics = toC(family.graphics),
+        .compute = toC(family.compute),
+        .copy = toC(family.copy),
+        .sparse = toC(family.sparse),
+        .count = family.count,
+        .timestamp_bits = family.timestampBits,
+        .timestamps = toC(family.timestamps),
+        .timestamp_stages = toC(family.timestampStages),
+        .timestamp_resets = toC(family.timestampResets),
+        .levels = toC(family.levels),
+        .granularity = toC(family.granularity),
     };
 }
 
@@ -1662,20 +1649,8 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_device_desc takes no chained structs");
         }
         bfr::core::Message error;
-        const auto window = windowIn(desc->window, error);
-        if (!window) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
-        }
-        const auto graphics = queuesIn(desc->graphics_queues, desc->graphics_queue_count, "graphics_queues", error);
-        if (!graphics) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
-        }
-        const auto compute = queuesIn(desc->compute_queues, desc->compute_queue_count, "compute_queues", error);
-        if (!compute) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
-        }
-        const auto copy = queuesIn(desc->copy_queues, desc->copy_queue_count, "copy_queues", error);
-        if (!copy) {
+        const auto queues = queuesIn(desc->queues, desc->queue_count, error);
+        if (!queues) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, error);
         }
         if (desc->indirect_strides == nullptr && desc->indirect_stride_count != 0) {
@@ -1683,34 +1658,31 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
                         "indirect_strides is null but indirect_stride_count is not 0");
         }
         auto created = instance->instance->createDevice(
-            desc->adapter, *window,
-            {.graphics = *graphics,
-             .compute = *compute,
-             .copy = *copy,
-             .maxCommandLists = desc->max_command_lists,
-             .maxCommandPools = desc->max_command_pools,
-             .maxSwapchains = desc->max_swapchains,
-             .maxBindlessTextures = desc->max_bindless_textures,
-             .maxBindlessStorageTextures = desc->max_bindless_storage_textures,
-             .maxBindlessStorageBuffers = desc->max_bindless_storage_buffers,
-             .maxBindlessSamplers = desc->max_bindless_samplers,
-             .maxBindlessUniformBuffers = desc->max_bindless_uniform_buffers,
-             .maxTimestampPools = desc->max_timestamp_pools,
-             .maxQueryPools = desc->max_query_pools,
-             .maxDebugLabelLength = desc->max_debug_label_length,
-             .maxSparseMemories = desc->max_sparse_memories,
-             .maxTileMappings = desc->max_tile_mappings,
-             .maxBindlessAccelerationStructures = desc->max_bindless_acceleration_structures,
-             .maxBindlessPartitionedTops = desc->max_bindless_partitioned_tops,
-             .maxBuildGeometries = desc->max_build_geometries,
-             .maxAccelerationStructurePropertyPools = desc->max_acceleration_structure_property_pools,
-             .maxBuffers = desc->max_buffers,
-             .maxTextures = desc->max_textures,
-             .maxShaders = desc->max_shaders,
-             .maxPipelines = desc->max_pipelines,
-             .maxPipelineCaches = desc->max_pipeline_caches,
-             .maxAccelerationStructures = desc->max_acceleration_structures,
-             .indirectStrides = {desc->indirect_strides, desc->indirect_stride_count}});
+            desc->adapter, {.queues = *queues,
+                            .maxCommandLists = desc->max_command_lists,
+                            .maxCommandPools = desc->max_command_pools,
+                            .maxSwapchains = desc->max_swapchains,
+                            .maxBindlessTextures = desc->max_bindless_textures,
+                            .maxBindlessStorageTextures = desc->max_bindless_storage_textures,
+                            .maxBindlessStorageBuffers = desc->max_bindless_storage_buffers,
+                            .maxBindlessSamplers = desc->max_bindless_samplers,
+                            .maxBindlessUniformBuffers = desc->max_bindless_uniform_buffers,
+                            .maxTimestampPools = desc->max_timestamp_pools,
+                            .maxQueryPools = desc->max_query_pools,
+                            .maxDebugLabelLength = desc->max_debug_label_length,
+                            .maxSparseMemories = desc->max_sparse_memories,
+                            .maxTileMappings = desc->max_tile_mappings,
+                            .maxBindlessAccelerationStructures = desc->max_bindless_acceleration_structures,
+                            .maxBindlessPartitionedTops = desc->max_bindless_partitioned_tops,
+                            .maxBuildGeometries = desc->max_build_geometries,
+                            .maxAccelerationStructurePropertyPools = desc->max_acceleration_structure_property_pools,
+                            .maxBuffers = desc->max_buffers,
+                            .maxTextures = desc->max_textures,
+                            .maxShaders = desc->max_shaders,
+                            .maxPipelines = desc->max_pipelines,
+                            .maxPipelineCaches = desc->max_pipeline_caches,
+                            .maxAccelerationStructures = desc->max_acceleration_structures,
+                            .indirectStrides = {desc->indirect_strides, desc->indirect_stride_count}});
         if (!created) {
             return fail(created.error());
         }
@@ -2337,7 +2309,7 @@ bfr_result bfr_get_caps(bfr_instance* instance, uint32_t adapter, bfr_caps* caps
             .ray_tracing = toC(found.rayTracing),
             .features = toC(found.features),
             .memory = toC(found.memory),
-            .queues = toC(found.queues),
+            .queue_ranks = found.queueRanks,
             .timestamps = toC(found.timestamps),
             .sparse = toC(found.sparse),
             .resolve = toC(found.resolve),
@@ -2420,6 +2392,108 @@ bfr_result bfr_get_swapchain_formats(bfr_instance* instance, uint32_t adapter, c
             return BFR_RESULT_SUCCESS;
         }
         return writeList(std::span<const bfr::rhi::SwapchainFormat>{*found}, count, formats);
+    });
+}
+
+bfr_result bfr_get_queue_families(bfr_instance* instance, uint32_t adapter, uint32_t* count,
+                                  bfr_queue_family* families) {
+    return guarded([&] {
+        if (instance == nullptr || count == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instance and count must not be null");
+        }
+        if (const auto failed = checkAdapter(*instance, adapter)) {
+            return *failed;
+        }
+        const std::span<const bfr::rhi::QueueFamily> found = instance->instance->adapters()[adapter].caps.queueFamilies;
+        if (families == nullptr) {
+            *count = static_cast<std::uint32_t>(found.size());
+            return BFR_RESULT_SUCCESS;
+        }
+        return writeList(found, count, families);
+    });
+}
+
+bfr_result bfr_get_queue_family_presents(bfr_instance* instance, uint32_t adapter, uint32_t family,
+                                         const bfr_swapchain_query* desc, bfr_bool* presents) {
+    return guarded([&] {
+        if (instance == nullptr || desc == nullptr || presents == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instance, desc and presents must not be null");
+        }
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_swapchain_query takes no chained structs");
+        }
+        if (const auto failed = checkAdapter(*instance, adapter)) {
+            return *failed;
+        }
+        bfr_result failed = BFR_RESULT_SUCCESS;
+        const auto window = surfaceWindow(desc->window, failed);
+        if (!window) {
+            return failed;
+        }
+        const auto answer = instance->instance->queueFamilyPresents(adapter, family, *window);
+        if (!answer) {
+            return fail(answer.error());
+        }
+        *presents = toC(*answer);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+// Built only on bfr_get_queue_families and bfr_get_queue_family_presents, as
+// a caller could build it: the families with query's flags, in the backend's
+// order, then the first of them that presents where query names a window.
+bfr_result bfr_find_queue_family(bfr_instance* instance, uint32_t adapter, const bfr_queue_family_query* query,
+                                 uint32_t* family) {
+    return guarded([&] {
+        if (query == nullptr || family == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "query and family must not be null");
+        }
+        std::uint32_t count = 0;
+        if (const bfr_result listed = bfr_get_queue_families(instance, adapter, &count, nullptr); listed < 0) {
+            return listed;
+        }
+        std::vector<bfr_queue_family> families(count);
+        if (const bfr_result listed = bfr_get_queue_families(instance, adapter, &count, families.data()); listed < 0) {
+            return listed;
+        }
+        const auto runs = [query](const bfr_queue_family& candidate) {
+            return (query->graphics == BFR_FALSE || candidate.graphics != BFR_FALSE) &&
+                   (query->compute == BFR_FALSE || candidate.compute != BFR_FALSE) &&
+                   (query->copy == BFR_FALSE || candidate.copy != BFR_FALSE);
+        };
+        const bfr_swapchain_query presentsTo{.next = nullptr,
+                                             .window = query->presents != nullptr ? *query->presents : bfr_window{}};
+        for (std::uint32_t index = 0; index < count; ++index) {
+            if (!runs(families[index])) {
+                continue;
+            }
+            bfr_bool presents = BFR_TRUE;
+            if (query->presents != nullptr) {
+                if (const bfr_result asked = bfr_get_queue_family_presents(instance, adapter, index, &presentsTo,
+                                                                           &presents);
+                    asked < 0) {
+                    return asked;
+                }
+            }
+            if (presents != BFR_FALSE) {
+                *family = index;
+                return BFR_RESULT_SUCCESS;
+            }
+        }
+        std::vector<std::string_view> asked;
+        for (const auto& [wanted, what] :
+             {std::pair{query->graphics, "runs graphics"}, std::pair{query->compute, "runs compute"},
+              std::pair{query->copy, "runs copies"},
+              std::pair{toC(query->presents != nullptr), "presents to the window"}}) {
+            if (wanted != BFR_FALSE) {
+                asked.emplace_back(what);
+            }
+        }
+        if (asked.empty()) {
+            return fail(BFR_RESULT_ERROR_UNSUPPORTED, "adapter {} has no queue family", adapter);
+        }
+        return fail(BFR_RESULT_ERROR_UNSUPPORTED, "adapter {} has no queue family that {}", adapter,
+                    bfr::core::text::join(asked, " and "));
     });
 }
 

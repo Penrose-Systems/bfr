@@ -331,44 +331,47 @@ struct Window {
     void* display{};
     WindowSystem system{};
 };
+static_assert(sizeof(Window) == sizeof(bfr_window) && alignof(Window) == alignof(bfr_window) &&
+              std::is_standard_layout_v<Window> && std::is_trivially_copyable_v<Window>);
+static_assert(offsetof(Window, window) == offsetof(bfr_window, window));
+static_assert(offsetof(Window, display) == offsetof(bfr_window, display));
+static_assert(offsetof(Window, system) == offsetof(bfr_window, system));
 
 /// One queue a device opens.
 struct QueueDesc {
+    /// The family it is of, an index into bfr_get_queue_families. One past them fails the device
+    /// with error_invalid_argument, as do more queues of a family than its count where that is not
+    /// 0.
+    std::uint32_t family{};
     /// 0 to 1: its priority against the device's other queues, higher first; passed to the backend
-    /// as given. Where bfr_caps_queues.ranks is 0 the backend doesn't rank a device's queues, so
+    /// as given. Where bfr_caps.queue_ranks is 0 the backend doesn't rank a device's queues, so
     /// queues of different ranks fail the device with error_unsupported.
     float rank{};
     /// Its priority against every queue on the system; 0 is normal. A level the backend has no
     /// setting for fails the device with error_unsupported. Vulkan sets one level for all the
-    /// queues of a kind, so there different levels in one kind fail the same way.
+    /// queues of a family, so there different levels in one family fail the same way.
     QueueLevel level{};
 };
 static_assert(sizeof(QueueDesc) == sizeof(bfr_queue_desc) && alignof(QueueDesc) == alignof(bfr_queue_desc) &&
               std::is_standard_layout_v<QueueDesc> && std::is_trivially_copyable_v<QueueDesc>);
+static_assert(offsetof(QueueDesc, family) == offsetof(bfr_queue_desc, family));
 static_assert(offsetof(QueueDesc, rank) == offsetof(bfr_queue_desc, rank));
 static_assert(offsetof(QueueDesc, level) == offsetof(bfr_queue_desc, level));
 
-/// How to open an adapter. The device's queues are numbered: the graphics queues from 0, then the
-/// compute queues, then the copy queues, in the order asked for here. A graphics queue's lists run
-/// every call. A compute queue's run all but rendering, draws, the calls that set their state or
-/// bind a graphics pipeline or an index buffer, and bfr_resolve_texture; a copy queue's run only
-/// copies, barriers and bfr_write_timestamp. A copy between a buffer and a texture's depth or
-/// stencil runs only in a graphics queue's lists, and one in a copy queue's has a buffer_offset
-/// that is a multiple of 4. bfr_texture_layout says which layouts each kind's lists move a texture
-/// between.
+/// How to open an adapter. The device's queues are numbered from 0 in the order queues asks for
+/// them. The calls a queue's lists run follow its family's flags: rendering, draws, the calls that
+/// set their state or bind a graphics pipeline or an index buffer, and bfr_resolve_texture where it
+/// runs graphics; dispatches, ray traces, acceleration structure builds and the calls that bind a
+/// compute or ray tracing pipeline where it runs compute; copies where it runs copies; barriers,
+/// bfr_write_timestamp and the debug label calls on any. A copy between a buffer and a texture's
+/// depth or stencil runs only where the family runs graphics, and one where it runs copies but
+/// neither graphics nor compute has a buffer_offset that is a multiple of 4. bfr_texture_layout
+/// says which layouts each family's lists move a texture between.
 struct DeviceDesc {
     /// Index into the instance's adapter list.
     std::uint32_t adapter{};
-    /// The window one of the device's queues must be able to present to, else it fails with
-    /// error_present_unsupported; all zero opens it without asking.
-    Window window{};
-    /// The graphics queues to open, read during the call only; none is none. Fails with
-    /// error_unsupported when the adapter has fewer; bfr_caps.queues says how many it has.
-    std::span<const QueueDesc> graphicsQueues{};
-    /// The compute queues to open, as graphics_queues says.
-    std::span<const QueueDesc> computeQueues{};
-    /// The copy queues to open, as graphics_queues says.
-    std::span<const QueueDesc> copyQueues{};
+    /// The queues to open, each of the family it names, read during the call only; none is none.
+    std::span<const QueueDesc> queues{};
     /// Command lists the device holds at once, across all its pools, and the most swapchains its
     /// recording lists render to at once; past it, calls fail with error_limit_reached. Room for
     /// them is made with the device, so recording and submitting never allocate. A bfr_submit of
@@ -464,7 +467,8 @@ struct SwapchainDesc {
     /// The window to present to.
     Window window{};
     /// The device's queue that presents its images; one the device lacks fails with
-    /// error_invalid_argument.
+    /// error_invalid_argument, and one whose family doesn't present to the window, as
+    /// bfr_get_queue_family_presents answers, with error_present_unsupported.
     std::uint32_t queue{};
     /// Images to request, passed to the backend as given. bfr_swapchain_images says how many it
     /// made.
@@ -2184,7 +2188,7 @@ struct CapsFeatures {
     bool storageTextureNonUniformIndexing{};
     /// The uniform buffer table indexed by a value that differs within a shader's invocation group.
     bool uniformBufferNonUniformIndexing{};
-    /// Every graphics and compute queue writes timestamps.
+    /// Every queue whose family runs graphics or compute writes timestamps.
     bool timestampsOnAllQueues{};
     /// bfr_create_query_pool makes occlusion pools, and pipeline_statistics and
     /// mesh_primitives_generated ones where pipeline_statistics and mesh_statistics say.
@@ -2237,7 +2241,7 @@ struct CapsMemory {
     bool unified{};
 };
 
-/// The bfr_queue_level values a kind of queue takes; each true where the backend says so.
+/// The bfr_queue_level values a family's queues take; each true where the backend says so.
 struct QueueLevels {
     bool normal{};
     bool low{};
@@ -2245,48 +2249,16 @@ struct QueueLevels {
     bool realtime{};
 };
 
-/// How a copy between a buffer and a texture, or between two textures, lines up in a kind of
-/// queue's lists, in texels, or texel blocks for a compressed format: its offsets are multiples of
-/// width, height and depth, and each size is a multiple too or reaches the edge of the mip level.
-/// With whole_levels it copies whole mip levels only, from 0. All 0 and false where the backend
-/// states none.
+/// How a copy between a buffer and a texture, or between two textures, lines up in the lists of a
+/// family's queues, in texels, or texel blocks for a compressed format: its offsets are multiples
+/// of width, height and depth, and each size is a multiple too or reaches the edge of the mip
+/// level. With whole_levels it copies whole mip levels only, from 0. All 0 and false where the
+/// backend states none.
 struct CopyGranularity {
     std::uint32_t width{};
     std::uint32_t height{};
     std::uint32_t depth{};
     bool wholeLevels{};
-};
-
-/// How many queues of each type the adapter has, and what they do, for a device opened without a
-/// window. On Vulkan a window may move a type to another family that presents to it, with its own
-/// counts, timestamp bits and levels. The counts are 0 where the backend has no count of queues;
-/// bfr_create_device then takes any number of each.
-struct CapsQueues {
-    /// Queues that run graphics.
-    std::uint32_t graphics{};
-    /// Queues that run compute but not graphics (async compute).
-    std::uint32_t compute{};
-    /// Queues that only copy.
-    std::uint32_t copy{};
-    /// Valid bits in a graphics queue's timestamps; 0 without timestamps.
-    std::uint32_t graphicsTimestampBits{};
-    std::uint32_t computeTimestampBits{};
-    std::uint32_t copyTimestampBits{};
-    /// The distinct priorities the backend gives a device's queues by their bfr_queue_desc.rank; 0
-    /// where it doesn't rank them.
-    std::uint32_t ranks{};
-    /// Levels a graphics queue takes; none set where the backend has no setting.
-    QueueLevels graphicsLevels{};
-    QueueLevels computeLevels{};
-    QueueLevels copyLevels{};
-    /// Graphics queues run bfr_update_tile_mappings.
-    bool graphicsSparse{};
-    bool computeSparse{};
-    bool copySparse{};
-    /// How a graphics queue's copies line up.
-    CopyGranularity graphicsGranularity{};
-    CopyGranularity computeGranularity{};
-    CopyGranularity copyGranularity{};
 };
 
 /// The bfr_timestamp_stage values a timestamp write takes; each true where the backend says so.
@@ -2303,6 +2275,49 @@ struct TimestampStages {
     bool accelerationStructureBuild{};
 };
 
+/// A family of an adapter's queues, as the backend gives it: what its queues run and how many it
+/// has. bfr_get_queue_families lists them, every one the backend has, those that run none of these
+/// calls included.
+struct QueueFamily {
+    /// Its queues run rendering, draws and their state.
+    bool graphics{};
+    /// Its queues run dispatches.
+    bool compute{};
+    /// Its queues run copies.
+    bool copy{};
+    /// Its queues run bfr_update_tile_mappings.
+    bool sparse{};
+    /// Queues it has; 0 where the backend has no count of queues, and bfr_create_device then takes
+    /// any number.
+    std::uint32_t count{};
+    /// Valid bits in its timestamps where the backend states them; 0 otherwise.
+    std::uint32_t timestampBits{};
+    /// Its queues write timestamps.
+    bool timestamps{};
+    /// The stages a write on one of its queues outside rendering takes.
+    TimestampStages timestampStages{};
+    /// Its queues record bfr_reset_timestamps. A pool written on a queue whose family can't is
+    /// reset on one whose family can, ordered before the writes by a submit's wait.
+    bool timestampResets{};
+    /// Levels its queues take; none set where the backend has no setting.
+    QueueLevels levels{};
+    /// How its queues' copies line up.
+    CopyGranularity granularity{};
+};
+
+/// What bfr_find_queue_family looks for.
+struct QueueFamilyQuery {
+    /// The family must run graphics.
+    bool graphics{};
+    /// The family must run compute.
+    bool compute{};
+    /// The family must run copies.
+    bool copy{};
+    /// The window the family must present to, read during the call only; null asks nothing of
+    /// presenting. May be null.
+    const Window* presents{};
+};
+
 /// The bfr_host_clock values bfr_calibrate_timestamps reads beside a GPU timestamp.
 struct HostClocks {
     bool monotonic{};
@@ -2310,29 +2325,12 @@ struct HostClocks {
     bool performanceCounter{};
 };
 
-/// What the adapter's GPU timestamps are.
+/// What the adapter's GPU timestamps are, on every family alike.
 struct CapsTimestamps {
-    /// Graphics queues write timestamps.
-    bool graphics{};
-    /// Compute queues write timestamps.
-    bool compute{};
-    /// Copy queues write timestamps.
-    bool copy{};
-    /// The stages a write on a graphics queue outside rendering takes.
-    TimestampStages outsideRendering{};
-    /// The stages a write between bfr_begin_rendering and bfr_end_rendering takes.
+    /// The stages a write between bfr_begin_rendering and bfr_end_rendering takes on every family
+    /// that runs graphics. Which families' queues write timestamps, and the stages they take
+    /// outside rendering, are in bfr_queue_family.
     TimestampStages insideRendering{};
-    /// The stages a write on a compute queue takes.
-    TimestampStages computeStages{};
-    /// The stages a write on a copy queue takes.
-    TimestampStages copyStages{};
-    /// Graphics queues record bfr_reset_timestamps. A pool written on a kind of queue that can't is
-    /// reset on one that can, ordered before the writes by a submit's wait.
-    bool graphicsResets{};
-    /// Compute queues record bfr_reset_timestamps.
-    bool computeResets{};
-    /// Copy queues record bfr_reset_timestamps.
-    bool copyResets{};
     /// The backend takes a bfr_timestamp_granularity; where false the value is unused.
     bool granularity{};
     /// What one timestamp takes in a buffer bfr_resolve_timestamps writes.
@@ -2404,7 +2402,9 @@ struct Caps {
     CapsRayTracing rayTracing{};
     CapsFeatures features{};
     CapsMemory memory{};
-    CapsQueues queues{};
+    /// The distinct priorities the backend gives a device's queues by their bfr_queue_desc.rank; 0
+    /// where it doesn't rank them. The queues themselves are in bfr_get_queue_families.
+    std::uint32_t queueRanks{};
     CapsTimestamps timestamps{};
     CapsSparse sparse{};
     CapsResolve resolve{};
@@ -2547,20 +2547,19 @@ inline bfr_window toC(const Window& value) {
 }
 
 inline bfr_queue_desc toC(const QueueDesc& value) {
-    return {.rank = value.rank, .level = static_cast<bfr_queue_level>(value.level)};
+    return {
+        .family = value.family,
+        .rank = value.rank,
+        .level = static_cast<bfr_queue_level>(value.level),
+    };
 }
 
 inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
     return {
         .next = next,
         .adapter = value.adapter,
-        .window = toC(value.window),
-        .graphics_queues = reinterpret_cast<const bfr_queue_desc*>(value.graphicsQueues.data()),
-        .graphics_queue_count = static_cast<uint32_t>(value.graphicsQueues.size()),
-        .compute_queues = reinterpret_cast<const bfr_queue_desc*>(value.computeQueues.data()),
-        .compute_queue_count = static_cast<uint32_t>(value.computeQueues.size()),
-        .copy_queues = reinterpret_cast<const bfr_queue_desc*>(value.copyQueues.data()),
-        .copy_queue_count = static_cast<uint32_t>(value.copyQueues.size()),
+        .queues = reinterpret_cast<const bfr_queue_desc*>(value.queues.data()),
+        .queue_count = static_cast<uint32_t>(value.queues.size()),
         .max_command_lists = value.maxCommandLists,
         .max_command_pools = value.maxCommandPools,
         .max_swapchains = value.maxSwapchains,
@@ -3033,6 +3032,15 @@ inline bfr_swapchain_query toC(const SwapchainQuery& value, const bfr_chain* nex
     return {.next = next, .window = toC(value.window)};
 }
 
+inline bfr_queue_family_query toC(const QueueFamilyQuery& value) {
+    return {
+        .graphics = static_cast<bfr_bool>(value.graphics),
+        .compute = static_cast<bfr_bool>(value.compute),
+        .copy = static_cast<bfr_bool>(value.copy),
+        .presents = reinterpret_cast<const bfr_window*>(value.presents),
+    };
+}
+
 inline AdapterInfo fromC(const bfr_adapter_info& value) {
     return {
         .name = std::string{detail::text(value.name)},
@@ -3419,27 +3427,6 @@ inline CopyGranularity fromC(const bfr_copy_granularity& value) {
     };
 }
 
-inline CapsQueues fromC(const bfr_caps_queues& value) {
-    return {
-        .graphics = value.graphics,
-        .compute = value.compute,
-        .copy = value.copy,
-        .graphicsTimestampBits = value.graphics_timestamp_bits,
-        .computeTimestampBits = value.compute_timestamp_bits,
-        .copyTimestampBits = value.copy_timestamp_bits,
-        .ranks = value.ranks,
-        .graphicsLevels = fromC(value.graphics_levels),
-        .computeLevels = fromC(value.compute_levels),
-        .copyLevels = fromC(value.copy_levels),
-        .graphicsSparse = value.graphics_sparse != BFR_FALSE,
-        .computeSparse = value.compute_sparse != BFR_FALSE,
-        .copySparse = value.copy_sparse != BFR_FALSE,
-        .graphicsGranularity = fromC(value.graphics_granularity),
-        .computeGranularity = fromC(value.compute_granularity),
-        .copyGranularity = fromC(value.copy_granularity),
-    };
-}
-
 inline TimestampStages fromC(const bfr_timestamp_stages& value) {
     return {
         .end = value.end != BFR_FALSE,
@@ -3455,6 +3442,22 @@ inline TimestampStages fromC(const bfr_timestamp_stages& value) {
     };
 }
 
+inline QueueFamily fromC(const bfr_queue_family& value) {
+    return {
+        .graphics = value.graphics != BFR_FALSE,
+        .compute = value.compute != BFR_FALSE,
+        .copy = value.copy != BFR_FALSE,
+        .sparse = value.sparse != BFR_FALSE,
+        .count = value.count,
+        .timestampBits = value.timestamp_bits,
+        .timestamps = value.timestamps != BFR_FALSE,
+        .timestampStages = fromC(value.timestamp_stages),
+        .timestampResets = value.timestamp_resets != BFR_FALSE,
+        .levels = fromC(value.levels),
+        .granularity = fromC(value.granularity),
+    };
+}
+
 inline HostClocks fromC(const bfr_host_clocks& value) {
     return {
         .monotonic = value.monotonic != BFR_FALSE,
@@ -3465,16 +3468,7 @@ inline HostClocks fromC(const bfr_host_clocks& value) {
 
 inline CapsTimestamps fromC(const bfr_caps_timestamps& value) {
     return {
-        .graphics = value.graphics != BFR_FALSE,
-        .compute = value.compute != BFR_FALSE,
-        .copy = value.copy != BFR_FALSE,
-        .outsideRendering = fromC(value.outside_rendering),
         .insideRendering = fromC(value.inside_rendering),
-        .computeStages = fromC(value.compute_stages),
-        .copyStages = fromC(value.copy_stages),
-        .graphicsResets = value.graphics_resets != BFR_FALSE,
-        .computeResets = value.compute_resets != BFR_FALSE,
-        .copyResets = value.copy_resets != BFR_FALSE,
         .granularity = value.granularity != BFR_FALSE,
         .entryBytes = value.entry_bytes,
         .hostClocks = fromC(value.host_clocks),
@@ -3527,7 +3521,7 @@ inline Caps fromC(const bfr_caps& value) {
         .rayTracing = fromC(value.ray_tracing),
         .features = fromC(value.features),
         .memory = fromC(value.memory),
-        .queues = fromC(value.queues),
+        .queueRanks = value.queue_ranks,
         .timestamps = fromC(value.timestamps),
         .sparse = fromC(value.sparse),
         .resolve = fromC(value.resolve),
@@ -3646,8 +3640,23 @@ public:
     /// the order the window system gives.
     [[nodiscard]] Expected<std::vector<SwapchainFormat>> swapchainFormats(std::uint32_t adapter, const SwapchainQuery& desc) const;
 
-    /// Opens an adapter with the queues desc asks for, preferring queue families that present to
-    /// the window in desc, if any.
+    /// Lists an adapter's queue families, every one the backend has, in its order; a bfr_queue_desc
+    /// names one by its index here.
+    [[nodiscard]] Expected<std::vector<QueueFamily>> queueFamilies(std::uint32_t adapter) const;
+
+    /// Writes whether the queues of an adapter's family present to the window in desc, as the
+    /// backend answers each time. Fails with invalid_argument for a family the adapter doesn't
+    /// have, window_failed as bfr_create_swapchain does, and unsupported when the backend can't be
+    /// asked, naming why.
+    [[nodiscard]] Expected<bool> queueFamilyPresents(std::uint32_t adapter, std::uint32_t family, const SwapchainQuery& desc) const;
+
+    /// Writes the first family of an adapter, in bfr_get_queue_families' order, that has everything
+    /// query asks for, asking bfr_get_queue_family_presents only of those with its flags. Fails
+    /// with unsupported, naming what was asked, when none has, and as those two calls do when they
+    /// fail.
+    [[nodiscard]] Expected<std::uint32_t> findQueueFamily(std::uint32_t adapter, const QueueFamilyQuery& query) const;
+
+    /// Opens an adapter with the queues desc asks for, each of the family it names.
     [[nodiscard]] Expected<Device> createDevice(const DeviceDesc& desc) const;
 
     /// Lists the CPU time spent in each of the instance's own calls since it was made, indexed by
@@ -3695,8 +3704,8 @@ public:
     /// when the driver cannot say.
     [[nodiscard]] Expected<MemoryBudget> budget() const;
 
-    /// Creates a swapchain for the window in desc, which the device must be able to present to. It
-    /// has no images until the first bfr_resize_swapchain gives it a size.
+    /// Creates a swapchain for the window in desc, which the family of the device's queue in desc
+    /// must present to. It has no images until the first bfr_resize_swapchain gives it a size.
     [[nodiscard]] Expected<Swapchain> createSwapchain(const SwapchainDesc& desc) const;
 
     /// Creates a command pool, as desc says, with its lists made. Fails with error_limit_reached at
@@ -4079,7 +4088,7 @@ public:
     /// and a bottom_structure is named where it is not null, else bottom_reference.
     [[nodiscard]] Expected<void> writeInstances(std::span<const AccelerationStructureInstance> instances, void* data, std::size_t size) const;
 
-    /// Records build, outside rendering, on a queue whose kind runs compute. A barrier orders the
+    /// Records build, outside rendering, on a queue whose family runs compute. A barrier orders the
     /// work that wrote its inputs before it, and its readers and any reuse of its scratch after.
     /// Fails with error_unsupported where bfr_caps_features.acceleration_structure is false,
     /// error_invalid_argument for inputs bfr_get_acceleration_structure_sizes refuses, an opacity
@@ -4106,7 +4115,7 @@ public:
     /// error_invalid_argument for an enum value BFR doesn't have.
     [[nodiscard]] Expected<AccelerationStructureSizes> clusterSizes(const ClusterInputs& inputs) const;
 
-    /// Records build, a cluster operation, outside rendering, on a queue whose kind runs compute:
+    /// Records build, a cluster operation, outside rendering, on a queue whose family runs compute:
     /// the GPU reads its records and count as it runs. A barrier orders the work that wrote its
     /// records, count and the structures it reads before it, and their readers and any reuse of its
     /// scratch after. Traces reach the cluster bottom structures it builds only through pipelines
@@ -4144,7 +4153,7 @@ public:
     [[nodiscard]] Expected<Pipeline> createRayTracingPipeline(const RayTracingPipelineDesc& desc) const;
 
     /// Records a trace of desc's rays with the bound ray tracing pipeline, outside rendering, on a
-    /// queue whose kind runs compute; commands after a barrier see what it wrote. Fails with
+    /// queue whose family runs compute; commands after a barrier see what it wrote. Fails with
     /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false,
     /// error_invalid_argument for a table buffer with no address, and error_invalid_handle for a
     /// buffer that is gone.
@@ -4166,11 +4175,11 @@ public:
 
     /// Records a reset of count entries from first, which a backend that needs one before an entry
     /// is written, the first time too, is given; the others record nothing. Outside rendering, on a
-    /// queue whose kind runs compute.
+    /// queue whose family runs compute.
     [[nodiscard]] Expected<void> resetAccelerationStructureProperties(CommandList commandList, const AccelerationStructurePropertyPool& pool, std::uint32_t first, std::uint32_t count) const;
 
     /// Records writes of structures' property into the pool's entries from first, in order, outside
-    /// rendering, on a queue whose kind runs compute. A barrier orders their builds before it. A
+    /// rendering, on a queue whose family runs compute. A barrier orders their builds before it. A
     /// compacted_size is of structures built with allow_compaction, a serialized_bottom_count of
     /// top ones. Fails with error_invalid_argument for more structures than the pool holds from
     /// first, or for a partitioned top structure where the backend writes none of its properties
@@ -4179,7 +4188,7 @@ public:
 
     /// Records a copy of count entries from first into buffer at offset, a multiple of 8, as
     /// bfr_caps_ray_tracing.property_entry_bytes each, once the GPU has written them. buffer has
-    /// copy_dst usage. Outside rendering, on a queue whose kind runs compute.
+    /// copy_dst usage. Outside rendering, on a queue whose family runs compute.
     [[nodiscard]] Expected<void> resolveAccelerationStructureProperties(CommandList commandList, const AccelerationStructurePropertyPool& pool, std::uint32_t first, std::uint32_t count, const Buffer& buffer, std::uint64_t offset) const;
 
     /// Records a compact copy of src, built with allow_compaction, into dst, at least its
@@ -5301,15 +5310,57 @@ inline Expected<std::vector<SwapchainFormat>> Instance::swapchainFormats(std::ui
     return formats;
 }
 
+inline Expected<std::vector<QueueFamily>> Instance::queueFamilies(std::uint32_t adapter) const {
+    std::vector<bfr_queue_family> familiesC;
+    std::uint32_t count = 0;
+    // Asked again while the list grows between the two calls.
+    for (;;) {
+        bfr_result result = bfr_get_queue_families(instance_, adapter, &count, nullptr);
+        if (result < 0) {
+            return std::unexpected(detail::failure(result));
+        }
+        // None to fill: a null array would ask the count again.
+        if (count == 0) {
+            break;
+        }
+        familiesC.resize(count);
+        result = bfr_get_queue_families(instance_, adapter, &count, familiesC.data());
+        if (result < 0) {
+            return std::unexpected(detail::failure(result));
+        }
+        if (result != BFR_RESULT_INCOMPLETE) {
+            break;
+        }
+    }
+    std::vector<QueueFamily> families;
+    families.reserve(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        families.push_back(detail::fromC(familiesC[i]));
+    }
+    return families;
+}
+
+inline Expected<bool> Instance::queueFamilyPresents(std::uint32_t adapter, std::uint32_t family, const SwapchainQuery& desc) const {
+    const bfr_swapchain_query cDesc = detail::toC(desc, nullptr);
+    bfr_bool presents{};
+    if (const bfr_result result = bfr_get_queue_family_presents(instance_, adapter, family, &cDesc, &presents); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return presents != BFR_FALSE;
+}
+
+inline Expected<std::uint32_t> Instance::findQueueFamily(std::uint32_t adapter, const QueueFamilyQuery& query) const {
+    const bfr_queue_family_query cQuery = detail::toC(query);
+    uint32_t family{};
+    if (const bfr_result result = bfr_find_queue_family(instance_, adapter, &cQuery, &family); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return family;
+}
+
 inline Expected<Device> Instance::createDevice(const DeviceDesc& desc) const {
-    if (!std::in_range<uint32_t>(desc.graphicsQueues.size())) {
-        return std::unexpected(detail::tooMany("desc.graphicsQueues holds more elements than a uint32_t counts"));
-    }
-    if (!std::in_range<uint32_t>(desc.computeQueues.size())) {
-        return std::unexpected(detail::tooMany("desc.computeQueues holds more elements than a uint32_t counts"));
-    }
-    if (!std::in_range<uint32_t>(desc.copyQueues.size())) {
-        return std::unexpected(detail::tooMany("desc.copyQueues holds more elements than a uint32_t counts"));
+    if (!std::in_range<uint32_t>(desc.queues.size())) {
+        return std::unexpected(detail::tooMany("desc.queues holds more elements than a uint32_t counts"));
     }
     if (!std::in_range<uint32_t>(desc.indirectStrides.size())) {
         return std::unexpected(detail::tooMany("desc.indirectStrides holds more elements than a uint32_t counts"));

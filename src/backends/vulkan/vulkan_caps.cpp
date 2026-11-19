@@ -6,7 +6,6 @@
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/pipeline.h"
 #include "vulkan/instance_table.h"
-#include "vulkan/queue_families.h"
 #include "vulkan/vulkan_list.h"
 #include "vulkan/vulkan_pipeline.h"
 #include "vulkan/vulkan_result.h"
@@ -511,17 +510,6 @@ QueueLevels levelsFrom(const VkQueueFamilyGlobalPriorityPropertiesKHR& listed) {
     return levels;
 }
 
-// Each kind's queues, timestamp bits and levels on the family a device opens
-// it on, none for a kind the device can't open. The levels are each family's
-// list where the adapter has VK_KHR_global_priority, none without it; ranks
-// is the adapter's discreteQueuePriorities.
-// The flags of the family each kind of queue opens on; 0 for a kind with none.
-struct KindFlags {
-    VkQueueFlags graphics = 0;
-    VkQueueFlags compute = 0;
-    VkQueueFlags copy = 0;
-};
-
 // The stages a timestamp takes on a queue of a family with flags: graphics
 // stages only on a graphics queue (synchronization.adoc:838-841), compute on
 // a compute queue, copies on a graphics, compute or transfer one, and the
@@ -545,9 +533,22 @@ TimestampStages stagesFor(VkQueueFlags flags, const Features& features) {
             .accelerationStructureBuild = compute && features.accelerationStructure};
 }
 
-Queues queuesFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
-                  std::span<const VkExtensionProperties> extensions, KindFlags& kinds,
-                  const VkPhysicalDeviceLimits& limits) {
+// Whether a queue of a family with flags records vkCmdResetQueryPool, which
+// takes a graphics or compute queue (VUID-vkCmdResetQueryPool-commandBuffer-cmdpool).
+bool resets(VkQueueFlags flags) {
+    return (flags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0;
+}
+
+// Each of the adapter's queue families as vkGetPhysicalDeviceQueueFamilyProperties2
+// lists it, in its order. A graphics or compute family copies even when it
+// doesn't report VK_QUEUE_TRANSFER_BIT (the spec's VkQueueFlagBits). A family
+// writes timestamps where it has valid timestamp bits, at the stages its
+// flags take (stagesFor), and at none without them. The levels are the family's list where the adapter
+// has VK_KHR_global_priority, none without it. rendering is set to the flags
+// every graphics family has, 0 where none has graphics.
+std::vector<QueueFamily> queueFamiliesFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
+                                           std::span<const VkExtensionProperties> extensions, const Features& features,
+                                           VkQueueFlags& rendering) {
     std::uint32_t count = 0;
     vk.vkGetPhysicalDeviceQueueFamilyProperties2(adapter, &count, nullptr);
     const bool listsLevels = hasQueueLevels(version, extensions);
@@ -560,57 +561,37 @@ Queues queuesFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32
         queried[index].pNext = listsLevels ? &listed[index] : nullptr;
     }
     vk.vkGetPhysicalDeviceQueueFamilyProperties2(adapter, &count, queried.data());
-    std::vector<VkQueueFamilyProperties> families(count);
-    std::ranges::transform(queried, families.begin(), &VkQueueFamilyProperties2::queueFamilyProperties);
-    // Without a surface. A surface may move each kind to a family of its kind
-    // that presents to it, which may have other counts, timestamp bits and
-    // levels; bfr_caps_queues says so.
-    const QueueFamilies chosen = chooseQueueFamilies(families, {});
-    const QueueCounts counts = countQueues(chosen, families);
-    const auto flags = [&families](std::uint32_t queues, std::optional<std::uint32_t> family) -> VkQueueFlags {
-        return queues == 0 ? 0 : families[*family].queueFlags;
-    };
-    kinds = {.graphics = flags(counts.graphics, chosen.graphics),
-             .compute = flags(counts.compute, chosen.compute),
-             .copy = flags(counts.copy, chosen.transfer)};
-    const auto bits = [&families](std::uint32_t queues, std::optional<std::uint32_t> family) {
-        return queues == 0 ? 0 : families[*family].timestampValidBits;
-    };
-    const auto levels = [&listed, listsLevels](std::uint32_t queues, std::optional<std::uint32_t> family) {
-        return queues == 0 || !listsLevels ? QueueLevels{} : levelsFrom(listed[*family]);
-    };
-    const auto sparse = [&families](std::uint32_t queues, std::optional<std::uint32_t> family) {
-        return queues != 0 && (families[*family].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) != 0;
-    };
-    // (0,0,0) is whole mip levels only (the spec's VkQueueFamilyProperties).
-    const auto granularity = [&families](std::uint32_t queues, std::optional<std::uint32_t> family) -> CopyGranularity {
-        if (queues == 0) {
-            return {};
+    std::vector<QueueFamily> families;
+    families.reserve(count);
+    std::optional<VkQueueFlags> graphicsFlags;
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const VkQueueFamilyProperties& family = queried[index].queueFamilyProperties;
+        const VkQueueFlags flags = family.queueFlags;
+        const bool graphics = (flags & VK_QUEUE_GRAPHICS_BIT) != 0;
+        const bool compute = (flags & VK_QUEUE_COMPUTE_BIT) != 0;
+        if (graphics) {
+            graphicsFlags = graphicsFlags.value_or(flags) & flags;
         }
-        const VkExtent3D extent = families[*family].minImageTransferGranularity;
-        return {.width = extent.width,
-                .height = extent.height,
-                .depth = extent.depth,
-                .wholeLevels = extent.width == 0 && extent.height == 0 && extent.depth == 0};
-    };
-    return {
-        .graphics = counts.graphics,
-        .compute = counts.compute,
-        .copy = counts.copy,
-        .graphicsTimestampBits = bits(counts.graphics, chosen.graphics),
-        .computeTimestampBits = bits(counts.compute, chosen.compute),
-        .copyTimestampBits = bits(counts.copy, chosen.transfer),
-        .ranks = limits.discreteQueuePriorities,
-        .graphicsLevels = levels(counts.graphics, chosen.graphics),
-        .computeLevels = levels(counts.compute, chosen.compute),
-        .copyLevels = levels(counts.copy, chosen.transfer),
-        .graphicsSparse = sparse(counts.graphics, chosen.graphics),
-        .computeSparse = sparse(counts.compute, chosen.compute),
-        .copySparse = sparse(counts.copy, chosen.transfer),
-        .graphicsGranularity = granularity(counts.graphics, chosen.graphics),
-        .computeGranularity = granularity(counts.compute, chosen.compute),
-        .copyGranularity = granularity(counts.copy, chosen.transfer),
-    };
+        // (0,0,0) is whole mip levels only (the spec's VkQueueFamilyProperties).
+        const VkExtent3D extent = family.minImageTransferGranularity;
+        families.push_back(
+            {.graphics = graphics,
+             .compute = compute,
+             .copy = graphics || compute || (flags & VK_QUEUE_TRANSFER_BIT) != 0,
+             .sparse = (flags & VK_QUEUE_SPARSE_BINDING_BIT) != 0,
+             .count = family.queueCount,
+             .timestampBits = family.timestampValidBits,
+             .timestamps = family.timestampValidBits != 0,
+             .timestampStages = family.timestampValidBits != 0 ? stagesFor(flags, features) : TimestampStages{},
+             .timestampResets = resets(flags),
+             .levels = listsLevels ? levelsFrom(listed[index]) : QueueLevels{},
+             .granularity = {.width = extent.width,
+                             .height = extent.height,
+                             .depth = extent.depth,
+                             .wholeLevels = extent.width == 0 && extent.height == 0 && extent.depth == 0}});
+    }
+    rendering = graphicsFlags.value_or(0);
+    return families;
 }
 
 struct FormatPair {
@@ -1114,30 +1095,14 @@ HostClocks hostClocksFrom(const InstanceTable& vk, VkPhysicalDevice adapter,
     return clocks;
 }
 
-// Vulkan writes a timestamp at each stage its family's queues run
-// (stagesFor), in rendering and out of it, on a queue whose family has valid
-// timestamp bits; it takes no granularity. A VK_QUERY_RESULT_64_BIT copy
-// writes each as a uint64_t.
-// Whether a queue of a family with flags records vkCmdResetQueryPool, which
-// takes a graphics or compute queue (VUID-vkCmdResetQueryPool-commandBuffer-cmdpool).
-bool resets(VkQueueFlags flags) {
-    return (flags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0;
-}
-
+// Vulkan writes a timestamp in rendering at each stage its family's queues
+// run (stagesFor), so on every graphics family at the stages of the flags
+// they all have, rendering; it takes no granularity. A
+// VK_QUERY_RESULT_64_BIT copy writes each as a uint64_t.
 Timestamps timestampsFrom(const InstanceTable& vk, VkPhysicalDevice adapter,
-                          std::span<const VkExtensionProperties> extensions, const Queues& queues,
-                          const KindFlags& kinds, const Features& features) {
-    const TimestampStages graphics = stagesFor(kinds.graphics, features);
-    return {.graphics = queues.graphicsTimestampBits != 0,
-            .compute = queues.computeTimestampBits != 0,
-            .copy = queues.copyTimestampBits != 0,
-            .outsideRendering = graphics,
-            .insideRendering = graphics,
-            .computeStages = stagesFor(kinds.compute, features),
-            .copyStages = stagesFor(kinds.copy, features),
-            .graphicsResets = resets(kinds.graphics),
-            .computeResets = resets(kinds.compute),
-            .copyResets = resets(kinds.copy),
+                          std::span<const VkExtensionProperties> extensions, VkQueueFlags rendering,
+                          const Features& features) {
+    return {.insideRendering = stagesFor(rendering, features),
             .granularity = false,
             .entryBytes = sizeof(std::uint64_t),
             .hostClocks = hostClocksFrom(vk, adapter, extensions)};
@@ -1177,7 +1142,7 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t v
     reported.debugLabels = debugUtils;
     reported.queueDebugLabels = debugUtils;
     reported.objectNames = debugUtils;
-    KindFlags kinds;
+    VkQueueFlags rendering = 0;
     Caps caps{
         .info = infoFrom(properties),
         .limits = limitsFrom(properties, features),
@@ -1187,12 +1152,13 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t v
         .rayTracing = rayTracingFrom(properties, reported),
         .features = reported,
         .memory = memoryFrom(vk, adapter, properties.core.properties.deviceType),
-        .queues = queuesFrom(vk, adapter, version, extensions, kinds, properties.core.properties.limits),
+        .queueFamilies = queueFamiliesFrom(vk, adapter, version, extensions, reported, rendering),
+        .queueRanks = properties.core.properties.limits.discreteQueuePriorities,
         .timestamps = {},
         .sparse = sparseFrom(features, properties),
         .resolve = resolveFrom(properties),
     };
-    caps.timestamps = timestampsFrom(vk, adapter, extensions, caps.queues, kinds, reported);
+    caps.timestamps = timestampsFrom(vk, adapter, extensions, rendering, reported);
     if (reported.shadingRateTexture) {
         const VkExtent2D& smallest = properties.shadingRate.minFragmentShadingRateAttachmentTexelSize;
         const VkExtent2D& largest = properties.shadingRate.maxFragmentShadingRateAttachmentTexelSize;

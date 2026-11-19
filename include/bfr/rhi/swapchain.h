@@ -19,8 +19,8 @@ using SwapchainHandle = core::Handle<Swapchain>;
 /// given; the backend accepts or refuses it.
 struct SwapchainDesc {
     /// The device's queue that presents the images. createSwapchain fails
-    /// with RhiPresentUnsupported when it can't present to the window, and
-    /// with RhiInvalidCall when the device has no such queue.
+    /// with RhiPresentUnsupported when its family doesn't present to the
+    /// window, and with RhiInvalidCall when the device has no such queue.
     std::uint32_t queue = 0;
     /// The caller sets it; it is passed to the backend as given.
     std::uint32_t imageCount = 0;

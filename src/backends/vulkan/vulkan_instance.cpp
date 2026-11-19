@@ -13,7 +13,6 @@
 #include "rhi/device_limits.h"
 #include "rhi/format_check.h"
 #include "vulkan/instance_table.h"
-#include "vulkan/queue_families.h"
 #include "vulkan/vulkan_caps.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_list.h"
@@ -36,12 +35,12 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace bfr::rhi::vulkan {
@@ -107,22 +106,22 @@ VkQueueGlobalPriorityKHR vulkanLevel(QueueLevel level) {
     return VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR;
 }
 
-// The queues to open: one create info for each kind asked for, on its family,
-// pointing at its queues' ranks, and with the kind's level where the device
-// has VK_KHR_global_priority. No two kinds share a family: countQueues gives
-// a kind none on a family an earlier kind takes. The arrays are sized before
-// they are filled, so the pointers into them stay.
+// The queues to open: one create info for each family asked for, as Vulkan
+// takes no two for one family (VUID-VkDeviceCreateInfo-queueFamilyIndex-02802),
+// pointing at its queues' ranks in the order wanted asks for them, and with
+// the family's level where the device has VK_KHR_global_priority. The arrays
+// are sized before they are filled, so the pointers into them stay.
 struct QueueCreateInfos {
     std::vector<VkDeviceQueueCreateInfo> infos;
     std::vector<VkDeviceQueueGlobalPriorityCreateInfoKHR> levels;
     std::vector<float> ranks;
 };
 
-// Fails with RhiUnsupported when a kind's queues ask for different levels,
-// which Vulkan sets per family, or for a level other than normal on a device
-// with no VK_KHR_global_priority to set it.
-core::Result<QueueCreateInfos> queueCreateInfos(const QueueFamilies& families, const DeviceDesc& wanted,
-                                                bool hasLevels) {
+// For wanted's queues, each of a family checkQueueFamilies has seen is one of
+// familyCount. Fails with RhiUnsupported when a family's queues ask for
+// different levels, which Vulkan sets per family, or for a level other than
+// normal on a device with no VK_KHR_global_priority to set it.
+core::Result<QueueCreateInfos> queueCreateInfos(const DeviceDesc& wanted, std::uint32_t familyCount, bool hasLevels) {
     if (!hasLevels) {
         if (auto checked = checkNormalLevels(wanted,
                                              "the device has neither Vulkan 1.4 nor VK_KHR_global_priority to set it");
@@ -130,31 +129,33 @@ core::Result<QueueCreateInfos> queueCreateInfos(const QueueFamilies& families, c
             return std::unexpected(std::move(checked.error()));
         }
     }
-    constexpr std::size_t kKinds = 3;
     QueueCreateInfos queues;
-    queues.infos.reserve(kKinds);
-    queues.levels.reserve(kKinds);
-    queues.ranks.reserve(wanted.graphics.size() + wanted.compute.size() + wanted.copy.size());
-    // A kind with no family has no queues: createDevice refuses asking for any.
-    for (const auto& [family, kind] :
-         {std::pair{families.graphics, wanted.graphics}, std::pair{families.compute, wanted.compute},
-          std::pair{families.transfer, wanted.copy}}) {
-        if (kind.empty() || !family) {
+    queues.infos.reserve(familyCount);
+    queues.levels.reserve(familyCount);
+    queues.ranks.reserve(wanted.queues.size());
+    for (std::uint32_t family = 0; family < familyCount; ++family) {
+        const auto ofFamily = [family](const QueueDesc& queue) {
+            return queue.family == family;
+        };
+        const auto first = std::ranges::find_if(wanted.queues, ofFamily);
+        if (first == wanted.queues.end()) {
             continue;
         }
-        const QueueLevel level = kind.front().level;
-        if (!std::ranges::all_of(kind, [level](const QueueDesc& queue) { return queue.level == level; })) {
+        const QueueLevel level = first->level;
+        if (!std::ranges::all_of(wanted.queues | std::views::filter(ofFamily),
+                                 [level](const QueueDesc& queue) { return queue.level == level; })) {
             return core::failure(core::ErrorCode::RhiUnsupported,
-                                 "Vulkan sets one level for all of a kind's queues; family {} was asked for several",
-                                 *family);
+                                 "Vulkan sets one level for all of a family's queues; family {} was asked for several",
+                                 family);
         }
-        const std::size_t first = queues.ranks.size();
-        std::ranges::transform(kind, std::back_inserter(queues.ranks), &QueueDesc::rank);
+        const std::size_t start = queues.ranks.size();
+        std::ranges::transform(wanted.queues | std::views::filter(ofFamily), std::back_inserter(queues.ranks),
+                               &QueueDesc::rank);
         VkDeviceQueueCreateInfo& queue = queues.infos.emplace_back();
         queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        queue.queueFamilyIndex = *family;
-        queue.queueCount = static_cast<std::uint32_t>(kind.size());
-        queue.pQueuePriorities = std::span{queues.ranks}.subspan(first).data();
+        queue.queueFamilyIndex = family;
+        queue.queueCount = static_cast<std::uint32_t>(queues.ranks.size() - start);
+        queue.pQueuePriorities = std::span{queues.ranks}.subspan(start).data();
         if (hasLevels) {
             VkDeviceQueueGlobalPriorityCreateInfoKHR& global = queues.levels.emplace_back();
             global.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR;
@@ -399,9 +400,7 @@ std::span<const Adapter> VulkanInstance::adapters() const {
     return adapters_;
 }
 
-core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t adapter,
-                                                                   const core::window::NativeWindow& presentTo,
-                                                                   const DeviceDesc& wanted) {
+core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t adapter, const DeviceDesc& wanted) {
     if (auto listed = checkAdapter(adapter); !listed) {
         return std::unexpected(std::move(listed.error()));
     }
@@ -412,13 +411,10 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
         return std::unexpected(std::move(checked.error()));
     }
     const Adapter& listed = adapters_[adapter];
-    VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
-    const auto properties = queueFamilies(vk_, physicalDevice);
-    const auto presenting = presentingFamilies(adapter, properties.size(), presentTo);
-    if (!presenting) {
-        return std::unexpected(presenting.error());
+    if (auto checked = checkQueueFamilies(wanted, listed.caps.queueFamilies); !checked) {
+        return std::unexpected(std::move(checked.error()));
     }
-    const auto families = chooseQueueFamilies(properties, *presenting);
+    VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
     const std::vector<VkExtensionProperties>* available = &adapterExtensions_[adapter];
     // Presenting needs it; a device without it computes and renders offscreen.
     const bool swapchains = lists(*available, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
@@ -441,7 +437,8 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     features.mesh.primitiveFragmentShadingRateMeshShader = VK_FALSE;
     extensions.insert(extensions.end(), features.enabledExtensions.begin(), features.enabledExtensions.end());
 
-    const auto queues = queueCreateInfos(families, wanted, hasQueueLevels(versions_[adapter], *available));
+    const auto queues = queueCreateInfos(wanted, static_cast<std::uint32_t>(listed.caps.queueFamilies.size()),
+                                         hasQueueLevels(versions_[adapter], *available));
     if (!queues) {
         return std::unexpected(queues.error());
     }
@@ -463,7 +460,7 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
                  core::text::join(extensions, ", "));
     VkPhysicalDeviceProperties adapterProperties{};
     vk_.vkGetPhysicalDeviceProperties(physicalDevice, &adapterProperties);
-    auto made = VulkanDevice::create(*this, physicalDevice, device, families, wanted,
+    auto made = VulkanDevice::create(*this, physicalDevice, device, wanted,
                                      {.apiVersion = versions_[adapter],
                                       .formats13 = formats13Of(versions_[adapter], *available),
                                       .hasBudget = hasBudget_[adapter],
@@ -503,6 +500,24 @@ core::Result<std::vector<SwapchainFormat>> VulkanInstance::swapchainFormats(
     return askAboutSurface(adapter, window, readSurfaceFormats);
 }
 
+core::Result<bool> VulkanInstance::queueFamilyPresents(std::size_t adapter, std::uint32_t family,
+                                                       const core::window::NativeWindow& window) const {
+    if (auto listed = checkAdapter(adapter); !listed) {
+        return std::unexpected(std::move(listed.error()));
+    }
+    if (family >= adapters_[adapter].caps.queueFamilies.size()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "{} has {} queue families; family {} was asked about",
+                             adapters_[adapter].name, adapters_[adapter].caps.queueFamilies.size(), family);
+    }
+    // The surface lives only while the family is asked: some window systems
+    // allow one surface per window, and a swapchain makes its own.
+    const auto surface = surfaceFor(window);
+    if (!surface) {
+        return std::unexpected(surface.error());
+    }
+    return presents(physicalDevices_[adapter], family, *surface);
+}
+
 core::Result<void> VulkanInstance::checkAdapter(std::size_t adapter) const {
     if (adapter >= adapters_.size()) {
         return core::failure(core::ErrorCode::RhiAdapterOutOfRange, "adapter {} of {}", adapter, adapters_.size());
@@ -536,30 +551,16 @@ auto VulkanInstance::askAboutSurface(std::size_t adapter, const core::window::Na
     return query(vk_, physicalDevice, surface->handle());
 }
 
-core::Result<std::vector<VkBool32>> VulkanInstance::presentingFamilies(
-    std::size_t adapter, std::size_t familyCount, const core::window::NativeWindow& presentTo) const {
-    std::vector<VkBool32> presenting;
-    if (std::holds_alternative<std::monostate>(presentTo)) {
-        return presenting;
-    }
-    // The surface lives only while the families are asked: some window systems
-    // allow one surface per window, and a swapchain makes its own.
-    const auto surface = surfaceFor(presentTo);
-    if (!surface) {
-        return std::unexpected(surface.error());
-    }
-    return presentingOn(adapter, familyCount, *surface);
-}
-
 core::Result<std::vector<VkBool32>> VulkanInstance::presentingOn(std::size_t adapter, std::size_t familyCount,
                                                                  const VulkanSurface& surface) const {
     VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
+    std::vector<VkBool32> presenting(familyCount);
     if (presentQueryCrashes(physicalDevice, surface)) {
         BFR_LOG_INFO(logger(),
                      "{} does not present to headless surfaces; not asked, since loader {} would crash its driver",
                      adapters_[adapter].name, versionName(loaderVersion_));
+        return presenting;
     }
-    std::vector<VkBool32> presenting(familyCount);
     for (std::uint32_t family = 0; family < presenting.size(); ++family) {
         const auto answer = presents(physicalDevice, family, surface);
         if (!answer) {
@@ -577,7 +578,10 @@ core::Result<VulkanSurface> VulkanInstance::surfaceFor(const core::window::Nativ
 core::Result<bool> VulkanInstance::presents(VkPhysicalDevice adapter, std::uint32_t family,
                                             const VulkanSurface& surface) const {
     if (presentQueryCrashes(adapter, surface)) {
-        return false;
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "Vulkan loader {} lets NVIDIA's driver crash when asked whether it presents to a headless "
+                             "window, so it was not asked",
+                             versionName(loaderVersion_));
     }
     VkBool32 supported = VK_FALSE;
     if (const VkResult result = vk_.vkGetPhysicalDeviceSurfaceSupportKHR(adapter, family, surface.handle(), &supported);

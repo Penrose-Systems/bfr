@@ -67,8 +67,33 @@ constexpr bfr_texture_range kWholeTexture{.mip_level = 0,
                                           .mip_count = BFR_REMAINING,
                                           .layer = 0,
                                           .layer_count = BFR_REMAINING};
-// One queue at rank 0 and level normal.
-constexpr bfr_queue_desc kOneQueue{.rank = 0, .level = BFR_QUEUE_LEVEL_NORMAL};
+// Asks for a family that runs graphics, compute and copies.
+constexpr bfr_queue_family_query kRunsEverything{.graphics = BFR_TRUE,
+                                                 .compute = BFR_TRUE,
+                                                 .copy = BFR_TRUE,
+                                                 .presents = nullptr};
+
+// The queue families adapter of instance lists.
+std::vector<bfr_queue_family> queueFamilies(bfr_instance* instance, std::uint32_t adapter) {
+    std::uint32_t count = 0;
+    REQUIRE(bfr_get_queue_families(instance, adapter, &count, nullptr) == BFR_RESULT_SUCCESS);
+    std::vector<bfr_queue_family> families(count);
+    REQUIRE(bfr_get_queue_families(instance, adapter, &count, families.data()) == BFR_RESULT_SUCCESS);
+    families.resize(count);
+    return families;
+}
+
+// One queue at rank 0 and level normal of adapter's first family that runs
+// graphics, compute and copies and, where presents is not null, presents to it.
+bfr_queue_desc queueOn(bfr_instance* instance, std::uint32_t adapter, const bfr_window* presents) {
+    bfr_queue_family_query query = kRunsEverything;
+    query.presents = presents;
+    std::uint32_t family = 0;
+    const bfr_result result = bfr_find_queue_family(instance, adapter, &query, &family);
+    INFO(lastError());
+    REQUIRE(result == BFR_RESULT_SUCCESS);
+    return {.family = family, .rank = 0, .level = BFR_QUEUE_LEVEL_NORMAL};
+}
 
 // The backends this build has.
 std::vector<bfr_backend> backendsInBuild() {
@@ -146,15 +171,11 @@ struct HeadlessDevice {
                 BFR_RESULT_ERROR_PRESENT_UNSUPPORTED) {
                 continue;
             }
+            const bfr_queue_desc queue = queueOn(instance, adapter, &kHeadless);
             const bfr_device_desc desc{.next = nullptr,
                                        .adapter = adapter,
-                                       .window = kHeadless,
-                                       .graphics_queues = &kOneQueue,
-                                       .graphics_queue_count = 1,
-                                       .compute_queues = nullptr,
-                                       .compute_queue_count = 0,
-                                       .copy_queues = nullptr,
-                                       .copy_queue_count = 0,
+                                       .queues = &queue,
+                                       .queue_count = 1,
                                        .max_command_lists = kDeviceLists,
                                        .max_command_pools = kDevicePools,
                                        .max_swapchains = kDeviceSwapchains,
@@ -185,6 +206,7 @@ struct HeadlessDevice {
             REQUIRE(result == BFR_RESULT_SUCCESS);
             if (device != nullptr) {
                 this->adapter = adapter;
+                family = queueFamilies(instance, adapter).at(queue.family);
             }
         }
         REQUIRE(device != nullptr);
@@ -200,8 +222,9 @@ struct HeadlessDevice {
     HeadlessDevice& operator=(HeadlessDevice&&) = delete;
 
     bfr_device* device = nullptr;
-    // The adapter the device is on.
+    // The adapter the device is on, and the family of its queue 0.
     std::uint32_t adapter = 0;
+    bfr_queue_family family{};
     // The fewest images the window takes, which a swapchain on the device asks for.
     std::uint32_t images = 0;
 };
@@ -347,15 +370,11 @@ TEST_CASE("C API rejects a struct chained to a device or swapchain desc", "[c_ap
     std::vector<std::string> messages;
     {
         const Instance instance{backend, messages};
+        const bfr_queue_desc queue = queueOn(instance.instance, 0, nullptr);
         const bfr_device_desc deviceDesc{.next = &kStray,
                                          .adapter = 0,
-                                         .window = kHeadless,
-                                         .graphics_queues = &kOneQueue,
-                                         .graphics_queue_count = 1,
-                                         .compute_queues = nullptr,
-                                         .compute_queue_count = 0,
-                                         .copy_queues = nullptr,
-                                         .copy_queue_count = 0,
+                                         .queues = &queue,
+                                         .queue_count = 1,
                                          .max_command_lists = kDeviceLists,
                                          .max_command_pools = kDevicePools,
                                          .max_swapchains = kDeviceSwapchains,
@@ -409,16 +428,11 @@ TEST_CASE("C API rejects a device desc's null queues with a count, and a queue l
     std::vector<std::string> messages;
     {
         const Instance instance{backend, messages};
-        const bfr_queue_desc unknownLevel{.rank = 0, .level = static_cast<bfr_queue_level>(kNotAValue)};
+        const bfr_queue_desc unknownLevel{.family = 0, .rank = 0, .level = static_cast<bfr_queue_level>(kNotAValue)};
         const bfr_device_desc nullQueues{.next = nullptr,
                                          .adapter = 0,
-                                         .window = {},
-                                         .graphics_queues = nullptr,
-                                         .graphics_queue_count = 1,
-                                         .compute_queues = nullptr,
-                                         .compute_queue_count = 0,
-                                         .copy_queues = nullptr,
-                                         .copy_queue_count = 0,
+                                         .queues = nullptr,
+                                         .queue_count = 1,
                                          .max_command_lists = 0,
                                          .max_command_pools = 0,
                                          .max_swapchains = 0,
@@ -446,10 +460,10 @@ TEST_CASE("C API rejects a device desc's null queues with a count, and a queue l
                                          .indirect_stride_count = 0};
         bfr_device* device = nullptr;
         CHECK(bfr_create_device(instance.instance, &nullQueues, &device) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
-        CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("graphics_queues is null"));
+        CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("queues is null"));
 
         bfr_device_desc unknown = nullQueues;
-        unknown.graphics_queues = &unknownLevel;
+        unknown.queues = &unknownLevel;
         CHECK(bfr_create_device(instance.instance, &unknown, &device) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
         CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("not one BFR has"));
         CHECK(device == nullptr);
@@ -491,6 +505,55 @@ TEST_CASE("C API says when the caller's adapter array is too small", "[c_api][gp
 
     CHECK(bfr_get_adapters(instance.instance, &written, &adapter) == BFR_RESULT_INCOMPLETE);
     CHECK(written == 0);
+}
+
+TEST_CASE("C API lists an adapter's queue families in two calls, and says when the array is too small",
+          "[c_api][gpu]") {
+    const bfr_backend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    const Instance instance{backend, messages};
+    std::uint32_t count = 0;
+    REQUIRE(bfr_get_queue_families(instance.instance, 0, &count, nullptr) == BFR_RESULT_SUCCESS);
+    REQUIRE(count > 0);
+    std::vector<bfr_queue_family> families(count);
+    std::uint32_t written = count;
+    bfr_queue_family one{};
+    std::uint32_t none = 0;
+
+    CHECK(bfr_get_queue_families(instance.instance, 0, &written, families.data()) == BFR_RESULT_SUCCESS);
+    CHECK(bfr_get_queue_families(instance.instance, 0, &none, &one) == BFR_RESULT_INCOMPLETE);
+
+    CHECK(written == count);
+    CHECK(none == 0);
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("C API refuses null arguments and a missing window or family to the queue family calls", "[c_api][gpu]") {
+    const bfr_backend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    const Instance instance{backend, messages};
+    std::uint32_t count = 0;
+    REQUIRE(bfr_get_queue_families(instance.instance, 0, &count, nullptr) == BFR_RESULT_SUCCESS);
+    const bfr_swapchain_query headless{.next = nullptr, .window = kHeadless};
+    const bfr_swapchain_query none{.next = nullptr, .window = {}};
+    bfr_bool presents = BFR_FALSE;
+    std::uint32_t family = 0;
+
+    CHECK(bfr_get_queue_families(nullptr, 0, &count, nullptr) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_get_queue_families(instance.instance, 0, nullptr, nullptr) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_get_queue_family_presents(instance.instance, 0, 0, nullptr, &presents) ==
+          BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_get_queue_family_presents(instance.instance, 0, 0, &headless, nullptr) ==
+          BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_get_queue_family_presents(instance.instance, 0, 0, &none, &presents) ==
+          BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK_THAT(lastError(), Catch::Matchers::ContainsSubstring("needs a window"));
+    CHECK(bfr_get_queue_family_presents(instance.instance, 0, count, &headless, &presents) ==
+          BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_find_queue_family(instance.instance, 0, nullptr, &family) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_find_queue_family(instance.instance, 0, &kRunsEverything, nullptr) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK(bfr_find_queue_family(nullptr, 0, &kRunsEverything, &family) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
 TEST_CASE("C API builds, resizes and destroys a headless swapchain", "[c_api][gpu]") {
@@ -1255,7 +1318,7 @@ TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call tim
 
     std::uint32_t count = 0;
     REQUIRE(bfr_get_call_timings(device.device, &count, nullptr) == BFR_RESULT_SUCCESS);
-    CHECK(count == BFR_CALL_INSERT_QUEUE_DEBUG_LABEL + 1);
+    CHECK(count == BFR_CALL_INSTANCE_QUEUE_FAMILY_PRESENTS + 1);
     std::vector<bfr_call_timing> timings(count);
     REQUIRE(bfr_get_call_timings(device.device, &count, timings.data()) == BFR_RESULT_SUCCESS);
     CHECK(timings.at(BFR_CALL_CREATE_TIMESTAMP_POOL).count == 2);
@@ -1342,7 +1405,7 @@ TEST_CASE("C API labels work and names objects as the device's caps allow, and r
     if (caps.features.object_names == BFR_FALSE) {
         CHECK(bfr_create_timestamp_pool(device.device, &named, &timestamps) == BFR_RESULT_ERROR_UNSUPPORTED);
     }
-    else if (caps.timestamps.graphics != BFR_FALSE) {
+    else if (device.family.timestamps != BFR_FALSE) {
         CHECK(bfr_create_timestamp_pool(device.device, &named, &timestamps) == BFR_RESULT_SUCCESS);
         bfr_destroy_timestamp_pool(device.device, timestamps);
     }
@@ -1885,15 +1948,11 @@ TEST_CASE("C API passes cluster inputs through, where the adapter has them", "[c
         const Instance instance{backend, messages};
         bfr_caps caps{};
         REQUIRE(bfr_get_caps(instance.instance, 0, &caps) == BFR_RESULT_SUCCESS);
+        const bfr_queue_desc queue = queueOn(instance.instance, 0, nullptr);
         const bfr_device_desc desc{.next = nullptr,
                                    .adapter = 0,
-                                   .window = {},
-                                   .graphics_queues = &kOneQueue,
-                                   .graphics_queue_count = 1,
-                                   .compute_queues = nullptr,
-                                   .compute_queue_count = 0,
-                                   .copy_queues = nullptr,
-                                   .copy_queue_count = 0,
+                                   .queues = &queue,
+                                   .queue_count = 1,
                                    .max_command_lists = kDeviceLists,
                                    .max_command_pools = kDevicePools,
                                    .max_swapchains = 0,
@@ -1963,15 +2022,11 @@ TEST_CASE("C API passes a structure's capture to a replay on another device, whe
         const Instance instance{backend, messages};
         bfr_caps caps{};
         REQUIRE(bfr_get_caps(instance.instance, 0, &caps) == BFR_RESULT_SUCCESS);
+        const bfr_queue_desc queue = queueOn(instance.instance, 0, nullptr);
         const bfr_device_desc desc{.next = nullptr,
                                    .adapter = 0,
-                                   .window = {},
-                                   .graphics_queues = &kOneQueue,
-                                   .graphics_queue_count = 1,
-                                   .compute_queues = nullptr,
-                                   .compute_queue_count = 0,
-                                   .copy_queues = nullptr,
-                                   .copy_queue_count = 0,
+                                   .queues = &queue,
+                                   .queue_count = 1,
                                    .max_command_lists = kDeviceLists,
                                    .max_command_pools = kDevicePools,
                                    .max_swapchains = 0,
@@ -2046,15 +2101,11 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
         bfr_caps caps{};
         REQUIRE(bfr_get_caps(instance.instance, 0, &caps) == BFR_RESULT_SUCCESS);
         const bool table = caps.bindless.max_acceleration_structures != 0;
+        const bfr_queue_desc queue = queueOn(instance.instance, 0, nullptr);
         const bfr_device_desc desc{.next = nullptr,
                                    .adapter = 0,
-                                   .window = {},
-                                   .graphics_queues = &kOneQueue,
-                                   .graphics_queue_count = 1,
-                                   .compute_queues = nullptr,
-                                   .compute_queue_count = 0,
-                                   .copy_queues = nullptr,
-                                   .copy_queue_count = 0,
+                                   .queues = &queue,
+                                   .queue_count = 1,
                                    .max_command_lists = kDeviceLists,
                                    .max_command_pools = kDevicePools,
                                    .max_swapchains = 0,
@@ -2262,15 +2313,11 @@ TEST_CASE("C API makes shaders and a ray tracing pipeline from them, and gives i
             SKIP("the adapter has no ray tracing pipelines, or no bytecode for it is checked in");
         }
         // trace.rgen reads the acceleration structure table.
+        const bfr_queue_desc queue = queueOn(instance.instance, 0, nullptr);
         const bfr_device_desc deviceDesc{.next = nullptr,
                                          .adapter = 0,
-                                         .window = {},
-                                         .graphics_queues = &kOneQueue,
-                                         .graphics_queue_count = 1,
-                                         .compute_queues = nullptr,
-                                         .compute_queue_count = 0,
-                                         .copy_queues = nullptr,
-                                         .copy_queue_count = 0,
+                                         .queues = &queue,
+                                         .queue_count = 1,
                                          .max_command_lists = kDeviceLists,
                                          .max_command_pools = kDevicePools,
                                          .max_swapchains = 0,

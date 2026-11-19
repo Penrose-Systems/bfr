@@ -76,7 +76,12 @@ TEST_CASE("Instance fails to create a device on an adapter it does not list", "[
     INFO(name(backend) << ' ' << failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto device = rhi->createDevice(testDeviceOn(static_cast<std::uint32_t>(adaptersOf(*rhi).size()), kNoWindow));
+    // The adapter lists no families to find one in, so the desc names one.
+    DeviceDesc desc = kTestDevice;
+    desc.adapter = static_cast<std::uint32_t>(adaptersOf(*rhi).size());
+    desc.queues = testQueues(0);
+
+    const auto device = rhi->createDevice(desc);
 
     REQUIRE_FALSE(device.has_value());
     CHECK(device.error().code == Result::ErrorInvalidArgument);
@@ -93,7 +98,7 @@ TEST_CASE("Instance creates a device on every adapter it lists", "[rhi][agnostic
     REQUIRE_FALSE(adapters.empty());
 
     for (std::uint32_t adapter = 0; adapter < adapters.size(); ++adapter) {
-        const auto device = rhi->createDevice(testDeviceOn(adapter, kNoWindow));
+        const auto device = rhi->createDevice(testDeviceOn(*rhi, adapter, kNoWindow));
         INFO(adapters[adapter].name << ' ' << failureOf(device));
         REQUIRE(device.has_value());
         CHECK(static_cast<bool>(*device));

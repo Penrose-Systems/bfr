@@ -73,7 +73,7 @@ struct RayDevice {
         instance = std::move(*made);
         caps = capsOf(instance, kFirstAdapter);
         const bool table = caps.bindless.maxAccelerationStructures != 0;
-        auto opened = instance.createDevice(testDeviceWith(kFirstAdapter, kNoWindow, [&](DeviceDesc& device) {
+        auto opened = instance.createDevice(testDeviceWith(instance, kFirstAdapter, kNoWindow, [&](DeviceDesc& device) {
             device.maxBindlessAccelerationStructures = table ? tableSlots : 0;
             device.maxBindlessPartitionedTops = caps.features.partitionedTop ? tableSlots : 0;
             device.maxBuildGeometries = kGeometries;
@@ -2045,7 +2045,7 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
         }
         if (!made.caps.features.partitionedTop) {
             const auto refused = made.instance.createDevice(
-                testDeviceWith(kFirstAdapter, kNoWindow,
+                testDeviceWith(made.instance, kFirstAdapter, kNoWindow,
                                [](DeviceDesc& desc) { desc.maxBindlessPartitionedTops = 1; }));
             REQUIRE_FALSE(refused.has_value());
             CHECK(refused.error().code == Result::ErrorLimitReached);
@@ -2130,7 +2130,7 @@ TEST_CASE("Device refuses a top structure past its table, and slots from an adap
         const Device& device = made.device;
         if (made.caps.bindless.maxAccelerationStructures == 0) {
             const auto refused = made.instance.createDevice(
-                testDeviceWith(kFirstAdapter, kNoWindow,
+                testDeviceWith(made.instance, kFirstAdapter, kNoWindow,
                                [](DeviceDesc& desc) { desc.maxBindlessAccelerationStructures = 1; }));
             REQUIRE_FALSE(refused.has_value());
             CHECK(refused.error().code == Result::ErrorLimitReached);

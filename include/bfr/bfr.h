@@ -585,11 +585,12 @@ typedef enum bfr_call {
     BFR_CALL_BEGIN_QUEUE_DEBUG_LABEL = 119,
     BFR_CALL_END_QUEUE_DEBUG_LABEL = 120,
     BFR_CALL_INSERT_QUEUE_DEBUG_LABEL = 121,
+    BFR_CALL_INSTANCE_QUEUE_FAMILY_PRESENTS = 122,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
-// The point in a list's work a timestamp is written at. Which ones a backend takes, inside and
-// outside rendering, is in bfr_caps_timestamps.
+// The point in a list's work a timestamp is written at. Which ones a write takes is in
+// bfr_caps_timestamps inside rendering, and in its queue's bfr_queue_family outside it.
 typedef enum bfr_timestamp_stage {
     // Once all the work recorded before it is done.
     BFR_TIMESTAMP_STAGE_END = 0,
@@ -667,8 +668,8 @@ typedef enum bfr_host_clock {
     BFR_HOST_CLOCK_FORCE32 = 0x7FFFFFFF
 } bfr_host_clock;
 
-// A queue's priority against every queue on the system, other processes' included. Which levels
-// each kind of queue takes is in bfr_caps_queues; one above normal may need privileges the process
+// A queue's priority against every queue on the system, other processes' included. Which levels a
+// family's queues take is in bfr_queue_family; one above normal may need privileges the process
 // lacks, and then fails as the backend says.
 typedef enum bfr_queue_level {
     // The system's default, which a backend's queues have when none is set.
@@ -739,10 +740,12 @@ typedef enum bfr_texture_dimension {
 } bfr_texture_dimension;
 
 // How a texture's memory is arranged for what the GPU does with it next. bfr_texture_barrier moves
-// a texture between layouts; BFR keeps no record of the one it is in. A copy queue's lists move a
-// texture only between undefined, copy_src and copy_dst, and a compute queue's never to or from
-// color_target, depth_stencil_target, depth_stencil_read, resolve_src or resolve_dst, as D3D12's
-// layouts for those queues allow; so a texture crosses between queues in a layout both kinds take.
+// a texture between layouts; BFR keeps no record of the one it is in. The lists of a queue whose
+// family runs copies but neither graphics nor compute move a texture only between undefined,
+// copy_src and copy_dst, and those of one whose family runs compute but not graphics never to or
+// from color_target, depth_stencil_target, depth_stencil_read, resolve_src or resolve_dst, as
+// D3D12's layouts for its copy and compute queues allow; so a texture crosses between queues in a
+// layout both families take.
 typedef enum bfr_texture_layout {
     // Its contents are not kept. Only a layout to move from.
     BFR_TEXTURE_LAYOUT_UNDEFINED = 0,
@@ -1350,44 +1353,37 @@ typedef struct bfr_window {
 
 // One queue a device opens.
 typedef struct bfr_queue_desc {
+    // The family it is of, an index into bfr_get_queue_families. One past them fails the device
+    // with error_invalid_argument, as do more queues of a family than its count where that is not
+    // 0.
+    uint32_t family;
     // 0 to 1: its priority against the device's other queues, higher first; passed to the backend
-    // as given. Where bfr_caps_queues.ranks is 0 the backend doesn't rank a device's queues, so
+    // as given. Where bfr_caps.queue_ranks is 0 the backend doesn't rank a device's queues, so
     // queues of different ranks fail the device with error_unsupported.
     float rank;
     // Its priority against every queue on the system; 0 is normal. A level the backend has no
     // setting for fails the device with error_unsupported. Vulkan sets one level for all the queues
-    // of a kind, so there different levels in one kind fail the same way.
+    // of a family, so there different levels in one family fail the same way.
     bfr_queue_level level;
 } bfr_queue_desc;
 
-// How to open an adapter. The device's queues are numbered: the graphics queues from 0, then the
-// compute queues, then the copy queues, in the order asked for here. A graphics queue's lists run
-// every call. A compute queue's run all but rendering, draws, the calls that set their state or
-// bind a graphics pipeline or an index buffer, and bfr_resolve_texture; a copy queue's run only
-// copies, barriers and bfr_write_timestamp. A copy between a buffer and a texture's depth or
-// stencil runs only in a graphics queue's lists, and one in a copy queue's has a buffer_offset that
-// is a multiple of 4. bfr_texture_layout says which layouts each kind's lists move a texture
-// between.
+// How to open an adapter. The device's queues are numbered from 0 in the order queues asks for
+// them. The calls a queue's lists run follow its family's flags: rendering, draws, the calls that
+// set their state or bind a graphics pipeline or an index buffer, and bfr_resolve_texture where it
+// runs graphics; dispatches, ray traces, acceleration structure builds and the calls that bind a
+// compute or ray tracing pipeline where it runs compute; copies where it runs copies; barriers,
+// bfr_write_timestamp and the debug label calls on any. A copy between a buffer and a texture's
+// depth or stencil runs only where the family runs graphics, and one where it runs copies but
+// neither graphics nor compute has a buffer_offset that is a multiple of 4. bfr_texture_layout says
+// which layouts each family's lists move a texture between.
 typedef struct bfr_device_desc {
     const bfr_chain* next;
     // Index into the instance's adapter list.
     uint32_t adapter;
-    // The window one of the device's queues must be able to present to, else it fails with
-    // error_present_unsupported; all zero opens it without asking.
-    bfr_window window;
-    // The graphics queues to open, read during the call only; none is none. Fails with
-    // error_unsupported when the adapter has fewer; bfr_caps.queues says how many it has. An array
-    // of graphics_queue_count elements. May be null.
-    const bfr_queue_desc* graphics_queues;
-    uint32_t graphics_queue_count;
-    // The compute queues to open, as graphics_queues says. An array of compute_queue_count
-    // elements. May be null.
-    const bfr_queue_desc* compute_queues;
-    uint32_t compute_queue_count;
-    // The copy queues to open, as graphics_queues says. An array of copy_queue_count elements. May
-    // be null.
-    const bfr_queue_desc* copy_queues;
-    uint32_t copy_queue_count;
+    // The queues to open, each of the family it names, read during the call only; none is none. An
+    // array of queue_count elements. May be null.
+    const bfr_queue_desc* queues;
+    uint32_t queue_count;
     // Command lists the device holds at once, across all its pools, and the most swapchains its
     // recording lists render to at once; past it, calls fail with error_limit_reached. Room for
     // them is made with the device, so recording and submitting never allocate. A bfr_submit of
@@ -1485,7 +1481,8 @@ typedef struct bfr_swapchain_desc {
     // The window to present to.
     bfr_window window;
     // The device's queue that presents its images; one the device lacks fails with
-    // error_invalid_argument.
+    // error_invalid_argument, and one whose family doesn't present to the window, as
+    // bfr_get_queue_family_presents answers, with error_present_unsupported.
     uint32_t queue;
     // Images to request, passed to the backend as given. bfr_swapchain_images says how many it
     // made.
@@ -3299,7 +3296,7 @@ typedef struct bfr_caps_features {
     bfr_bool storage_texture_non_uniform_indexing;
     // The uniform buffer table indexed by a value that differs within a shader's invocation group.
     bfr_bool uniform_buffer_non_uniform_indexing;
-    // Every graphics and compute queue writes timestamps.
+    // Every queue whose family runs graphics or compute writes timestamps.
     bfr_bool timestamps_on_all_queues;
     // bfr_create_query_pool makes occlusion pools, and pipeline_statistics and
     // mesh_primitives_generated ones where pipeline_statistics and mesh_statistics say.
@@ -3352,7 +3349,7 @@ typedef struct bfr_caps_memory {
     bfr_bool unified;
 } bfr_caps_memory;
 
-// The bfr_queue_level values a kind of queue takes; each true where the backend says so.
+// The bfr_queue_level values a family's queues take; each true where the backend says so.
 typedef struct bfr_queue_levels {
     bfr_bool normal;
     bfr_bool low;
@@ -3360,49 +3357,17 @@ typedef struct bfr_queue_levels {
     bfr_bool realtime;
 } bfr_queue_levels;
 
-// How a copy between a buffer and a texture, or between two textures, lines up in a kind of queue's
-// lists, in texels, or texel blocks for a compressed format: its offsets are multiples of width,
-// height and depth, and each size is a multiple too or reaches the edge of the mip level. With
-// whole_levels it copies whole mip levels only, from 0. All 0 and false where the backend states
-// none.
+// How a copy between a buffer and a texture, or between two textures, lines up in the lists of a
+// family's queues, in texels, or texel blocks for a compressed format: its offsets are multiples of
+// width, height and depth, and each size is a multiple too or reaches the edge of the mip level.
+// With whole_levels it copies whole mip levels only, from 0. All 0 and false where the backend
+// states none.
 typedef struct bfr_copy_granularity {
     uint32_t width;
     uint32_t height;
     uint32_t depth;
     bfr_bool whole_levels;
 } bfr_copy_granularity;
-
-// How many queues of each type the adapter has, and what they do, for a device opened without a
-// window. On Vulkan a window may move a type to another family that presents to it, with its own
-// counts, timestamp bits and levels. The counts are 0 where the backend has no count of queues;
-// bfr_create_device then takes any number of each.
-typedef struct bfr_caps_queues {
-    // Queues that run graphics.
-    uint32_t graphics;
-    // Queues that run compute but not graphics (async compute).
-    uint32_t compute;
-    // Queues that only copy.
-    uint32_t copy;
-    // Valid bits in a graphics queue's timestamps; 0 without timestamps.
-    uint32_t graphics_timestamp_bits;
-    uint32_t compute_timestamp_bits;
-    uint32_t copy_timestamp_bits;
-    // The distinct priorities the backend gives a device's queues by their bfr_queue_desc.rank; 0
-    // where it doesn't rank them.
-    uint32_t ranks;
-    // Levels a graphics queue takes; none set where the backend has no setting.
-    bfr_queue_levels graphics_levels;
-    bfr_queue_levels compute_levels;
-    bfr_queue_levels copy_levels;
-    // Graphics queues run bfr_update_tile_mappings.
-    bfr_bool graphics_sparse;
-    bfr_bool compute_sparse;
-    bfr_bool copy_sparse;
-    // How a graphics queue's copies line up.
-    bfr_copy_granularity graphics_granularity;
-    bfr_copy_granularity compute_granularity;
-    bfr_copy_granularity copy_granularity;
-} bfr_caps_queues;
 
 // The bfr_timestamp_stage values a timestamp write takes; each true where the backend says so.
 typedef struct bfr_timestamp_stages {
@@ -3418,6 +3383,49 @@ typedef struct bfr_timestamp_stages {
     bfr_bool acceleration_structure_build;
 } bfr_timestamp_stages;
 
+// A family of an adapter's queues, as the backend gives it: what its queues run and how many it
+// has. bfr_get_queue_families lists them, every one the backend has, those that run none of these
+// calls included.
+typedef struct bfr_queue_family {
+    // Its queues run rendering, draws and their state.
+    bfr_bool graphics;
+    // Its queues run dispatches.
+    bfr_bool compute;
+    // Its queues run copies.
+    bfr_bool copy;
+    // Its queues run bfr_update_tile_mappings.
+    bfr_bool sparse;
+    // Queues it has; 0 where the backend has no count of queues, and bfr_create_device then takes
+    // any number.
+    uint32_t count;
+    // Valid bits in its timestamps where the backend states them; 0 otherwise.
+    uint32_t timestamp_bits;
+    // Its queues write timestamps.
+    bfr_bool timestamps;
+    // The stages a write on one of its queues outside rendering takes.
+    bfr_timestamp_stages timestamp_stages;
+    // Its queues record bfr_reset_timestamps. A pool written on a queue whose family can't is reset
+    // on one whose family can, ordered before the writes by a submit's wait.
+    bfr_bool timestamp_resets;
+    // Levels its queues take; none set where the backend has no setting.
+    bfr_queue_levels levels;
+    // How its queues' copies line up.
+    bfr_copy_granularity granularity;
+} bfr_queue_family;
+
+// What bfr_find_queue_family looks for.
+typedef struct bfr_queue_family_query {
+    // The family must run graphics.
+    bfr_bool graphics;
+    // The family must run compute.
+    bfr_bool compute;
+    // The family must run copies.
+    bfr_bool copy;
+    // The window the family must present to, read during the call only; null asks nothing of
+    // presenting. May be null.
+    const bfr_window* presents;
+} bfr_queue_family_query;
+
 // The bfr_host_clock values bfr_calibrate_timestamps reads beside a GPU timestamp.
 typedef struct bfr_host_clocks {
     bfr_bool monotonic;
@@ -3425,29 +3433,12 @@ typedef struct bfr_host_clocks {
     bfr_bool performance_counter;
 } bfr_host_clocks;
 
-// What the adapter's GPU timestamps are.
+// What the adapter's GPU timestamps are, on every family alike.
 typedef struct bfr_caps_timestamps {
-    // Graphics queues write timestamps.
-    bfr_bool graphics;
-    // Compute queues write timestamps.
-    bfr_bool compute;
-    // Copy queues write timestamps.
-    bfr_bool copy;
-    // The stages a write on a graphics queue outside rendering takes.
-    bfr_timestamp_stages outside_rendering;
-    // The stages a write between bfr_begin_rendering and bfr_end_rendering takes.
+    // The stages a write between bfr_begin_rendering and bfr_end_rendering takes on every family
+    // that runs graphics. Which families' queues write timestamps, and the stages they take outside
+    // rendering, are in bfr_queue_family.
     bfr_timestamp_stages inside_rendering;
-    // The stages a write on a compute queue takes.
-    bfr_timestamp_stages compute_stages;
-    // The stages a write on a copy queue takes.
-    bfr_timestamp_stages copy_stages;
-    // Graphics queues record bfr_reset_timestamps. A pool written on a kind of queue that can't is
-    // reset on one that can, ordered before the writes by a submit's wait.
-    bfr_bool graphics_resets;
-    // Compute queues record bfr_reset_timestamps.
-    bfr_bool compute_resets;
-    // Copy queues record bfr_reset_timestamps.
-    bfr_bool copy_resets;
     // The backend takes a bfr_timestamp_granularity; where false the value is unused.
     bfr_bool granularity;
     // What one timestamp takes in a buffer bfr_resolve_timestamps writes.
@@ -3519,7 +3510,9 @@ typedef struct bfr_caps {
     bfr_caps_ray_tracing ray_tracing;
     bfr_caps_features features;
     bfr_caps_memory memory;
-    bfr_caps_queues queues;
+    // The distinct priorities the backend gives a device's queues by their bfr_queue_desc.rank; 0
+    // where it doesn't rank them. The queues themselves are in bfr_get_queue_families.
+    uint32_t queue_ranks;
     bfr_caps_timestamps timestamps;
     bfr_caps_sparse sparse;
     bfr_caps_resolve resolve;
@@ -3672,12 +3665,43 @@ BFR_API bfr_result bfr_get_swapchain_formats(
     uint32_t* count,
     bfr_swapchain_format* formats);
 
+// Lists an adapter's queue families, every one the backend has, in its order; a bfr_queue_desc
+// names one by its index here. With families null, writes how many there are to count. Otherwise
+// writes up to count of them, sets count to how many it wrote, and returns incomplete if there were
+// more.
+// families: An array of count elements. May be null.
+BFR_API bfr_result bfr_get_queue_families(
+    bfr_instance* instance,
+    uint32_t adapter,
+    uint32_t* count,
+    bfr_queue_family* families);
+
+// Writes whether the queues of an adapter's family present to the window in desc, as the backend
+// answers each time. Fails with invalid_argument for a family the adapter doesn't have,
+// window_failed as bfr_create_swapchain does, and unsupported when the backend can't be asked,
+// naming why.
+// family: Index into bfr_get_queue_families.
+BFR_API bfr_result bfr_get_queue_family_presents(
+    bfr_instance* instance,
+    uint32_t adapter,
+    uint32_t family,
+    const bfr_swapchain_query* desc,
+    bfr_bool* presents);
+
+// Writes the first family of an adapter, in bfr_get_queue_families' order, that has everything
+// query asks for, asking bfr_get_queue_family_presents only of those with its flags. Fails with
+// unsupported, naming what was asked, when none has, and as those two calls do when they fail.
+BFR_API bfr_result bfr_find_queue_family(
+    bfr_instance* instance,
+    uint32_t adapter,
+    const bfr_queue_family_query* query,
+    uint32_t* family);
+
 // Writes how much memory the device's process may use and uses now. Fails with unsupported when the
 // driver cannot say.
 BFR_API bfr_result bfr_get_budget(bfr_device* device, bfr_memory_budget* budget);
 
-// Opens an adapter with the queues desc asks for, preferring queue families that present to the
-// window in desc, if any.
+// Opens an adapter with the queues desc asks for, each of the family it names.
 BFR_API bfr_result bfr_create_device(
     bfr_instance* instance,
     const bfr_device_desc* desc,
@@ -3688,8 +3712,8 @@ BFR_API bfr_result bfr_create_device(
 // device: May be null.
 BFR_API void bfr_destroy_device(bfr_device* device);
 
-// Creates a swapchain for the window in desc, which the device must be able to present to. It has
-// no images until the first bfr_resize_swapchain gives it a size.
+// Creates a swapchain for the window in desc, which the family of the device's queue in desc must
+// present to. It has no images until the first bfr_resize_swapchain gives it a size.
 BFR_API bfr_result bfr_create_swapchain(
     bfr_device* device,
     const bfr_swapchain_desc* desc,
@@ -4531,7 +4555,7 @@ BFR_API bfr_result bfr_write_instances(
     void* data,
     size_t size);
 
-// Records build, outside rendering, on a queue whose kind runs compute. A barrier orders the work
+// Records build, outside rendering, on a queue whose family runs compute. A barrier orders the work
 // that wrote its inputs before it, and its readers and any reuse of its scratch after. Fails with
 // error_unsupported where bfr_caps_features.acceleration_structure is false, error_invalid_argument
 // for inputs bfr_get_acceleration_structure_sizes refuses, an opacity micromap updated where the
@@ -4570,7 +4594,7 @@ BFR_API bfr_result bfr_get_cluster_sizes(
     const bfr_cluster_inputs* inputs,
     bfr_acceleration_structure_sizes* sizes);
 
-// Records build, a cluster operation, outside rendering, on a queue whose kind runs compute: the
+// Records build, a cluster operation, outside rendering, on a queue whose family runs compute: the
 // GPU reads its records and count as it runs. A barrier orders the work that wrote its records,
 // count and the structures it reads before it, and their readers and any reuse of its scratch
 // after. Traces reach the cluster bottom structures it builds only through pipelines made with
@@ -4653,9 +4677,9 @@ BFR_API bfr_result bfr_get_capture_replay_identifiers(
     size_t size);
 
 // Records a trace of desc's rays with the bound ray tracing pipeline, outside rendering, on a queue
-// whose kind runs compute; commands after a barrier see what it wrote. Fails with error_unsupported
-// where bfr_caps_features.ray_tracing_pipeline is false, error_invalid_argument for a table buffer
-// with no address, and error_invalid_handle for a buffer that is gone.
+// whose family runs compute; commands after a barrier see what it wrote. Fails with
+// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false, error_invalid_argument
+// for a table buffer with no address, and error_invalid_handle for a buffer that is gone.
 BFR_API bfr_result bfr_trace_rays(
     bfr_device* device,
     bfr_command_list command_list,
@@ -4695,7 +4719,7 @@ BFR_API void bfr_destroy_acceleration_structure_property_pool(
 
 // Records a reset of count entries from first, which a backend that needs one before an entry is
 // written, the first time too, is given; the others record nothing. Outside rendering, on a queue
-// whose kind runs compute.
+// whose family runs compute.
 BFR_API bfr_result bfr_reset_acceleration_structure_properties(
     bfr_device* device,
     bfr_command_list command_list,
@@ -4704,7 +4728,7 @@ BFR_API bfr_result bfr_reset_acceleration_structure_properties(
     uint32_t count);
 
 // Records writes of structures' property into the pool's entries from first, in order, outside
-// rendering, on a queue whose kind runs compute. A barrier orders their builds before it. A
+// rendering, on a queue whose family runs compute. A barrier orders their builds before it. A
 // compacted_size is of structures built with allow_compaction, a serialized_bottom_count of top
 // ones. Fails with error_invalid_argument for more structures than the pool holds from first, or
 // for a partitioned top structure where the backend writes none of its properties (Vulkan), and
@@ -4720,7 +4744,7 @@ BFR_API bfr_result bfr_write_acceleration_structure_properties(
 
 // Records a copy of count entries from first into buffer at offset, a multiple of 8, as
 // bfr_caps_ray_tracing.property_entry_bytes each, once the GPU has written them. buffer has
-// copy_dst usage. Outside rendering, on a queue whose kind runs compute.
+// copy_dst usage. Outside rendering, on a queue whose family runs compute.
 // offset: Bytes into the buffer.
 BFR_API bfr_result bfr_resolve_acceleration_structure_properties(
     bfr_device* device,

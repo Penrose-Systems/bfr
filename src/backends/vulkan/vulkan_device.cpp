@@ -13,7 +13,6 @@
 #include "rhi/command_check.h"
 #include "rhi/device_limits.h"
 #include "rhi/enum_check.h"
-#include "vulkan/queue_families.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_buffer.h"
 #include "vulkan/vulkan_caps.h"
@@ -180,11 +179,10 @@ void recordBarrier(const VolkDeviceTable& table, VkCommandBuffer buffer, const V
 } // namespace
 
 core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance& rhi, VkPhysicalDevice adapter,
-                                                                 VkDevice device, const QueueFamilies& families,
-                                                                 const DeviceDesc& desc,
+                                                                 VkDevice device, const DeviceDesc& desc,
                                                                  const VulkanDeviceSetup& setup) {
     auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, desc, setup);
-    if (auto opened = made->openQueues(families, desc); !opened) {
+    if (auto opened = made->openQueues(desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
     // VMA takes Vulkan 1.0 to 1.4 (vk_mem_alloc.h:1142); a later device
@@ -279,20 +277,24 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
     }
 }
 
-core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const DeviceDesc& desc) {
+core::Result<void> VulkanDevice::openQueues(const DeviceDesc& desc) {
     const InstanceTable& vk = instance_->instanceTable();
     std::uint32_t familyCount = 0;
     vk.vkGetPhysicalDeviceQueueFamilyProperties(adapter_, &familyCount, nullptr);
     std::vector<VkQueueFamilyProperties> properties(familyCount);
     vk.vkGetPhysicalDeviceQueueFamilyProperties(adapter_, &familyCount, properties.data());
-    const auto open = [this, &properties](QueueType type, std::uint32_t family,
-                                          std::uint32_t index) -> core::Result<void> {
+    // Each queue is the next of its family's, as the device's create info
+    // asked for them in desc's order.
+    std::vector<std::uint32_t> opened(familyCount);
+    for (const QueueDesc& wanted : desc.queues) {
+        const std::uint32_t family = wanted.family;
+        const VkQueueFlags flags = properties[family].queueFlags;
         auto queue = std::make_unique<VulkanQueue>();
-        queue->type = type;
         queue->family = family;
-        queue->sparse = (properties[family].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) != 0;
-        queue->compute = (properties[family].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0;
-        table_.vkGetDeviceQueue(device_, family, index, &queue->queue);
+        queue->sparse = (flags & VK_QUEUE_SPARSE_BINDING_BIT) != 0;
+        queue->graphics = (flags & VK_QUEUE_GRAPHICS_BIT) != 0;
+        queue->compute = (flags & VK_QUEUE_COMPUTE_BIT) != 0;
+        table_.vkGetDeviceQueue(device_, family, opened[family]++, &queue->queue);
         VkSemaphoreTypeCreateInfo timeline{};
         timeline.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
         timeline.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
@@ -305,22 +307,6 @@ core::Result<void> VulkanDevice::openQueues(const QueueFamilies& families, const
             return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkCreateSemaphore", .result = result});
         }
         queues_.push_back(std::move(queue));
-        return {};
-    };
-    for (std::uint32_t index = 0; index < desc.graphics.size(); ++index) {
-        if (auto opened = open(QueueType::Graphics, *families.graphics, index); !opened) {
-            return opened;
-        }
-    }
-    for (std::uint32_t index = 0; index < desc.compute.size(); ++index) {
-        if (auto opened = open(QueueType::Compute, *families.compute, index); !opened) {
-            return opened;
-        }
-    }
-    for (std::uint32_t index = 0; index < desc.copy.size(); ++index) {
-        if (auto opened = open(QueueType::Copy, *families.transfer, index); !opened) {
-            return opened;
-        }
     }
     // A submit's arrays, made now at the device's maximums: every list; a
     // wait for each swapchain and queue; a signal for each swapchain and the
@@ -442,6 +428,18 @@ core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::
     }
     if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
+    }
+    // Presenting from a queue whose family doesn't present to the surface is
+    // invalid (VUID-vkQueuePresentKHR-pSwapchains-01292), so the family's own
+    // answer decides.
+    const std::uint32_t family = queues_[desc.queue]->family;
+    auto presents = instance_->presents(adapter_, family, *surface);
+    if (!presents) {
+        return std::unexpected(std::move(presents.error()));
+    }
+    if (!*presents) {
+        return core::failure(core::ErrorCode::RhiPresentUnsupported,
+                             "queue {} is of family {}, which doesn't present to the window", desc.queue, family);
     }
     const SwapchainHandle swapchain = swapchains_.emplace(device_, table_, instance_->instanceTable(),
                                                           std::move(*surface), desc, families_, instance_->logger());
@@ -630,11 +628,10 @@ core::Result<CommandListHandle> VulkanDevice::beginCommands(CommandPoolHandle co
     if (const VkResult result = table_.vkBeginCommandBuffer(buffer, &begin); result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkBeginCommandBuffer", .result = result});
     }
-    // The one descriptor set, bound once per list where the queue can take
-    // it, so every pipeline bound later finds its tables.
-    const QueueType type = queues_[(*pool)->queue]->type;
+    // The one descriptor set, bound once per list where the queue's family
+    // can take it, so every pipeline bound later finds its tables.
     VkDescriptorSet set = layout_.set();
-    if (type == QueueType::Graphics) {
+    if (queues_[(*pool)->queue]->graphics) {
         table_.vkCmdBindDescriptorSets(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_.pipelineLayout(), 0, 1, &set, 0,
                                        nullptr);
     }

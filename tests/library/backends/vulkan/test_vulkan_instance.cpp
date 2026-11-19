@@ -29,6 +29,7 @@
 #include <format>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <string>
@@ -277,7 +278,7 @@ TEST_CASE("Vulkan makes the instance at a version past every adapter's, and open
     REQUIRE(rhi.has_value());
     const std::vector<AdapterInfo> adapters = adaptersOf(*rhi);
     for (std::uint32_t adapter = 0; adapter < adapters.size(); ++adapter) {
-        const auto device = rhi->createDevice(testDeviceOn(adapter, kNoWindow));
+        const auto device = rhi->createDevice(testDeviceOn(*rhi, adapter, kNoWindow));
         INFO(adapters[adapter].name << ' ' << failureOf(device));
         CHECK(device.has_value());
     }
@@ -411,7 +412,7 @@ TEST_CASE("Vulkan without VK_EXT_mesh_shader reports no mesh shaders, and refuse
         CHECK_FALSE(caps.features.taskShader);
         CHECK(caps.mesh.maxMeshOutputVertices == 0);
         CHECK_FALSE(caps.timestamps.insideRendering.mesh);
-        auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+        auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         const Device& device = *made;
@@ -469,13 +470,13 @@ TEST_CASE("Vulkan without VK_KHR_acceleration_structure reports none, and refuse
         CHECK(caps.rayTracing.maxInstances == 0);
         CHECK(caps.rayTracing.instanceSize == 0);
         CHECK(caps.bindless.maxAccelerationStructures == 0);
-        CHECK_FALSE(caps.timestamps.outsideRendering.accelerationStructureBuild);
-        const auto tabled = instance.createDevice(testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& desc) {
-            desc.maxBindlessAccelerationStructures = 1;
-        }));
+        CHECK_FALSE(testQueueFamily(instance, kFirstAdapter).timestampStages.accelerationStructureBuild);
+        const auto tabled = instance.createDevice(
+            testDeviceWith(instance, kFirstAdapter, kNoWindow,
+                           [](DeviceDesc& desc) { desc.maxBindlessAccelerationStructures = 1; }));
         REQUIRE_FALSE(tabled.has_value());
         CHECK(tabled.error().code == Result::ErrorLimitReached);
-        auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+        auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         const Device& device = *made;
@@ -522,8 +523,8 @@ TEST_CASE("Vulkan without VK_KHR_ray_tracing_pipeline reports none, and refuses 
         CHECK_FALSE(caps.features.rayPrimitiveCulling);
         CHECK(caps.rayTracing.identifierSize == 0);
         CHECK(caps.rayTracing.maxRecursionDepth == 0);
-        CHECK_FALSE(caps.timestamps.outsideRendering.rayTracing);
-        auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+        CHECK_FALSE(testQueueFamily(instance, kFirstAdapter).timestampStages.rayTracing);
+        auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         const Device& device = *made;
@@ -575,7 +576,7 @@ TEST_CASE("Vulkan without VK_KHR_pipeline_library reports no pipeline libraries,
         if (!caps.features.rayTracingPipeline) {
             SKIP("the adapter has no ray tracing pipelines");
         }
-        auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+        auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         const auto library = made->createRayTracingPipeline({.library = true});
@@ -603,7 +604,7 @@ TEST_CASE("Vulkan without VK_EXT_opacity_micromap reports no micromaps, and refu
     if (!caps.features.accelerationStructure) {
         SKIP("the adapter has no acceleration structures");
     }
-    auto made = instance.createDevice(testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& device) {
+    auto made = instance.createDevice(testDeviceWith(instance, kFirstAdapter, kNoWindow, [](DeviceDesc& device) {
         device.maxAccelerationStructurePropertyPools = 1;
     }));
     INFO(failureOf(made));
@@ -649,7 +650,7 @@ TEST_CASE("Vulkan refuses motion of other than the two keyframes it takes", "[vu
         SKIP("the adapter has no structures with motion");
     }
     CHECK(caps.rayTracing.maxMotionKeyframes == 2);
-    auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+    auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
     INFO(failureOf(made));
     REQUIRE(made.has_value());
     const Device& device = *made;
@@ -679,7 +680,8 @@ TEST_CASE("Vulkan without VK_NV_partitioned_acceleration_structure reports no pa
     CHECK_FALSE(caps.features.partitionedTop);
     CHECK(caps.rayTracing.maxPartitions == 0);
     const auto refused = instance.createDevice(
-        testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& device) { device.maxBindlessPartitionedTops = 1; }));
+        testDeviceWith(instance, kFirstAdapter, kNoWindow,
+                       [](DeviceDesc& device) { device.maxBindlessPartitionedTops = 1; }));
     REQUIRE_FALSE(refused.has_value());
     CHECK(refused.error().code == Result::ErrorLimitReached);
 }
@@ -705,7 +707,7 @@ TEST_CASE("Vulkan without VK_NV_cluster_acceleration_structure reports no cluste
     if (!caps.features.accelerationStructure) {
         SKIP("the adapter has no acceleration structures");
     }
-    auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+    auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
     INFO(failureOf(made));
     REQUIRE(made.has_value());
     const Device& device = *made;
@@ -728,7 +730,7 @@ TEST_CASE("Vulkan refuses partitioned top structure work it has no call for", "[
     if (!caps.features.partitionedTop) {
         SKIP("the adapter has no partitioned top structures");
     }
-    auto made = instance.createDevice(testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& device) {
+    auto made = instance.createDevice(testDeviceWith(instance, kFirstAdapter, kNoWindow, [](DeviceDesc& device) {
         device.maxAccelerationStructurePropertyPools = 1;
     }));
     INFO(failureOf(made));
@@ -815,7 +817,7 @@ TEST_CASE("Vulkan writes the last motion instance into its record's bytes, short
     if (!caps.features.rayTracingMotion) {
         SKIP("the adapter has no structures with motion");
     }
-    auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+    auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
     INFO(failureOf(made));
     REQUIRE(made.has_value());
     const Device& device = *made;
@@ -840,7 +842,7 @@ TEST_CASE("Vulkan refuses motion on a micromap, whose create info has none", "[v
     if (!caps.features.rayTracingMotion) {
         SKIP("the adapter has no structures with motion");
     }
-    auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+    auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
     INFO(failureOf(made));
     REQUIRE(made.has_value());
     const Device& device = *made;
@@ -864,7 +866,7 @@ TEST_CASE("Vulkan refuses opacity micromap work it has no call for", "[vulkan][g
     if (!capsOf(instance, kFirstAdapter).features.opacityMicromap) {
         SKIP("the adapter has no opacity micromaps");
     }
-    auto made = instance.createDevice(testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& device) {
+    auto made = instance.createDevice(testDeviceWith(instance, kFirstAdapter, kNoWindow, [](DeviceDesc& device) {
         device.maxAccelerationStructurePropertyPools = 1;
     }));
     INFO(failureOf(made));
@@ -917,7 +919,7 @@ TEST_CASE("Vulkan refuses a ray tracing stack size past the 32 bits it takes", "
     if (!capsOf(instance, kFirstAdapter).features.rayTracingPipeline) {
         SKIP("the adapter has no ray tracing pipelines");
     }
-    auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+    auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
     INFO(failureOf(made));
     REQUIRE(made.has_value());
     constexpr std::uint64_t kPast32Bits = std::uint64_t{1} << 32U;
@@ -940,11 +942,12 @@ TEST_CASE("Vulkan with acceleration structures but no table updated after bind h
         SKIP("the adapter has no acceleration structures");
     }
     CHECK(caps.bindless.maxAccelerationStructures == 0);
-    const auto tabled = instance.createDevice(
-        testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& desc) { desc.maxBindlessAccelerationStructures = 1; }));
+    const auto tabled = instance.createDevice(testDeviceWith(instance, kFirstAdapter, kNoWindow, [](DeviceDesc& desc) {
+        desc.maxBindlessAccelerationStructures = 1;
+    }));
     REQUIRE_FALSE(tabled.has_value());
     CHECK(tabled.error().code == Result::ErrorLimitReached);
-    auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+    auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
     INFO(failureOf(made));
     REQUIRE(made.has_value());
     const Device& device = *made;
@@ -974,7 +977,7 @@ TEST_CASE("Vulkan with mesh shaders but no task shaders refuses a task pipeline"
     }
     CHECK_FALSE(caps.features.taskShader);
     CHECK(caps.mesh.maxTaskWorkgroupTotalCount == 0);
-    auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+    auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
     INFO(failureOf(made));
     REQUIRE(made.has_value());
     const Device& device = *made;
@@ -1022,7 +1025,7 @@ TEST_CASE("Vulkan at 1.2 without VK_EXT_extended_dynamic_state reports no dynami
         REQUIRE(created.has_value());
         const Instance instance = std::move(*created);
         CHECK_FALSE(capsOf(instance, kFirstAdapter).features.dynamicTopology);
-        auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+        auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         const Device& device = *made;
@@ -1081,7 +1084,7 @@ TEST_CASE("Vulkan lists an adapter without the swapchain extension and its devic
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto device = rhi->createDevice(testDeviceOn(cpuAdapter(*rhi), kNoWindow));
+    const auto device = rhi->createDevice(testDeviceOn(*rhi, cpuAdapter(*rhi), kNoWindow));
     INFO(failureOf(device));
     REQUIRE(device.has_value());
     const auto swapchain = device->createSwapchain(kTestSwapchain);
@@ -1091,7 +1094,8 @@ TEST_CASE("Vulkan lists an adapter without the swapchain extension and its devic
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Vulkan lists an adapter with no graphics family and opens its compute queues", "[vulkan][gpu]") {
+TEST_CASE("Vulkan lists an adapter with no graphics family, finds none, and opens queues of its other families",
+          "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
     const ScopedEnv noGraphics("BFR_ADAPTER_NO_GRAPHICS", "1");
     std::vector<std::string> errors;
@@ -1099,78 +1103,164 @@ TEST_CASE("Vulkan lists an adapter with no graphics family and opens its compute
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
     const std::uint32_t adapter = cpuAdapter(*rhi);
-    CHECK(capsOf(*rhi, adapter).queues.graphics == 0);
+    const std::vector<QueueFamily> families = queueFamiliesOf(*rhi, adapter);
+    CHECK(std::ranges::none_of(families, &QueueFamily::graphics));
 
-    DeviceDesc computeOnly = testDeviceOn(adapter, kNoWindow);
-    computeOnly.graphicsQueues = {};
-    computeOnly.computeQueues = std::span{kTestQueues}.first(1);
-    const auto device = rhi->createDevice(computeOnly);
+    const auto graphics = rhi->findQueueFamily(adapter, {.graphics = true, .compute = true});
+    const auto compute = rhi->findQueueFamily(adapter, {.compute = true});
+
+    REQUIRE_FALSE(graphics.has_value());
+    CHECK(graphics.error().code == Result::ErrorUnsupported);
+    CHECK_THAT(graphics.error().message.text(), Catch::Matchers::ContainsSubstring("runs graphics and runs compute"));
+    INFO(failureOf(compute));
+    REQUIRE(compute.has_value());
+    DeviceDesc desc = kTestDevice;
+    desc.adapter = adapter;
+    desc.queues = testQueues(*compute);
+    const auto device = rhi->createDevice(desc);
     INFO(failureOf(device));
     CHECK(device.has_value());
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Vulkan fails with RhiUnsupported for one kind's queues at different levels", "[vulkan][gpu]") {
+TEST_CASE("Vulkan fails with RhiUnsupported for one family's queues at different levels", "[vulkan][gpu]") {
     std::vector<std::string> errors;
     const auto rhi = createInstance(recordingErrorsInto(errors), kValidation);
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
-    const auto found = adapterWhere(*rhi, [](const Caps& caps) { return caps.queues.graphics >= 2; });
-    if (!found) {
-        SKIP("no adapter has two graphics queues");
+    // A family with room for two queues whose levels the adapter lists, so the
+    // mix, not the lack of VK_KHR_global_priority, is what is refused.
+    std::optional<std::pair<std::uint32_t, std::uint32_t>> found;
+    const auto adapters = static_cast<std::uint32_t>(adaptersOf(*rhi).size());
+    for (std::uint32_t adapter = 0; adapter < adapters && !found; ++adapter) {
+        const auto family = familyWhere(*rhi, adapter, [](const QueueFamily& candidate) {
+            const QueueLevels& levels = candidate.levels;
+            return candidate.count >= 2 && (levels.normal || levels.low || levels.high || levels.realtime);
+        });
+        if (family) {
+            found = std::pair{adapter, *family};
+        }
     }
-    constexpr std::array kMixed{QueueDesc{.rank = 0, .level = QueueLevel::Normal},
-                                QueueDesc{.rank = 0, .level = QueueLevel::Low}};
-    DeviceDesc mixed = testDeviceOn(*found, kNoWindow);
-    mixed.graphicsQueues = kMixed;
+    if (!found) {
+        SKIP("no adapter has a family of two queues whose levels it lists");
+    }
+    const auto [adapter, family] = *found;
+    const std::array mixed{QueueDesc{.family = family, .rank = 0, .level = QueueLevel::Normal},
+                           QueueDesc{.family = family, .rank = 0, .level = QueueLevel::Low}};
+    DeviceDesc desc = testDeviceOn(*rhi, adapter, kNoWindow);
+    desc.queues = mixed;
 
-    const auto device = rhi->createDevice(mixed);
+    const auto device = rhi->createDevice(desc);
 
     REQUIRE_FALSE(device.has_value());
     CHECK(device.error().code == Result::ErrorUnsupported);
-    // Without VK_KHR_global_priority, the low level is refused before the mix is.
-    const QueueLevels listed = capsOf(*rhi, *found).queues.graphicsLevels;
-    if (listed.normal || listed.low || listed.high || listed.realtime) {
-        CHECK_THAT(device.error().message.text(), Catch::Matchers::ContainsSubstring("one level"));
-    }
+    CHECK_THAT(device.error().message.text(), Catch::Matchers::ContainsSubstring("one level"));
     CHECK_THAT(errors, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Vulkan fails with RhiWindowFailed when the API refuses a surface for the device's window", "[vulkan][gpu]") {
+TEST_CASE("Vulkan reports each queue family as the driver lists it, those that run nothing included", "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride;
+    const ScopedEnv separate("BFR_ADAPTER_SEPARATE_PRESENT", "1");
+    const auto rhi = Instance::create(vulkanDesc());
+    INFO(failureOf(rhi));
+    REQUIRE(rhi.has_value());
+    const std::uint32_t adapter = cpuAdapter(*rhi);
+
+    // lavapipe's one family, then the layer's, which only presents.
+    const std::vector<QueueFamily> families = queueFamiliesOf(*rhi, adapter);
+    REQUIRE(families.size() == 2);
+    const QueueFamily& lavapipe = families.front();
+    const QueueFamily& presenting = families.back();
+    const auto lavapipePresents = rhi->queueFamilyPresents(adapter, 0, {.window = kHeadless});
+    const auto presentingPresents = rhi->queueFamilyPresents(adapter, 1, {.window = kHeadless});
+    const auto found = rhi->findQueueFamily(adapter, {.graphics = true, .presents = &kHeadless});
+
+    CHECK((lavapipe.graphics && lavapipe.compute && lavapipe.copy));
+    CHECK_FALSE((presenting.graphics || presenting.compute || presenting.copy || presenting.sparse));
+    CHECK(presenting.count == 1);
+    CHECK_FALSE(presenting.timestamps);
+    CHECK(presenting.timestampBits == 0);
+    CHECK((presenting.granularity.width == 1 && presenting.granularity.height == 1 &&
+           presenting.granularity.depth == 1 && !presenting.granularity.wholeLevels));
+    REQUIRE(lavapipePresents.has_value());
+    REQUIRE(presentingPresents.has_value());
+    CHECK_FALSE(*lavapipePresents);
+    CHECK(*presentingPresents);
+    REQUIRE_FALSE(found.has_value());
+    CHECK(found.error().code == Result::ErrorUnsupported);
+    CHECK_THAT(found.error().message.text(),
+               Catch::Matchers::ContainsSubstring("runs graphics and presents to the window"));
+}
+
+TEST_CASE("Vulkan fails with RhiPresentUnsupported for a swapchain on a queue of a family that doesn't present",
+          "[vulkan][gpu]") {
+    const AdapterOverrideLayer adapterOverride{"VK_LAYER_KHRONOS_validation"};
+    const ScopedEnv separate("BFR_ADAPTER_SEPARATE_PRESENT", "1");
+    std::vector<std::string> errors;
+    const auto rhi = createInstance(recordingErrorsInto(errors), kValidation);
+    INFO(failureOf(rhi));
+    REQUIRE(rhi.has_value());
+    const auto device = rhi->createDevice(testDeviceOn(*rhi, cpuAdapter(*rhi), kNoWindow));
+    INFO(failureOf(device));
+    REQUIRE(device.has_value());
+    SwapchainDesc desc = kTestSwapchain;
+    desc.imageCount = 1;
+
+    const auto swapchain = device->createSwapchain(desc);
+
+    REQUIRE_FALSE(swapchain.has_value());
+    CHECK(swapchain.error().code == Result::ErrorPresentUnsupported);
+    CHECK_THAT(swapchain.error().message.text(), Catch::Matchers::ContainsSubstring("family 0"));
+    CHECK_THAT(errors, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Vulkan fails with RhiWindowFailed when the API refuses a surface for a family's window", "[vulkan][gpu]") {
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv refused("BFR_FAIL", "vkCreateHeadlessSurfaceEXT");
     const auto rhi = Instance::create(vulkanDesc());
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto device = rhi->createDevice(testDeviceOn(kFirstAdapter, kHeadless));
+    const auto presents = rhi->queueFamilyPresents(kFirstAdapter, 0, {.window = kHeadless});
+    const auto found = rhi->findQueueFamily(kFirstAdapter, {.presents = &kHeadless});
 
-    REQUIRE_FALSE(device.has_value());
-    CHECK(device.error().code == Result::ErrorWindowFailed);
-    CHECK_THAT(device.error().message.text(),
+    REQUIRE_FALSE(presents.has_value());
+    CHECK(presents.error().code == Result::ErrorWindowFailed);
+    CHECK_THAT(presents.error().message.text(),
                Catch::Matchers::ContainsSubstring("vkCreateHeadlessSurfaceEXT: VK_ERROR_UNKNOWN"));
+    REQUIRE_FALSE(found.has_value());
+    CHECK(found.error().code == Result::ErrorWindowFailed);
 }
 
 // In these two, lavapipe reports NVIDIA's driver ID and stands in for NVIDIA's
 // driver, which has no headless surfaces and crashes when a loader before
 // 1.4.319 asks it about one.
-TEST_CASE("Vulkan doesn't ask NVIDIA's driver about a headless window on a loader that lets it crash",
+TEST_CASE("Vulkan fails with RhiUnsupported, naming the loader, to ask NVIDIA's driver about a headless window on a "
+          "loader that lets it crash",
           "[vulkan][gpu]") {
     const LoaderVersion loader{"1.4.318"};
     const AdapterOverrideLayer adapterOverride;
     const ScopedEnv nvidia("BFR_ADAPTER_DRIVER_ID", std::to_string(VK_DRIVER_ID_NVIDIA_PROPRIETARY));
-    std::ostringstream log;
-    const auto rhi = Instance::create(vulkanLoggingInto(log));
+    const auto rhi = Instance::create(vulkanDesc());
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
-
-    const auto device = rhi->createDevice(testDeviceOn(cpuAdapter(*rhi), kHeadless));
-
+    const std::uint32_t adapter = cpuAdapter(*rhi);
+    const auto device = rhi->createDevice(testDeviceOn(*rhi, adapter, kNoWindow));
     INFO(failureOf(device));
-    CHECK(device.has_value());
-    if (BFR_LOGGING_ENABLED) {
-        CHECK_THAT(log.str(), Catch::Matchers::ContainsSubstring(
-                                  "does not present to headless surfaces; not asked, since loader 1.4.318"));
+    REQUIRE(device.has_value());
+    SwapchainDesc desc = kTestSwapchain;
+    desc.imageCount = 1;
+
+    const auto presents = rhi->queueFamilyPresents(adapter, 0, {.window = kHeadless});
+    const auto found = rhi->findQueueFamily(adapter, {.graphics = true, .presents = &kHeadless});
+    const auto swapchain = device->createSwapchain(desc);
+
+    REQUIRE_FALSE(presents.has_value());
+    REQUIRE_FALSE(found.has_value());
+    REQUIRE_FALSE(swapchain.has_value());
+    for (const Error* failed : {&presents.error(), &found.error(), &swapchain.error()}) {
+        CHECK(failed->code == Result::ErrorUnsupported);
+        CHECK_THAT(failed->message.text(), Catch::Matchers::ContainsSubstring("loader 1.4.318"));
     }
 }
 
@@ -1182,10 +1272,10 @@ TEST_CASE("Vulkan asks NVIDIA's driver about a headless window on a loader that 
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto device = rhi->createDevice(testDeviceOn(cpuAdapter(*rhi), kHeadless));
+    const auto presents = rhi->queueFamilyPresents(cpuAdapter(*rhi), 0, {.window = kHeadless});
 
-    INFO(failureOf(device));
-    CHECK(device.has_value());
+    INFO(failureOf(presents));
+    CHECK(presents.has_value());
 }
 
 TEST_CASE("Vulkan fails with RhiDeviceFailed when the API refuses the device and leaves nothing behind",
@@ -1198,7 +1288,7 @@ TEST_CASE("Vulkan fails with RhiDeviceFailed when the API refuses the device and
         INFO(failureOf(rhi));
         REQUIRE(rhi.has_value());
 
-        const auto device = rhi->createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+        const auto device = rhi->createDevice(testDeviceOn(*rhi, kFirstAdapter, kNoWindow));
 
         REQUIRE_FALSE(device.has_value());
         CHECK(device.error().code == Result::ErrorDeviceFailed);
@@ -1220,7 +1310,7 @@ TEST_CASE("Vulkan creates a valid device on an adapter that lists VK_KHR_portabi
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto device = rhi->createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+    const auto device = rhi->createDevice(testDeviceOn(*rhi, kFirstAdapter, kNoWindow));
 
     INFO(failureOf(device));
     REQUIRE(device.has_value());
@@ -1292,7 +1382,7 @@ TEST_CASE("Vulkan at 1.2 enables each extension 1.3 made core that the adapter l
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
 
-    const auto device = rhi->createDevice(testDeviceOn(cpuAdapter(*rhi), kNoWindow));
+    const auto device = rhi->createDevice(testDeviceOn(*rhi, cpuAdapter(*rhi), kNoWindow));
 
     INFO(extension << " at 1." << minor << ' ' << failureOf(device));
     REQUIRE(device.has_value());
@@ -1318,7 +1408,7 @@ TEST_CASE("Vulkan logs the device it creates, its queue families and its extensi
     REQUIRE(rhi.has_value());
 
     // lavapipe has one queue family.
-    const auto device = rhi->createDevice(testDeviceOn(cpuAdapter(*rhi), kNoWindow));
+    const auto device = rhi->createDevice(testDeviceOn(*rhi, cpuAdapter(*rhi), kNoWindow));
 
     INFO(failureOf(device));
     REQUIRE(device.has_value());
@@ -1359,8 +1449,8 @@ TEST_CASE("Vulkan enables VK_EXT_debug_utils without validation where the loader
     if (!listed) {
         SKIP("the loader lists no VK_EXT_debug_utils");
     }
-    auto made = rhi->createDevice(
-        testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& desc) { desc.maxDebugLabelLength = kLabelLength; }));
+    auto made = rhi->createDevice(testDeviceWith(*rhi, kFirstAdapter, kNoWindow,
+                                                 [](DeviceDesc& desc) { desc.maxDebugLabelLength = kLabelLength; }));
     INFO(failureOf(made));
     REQUIRE(made.has_value());
     const Device& device = *made;
@@ -1389,7 +1479,7 @@ TEST_CASE("Vulkan passes an end label with no begin through, and validation repo
         if (!capsOf(instance, kFirstAdapter).features.debugLabels) {
             SKIP("the instance has no VK_EXT_debug_utils");
         }
-        auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+        auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         const Device& device = *made;
@@ -1420,7 +1510,7 @@ TEST_CASE("Vulkan names a buffer as its desc says, and validation reports it by 
         if (!capsOf(instance, kFirstAdapter).features.objectNames) {
             SKIP("the instance has no VK_EXT_debug_utils");
         }
-        auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+        auto made = instance.createDevice(testDeviceOn(instance, kFirstAdapter, kNoWindow));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         const Device& device = *made;

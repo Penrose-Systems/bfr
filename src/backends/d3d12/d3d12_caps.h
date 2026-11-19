@@ -6,10 +6,24 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
 
 namespace bfr::rhi::d3d12 {
+
+/// The command list type each of an adapter's queue families stands for, by
+/// family index. D3D12 has no queue families; a queue takes one of these
+/// types (D3D12_COMMAND_QUEUE_DESC::Type), so BFR lists one family for each.
+inline constexpr std::array kQueueFamilyTypes{D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_LIST_TYPE_COMPUTE,
+                                              D3D12_COMMAND_LIST_TYPE_COPY};
+
+/// Whether a queue of type presents. D3D12 has no query: DXGI's
+/// CreateSwapChainForHwnd and CreateSwapChainForComposition take, for D3D12,
+/// "a direct command queue" (Microsoft Learn, IDXGIFactory2, pDevice).
+[[nodiscard]] constexpr bool presents(D3D12_COMMAND_LIST_TYPE type) {
+    return type == D3D12_COMMAND_LIST_TYPE_DIRECT;
+}
 
 /// What device's samplers may be, as its options answer, for the caps. A
 /// question the device won't answer leaves false.

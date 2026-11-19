@@ -295,7 +295,7 @@ TEST_CASE("Device holds as many buffers as its desc's maxBuffers, and fails with
         INFO(failureOf(instance));
         REQUIRE(instance.has_value());
         auto made = instance->createDevice(
-            testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& desc) { desc.maxBuffers = 1; }));
+            testDeviceWith(*instance, kFirstAdapter, kNoWindow, [](DeviceDesc& desc) { desc.maxBuffers = 1; }));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         const Device& device = *made;

@@ -171,8 +171,6 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     constexpr std::uint32_t kStorageBuffers = 1;
     constexpr std::uint32_t kBuffers = 1;
     constexpr std::uint32_t kPipelines = 2;
-    // One graphics queue, at rank 0 and level normal.
-    constexpr std::array<bfr::QueueDesc, 1> kOneQueue{};
     detail::row("Backend", {std::string{bfr::name(backend)}});
     const ApiVersion version = apiVersionFor(backend);
     auto instance = bfr::Instance::create(
@@ -206,11 +204,18 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
         std::cerr << "no adapter presents to this window\n";
         return 1;
     }
+    // The queue draws and presents, so it is of a family that runs graphics
+    // and presents to the window.
+    const auto family = instance->findQueueFamily(adapter, {.graphics = true, .presents = &window});
+    if (!family) {
+        return detail::fail("can't find a queue on " + adapters->at(adapter).name + " that draws and presents",
+                            family.error());
+    }
+    const std::array<bfr::QueueDesc, 1> queue{bfr::QueueDesc{.family = *family}};
     bfr::Device device;
     {
         auto opened = instance->createDevice({.adapter = adapter,
-                                              .window = window,
-                                              .graphicsQueues = kOneQueue,
+                                              .queues = queue,
                                               .maxCommandLists = kFramesInFlight * kListsPerFrame,
                                               .maxCommandPools = kFramesInFlight,
                                               .maxSwapchains = kSwapchains,

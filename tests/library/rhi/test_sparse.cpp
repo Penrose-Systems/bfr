@@ -46,16 +46,21 @@ struct SparseDevice {
         REQUIRE(created.has_value());
         instance = std::move(*created);
         adapterCaps = capsOf(instance, kFirstAdapter);
-        auto made = instance.createDevice(testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& deviceDesc) {
-            deviceDesc.maxSparseMemories = kSparseMemories;
-            deviceDesc.maxTileMappings = kTileMappings;
-        }));
+        queueFamily = testQueueFamily(instance, kFirstAdapter);
+        auto made = instance.createDevice(
+            testDeviceWith(instance, kFirstAdapter, kNoWindow, [](DeviceDesc& deviceDesc) {
+                deviceDesc.maxSparseMemories = kSparseMemories;
+                deviceDesc.maxTileMappings = kTileMappings;
+            }));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         device = std::move(*made);
     }
 
     [[nodiscard]] const Caps& caps() const { return adapterCaps; }
+
+    // The family of the device's queue 0.
+    [[nodiscard]] const QueueFamily& family() const { return queueFamily; }
 
     // The tile size a resource is made with: the backend's first, or 0 where
     // it sets them itself.
@@ -65,6 +70,7 @@ struct SparseDevice {
 
     Instance instance;
     Caps adapterCaps;
+    QueueFamily queueFamily;
     Device device;
 };
 
@@ -84,8 +90,8 @@ TEST_CASE("Device maps a sparse buffer's tile to memory, copies through it, and 
     {
         const SparseDevice made{recordingInto(backend, messages)};
         const Device& device = made.device;
-        if (!made.caps().sparse.buffers || !made.caps().queues.graphicsSparse) {
-            SKIP("the adapter maps no sparse buffers on its graphics queues");
+        if (!made.caps().sparse.buffers || !made.family().sparse) {
+            SKIP("the adapter maps no sparse buffers on its device's queue");
         }
         auto sparse = device.createBuffer({.size = kSparseBufferBytes,
                                            .memory = BufferMemory::Device,
@@ -204,8 +210,8 @@ TEST_CASE("Device gives a sparse texture's tiling, maps a tile and its tail, and
     {
         const SparseDevice made{recordingInto(backend, messages)};
         const Device& device = made.device;
-        if (!made.caps().sparse.textures2d || !made.caps().queues.graphicsSparse) {
-            SKIP("the adapter maps no sparse 2D textures on its graphics queues");
+        if (!made.caps().sparse.textures2d || !made.family().sparse) {
+            SKIP("the adapter maps no sparse 2D textures on its device's queue");
         }
         const TextureUsage usage{.copySrc = true, .copyDst = true, .sampled = true};
         const auto format = device.sparseFormat({.format = Format::Rgba8Unorm,
@@ -360,8 +366,8 @@ TEST_CASE("Device refuses sparse calls on resources that are not sparse, and map
         *plain = Buffer{};
         CHECK(slotsResult(device, destroyedPlain.get()) == Result::ErrorInvalidHandle);
 
-        if (!made.caps().sparse.buffers || !made.caps().queues.graphicsSparse) {
-            SKIP("the adapter maps no sparse buffers on its graphics queues");
+        if (!made.caps().sparse.buffers || !made.family().sparse) {
+            SKIP("the adapter maps no sparse buffers on its device's queue");
         }
         auto sparse = device.createBuffer({.size = kSparseBufferBytes,
                                            .memory = BufferMemory::Device,

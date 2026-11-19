@@ -306,6 +306,7 @@ struct Features {
     /// The uniform buffer table indexed by a value that differs within a
     /// shader's invocation group.
     bool uniformBufferNonUniformIndexing = false;
+    /// Every queue whose family runs graphics or compute writes timestamps.
     bool timestampsOnAllQueues = false;
     /// Device::createQueryPool makes Occlusion pools, and PipelineStatistics
     /// and MeshPrimitivesGenerated ones where pipelineStatistics and
@@ -346,7 +347,7 @@ struct Memory {
     bool unified = false;
 };
 
-/// The QueueLevel values a kind of queue takes; each true where the backend
+/// The QueueLevel values a family's queues take; each true where the backend
 /// says so, none where it has no setting.
 struct QueueLevels {
     bool normal = false;
@@ -356,7 +357,7 @@ struct QueueLevels {
 };
 
 /// How a copy between a buffer and a texture, or between two textures, lines
-/// up in a kind of queue's lists, in texels, or texel blocks for a compressed
+/// up in the lists of a family's queues, in texels, or texel blocks for a compressed
 /// format: its offsets are multiples of width, height and depth, and each
 /// size is a multiple too or reaches the edge of the mip level. With
 /// wholeLevels it copies whole mip levels only, from 0. All 0 and false
@@ -366,30 +367,6 @@ struct CopyGranularity {
     std::uint32_t height = 0;
     std::uint32_t depth = 0;
     bool wholeLevels = false;
-};
-
-/// graphics, compute and copy are 0 where the backend has no count of queues;
-/// createDevice then takes any number of each. ranks is how many distinct
-/// priorities the backend gives a device's queues by their QueueDesc::rank; 0
-/// where it doesn't rank them.
-struct Queues {
-    std::uint32_t graphics = 0;
-    std::uint32_t compute = 0;
-    std::uint32_t copy = 0;
-    std::uint32_t graphicsTimestampBits = 0;
-    std::uint32_t computeTimestampBits = 0;
-    std::uint32_t copyTimestampBits = 0;
-    std::uint32_t ranks = 0;
-    QueueLevels graphicsLevels;
-    QueueLevels computeLevels;
-    QueueLevels copyLevels;
-    /// Whether each kind of queue runs Device::updateTileMappings.
-    bool graphicsSparse = false;
-    bool computeSparse = false;
-    bool copySparse = false;
-    CopyGranularity graphicsGranularity;
-    CopyGranularity computeGranularity;
-    CopyGranularity copyGranularity;
 };
 
 /// The TimestampStage values a timestamp write takes; each true where the
@@ -414,28 +391,38 @@ struct HostClocks {
     bool performanceCounter = false;
 };
 
-/// What the adapter's GPU timestamps are. graphics, compute and copy say
-/// which kinds of queue write them. A write on a graphics queue takes the
-/// stages in outsideRendering, or between beginRendering and endRendering
-/// those in insideRendering; one on a compute or copy queue those in
-/// computeStages or copyStages. granularity says the backend
-/// takes a TimestampGranularity; where it is false the value is unused.
-/// entryBytes is what one timestamp takes in a buffer resolveTimestamps
-/// writes, and hostClocks the clocks calibrateTimestamps reads.
-struct Timestamps {
+/// One of an adapter's queue families, as the backend gives it: what its
+/// queues run, how many it has (0 where the backend has no count, and
+/// createDevice then takes any number), and their timestamps, levels and
+/// copy granularity. A timestamp write on one of its queues outside rendering
+/// takes the stages in timestampStages.
+struct QueueFamily {
     bool graphics = false;
     bool compute = false;
     bool copy = false;
-    TimestampStages outsideRendering;
+    /// Its queues run Device::updateTileMappings.
+    bool sparse = false;
+    std::uint32_t count = 0;
+    std::uint32_t timestampBits = 0;
+    bool timestamps = false;
+    TimestampStages timestampStages;
+    /// Its queues record resetTimestamps. A pool written on a queue whose
+    /// family can't is reset on one whose family can, ordered before the
+    /// writes by a submit's wait.
+    bool timestampResets = false;
+    QueueLevels levels;
+    CopyGranularity granularity;
+};
+
+/// What the adapter's GPU timestamps are on every family alike. A write
+/// between beginRendering and endRendering takes the stages in
+/// insideRendering on every family that runs graphics. granularity says the
+/// backend takes a TimestampGranularity; where it is false the value is
+/// unused. entryBytes is what one timestamp takes in a buffer
+/// resolveTimestamps writes, and hostClocks the clocks calibrateTimestamps
+/// reads.
+struct Timestamps {
     TimestampStages insideRendering;
-    TimestampStages computeStages;
-    TimestampStages copyStages;
-    /// The kinds of queue that record resetTimestamps. A pool written on one
-    /// that can't is reset on one that can, ordered before the writes by a
-    /// submit's wait.
-    bool graphicsResets = false;
-    bool computeResets = false;
-    bool copyResets = false;
     bool granularity = false;
     std::uint32_t entryBytes = 0;
     HostClocks hostClocks;
@@ -506,7 +493,12 @@ struct Caps {
     RayTracingLimits rayTracing;
     Features features;
     Memory memory;
-    Queues queues;
+    /// Every queue family the backend has, in its order; a QueueDesc names
+    /// one by its index here.
+    std::vector<QueueFamily> queueFamilies;
+    /// How many distinct priorities the backend gives a device's queues by
+    /// their QueueDesc::rank; 0 where it doesn't rank them.
+    std::uint32_t queueRanks = 0;
     Timestamps timestamps;
     Sparse sparse;
     ResolveCaps resolve;

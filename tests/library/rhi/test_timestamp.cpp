@@ -36,6 +36,11 @@ CapsTimestamps timestampCaps(const FirstAdapterDevice& made) {
     return capsOf(made.instance, kFirstAdapter).timestamps;
 }
 
+// The family of made's device's queue 0.
+QueueFamily queueFamily(const FirstAdapterDevice& made) {
+    return testQueueFamily(made.instance, kFirstAdapter);
+}
+
 // Each stage that stages lists.
 std::vector<TimestampStage> listed(const TimestampStages& stages) {
     std::vector<TimestampStage> out;
@@ -70,11 +75,12 @@ TEST_CASE("Device writes a timestamp at each stage the caps list, in rendering a
         const FirstAdapterDevice made{recordingInto(backend, messages)};
         const Device& device = made.device;
         const CapsTimestamps caps = timestampCaps(made);
-        if (!caps.graphics) {
-            SKIP("the adapter's graphics queues write no timestamps");
+        const QueueFamily family = queueFamily(made);
+        if (!family.timestamps) {
+            SKIP("the device's queue writes no timestamps");
         }
         REQUIRE(caps.entryBytes >= sizeof(std::uint64_t));
-        const std::vector<TimestampStage> outside = listed(caps.outsideRendering);
+        const std::vector<TimestampStage> outside = listed(family.timestampStages);
         const std::vector<TimestampStage> inside = listed(caps.insideRendering);
         // The outside stages, then the inside ones, then one more outside
         // after rendering, which no earlier timestamp comes after.
@@ -161,8 +167,8 @@ TEST_CASE("Device gives a queue's timestamp rate in the backend's one unit, and 
     std::vector<std::string> messages;
     {
         const FirstAdapterDevice made{recordingInto(backend, messages)};
-        if (!timestampCaps(made).graphics) {
-            SKIP("the adapter's graphics queues write no timestamps");
+        if (!queueFamily(made).timestamps) {
+            SKIP("the device's queue writes no timestamps");
         }
         const auto rate = made.device.timestampRate(0);
         INFO(failureOf(rate));
@@ -272,36 +278,41 @@ TEST_CASE("Device counts the CPU time of each call when the InstanceDesc asks fo
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Device writes a timestamp at each stage a compute or copy queue's caps list", "[rhi][agnostic]") {
+TEST_CASE("Device writes a timestamp at each stage the family of a queue without graphics lists", "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
         auto instance = createInstance(recordingInto(backend, messages), kValidation);
         INFO(failureOf(instance));
         REQUIRE(instance.has_value());
-        const Caps caps = capsOf(*instance, kFirstAdapter);
-        if (caps.queues.compute == 0 || caps.queues.copy == 0) {
-            SKIP("the adapter has no compute or no copy queue");
+        const std::vector<QueueFamily> families = queueFamiliesOf(*instance, kFirstAdapter);
+        const auto computeFamily = familyWhere(*instance, kFirstAdapter, [](const QueueFamily& family) {
+            return family.compute && !family.graphics;
+        });
+        const auto copyFamily = familyWhere(*instance, kFirstAdapter, [](const QueueFamily& family) {
+            return family.copy && !family.graphics && !family.compute;
+        });
+        if (!computeFamily || !copyFamily) {
+            SKIP("the adapter has no family that runs compute but not graphics, or none that runs copies alone");
         }
-        // Queue 0 is graphics, 1 compute and 2 copy, as DeviceDesc numbers them.
+        // Queue 0 runs graphics, 1 compute and 2 copies, as DeviceDesc numbers them.
         constexpr std::uint32_t kGraphics = 0;
         constexpr std::uint32_t kCompute = 1;
         constexpr std::uint32_t kCopy = 2;
-        auto opened = instance->createDevice(testDeviceWith(kFirstAdapter, kNoWindow, [](DeviceDesc& desc) {
-            desc.computeQueues = std::span{kTestQueues}.first(1);
-            desc.copyQueues = std::span{kTestQueues}.first(1);
-        }));
+        const std::array queues{testQueues(testFamily(*instance, kFirstAdapter, kNoWindow)).front(),
+                                testQueues(*computeFamily).front(), testQueues(*copyFamily).front()};
+        auto opened = instance->createDevice(
+            testDeviceWith(*instance, kFirstAdapter, kNoWindow, [&queues](DeviceDesc& desc) { desc.queues = queues; }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
         const Device& device = *opened;
-        const auto [queue, writes,
-                    stages] = GENERATE_COPY(std::tuple{kCompute, caps.timestamps.compute,
-                                                       caps.timestamps.computeStages},
-                                            std::tuple{kCopy, caps.timestamps.copy, caps.timestamps.copyStages});
+        const auto [queue, family] = GENERATE_COPY(std::pair{kCompute, families.at(*computeFamily)},
+                                                   std::pair{kCopy, families.at(*copyFamily)});
         INFO("queue " << queue);
-        if (!writes) {
-            SKIP("this kind of queue writes no timestamps");
+        if (!family.timestamps) {
+            SKIP("this queue's family writes no timestamps");
         }
+        const TimestampStages& stages = family.timestampStages;
         const std::vector<TimestampStage> listedStages = listed(stages);
         constexpr std::array kEveryStage{TimestampStage::End,      TimestampStage::Start,   TimestampStage::Vertex,
                                          TimestampStage::Fragment, TimestampStage::Compute, TimestampStage::Copy,
@@ -309,9 +320,9 @@ TEST_CASE("Device writes a timestamp at each stage a compute or copy queue's cap
         constexpr auto kStages = static_cast<std::uint32_t>(kEveryStage.size());
         auto pool = device.createTimestampPool({.queue = queue, .count = kStages});
         REQUIRE(pool.has_value());
-        // Where this kind of queue resets no timestamps, the graphics queue
+        // Where this queue's family resets no timestamps, the graphics queue
         // resets them first.
-        const bool resets = queue == kCompute ? caps.timestamps.computeResets : caps.timestamps.copyResets;
+        const bool resets = family.timestampResets;
         auto resetting = device.createCommandPool({.queue = kGraphics, .listCount = kPoolLists});
         REQUIRE(resetting.has_value());
         const auto reset = resetting->beginCommands();
