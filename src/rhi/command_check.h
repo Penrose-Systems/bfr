@@ -19,7 +19,8 @@ namespace bfr::rhi {
 /// Fails with RhiInvalidCall when desc asks for a rendering no backend can
 /// begin: a load or store op or resolve mode BFR doesn't have, more color
 /// attachments than there are, none at all, a color attachment naming no
-/// texture, a resolve texture named with no texture, or, with a
+/// texture, a resolve texture named with no texture, a read-only
+/// depth-stencil attachment with an op other than Load or Store, or, with a
 /// swapchain, no color attachment or attachment 0 naming a resolve texture
 /// when the swapchain's image is its resolve target. Attachment 0 names no
 /// texture when the swapchain's image is it. Each backend's beginRendering
@@ -56,6 +57,14 @@ namespace bfr::rhi {
         }
     }
     const DepthStencilAttachment& depth = desc.depthStencil;
+    // Clearing or discarding would write the texture the rendering promises
+    // not to write: D3D12 would clear its writable view, and Vulkan would
+    // clear a read-only layout.
+    if (depth.readOnly && (depth.depthLoadOp != LoadOp::Load || depth.stencilLoadOp != LoadOp::Load ||
+                           depth.depthStoreOp != StoreOp::Store || depth.stencilStoreOp != StoreOp::Store)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "a read-only depth-stencil attachment loads and stores; it was given another op");
+    }
     if (!depth.resolveTexture.isNull() && depth.texture.isNull()) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "the depth-stencil resolve texture has no texture to resolve");

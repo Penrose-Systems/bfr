@@ -279,8 +279,9 @@ struct DepthStencilAttachment {
     /// When stencilLoadOp is Clear. The low 8 bits count.
     std::uint32_t clearStencil = 0;
     /// The rendering tests depth and stencil but never writes them, and
-    /// shaders may sample the texture meanwhile; every op is then Load and
-    /// Store. The pipelines drawn with write neither depth nor stencil.
+    /// shaders may sample the texture meanwhile. Every op is Load and Store,
+    /// else beginRendering fails with RhiInvalidCall. The pipelines drawn with
+    /// write neither depth nor stencil.
     bool readOnly = false;
     /// A single-sample texture of texture's format and size, with
     /// depthStencil usage, in layout DepthStencilTarget, that the samples are

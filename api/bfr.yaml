@@ -1334,7 +1334,7 @@ structs:
       - {name: stencil_store_op, type: store_op, doc: 0 is store.}
       - {name: clear_depth, type: f32, doc: "0 to 1, when depth_load_op is clear."}
       - {name: clear_stencil, type: u32, doc: When stencil_load_op is clear. The low 8 bits count.}
-      - {name: read_only, type: bool, doc: "The rendering tests depth and stencil but never writes them, and shaders may sample the texture meanwhile; every op is then load and store. The pipelines drawn with write neither depth nor stencil."}
+      - {name: read_only, type: bool, doc: "The rendering tests depth and stencil but never writes them, and shaders may sample the texture meanwhile; every op is load and store, else bfr_begin_rendering fails with error_invalid_argument. The pipelines drawn with write neither depth nor stencil."}
       - {name: resolve_texture, type: texture, doc: "A single-sample texture of texture's format and size, with depth_stencil usage, in layout depth_stencil_target, that the samples are resolved into as rendering ends, by depth_resolve and stencil_resolve, at its mip level 0, from layer 0; null for none."}
       - {name: depth_resolve, type: resolve_mode, doc: 0 is none.}
       - {name: stencil_resolve, type: resolve_mode, doc: 0 is none.}

@@ -542,3 +542,45 @@ TEST_CASE("Device refuses a buffer copy of an aspect the texture's format lacks"
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
+
+TEST_CASE("Device refuses a read-only depth-stencil attachment that would clear or discard it", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        Texture depth = created(device, {.dimension = TextureDimension::D2,
+                                         .format = Format::D32Float,
+                                         .width = kWidth,
+                                         .height = kHeight,
+                                         .depth = 1,
+                                         .layers = 1,
+                                         .mipLevels = 1,
+                                         .samples = 1,
+                                         .usage = {.sampled = true, .depthStencil = true}});
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = pool->beginCommands();
+        REQUIRE(list.has_value());
+        CHECK(device.textureBarrier(*list, depth, TextureLayout::Undefined, TextureLayout::DepthStencilRead, {})
+                  .has_value());
+        const auto readOnly = [&depth](LoadOp load, StoreOp store) {
+            RenderingDesc rendering{};
+            rendering.depthStencil.texture = depth;
+            rendering.depthStencil.depthLoadOp = load;
+            rendering.depthStencil.depthStoreOp = store;
+            rendering.depthStencil.readOnly = true;
+            return rendering;
+        };
+
+        for (const auto& [load, store] :
+             {std::pair{LoadOp::Clear, StoreOp::Store}, std::pair{LoadOp::DontCare, StoreOp::Store},
+              std::pair{LoadOp::Load, StoreOp::DontCare}}) {
+            INFO(static_cast<int>(load) << ' ' << static_cast<int>(store));
+            CHECK(device.beginRendering(*list, {}, readOnly(load, store)).error().code == Result::ErrorInvalidArgument);
+        }
+        CHECK(device.beginRendering(*list, {}, readOnly(LoadOp::Load, StoreOp::Store)).has_value());
+        CHECK(device.endRendering(*list).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
