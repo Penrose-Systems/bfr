@@ -209,6 +209,22 @@ struct RecordState {
     return false;
 }
 
+/// Fails with RhiInvalidCall when an attachment's layerCount layers from layer
+/// are none, or run past the available layers it may draw to: the texture's
+/// layers, or a 3D texture's depth slices at its mip level. Each backend's
+/// beginRendering calls it for each attachment it looks up: past them,
+/// Vulkan's rendering is invalid (VUID-VkRenderingInfo-imageView-06070), and
+/// D3D12's and Metal's views have no such layers.
+[[nodiscard]] inline core::Result<void> checkAttachmentLayers(std::uint32_t layer, std::uint32_t layerCount,
+                                                              std::uint32_t available) {
+    if (layerCount == 0 || std::uint64_t{layer} + layerCount > available) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "an attachment draws to {} layers from layer {}; the texture has {} there", layerCount,
+                             layer, available);
+    }
+    return {};
+}
+
 /// Fails with RhiUnsupported when a queue of family writes no timestamp at
 /// stage, as its QueueFamily::timestamps and timestampStages say: Vulkan
 /// leaves such a write undefined (VUID-vkCmdWriteTimestamp2-stage-03930 and

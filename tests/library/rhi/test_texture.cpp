@@ -617,3 +617,45 @@ TEST_CASE("Device refuses resolveTexture with RhiUnsupported where the caps say 
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
+
+TEST_CASE("Device refuses an attachment drawing to layers past the texture's, or to none", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        Texture color = created(device, {.dimension = TextureDimension::D2,
+                                         .format = Format::Rgba8Unorm,
+                                         .width = kWidth,
+                                         .height = kHeight,
+                                         .depth = 1,
+                                         .layers = kLayers,
+                                         .mipLevels = 1,
+                                         .samples = 1,
+                                         .usage = {.colorAttachment = true}});
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = pool->beginCommands();
+        REQUIRE(list.has_value());
+        CHECK(
+            device.textureBarrier(*list, color, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
+        const auto drawing = [&color](std::uint32_t layer, std::uint32_t layerCount) {
+            RenderingDesc rendering{};
+            rendering.colorAttachmentCount = 1;
+            rendering.colorAttachments.at(0).texture = color;
+            rendering.colorAttachments.at(0).layer = layer;
+            rendering.colorAttachments.at(0).layerCount = layerCount;
+            return rendering;
+        };
+
+        for (const auto& [layer, layerCount] :
+             {std::pair{0U, kLayers + 1}, std::pair{1U, kLayers}, std::pair{kLayers, 1U}, std::pair{0U, 0U}}) {
+            INFO(layer << ' ' << layerCount);
+            CHECK(device.beginRendering(*list, {}, drawing(layer, layerCount)).error().code ==
+                  Result::ErrorInvalidArgument);
+        }
+        CHECK(device.beginRendering(*list, {}, drawing(1, kLayers - 1)).has_value());
+        CHECK(device.endRendering(*list).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}

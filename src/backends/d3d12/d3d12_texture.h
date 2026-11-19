@@ -61,6 +61,10 @@ struct D3D12Target {
 
 /// What an attachment of texture at mipLevel covers, from layer, layerCount
 /// layers.
+/// The layers a texture's mipLevel has targets for: a 3D texture's slices at
+/// that level, any other's layers.
+[[nodiscard]] std::uint32_t targetLayersAt(const D3D12Texture& texture, std::uint32_t mipLevel);
+
 [[nodiscard]] D3D12Target targetOf(const D3D12Texture& texture, std::uint32_t mipLevel, std::uint32_t layer,
                                    std::uint32_t layerCount);
 

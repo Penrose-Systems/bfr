@@ -96,7 +96,8 @@ VkExtent2D mipExtent(VkExtent2D extent, std::uint32_t mipLevel) {
 // only through 2D views of an image made for them (Features::
 // volumeColorTargets, and not sparse), and RhiInvalidCall past its levels or
 // layers: there is no such view.
-core::Result<VkImageView> attachmentViewOf(const VulkanTexture& texture, std::uint32_t mipLevel, std::uint32_t layer) {
+core::Result<VkImageView> attachmentViewOf(const VulkanTexture& texture, std::uint32_t mipLevel, std::uint32_t layer,
+                                           std::uint32_t layerCount) {
     if (texture.size().depth > 1 && !texture.hasAttachmentViews()) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "Vulkan draws to a 3D texture only through 2D views of its slices, which this one has "
@@ -106,6 +107,9 @@ core::Result<VkImageView> attachmentViewOf(const VulkanTexture& texture, std::ui
     if (view == VK_NULL_HANDLE) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "the texture has no level {} or no layer {}", mipLevel,
                              layer);
+    }
+    if (auto checked = checkAttachmentLayers(layer, layerCount, texture.attachmentLayers(mipLevel)); !checked) {
+        return std::unexpected(std::move(checked.error()));
     }
     return view;
 }
@@ -711,7 +715,7 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
-        auto view = attachmentViewOf(**texture, attachment.mipLevel, attachment.layer);
+        auto view = attachmentViewOf(**texture, attachment.mipLevel, attachment.layer, attachment.layerCount);
         if (!view) {
             return std::unexpected(std::move(view.error()));
         }
@@ -722,7 +726,7 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
             if (!target) {
                 return std::unexpected(std::move(target.error()));
             }
-            auto targetView = attachmentViewOf(**target, 0, 0);
+            auto targetView = attachmentViewOf(**target, 0, 0, 1);
             if (!targetView) {
                 return std::unexpected(std::move(targetView.error()));
             }
@@ -744,7 +748,7 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
         }
         // Each aspect the format has gets its slot, with its own ops. A
         // read-only attachment keeps what it holds without writing it.
-        auto view = attachmentViewOf(**texture, depthStencil.mipLevel, depthStencil.layer);
+        auto view = attachmentViewOf(**texture, depthStencil.mipLevel, depthStencil.layer, depthStencil.layerCount);
         if (!view) {
             return std::unexpected(std::move(view.error()));
         }
@@ -763,7 +767,7 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
             if (!target) {
                 return std::unexpected(std::move(target.error()));
             }
-            auto targetView = attachmentViewOf(**target, 0, 0);
+            auto targetView = attachmentViewOf(**target, 0, 0, 1);
             if (!targetView) {
                 return std::unexpected(std::move(targetView.error()));
             }

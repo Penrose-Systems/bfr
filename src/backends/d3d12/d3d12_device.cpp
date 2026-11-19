@@ -852,6 +852,11 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
             if (!texture) {
                 return std::unexpected(std::move(texture.error()));
             }
+            if (auto checked = checkAttachmentLayers(attachment.layer, attachment.layerCount,
+                                                     targetLayersAt(**texture, attachment.mipLevel));
+                !checked) {
+                return checked;
+            }
             target = targetOf(**texture, attachment.mipLevel, attachment.layer, attachment.layerCount);
             colors.at(i) = targetAt(**texture, attachment.mipLevel, attachment.layer, false);
             if (colors.at(i).ptr == 0) {
@@ -904,6 +909,11 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
         auto texture = textureFor(depthStencil.texture);
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
+        }
+        if (auto checked = checkAttachmentLayers(depthStencil.layer, depthStencil.layerCount,
+                                                 targetLayersAt(**texture, depthStencil.mipLevel));
+            !checked) {
+            return checked;
         }
         depth = *texture;
         depthView = targetAt(*depth, depthStencil.mipLevel, depthStencil.layer, depthStencil.readOnly);

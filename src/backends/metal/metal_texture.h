@@ -9,7 +9,9 @@
 
 #include <Metal/Metal.hpp>
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 namespace bfr::rhi::metal {
@@ -24,6 +26,7 @@ struct MetalTexture {
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::uint32_t depth = 0;
+    std::uint32_t layers = 0;
     std::optional<MTL::SparsePageSize> page;
     TextureTiling tiling;
     /// Its places in the tables, which the device gives back when the texture
@@ -40,5 +43,13 @@ struct MetalTexture {
 /// bits, and RhiDeviceFailed when Metal gives no texture.
 [[nodiscard]] core::Result<MetalTexture> createMetalTexture(MTL::Device& device, const TextureDesc& desc,
                                                             Ref<MTL::ResidencySet> residency);
+
+/// The layers a rendering may draw to at mipLevel of texture: its layers, or
+/// a 3D texture's depth slices at that level.
+[[nodiscard]] inline std::uint32_t attachmentLayers(const MetalTexture& texture, std::uint32_t mipLevel) {
+    return texture.depth > 1
+               ? std::max(mipLevel < std::numeric_limits<std::uint32_t>::digits ? texture.depth >> mipLevel : 0U, 1U)
+               : texture.layers;
+}
 
 } // namespace bfr::rhi::metal

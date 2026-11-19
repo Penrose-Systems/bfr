@@ -7,6 +7,7 @@
 
 #include <volk.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <span>
@@ -62,6 +63,11 @@ public:
     /// layer, a 3D texture's depth slice; VK_NULL_HANDLE past the texture's
     /// levels or layers, or where it has none.
     [[nodiscard]] VkImageView attachmentView(std::uint32_t mipLevel, std::uint32_t layer) const;
+    /// The layers a rendering may draw to at mipLevel: the texture's layers,
+    /// or a 3D texture's depth slices at that level.
+    [[nodiscard]] std::uint32_t attachmentLayers(std::uint32_t mipLevel) const {
+        return size_.depth > 1 ? std::max(size_.depth >> mipLevel, 1U) : layers_;
+    }
     /// Makes attachmentView's views as desc says, of format, one for each
     /// level and layer, or each level's depth slices for a 3D texture made
     /// 2D-array compatible, when slices: Vulkan's rendering has no level or

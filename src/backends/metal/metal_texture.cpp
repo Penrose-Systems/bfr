@@ -172,6 +172,7 @@ core::Result<MetalTexture> createMetalTexture(MTL::Device& device, const Texture
                         .width = desc.width,
                         .height = desc.height,
                         .depth = desc.depth,
+                        .layers = desc.layers,
                         .page = page,
                         .tiling = tiling,
                         .slots = {},

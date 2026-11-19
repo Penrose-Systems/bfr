@@ -639,6 +639,11 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
+        if (auto checked = checkAttachmentLayers(attachment.layer, attachment.layerCount,
+                                                 attachmentLayers(**texture, attachment.mipLevel));
+            !checked) {
+            return checked;
+        }
         colors.at(i) = (*texture)->texture.get();
         formats.at(i) = (*texture)->format;
         if (!attachment.resolveTexture.isNull()) {
@@ -656,6 +661,11 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
         auto texture = textureFor(depthStencil.texture);
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
+        }
+        if (auto checked = checkAttachmentLayers(depthStencil.layer, depthStencil.layerCount,
+                                                 attachmentLayers(**texture, depthStencil.mipLevel));
+            !checked) {
+            return checked;
         }
         depth = *texture;
         if (!depthStencil.resolveTexture.isNull()) {
