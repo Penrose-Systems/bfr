@@ -416,10 +416,8 @@ TEST_CASE("Vulkan without VK_EXT_mesh_shader reports no mesh shaders, and refuse
         REQUIRE(made.has_value());
         const Device& device = *made;
         GraphicsPipelineDesc meshDesc{.vertex = {},
-                                      .fragment = {.code = std::span{bfr::test::spirv::kColorFrag},
-                                                   .entryPoint = "main"},
-                                      .mesh = {.code = std::span{bfr::test::spirv::kTriangleMesh},
-                                               .entryPoint = "main"},
+                                      .fragment = shaderCode(bfr::test::spirv::kColorFrag),
+                                      .mesh = shaderCode(bfr::test::spirv::kTriangleMesh),
                                       .meshWorkgroupSize = {1, 1, 1},
                                       .topology = Topology::TriangleList,
                                       .primitiveRestart = PrimitiveRestart::Off,
@@ -611,22 +609,19 @@ TEST_CASE("Vulkan without VK_EXT_opacity_micromap reports no micromaps, and refu
     INFO(failureOf(made));
     REQUIRE(made.has_value());
     const Device& device = *made;
-    const auto code = [](const auto& result) {
-        return result.has_value() ? Result{} : result.error().code;
-    };
     constexpr std::uint64_t kSmall = 256;
-    CHECK(code(device.createAccelerationStructure(
+    CHECK(resultOf(device.createAccelerationStructure(
               {.type = AccelerationStructureType::OpacityMicromap, .size = kSmall})) == Result::ErrorUnsupported);
-    CHECK(code(device.accelerationStructureSizes(
+    CHECK(resultOf(device.accelerationStructureSizes(
               {.type = AccelerationStructureType::Bottom, .flags = {.allowDisableOpacityMicromaps = true}})) ==
           Result::ErrorUnsupported);
-    CHECK(code(device.createAccelerationStructurePropertyPool({.count = 1, .opacityMicromaps = true})) ==
+    CHECK(resultOf(device.createAccelerationStructurePropertyPool({.count = 1, .opacityMicromaps = true})) ==
           Result::ErrorUnsupported);
     std::vector<std::byte> out(caps.rayTracing.instanceSize);
     const AccelerationStructureInstance disabled{.disableOpacityMicromaps = true};
-    CHECK(code(device.writeInstances(std::span{&disabled, 1}, out.data(), out.size())) == Result::ErrorUnsupported);
+    CHECK(resultOf(device.writeInstances(std::span{&disabled, 1}, out.data(), out.size())) == Result::ErrorUnsupported);
     if (caps.features.rayTracingPipeline) {
-        CHECK(code(device.createRayTracingPipeline({.allowOpacityMicromaps = true})) == Result::ErrorUnsupported);
+        CHECK(resultOf(device.createRayTracingPipeline({.allowOpacityMicromaps = true})) == Result::ErrorUnsupported);
     }
 }
 
@@ -740,16 +735,13 @@ TEST_CASE("Vulkan refuses partitioned top structure work it has no call for", "[
     REQUIRE(made.has_value());
     const Device& device = *made;
     constexpr std::uint64_t kSmall = 256;
-    const auto code = [](const auto& result) {
-        return result.has_value() ? Result{} : result.error().code;
-    };
     // VkPartitionedAccelerationStructureInstancesInputNV has no motion.
     if (caps.features.rayTracingMotion) {
-        CHECK(code(device.createAccelerationStructure(
+        CHECK(resultOf(device.createAccelerationStructure(
                   {.type = AccelerationStructureType::PartitionedTop, .size = kSmall, .motionKeyframes = 2})) ==
               Result::ErrorInvalidArgument);
-        CHECK(code(device.accelerationStructureSizes({.type = AccelerationStructureType::PartitionedTop,
-                                                      .motionKeyframes = 2})) == Result::ErrorInvalidArgument);
+        CHECK(resultOf(device.accelerationStructureSizes({.type = AccelerationStructureType::PartitionedTop,
+                                                          .motionKeyframes = 2})) == Result::ErrorInvalidArgument);
     }
     // Vulkan holds one as memory, with no VkAccelerationStructureKHR for the
     // other calls to name.
@@ -764,23 +756,24 @@ TEST_CASE("Vulkan refuses partitioned top structure work it has no call for", "[
     REQUIRE(commandPool.has_value());
     const auto list = commandPool->beginCommands();
     REQUIRE(list.has_value());
-    CHECK(code(device.copyAccelerationStructure(*list, *other, *partitioned)) == Result::ErrorInvalidArgument);
-    CHECK(code(device.compactAccelerationStructure(*list, *other, *partitioned)) == Result::ErrorInvalidArgument);
+    CHECK(resultOf(device.copyAccelerationStructure(*list, *other, *partitioned)) == Result::ErrorInvalidArgument);
+    CHECK(resultOf(device.compactAccelerationStructure(*list, *other, *partitioned)) == Result::ErrorInvalidArgument);
     auto propertyPool = device.createAccelerationStructurePropertyPool(
         {.property = AccelerationStructureProperty::CompactedSize, .count = 1});
     REQUIRE(propertyPool.has_value());
     const AccelerationStructureRef partitionedRef = *partitioned;
-    CHECK(code(device.writeAccelerationStructureProperties(*list, *propertyPool, 0, std::span{&partitionedRef, 1})) ==
-          Result::ErrorInvalidArgument);
+    CHECK(
+        resultOf(device.writeAccelerationStructureProperties(*list, *propertyPool, 0, std::span{&partitionedRef, 1})) ==
+        Result::ErrorInvalidArgument);
     if (caps.features.accelerationStructureSerialization) {
         auto data = device.createBuffer({.size = kSmall, .usage = {.accelerationStructureData = true}});
         REQUIRE(data.has_value());
-        CHECK(code(device.serializeAccelerationStructure(*list, *partitioned, *data, 0)) ==
+        CHECK(resultOf(device.serializeAccelerationStructure(*list, *partitioned, *data, 0)) ==
               Result::ErrorInvalidArgument);
-        CHECK(code(device.deserializeAccelerationStructure(*list, *data, 0, *partitioned)) ==
+        CHECK(resultOf(device.deserializeAccelerationStructure(*list, *data, 0, *partitioned)) ==
               Result::ErrorInvalidArgument);
         std::array<std::uint8_t, BFR_SERIALIZED_IDENTIFIER_SIZE> identifier{};
-        CHECK(code(device.serializedCompatible(AccelerationStructureType::PartitionedTop, identifier.data())) ==
+        CHECK(resultOf(device.serializedCompatible(AccelerationStructureType::PartitionedTop, identifier.data())) ==
               Result::ErrorInvalidArgument);
         const bfr_buffer dataHandle = data->get();
         *data = {};
@@ -789,7 +782,7 @@ TEST_CASE("Vulkan refuses partitioned top structure work it has no call for", "[
     if (caps.features.accelerationStructureIndirectBuild) {
         auto ranges = device.createBuffer({.size = kSmall, .usage = {.indirect = true}});
         REQUIRE(ranges.has_value());
-        CHECK(code(device.buildAccelerationStructureIndirect(
+        CHECK(resultOf(device.buildAccelerationStructureIndirect(
                   *list, {.dst = *partitioned, .inputs = {.type = AccelerationStructureType::PartitionedTop}}, *ranges,
                   0, 0)) == Result::ErrorInvalidArgument);
         const bfr_buffer rangesHandle = ranges->get();
@@ -851,19 +844,16 @@ TEST_CASE("Vulkan refuses motion on a micromap, whose create info has none", "[v
     INFO(failureOf(made));
     REQUIRE(made.has_value());
     const Device& device = *made;
-    const auto code = [](const auto& result) {
-        return result.has_value() ? Result{} : result.error().code;
-    };
     constexpr std::uint64_t kSmall = 256;
     const std::uint32_t keyframes = caps.rayTracing.maxMotionKeyframes;
     if (!caps.features.opacityMicromap) {
         SKIP("the adapter has no opacity micromaps");
     }
-    CHECK(code(device.createAccelerationStructure(
+    CHECK(resultOf(device.createAccelerationStructure(
               {.type = AccelerationStructureType::OpacityMicromap, .size = kSmall, .motionKeyframes = keyframes})) ==
           Result::ErrorInvalidArgument);
-    CHECK(code(device.accelerationStructureSizes({.type = AccelerationStructureType::OpacityMicromap,
-                                                  .motionKeyframes = keyframes})) == Result::ErrorInvalidArgument);
+    CHECK(resultOf(device.accelerationStructureSizes({.type = AccelerationStructureType::OpacityMicromap,
+                                                      .motionKeyframes = keyframes})) == Result::ErrorInvalidArgument);
 }
 
 TEST_CASE("Vulkan refuses opacity micromap work it has no call for", "[vulkan][gpu]") {
@@ -880,9 +870,6 @@ TEST_CASE("Vulkan refuses opacity micromap work it has no call for", "[vulkan][g
     INFO(failureOf(made));
     REQUIRE(made.has_value());
     const Device& device = *made;
-    const auto code = [](const auto& result) {
-        return result.has_value() ? Result{} : result.error().code;
-    };
     constexpr std::uint64_t kSmall = 256;
     auto micromap = device.createAccelerationStructure(
         {.type = AccelerationStructureType::OpacityMicromap, .size = kSmall});
@@ -890,14 +877,14 @@ TEST_CASE("Vulkan refuses opacity micromap work it has no call for", "[vulkan][g
     REQUIRE(micromap.has_value());
     // Vulkan gives a micromap no address, writes only its compacted and
     // serialized sizes, and builds it whole.
-    CHECK(code(micromap->accelerationStructureReference()) == Result::ErrorInvalidArgument);
+    CHECK(resultOf(micromap->accelerationStructureReference()) == Result::ErrorInvalidArgument);
     if (capsOf(instance, kFirstAdapter).features.accelerationStructureCaptureReplay) {
-        CHECK(code(device.createAccelerationStructure(
+        CHECK(resultOf(device.createAccelerationStructure(
                   {.type = AccelerationStructureType::OpacityMicromap, .size = kSmall, .captureReplay = true})) ==
               Result::ErrorInvalidArgument);
     }
     if (capsOf(instance, kFirstAdapter).features.accelerationStructureCurrentSize) {
-        CHECK(code(device.createAccelerationStructurePropertyPool(
+        CHECK(resultOf(device.createAccelerationStructurePropertyPool(
                   {.property = AccelerationStructureProperty::CurrentSize, .count = 1, .opacityMicromaps = true})) ==
               Result::ErrorInvalidArgument);
     }
@@ -905,12 +892,13 @@ TEST_CASE("Vulkan refuses opacity micromap work it has no call for", "[vulkan][g
     REQUIRE(pool.has_value());
     const auto list = pool->beginCommands();
     REQUIRE(list.has_value());
-    CHECK(code(device.buildAccelerationStructure(*list,
-                                                 {.dst = *micromap,
-                                                  .src = *micromap,
-                                                  .update = true,
-                                                  .inputs = {.type = AccelerationStructureType::OpacityMicromap}})) ==
-          Result::ErrorInvalidArgument);
+    CHECK(
+        resultOf(device.buildAccelerationStructure(*list,
+                                                   {.dst = *micromap,
+                                                    .src = *micromap,
+                                                    .update = true,
+                                                    .inputs = {.type = AccelerationStructureType::OpacityMicromap}})) ==
+        Result::ErrorInvalidArgument);
     device.destroyCommandList(*list);
     CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
     const bfr_command_pool poolHandle = pool->get();
@@ -991,10 +979,10 @@ TEST_CASE("Vulkan with mesh shaders but no task shaders refuses a task pipeline"
     REQUIRE(made.has_value());
     const Device& device = *made;
     GraphicsPipelineDesc taskDesc{.vertex = {},
-                                  .fragment = {.code = std::span{bfr::test::spirv::kColorFrag}, .entryPoint = "main"},
-                                  .task = {.code = std::span{bfr::test::spirv::kTriangleTask}, .entryPoint = "main"},
+                                  .fragment = shaderCode(bfr::test::spirv::kColorFrag),
+                                  .task = shaderCode(bfr::test::spirv::kTriangleTask),
                                   .taskWorkgroupSize = {1, 1, 1},
-                                  .mesh = {.code = std::span{bfr::test::spirv::kTriangleMesh}, .entryPoint = "main"},
+                                  .mesh = shaderCode(bfr::test::spirv::kTriangleMesh),
                                   .meshWorkgroupSize = {1, 1, 1},
                                   .topology = Topology::TriangleList,
                                   .primitiveRestart = PrimitiveRestart::Off,
@@ -1038,10 +1026,8 @@ TEST_CASE("Vulkan at 1.2 without VK_EXT_extended_dynamic_state reports no dynami
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         const Device& device = *made;
-        GraphicsPipelineDesc pipelineDesc{.vertex = {.code = std::span{bfr::test::spirv::kBindlessVert},
-                                                     .entryPoint = "main"},
-                                          .fragment = {.code = std::span{bfr::test::spirv::kColorFrag},
-                                                       .entryPoint = "main"},
+        GraphicsPipelineDesc pipelineDesc{.vertex = shaderCode(bfr::test::spirv::kBindlessVert),
+                                          .fragment = shaderCode(bfr::test::spirv::kColorFrag),
                                           .topology = Topology::TriangleStrip,
                                           .primitiveRestart = PrimitiveRestart::Off,
                                           .raster = {.cull = CullMode::None},

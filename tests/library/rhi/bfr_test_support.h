@@ -17,6 +17,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <expected>
 #include <limits>
 #include <optional>
@@ -235,15 +236,17 @@ struct HeadlessDevice {
     Device device;
 };
 
-/// An Instance as desc says, with validation on, and a device on its first
-/// adapter, presenting nowhere. The device goes before its Instance.
+/// An Instance as desc says, with validation on, and a device as deviceDesc
+/// says: by default the tests' device on the first adapter, presenting
+/// nowhere. The device goes before its Instance.
 struct FirstAdapterDevice {
-    explicit FirstAdapterDevice(const InstanceDesc& desc) {
+    explicit FirstAdapterDevice(const InstanceDesc& desc,
+                                const DeviceDesc& deviceDesc = testDeviceOn(kFirstAdapter, kNoWindow)) {
         auto created = createInstance(desc, kValidation);
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         instance = std::move(*created);
-        auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
+        auto made = instance.createDevice(deviceDesc);
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         device = std::move(*made);
@@ -317,6 +320,42 @@ inline Buffer created(const Device& device, const BufferDesc& desc) {
     return std::move(*buffer);
 }
 
+/// A texture on device as desc says; the test fails when it can't be made.
+inline Texture created(const Device& device, const TextureDesc& desc) {
+    auto texture = device.createTexture(desc);
+    INFO(failureOf(texture));
+    REQUIRE(texture.has_value());
+    return std::move(*texture);
+}
+
+/// An Upload buffer on device of usage holding data; the test fails when it
+/// can't be made or mapped.
+template <class T, std::size_t N>
+Buffer uploaded(const Device& device, const std::array<T, N>& data, const BufferUsage& usage) {
+    Buffer buffer = created(device, {.size = sizeof(data), .memory = BufferMemory::Upload, .usage = usage});
+    const auto written = buffer.map();
+    REQUIRE(written.has_value());
+    std::memcpy(*written, data.data(), sizeof(data));
+    return buffer;
+}
+
+/// buffer's slot in the storage buffer table, as Buffer::bufferSlots reports it.
+inline Expected<std::uint32_t> storageSlot(Buffer& buffer) {
+    const auto slots = buffer.bufferSlots();
+    if (!slots) {
+        return std::unexpected(slots.error());
+    }
+    return slots->storage;
+}
+
+/// The entry point every shader checked in under tests/library/shaders has.
+inline constexpr std::string_view kEntryPoint = "main";
+
+/// bytes, a shader checked in under tests/library/shaders, at its entry point.
+inline ShaderCode shaderCode(std::span<const std::uint8_t> bytes) {
+    return {.code = bytes, .entryPoint = kEntryPoint};
+}
+
 /// The bytes of a buffer of size at where Buffer::map put it: map gives no size.
 inline std::span<std::byte> mappedBytes(void* data, std::uint64_t size) {
     return {static_cast<std::byte*>(data), size};
@@ -343,6 +382,13 @@ inline Result resultOf(bfr_result result) {
     return static_cast<Result>(result);
 }
 
+/// What a bfr.hpp call returned, as its failure's code; Result{} where it
+/// succeeded.
+template <class T>
+Result resultOf(const Expected<T>& result) {
+    return result.has_value() ? Result{} : result.error().code;
+}
+
 /// What bfr_get_buffer_slots says of buffer.
 inline Result slotsResult(const Device& device, bfr_buffer buffer) {
     bfr_buffer_slots slots{};
@@ -353,6 +399,18 @@ inline Result slotsResult(const Device& device, bfr_buffer buffer) {
 inline Result slotsResult(const Device& device, bfr_texture texture) {
     bfr_texture_slots slots{};
     return resultOf(bfr_get_texture_slots(device.get(), texture, &slots));
+}
+
+/// What bfr_get_sampler_slot says of sampler.
+inline Result slotResult(const Device& device, bfr_sampler sampler) {
+    std::uint32_t slot = 0;
+    return resultOf(bfr_get_sampler_slot(device.get(), sampler, &slot));
+}
+
+/// What bfr_capture_acceleration_structure says of structure.
+inline Result captureResult(const Device& device, bfr_acceleration_structure structure) {
+    bfr_acceleration_structure_capture capture{};
+    return resultOf(bfr_capture_acceleration_structure(device.get(), structure, &capture));
 }
 
 /// What bfr_reset_command_pool says of pool.
@@ -367,17 +425,21 @@ inline Result resizeResult(const Device& device, bfr_swapchain swapchain, std::u
 }
 
 /// What use returns from the bfr.h call it makes with device and a list
-/// recording on queue, from a pool of its own that goes once use returns. A
-/// call that takes a list checks the handles beside it only once it finds the
-/// list, so a stale handle such a call names is checked through this.
+/// recording on queue, from a pool of its own that goes once use returns, or
+/// why the pool or list could not be made. A call that takes a list checks the
+/// handles beside it only once it finds the list, so a stale handle such a
+/// call names is checked through this. It asserts nothing, so a destructor may
+/// call it while a failed test unwinds.
 template <class Use>
 Result inList(const Device& device, std::uint32_t queue, Use use) {
     auto pool = device.createCommandPool({.queue = queue, .listCount = kPoolLists});
-    INFO(failureOf(pool));
-    REQUIRE(pool.has_value());
+    if (!pool) {
+        return pool.error().code;
+    }
     const auto list = pool->beginCommands();
-    INFO(failureOf(list));
-    REQUIRE(list.has_value());
+    if (!list) {
+        return list.error().code;
+    }
     return resultOf(use(device, *list));
 }
 

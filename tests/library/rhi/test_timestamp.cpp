@@ -31,24 +31,10 @@ namespace {
 constexpr std::uint32_t kSide = 16;
 constexpr std::uint64_t kReadbackBytes = 4096;
 
-// An Instance and a device on its first adapter, presenting nowhere.
-struct TimestampDevice {
-    explicit TimestampDevice(const InstanceDesc& desc) {
-        auto created = createInstance(desc, kValidation);
-        INFO(failureOf(created));
-        REQUIRE(created.has_value());
-        instance = std::move(*created);
-        auto made = instance.createDevice(testDeviceOn(kFirstAdapter, kNoWindow));
-        INFO(failureOf(made));
-        REQUIRE(made.has_value());
-        device = std::move(*made);
-    }
-
-    [[nodiscard]] CapsTimestamps caps() const { return capsOf(instance, kFirstAdapter).timestamps; }
-
-    Instance instance;
-    Device device;
-};
+// What made's adapter reports of timestamps; the test fails when it can't say.
+CapsTimestamps timestampCaps(const FirstAdapterDevice& made) {
+    return capsOf(made.instance, kFirstAdapter).timestamps;
+}
 
 // Each stage that stages lists.
 std::vector<TimestampStage> listed(const TimestampStages& stages) {
@@ -81,9 +67,9 @@ TEST_CASE("Device writes a timestamp at each stage the caps list, in rendering a
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const TimestampDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
         const Device& device = made.device;
-        const CapsTimestamps caps = made.caps();
+        const CapsTimestamps caps = timestampCaps(made);
         if (!caps.graphics) {
             SKIP("the adapter's graphics queues write no timestamps");
         }
@@ -174,8 +160,8 @@ TEST_CASE("Device gives a queue's timestamp rate in the backend's one unit, and 
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const TimestampDevice made{recordingInto(backend, messages)};
-        if (!made.caps().graphics) {
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        if (!timestampCaps(made).graphics) {
             SKIP("the adapter's graphics queues write no timestamps");
         }
         const auto rate = made.device.timestampRate(0);
@@ -192,8 +178,8 @@ TEST_CASE("Device reads each host clock the caps list beside a GPU timestamp, an
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const TimestampDevice made{recordingInto(backend, messages)};
-        const HostClocks clocks = made.caps().hostClocks;
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const HostClocks clocks = timestampCaps(made).hostClocks;
         for (const auto& [has, clock] : {std::pair{clocks.monotonic, HostClock::Monotonic},
                                          std::pair{clocks.monotonicRaw, HostClock::MonotonicRaw},
                                          std::pair{clocks.performanceCounter, HostClock::PerformanceCounter}}) {
@@ -218,7 +204,7 @@ TEST_CASE("Device refuses a timestamp stage or granularity BFR doesn't have", "[
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const TimestampDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
         const Device& device = made.device;
         auto pool = device.createTimestampPool({.queue = 0, .count = 1});
         REQUIRE(pool.has_value());
@@ -254,7 +240,7 @@ TEST_CASE("Device counts the CPU time of each call when the InstanceDesc asks fo
     {
         InstanceDesc desc = recordingInto(backend, messages);
         desc.callTimings = true;
-        const TimestampDevice made{desc};
+        const FirstAdapterDevice made{desc};
         const Device& device = made.device;
         for (std::uint64_t round = 0; round < kBuffers; ++round) {
             auto buffer = device.createBuffer(
@@ -279,7 +265,7 @@ TEST_CASE("Device counts the CPU time of each call when the InstanceDesc asks fo
         CHECK(own->at(static_cast<std::size_t>(Call::InstanceCreateDevice)).count == 1);
     }
     {
-        const TimestampDevice untimed{recordingInto(backend, messages)};
+        const FirstAdapterDevice untimed{recordingInto(backend, messages)};
         CHECK(untimed.device.callTimings().error().code == Result::ErrorInvalidArgument);
         CHECK(untimed.instance.instanceCallTimings().error().code == Result::ErrorInvalidArgument);
     }

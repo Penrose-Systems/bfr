@@ -20,7 +20,6 @@
 #include <numeric>
 #include <span>
 #include <string>
-#include <utility>
 #include <vector>
 
 using namespace bfr;
@@ -42,13 +41,6 @@ constexpr std::uint32_t kInset = 4;
 constexpr TextureUsage kCopies{.copySrc = true, .copyDst = true};
 // A number Format has no value for.
 constexpr auto kNoSuchFormat = static_cast<Format>(0xffff);
-
-Texture created(const Device& device, const TextureDesc& desc) {
-    auto texture = device.createTexture(desc);
-    INFO(failureOf(texture));
-    REQUIRE(texture.has_value());
-    return std::move(*texture);
-}
 
 // A format the copy runs in, with the size of its texel blocks, which the
 // caller knows of its own data, and the shape of texture it fills.

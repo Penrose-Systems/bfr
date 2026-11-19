@@ -67,13 +67,6 @@ Result acquireResult(const Device& device, bfr_swapchain swapchain) {
     return resultOf(bfr_acquire(device.get(), swapchain, kTestWait, &status));
 }
 
-// What bfr_capture_acceleration_structure says of structure, which may be
-// stale.
-Result captureResult(const Device& device, bfr_acceleration_structure structure) {
-    bfr_acceleration_structure_capture capture{};
-    return resultOf(bfr_capture_acceleration_structure(device.get(), structure, &capture));
-}
-
 // What one frame's calls failed with, or nothing; it holds no string, so
 // checking it allocates nothing.
 struct FrameFailure {

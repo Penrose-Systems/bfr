@@ -34,45 +34,11 @@ using namespace bfr::test;
 
 namespace {
 
-// An Instance and a device on its first adapter, presenting nowhere, holding
-// what desc says.
-struct SamplerDevice {
-    SamplerDevice(const InstanceDesc& instanceDesc, const DeviceDesc& desc) {
-        auto created = createInstance(instanceDesc, kValidation);
-        INFO(failureOf(created));
-        REQUIRE(created.has_value());
-        instance = std::move(*created);
-        auto made = instance.createDevice(desc);
-        INFO(failureOf(made));
-        REQUIRE(made.has_value());
-        device = std::move(*made);
-    }
-
-    Instance instance;
-    Device device;
-};
-
 Sampler created(const Device& device, const SamplerDesc& desc) {
     auto sampler = device.createSampler(desc);
     INFO(failureOf(sampler));
     REQUIRE(sampler.has_value());
     return std::move(*sampler);
-}
-
-// buffer's slot in the storage buffer table.
-Expected<std::uint32_t> storageSlot(Buffer& buffer) {
-    const auto slots = buffer.bufferSlots();
-    if (!slots) {
-        return std::unexpected(slots.error());
-    }
-    return slots->storage;
-}
-
-// What bfr_get_sampler_slot says of a sampler handle, which may be stale:
-// bfr.hpp names a sampler only by a live Sampler.
-Result slotResult(const Device& device, bfr_sampler sampler) {
-    std::uint32_t slot = 0;
-    return resultOf(bfr_get_sampler_slot(device.get(), sampler, &slot));
 }
 
 // The push constants sample.comp declares.
@@ -101,9 +67,9 @@ TEST_CASE("Device gives each sampler its own slot, and refuses one past the tabl
     constexpr std::uint32_t kSlots = 2;
     std::vector<std::string> messages;
     {
-        const SamplerDevice made{recordingInto(backend, messages),
-                                 testDeviceWith(kFirstAdapter, kNoWindow,
-                                                [](DeviceDesc& desc) { desc.maxBindlessSamplers = kSlots; })};
+        const FirstAdapterDevice made{recordingInto(backend, messages),
+                                      testDeviceWith(kFirstAdapter, kNoWindow,
+                                                     [](DeviceDesc& desc) { desc.maxBindlessSamplers = kSlots; })};
         const Device& device = made.device;
         Sampler first = created(device, SamplerDesc{});
         Sampler second = created(device, {.magFilter = Filter::Linear, .minFilter = Filter::Linear});
@@ -130,7 +96,7 @@ TEST_CASE("Device fails sampler calls with RhiInvalidHandle for a sampler that i
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const SamplerDevice made{recordingInto(backend, messages), testDeviceOn(kFirstAdapter, kNoWindow)};
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
         const Device& device = made.device;
         Sampler sampler = created(device, SamplerDesc{});
         const bfr_sampler gone = destroyed(sampler);
@@ -148,7 +114,7 @@ TEST_CASE("Device destroys the samplers left when it goes, and says so", "[rhi][
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const SamplerDevice made{recordingInto(backend, messages), testDeviceOn(kFirstAdapter, kNoWindow)};
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
         // A Sampler keeps its Device alive, so one is left only through bfr.h:
         // SamplerDesc{} as bfr_sampler_desc, never destroyed.
         const bfr_sampler_desc desc{};
@@ -170,7 +136,7 @@ TEST_CASE("Device samples a texture through a sampler's slot: nearest and linear
     }
     std::vector<std::string> messages;
     {
-        const SamplerDevice made{recordingInto(backend, messages), testDeviceOn(kFirstAdapter, kNoWindow)};
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
         const Device& device = made.device;
         const CapsLimits limits = capsOf(made.instance, kFirstAdapter).limits;
 
@@ -209,8 +175,7 @@ TEST_CASE("Device samples a texture through a sampler's slot: nearest and linear
         Buffer readback = created(device,
                                   {.size = 2 * kBytes, .memory = BufferMemory::Readback, .usage = {.copyDst = true}});
         auto pipeline = device.createComputePipeline(
-            {.compute = {.code = bfr::test::spirv::kSampleComp, .entryPoint = "main"},
-             .workgroupSize = {kSamples, 1, 1}});
+            {.compute = shaderCode(bfr::test::spirv::kSampleComp), .workgroupSize = {kSamples, 1, 1}});
         INFO(failureOf(pipeline));
         REQUIRE(pipeline.has_value());
 

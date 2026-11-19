@@ -20,7 +20,6 @@
 #include <cstdint>
 #include <span>
 #include <string>
-#include <string_view>
 #include <vector>
 
 using namespace bfr;
@@ -29,19 +28,13 @@ using namespace bfr::test;
 namespace {
 
 constexpr std::uint32_t kWorkgroup = 64;
-constexpr std::string_view kEntryPoint = "main";
-
-ShaderCode spirv(std::span<const std::uint8_t> bytes) {
-    return {.code = bytes, .entryPoint = kEntryPoint};
-}
-
-const ComputePipelineDesc kCompute{.compute = spirv(bfr::test::spirv::kBindlessComp),
+const ComputePipelineDesc kCompute{.compute = shaderCode(bfr::test::spirv::kBindlessComp),
                                    .workgroupSize = {kWorkgroup, 1, 1}};
 
 // A pipeline that renders a color target with depth, blending the color.
 GraphicsPipelineDesc graphicsDesc() {
-    GraphicsPipelineDesc desc{.vertex = spirv(bfr::test::spirv::kBindlessVert),
-                              .fragment = spirv(bfr::test::spirv::kBindlessFrag),
+    GraphicsPipelineDesc desc{.vertex = shaderCode(bfr::test::spirv::kBindlessVert),
+                              .fragment = shaderCode(bfr::test::spirv::kBindlessFrag),
                               .topology = Topology::TriangleList,
                               .primitiveRestart = PrimitiveRestart::Off,
                               .raster = {.cull = CullMode::Back, .frontFace = FrontFace::CounterClockwise},
