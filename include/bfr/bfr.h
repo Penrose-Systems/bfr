@@ -430,17 +430,6 @@ typedef enum bfr_alpha_mode {
     BFR_ALPHA_MODE_FORCE32 = 0x7FFFFFFF
 } bfr_alpha_mode;
 
-// What a queue runs.
-typedef enum bfr_queue_type {
-    // Graphics, compute and copies.
-    BFR_QUEUE_TYPE_GRAPHICS = 0,
-    // Compute and copies.
-    BFR_QUEUE_TYPE_COMPUTE = 1,
-    // Copies alone.
-    BFR_QUEUE_TYPE_COPY = 2,
-    BFR_QUEUE_TYPE_FORCE32 = 0x7FFFFFFF
-} bfr_queue_type;
-
 // What the backend said of a swapchain as an image was acquired or presented.
 typedef enum bfr_swapchain_status {
     // It said nothing more than that the call succeeded.
@@ -3646,7 +3635,7 @@ BFR_API bfr_result bfr_get_formats(
 
 // Writes what a swapchain for the window in desc may be on an adapter. Asks the window system each
 // time, since the window changes. Fails with present_unsupported when the adapter can't present to
-// the window.
+// the window, and unsupported when the backend can't be asked whether it does, naming why.
 BFR_API bfr_result bfr_get_swapchain_caps(
     bfr_instance* instance,
     uint32_t adapter,

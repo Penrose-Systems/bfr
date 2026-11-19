@@ -158,7 +158,8 @@ TEST_CASE("Vulkan reports a failed surface query as the failure it is", "[vulkan
     CHECK_THAT(failed.message.text(), Catch::Matchers::Equals(function + ": VK_ERROR_UNKNOWN"));
 }
 
-TEST_CASE("Vulkan doesn't ask NVIDIA's driver about a headless window's swapchain on a loader that lets it crash",
+TEST_CASE("Vulkan doesn't ask NVIDIA's driver about a headless window's swapchain on a loader that lets it crash, "
+          "and says so",
           "[vulkan][caps][gpu]") {
     const LoaderVersion loader{"1.4.318"};
     const AdapterOverrideLayer adapterOverride;
@@ -170,9 +171,8 @@ TEST_CASE("Vulkan doesn't ask NVIDIA's driver about a headless window's swapchai
     const auto caps = rhi->swapchainCaps(cpuAdapter(*rhi), {.window = kHeadless});
 
     REQUIRE_FALSE(caps.has_value());
-    CHECK(caps.error().code == Result::ErrorPresentUnsupported);
-    CHECK_THAT(caps.error().message.text(), Catch::Matchers::ContainsSubstring("can't present to this window"));
-    CHECK_THAT(caps.error().message.text(), !Catch::Matchers::ContainsSubstring("loader"));
+    CHECK(caps.error().code == Result::ErrorUnsupported);
+    CHECK_THAT(caps.error().message.text(), Catch::Matchers::ContainsSubstring("loader 1.4.318"));
 }
 
 TEST_CASE("Vulkan device without VK_EXT_memory_budget fails with RhiUnsupported", "[vulkan][caps][gpu]") {

@@ -3633,7 +3633,8 @@ public:
 
     /// Writes what a swapchain for the window in desc may be on an adapter. Asks the window system
     /// each time, since the window changes. Fails with present_unsupported when the adapter can't
-    /// present to the window.
+    /// present to the window, and unsupported when the backend can't be asked whether it does,
+    /// naming why.
     [[nodiscard]] Expected<SwapchainCaps> swapchainCaps(std::uint32_t adapter, const SwapchainQuery& desc) const;
 
     /// Lists the formats and color spaces a swapchain for the window in desc may use on an adapter,

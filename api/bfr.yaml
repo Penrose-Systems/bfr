@@ -306,13 +306,6 @@ enums:
       postmultiplied: {value: 2, doc: "The window multiplies colors by alpha."}
       inherit: {value: 3, doc: The window system decides how alpha blends.}
 
-  queue_type:
-    doc: What a queue runs.
-    values:
-      graphics: {value: 0, doc: "Graphics, compute and copies."}
-      compute: {value: 1, doc: "Compute and copies."}
-      copy: {value: 2, doc: Copies alone.}
-
   swapchain_status:
     doc: What the backend said of a swapchain as an image was acquired or presented.
     values:
@@ -3198,7 +3191,8 @@ functions:
     doc: >-
       Writes what a swapchain for the window in desc may be on an
       adapter. Asks the window system each time, since the window changes.
-      Fails with present_unsupported when the adapter can't present to the window.
+      Fails with present_unsupported when the adapter can't present to the window,
+      and unsupported when the backend can't be asked whether it does, naming why.
     returns: result
     params:
       - {name: instance, type: instance}

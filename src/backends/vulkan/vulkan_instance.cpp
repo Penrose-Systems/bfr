@@ -540,35 +540,26 @@ auto VulkanInstance::askAboutSurface(std::size_t adapter, const core::window::Na
     // VUID-vkGetPhysicalDeviceSurfaceFormatsKHR-surface-06525,
     // VUID-vkGetPhysicalDeviceSurfacePresentModesKHR-surface-06525).
     VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
-    const auto presenting = presentingOn(adapter, queueFamilies(vk_, physicalDevice).size(), *surface);
+    const auto presenting = presentsAtAll(physicalDevice, *surface);
     if (!presenting) {
         return std::unexpected(presenting.error());
     }
-    if (std::ranges::none_of(*presenting, [](VkBool32 presents) { return presents == VK_TRUE; })) {
+    if (!*presenting) {
         return core::failure(core::ErrorCode::RhiPresentUnsupported, "{} can't present to this window",
                              adapters_[adapter].name);
     }
     return query(vk_, physicalDevice, surface->handle());
 }
 
-core::Result<std::vector<VkBool32>> VulkanInstance::presentingOn(std::size_t adapter, std::size_t familyCount,
-                                                                 const VulkanSurface& surface) const {
-    VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
-    std::vector<VkBool32> presenting(familyCount);
-    if (presentQueryCrashes(physicalDevice, surface)) {
-        BFR_LOG_INFO(logger(),
-                     "{} does not present to headless surfaces; not asked, since loader {} would crash its driver",
-                     adapters_[adapter].name, versionName(loaderVersion_));
-        return presenting;
-    }
-    for (std::uint32_t family = 0; family < presenting.size(); ++family) {
-        const auto answer = presents(physicalDevice, family, surface);
-        if (!answer) {
-            return std::unexpected(answer.error());
+core::Result<bool> VulkanInstance::presentsAtAll(VkPhysicalDevice adapter, const VulkanSurface& surface) const {
+    const std::size_t familyCount = queueFamilies(vk_, adapter).size();
+    for (std::uint32_t family = 0; family < familyCount; ++family) {
+        const auto answer = presents(adapter, family, surface);
+        if (!answer || *answer) {
+            return answer;
         }
-        presenting[family] = *answer ? VK_TRUE : VK_FALSE;
     }
-    return presenting;
+    return false;
 }
 
 core::Result<VulkanSurface> VulkanInstance::surfaceFor(const core::window::NativeWindow& window) const {

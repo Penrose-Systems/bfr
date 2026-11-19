@@ -587,26 +587,6 @@ enum class AlphaMode : std::int32_t {
     return {};
 }
 
-/// What a queue runs.
-enum class QueueType : std::int32_t {
-    /// Graphics, compute and copies.
-    Graphics = BFR_QUEUE_TYPE_GRAPHICS,
-    /// Compute and copies.
-    Compute = BFR_QUEUE_TYPE_COMPUTE,
-    /// Copies alone.
-    Copy = BFR_QUEUE_TYPE_COPY,
-};
-
-/// value's name in bfr.yaml; empty for a value QueueType doesn't have.
-[[nodiscard]] constexpr std::string_view name(QueueType value) {
-    switch (value) {
-    case QueueType::Graphics: return "graphics";
-    case QueueType::Compute: return "compute";
-    case QueueType::Copy: return "copy";
-    }
-    return {};
-}
-
 /// What the backend said of a swapchain as an image was acquired or presented.
 enum class SwapchainStatus : std::int32_t {
     /// It said nothing more than that the call succeeded.

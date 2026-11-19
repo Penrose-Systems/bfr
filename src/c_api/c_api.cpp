@@ -2352,6 +2352,9 @@ bfr_result bfr_get_swapchain_caps(bfr_instance* instance, uint32_t adapter, cons
         if (instance == nullptr || desc == nullptr || caps == nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instance, desc and caps must not be null");
         }
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_swapchain_query takes no chained structs");
+        }
         if (const auto failed = checkAdapter(*instance, adapter)) {
             return *failed;
         }
@@ -2374,6 +2377,9 @@ bfr_result bfr_get_swapchain_formats(bfr_instance* instance, uint32_t adapter, c
     return guarded([&] {
         if (instance == nullptr || desc == nullptr || count == nullptr) {
             return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "instance, desc and count must not be null");
+        }
+        if (desc->next != nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "bfr_swapchain_query takes no chained structs");
         }
         if (const auto failed = checkAdapter(*instance, adapter)) {
             return *failed;
