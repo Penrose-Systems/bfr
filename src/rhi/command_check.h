@@ -213,8 +213,8 @@ struct RecordState {
 /// are none, or run past the available layers it may draw to: the texture's
 /// layers, or a 3D texture's depth slices at its mip level. Each backend's
 /// beginRendering calls it for each attachment it looks up: past them,
-/// Vulkan's rendering is invalid (VUID-VkRenderingInfo-imageView-06070), and
-/// D3D12's and Metal's views have no such layers.
+/// Vulkan's rendering is invalid (VUID-VkRenderingInfo-viewMask-06069, -10859,
+/// -10860), and D3D12's and Metal's views have no such layers.
 [[nodiscard]] inline core::Result<void> checkAttachmentLayers(std::uint32_t layer, std::uint32_t layerCount,
                                                               std::uint32_t available) {
     if (layerCount == 0 || std::uint64_t{layer} + layerCount > available) {
