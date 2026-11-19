@@ -2,7 +2,7 @@
 // that every test program sees the same one however it is started: ctest, the
 // binary directly, a debugger. A variable the caller set always wins.
 
-#include <cstdlib>
+#include <cstdlib> // NOLINT(misc-include-cleaner): setenv is POSIX; stdlib.h declares it, which modernize-deprecated-headers refuses
 
 namespace {
 
