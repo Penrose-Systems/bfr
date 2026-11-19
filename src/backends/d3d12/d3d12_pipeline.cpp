@@ -351,8 +351,14 @@ core::Result<D3D12Pipeline> createD3D12GraphicsPipeline(ID3D12Device& device, co
     // Only the masks' low 8 bits count, so only they need be the same.
     const bool sameMasks = (front.readMask & kStencilMaskBits) == (back.readMask & kStencilMaskBits) &&
                            (front.writeMask & kStencilMaskBits) == (back.writeMask & kStencilMaskBits);
+    // D3D12_DEPTH_STENCIL_DESC holds one read and one write mask for both
+    // faces. Per-face masks need D3D12_DEPTH_STENCIL_DESC2 and OPTIONS14's
+    // IndependentFrontAndBackStencilRefMaskSupported (d3d12.h), which BFR
+    // doesn't use yet, so this is BFR's refusal, not the adapter's.
     if (desc.depthStencil.stencilTest && !sameMasks) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "the adapter masks both stencil faces the same way");
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "BFR's D3D12 pipelines take one stencil mask for both faces; per-face masks aren't "
+                             "built yet");
     }
     // D3D12_RASTERIZER_DESC holds the bias as an INT, so a fraction, or a
     // value past an INT, would be cut off. D3D12_RASTERIZER_DESC1 holds it as

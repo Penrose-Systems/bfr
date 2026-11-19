@@ -261,14 +261,18 @@ core::Result<void> D3D12Device::executeIndirect(CommandListHandle commandList, I
     if (kind != IndirectKind::Dispatch) {
         // A short array the caller sized; the stride comes with each call.
         const auto signatures = std::ranges::find(drawSignatures_, stride, &D3D12DrawSignatures::stride);
-        signature = signatures == drawSignatures_.end() ? nullptr
-                    : kind == IndirectKind::Draw        ? signatures->draw.Get()
-                                                        : signatures->drawIndexed.Get();
-        if (signature == nullptr) {
+        if (signatures == drawSignatures_.end()) {
             return core::failure(core::ErrorCode::RhiUnsupported,
-                                 "the device has no signature of stride {} for these arguments: the stride is not in "
-                                 "DeviceDesc::indirectStrides, or is less than the arguments' size",
+                                 "D3D12 fixes the stride in a command signature, and stride {} is not in "
+                                 "DeviceDesc::indirectStrides",
                                  stride);
+        }
+        signature = kind == IndirectKind::Draw ? signatures->draw.Get() : signatures->drawIndexed.Get();
+        // D3D12 takes a byte stride only "large enough to hold all data"
+        // (DirectX-Specs, IndirectDrawing, runtime validation).
+        if (signature == nullptr) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 "stride {} holds less than these arguments, which D3D12 refuses", stride);
         }
     }
     (*list)->list->ExecuteIndirect(signature, maxCommandCount, (*found)->resource.Get(), offset, count, countOffset);
