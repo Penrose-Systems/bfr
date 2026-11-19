@@ -69,8 +69,7 @@ struct AdapterOverrideLayer {
     explicit AdapterOverrideLayer(const std::string& above = {})
         : enable{"VK_INSTANCE_LAYERS", (above.empty() ? "" : above + ":") + "VK_LAYER_BFR_adapter_override"} {}
 
-    ScopedEnv path{"VK_ADD_LAYER_PATH",
-                   std::string{std::getenv("VK_ADD_LAYER_PATH")} + ":" + BFR_TEST_ADAPTER_LAYER_PATH};
+    ScopedEnv path{"VK_LAYER_PATH", std::string{std::getenv("VK_LAYER_PATH")} + ":" + BFR_TEST_ADAPTER_LAYER_PATH};
     ScopedEnv enable;
 };
 

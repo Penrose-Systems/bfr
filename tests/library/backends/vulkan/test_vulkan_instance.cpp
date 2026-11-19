@@ -85,9 +85,9 @@ TEST_CASE("Vulkan with validation reports a broken layer manifest", "[vulkan][gp
     const auto layers = std::filesystem::temp_directory_path() / "bfr_broken_layer";
     std::filesystem::create_directories(layers);
     std::ofstream{layers / "broken.json"} << "{ not json";
-    const char* vcpkgLayers = std::getenv("VK_ADD_LAYER_PATH");
+    const char* vcpkgLayers = std::getenv("VK_LAYER_PATH");
     REQUIRE(vcpkgLayers != nullptr);
-    const ScopedEnv layerPath("VK_ADD_LAYER_PATH", std::string{vcpkgLayers} + ":" + layers.string());
+    const ScopedEnv layerPath("VK_LAYER_PATH", std::string{vcpkgLayers} + ":" + layers.string());
     std::vector<std::string> messages;
 
     const auto rhi = createInstance(recordingInto(messages), kValidation);
@@ -117,10 +117,10 @@ TEST_CASE("Vulkan with validation fails when the layer's library is missing", "[
                   "library_path": "./libVkLayer_missing.so", "api_version": "1.4.0",
                   "implementation_version": "1", "description": "Names a library that does not exist"}
     })";
-    const char* vcpkgLayers = std::getenv("VK_ADD_LAYER_PATH");
+    const char* vcpkgLayers = std::getenv("VK_LAYER_PATH");
     REQUIRE(vcpkgLayers != nullptr);
     // First in the path, so the loader takes this manifest over vcpkg's.
-    const ScopedEnv layerPath("VK_ADD_LAYER_PATH", layers.string() + ":" + vcpkgLayers);
+    const ScopedEnv layerPath("VK_LAYER_PATH", layers.string() + ":" + vcpkgLayers);
     std::vector<std::string> messages;
 
     const auto rhi = createInstance(recordingInto(messages), kValidation);

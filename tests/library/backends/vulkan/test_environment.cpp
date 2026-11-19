@@ -14,11 +14,12 @@ void setDefault(const char* name, const char* value) {
 
 struct VulkanTestEnvironment {
     VulkanTestEnvironment() {
-        // The loader takes vcpkg's validation layer ahead of an older system
-        // one. It keeps drivers loaded after the instance goes: unloading one
-        // strands the memory its globals still hold, which LeakSanitizer then
-        // reports as leaked.
-        setDefault("VK_ADD_LAYER_PATH", BFR_TEST_LAYER_PATH);
+        // The loader searches only vcpkg's validation layer: given a system
+        // copy too, it reports the duplicate through the message callback. It
+        // keeps drivers loaded after the instance goes: unloading one strands
+        // the memory its globals still hold, which LeakSanitizer then reports
+        // as leaked.
+        setDefault("VK_LAYER_PATH", BFR_TEST_LAYER_PATH);
         setDefault("VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING", "1");
 #ifdef BFR_TEST_DRIVER_FILES
         // NVIDIA's driver crashes ThreadSanitizer; lavapipe runs clean under it.
