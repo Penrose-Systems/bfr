@@ -65,7 +65,7 @@ enums:
       error_out_of_memory: {value: -2, doc: An allocation failed.}
       error_instance_failed: {value: -3, doc: The backend refused to create the instance.}
       error_loader_failed: {value: -4, doc: The backend's library could not be loaded.}
-      error_validation_unavailable: {value: -5, doc: Validation was asked for but the layer is missing.}
+      error_validation_unavailable: {value: -5, doc: "Validation was asked for, but the layer is missing or can't send its messages to the message callback."}
       error_no_adapter: {value: -6, doc: No adapter is usable; the message says why for each.}
       error_device_failed: {value: -7, doc: The backend refused to create the device.}
       error_device_lost: {value: -8, doc: The device was lost. Every later call on it returns this.}

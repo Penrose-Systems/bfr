@@ -127,13 +127,10 @@ core::Result<void> D3D12Instance::reportMessages(D3D12Adapter& native) {
         return core::failure(core::ErrorCode::RhiValidationUnavailable,
                              D3D12Failure{.call = call, .result = result}.message());
     };
-    // Without ID3D12InfoQueue1 the debug layer still runs, and its messages
-    // go to the debugger, as D3D12 sends them.
+    // Without ID3D12InfoQueue1 the debug layer's messages can't reach the
+    // message callback, so validation as asked for is unavailable.
     if (const HRESULT result = native.device.As(&native.messages); FAILED(result)) {
-        BFR_LOG_WARN(
-            logger_, "{}; validation messages go to the debugger",
-            D3D12Failure{.call = "ID3D12Device::QueryInterface(ID3D12InfoQueue1)", .result = result}.message());
-        return {};
+        return unavailable("ID3D12Device::QueryInterface(ID3D12InfoQueue1)", result);
     }
     // The messages go to the logger and not to the debugger as well.
     native.messages->SetMuteDebugOutput(TRUE);

@@ -29,7 +29,8 @@ enum class Result : std::int32_t {
     ErrorInstanceFailed = BFR_RESULT_ERROR_INSTANCE_FAILED,
     /// The backend's library could not be loaded.
     ErrorLoaderFailed = BFR_RESULT_ERROR_LOADER_FAILED,
-    /// Validation was asked for but the layer is missing.
+    /// Validation was asked for, but the layer is missing or can't send its messages to the message
+    /// callback.
     ErrorValidationUnavailable = BFR_RESULT_ERROR_VALIDATION_UNAVAILABLE,
     /// No adapter is usable; the message says why for each.
     ErrorNoAdapter = BFR_RESULT_ERROR_NO_ADAPTER,

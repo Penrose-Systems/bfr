@@ -124,7 +124,8 @@ typedef enum bfr_result {
     BFR_RESULT_ERROR_INSTANCE_FAILED = -3,
     // The backend's library could not be loaded.
     BFR_RESULT_ERROR_LOADER_FAILED = -4,
-    // Validation was asked for but the layer is missing.
+    // Validation was asked for, but the layer is missing or can't send its messages to the message
+    // callback.
     BFR_RESULT_ERROR_VALIDATION_UNAVAILABLE = -5,
     // No adapter is usable; the message says why for each.
     BFR_RESULT_ERROR_NO_ADAPTER = -6,
