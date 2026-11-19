@@ -281,7 +281,7 @@ core::Result<void> MetalDevice::copyBufferToTexture(CommandListHandle commandLis
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    if (auto checked = checkAspects(regions); !checked) {
+    if (auto checked = checkAspects((*to)->format, regions); !checked) {
         return checked;
     }
     // Metal 4 copies on a compute encoder. The pool drains the autoreleased
@@ -317,7 +317,7 @@ core::Result<void> MetalDevice::copyTextureToBuffer(CommandListHandle commandLis
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    if (auto checked = checkAspects(regions); !checked) {
+    if (auto checked = checkAspects((*from)->format, regions); !checked) {
         return checked;
     }
     const AutoreleasePool pool;

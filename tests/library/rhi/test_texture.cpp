@@ -486,3 +486,59 @@ TEST_CASE("Device destroys the textures left when it goes, and says so", "[rhi][
         CHECK_THAT(message, Catch::Matchers::ContainsSubstring("1 textures were left when the device went"));
     }
 }
+
+TEST_CASE("Device refuses a buffer copy of an aspect the texture's format lacks", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        constexpr std::uint64_t kBufferSize = 4096;
+        Buffer buffer = created(device, BufferDesc{.size = kBufferSize,
+                                                   .memory = BufferMemory::Upload,
+                                                   .usage = {.copySrc = true, .copyDst = true}});
+        const auto textureOf = [&device](Format format, TextureUsage usage) {
+            return created(device, {.dimension = TextureDimension::D2,
+                                    .format = format,
+                                    .width = kWidth,
+                                    .height = kHeight,
+                                    .depth = 1,
+                                    .layers = 1,
+                                    .mipLevels = 1,
+                                    .samples = 1,
+                                    .usage = usage});
+        };
+        Texture color = textureOf(Format::Rgba8Unorm, kCopies);
+        Texture depth = textureOf(Format::D32Float, {.copySrc = true, .copyDst = true, .depthStencil = true});
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = pool->beginCommands();
+        REQUIRE(list.has_value());
+        const auto region = [](TextureAspect aspect) {
+            return BufferTextureCopy{.bufferOffset = 0,
+                                     .bytesPerRow = 0,
+                                     .rowsPerImage = 0,
+                                     .mipLevel = 0,
+                                     .layer = 0,
+                                     .aspect = aspect,
+                                     .x = 0,
+                                     .y = 0,
+                                     .z = 0,
+                                     .width = kWidth,
+                                     .height = kHeight,
+                                     .depth = 1};
+        };
+
+        for (const auto& [texture, aspect] :
+             {std::pair{&color, TextureAspect::Depth}, std::pair{&depth, TextureAspect::Color},
+              std::pair{&depth, TextureAspect::Stencil}}) {
+            const BufferTextureCopy wrong = region(aspect);
+            INFO(static_cast<int>(aspect));
+            CHECK(device.copyBufferToTexture(*list, buffer, *texture, std::span{&wrong, 1}).error().code ==
+                  Result::ErrorInvalidArgument);
+            CHECK(device.copyTextureToBuffer(*list, *texture, buffer, std::span{&wrong, 1}).error().code ==
+                  Result::ErrorInvalidArgument);
+        }
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}

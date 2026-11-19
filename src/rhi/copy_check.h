@@ -30,11 +30,14 @@ namespace bfr::rhi {
     return {};
 }
 
-/// Fails with RhiInvalidCall when a region's aspect is not one BFR has. Each
-/// backend's buffer-texture copies call it before recording.
-[[nodiscard]] inline core::Result<void> checkAspects(std::span<const BufferTextureCopy> regions) {
+/// Fails as checkAspect does for any region's aspect of format, the copied
+/// texture's. Each backend's buffer-texture copies call it before recording:
+/// an aspect the format lacks is invalid on Vulkan
+/// (VUID-vkCmdCopyBufferToImage-imageSubresource-09105), names no plane on D3D12,
+/// and Metal's blit options can't express it.
+[[nodiscard]] inline core::Result<void> checkAspects(Format format, std::span<const BufferTextureCopy> regions) {
     for (const BufferTextureCopy& region : regions) {
-        if (auto checked = checkKnown(region.aspect, "texture aspect"); !checked) {
+        if (auto checked = checkAspect(format, region.aspect); !checked) {
             return checked;
         }
     }

@@ -640,7 +640,7 @@ core::Result<void> D3D12Device::copyBufferToTexture(CommandListHandle commandLis
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    if (auto checked = checkAspects(regions); !checked) {
+    if (auto checked = checkAspects((*to)->desc.format, regions); !checked) {
         return checked;
     }
     if (auto checked = checkRowPitches(regions); !checked) {
@@ -675,7 +675,7 @@ core::Result<void> D3D12Device::copyTextureToBuffer(CommandListHandle commandLis
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    if (auto checked = checkAspects(regions); !checked) {
+    if (auto checked = checkAspects((*from)->desc.format, regions); !checked) {
         return checked;
     }
     if (auto checked = checkRowPitches(regions); !checked) {

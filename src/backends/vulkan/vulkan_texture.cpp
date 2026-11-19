@@ -558,7 +558,7 @@ core::Result<void> VulkanDevice::copyBufferToTexture(CommandListHandle commandLi
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    if (auto checked = checkAspects(regions); !checked) {
+    if (auto checked = checkAspects((*to)->format(), regions); !checked) {
         return checked;
     }
     // Every region is checked before any is recorded, so a bad one leaves the
@@ -590,7 +590,7 @@ core::Result<void> VulkanDevice::copyTextureToBuffer(CommandListHandle commandLi
     if (!to) {
         return std::unexpected(std::move(to.error()));
     }
-    if (auto checked = checkAspects(regions); !checked) {
+    if (auto checked = checkAspects((*from)->format(), regions); !checked) {
         return checked;
     }
     // Every region is checked before any is recorded, so a bad one leaves the
