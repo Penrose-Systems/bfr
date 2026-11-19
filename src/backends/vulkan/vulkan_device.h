@@ -60,6 +60,9 @@ struct VulkanDeviceSetup {
     bool hasBudget = false;
     bool hasSwapchain = false;
     std::uint32_t pushConstantsSize = 0;
+    /// The adapter's queue families, as its caps list them; the instance
+    /// that holds them outlives the device.
+    std::span<const QueueFamily> queueFamilies;
     /// VkPhysicalDeviceLimits::timestampPeriod.
     float timestampPeriod = 0;
     /// The stages a timestamp in rendering takes, and what
@@ -386,7 +389,7 @@ public:
     [[nodiscard]] core::Result<std::uint64_t> bufferAddress(BufferHandle buffer) override;
 
 private:
-    [[nodiscard]] core::Result<void> openQueues(const DeviceDesc& desc);
+    [[nodiscard]] core::Result<void> openQueues(const DeviceDesc& desc, std::span<const QueueFamily> families);
     [[nodiscard]] core::Result<std::uint64_t> completedValue(const VulkanQueue& queue) const;
     [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
     [[nodiscard]] core::Result<void> checkToken(Token token) const;
@@ -496,6 +499,9 @@ private:
     bool hasSwapchain_;
     // The bytes of push constants the pipeline layout holds.
     std::uint32_t pushConstantsSize_;
+    // The adapter's queue families, held by the instance, which outlives the
+    // device.
+    std::span<const QueueFamily> queueFamilies_;
     float timestampPeriod_;
     Timestamps timestamps_;
     Features features_;

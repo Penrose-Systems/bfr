@@ -56,16 +56,16 @@ struct QueueDesc {
 /// tables in one heap, so there they fail with RhiLimitReached when together
 /// they are more than it holds.
 ///
-/// The calls a queue's lists run follow its family's flags: rendering, draws,
-/// the calls that set their state or bind a graphics pipeline or an index
-/// buffer, and resolveTexture where it runs graphics; dispatches, ray traces,
-/// acceleration structure builds and the calls that bind a compute or ray
-/// tracing pipeline where it runs compute; copies where it runs copies;
-/// barriers, writeTimestamp and the debug label calls on any. A copy between a
-/// buffer and a texture's depth or stencil runs only where the family runs
-/// graphics, and one where it runs copies but neither graphics nor compute has
-/// a bufferOffset that is a multiple of 4. TextureLayout says which layouts
-/// each family's lists move a texture between.
+/// The calls a queue's lists run follow its family's flags, as bfr.yaml's
+/// bfr_device_desc lists them from Vulkan's rules for each command: graphics
+/// for rendering, draws and their state, resolveTexture and occlusion queries;
+/// compute for dispatches, ray traces, compute and ray tracing pipelines and
+/// acceleration structure builds, copies and (de)serializes; graphics or
+/// compute for pushConstants, queries and timestamp resolves and resets;
+/// graphics, compute or copies for copies, barriers, labels and
+/// writeTimestamp. A copy from a buffer into a texture's depth or stencil
+/// needs graphics. TextureLayout says which layouts each family's lists move a
+/// texture between.
 struct DeviceDesc {
     std::span<const QueueDesc> queues;
     std::uint32_t maxCommandLists = 0;

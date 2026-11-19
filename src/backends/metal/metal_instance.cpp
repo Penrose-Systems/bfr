@@ -157,10 +157,8 @@ core::Result<bool> MetalInstance::queueFamilyPresents(std::size_t adapter, std::
     if (auto checked = checkAdapter(adapter); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    const std::size_t families = adapters_[adapter].caps.queueFamilies.size();
-    if (family >= families) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "Metal adapters have {} queue family; family {} was asked about", families, family);
+    if (auto checked = checkQueueFamily(family, adapters_[adapter].caps.queueFamilies); !checked) {
+        return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkWindow(window); !checked) {
         return std::unexpected(std::move(checked.error()));

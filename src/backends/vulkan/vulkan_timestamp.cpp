@@ -157,10 +157,12 @@ core::Result<void> VulkanDevice::writeTimestamp(CommandListHandle commandList, T
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    // Each family's queues take the stages its caps list
-    // (QueueFamily::timestampStages).
-    if (auto queue = queueOf(**list); !queue) {
+    auto queue = queueOf(**list);
+    if (!queue) {
         return std::unexpected(std::move(queue.error()));
+    }
+    if (auto checked = checkTimestampWrite(queueFamilies_[(*queue)->family], stage); !checked) {
+        return checked;
     }
     const VulkanTimestampPool* found = timestampPools_.find(pool);
     if (found == nullptr) {

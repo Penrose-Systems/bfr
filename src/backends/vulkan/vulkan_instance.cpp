@@ -466,6 +466,7 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
                                       .hasBudget = hasBudget_[adapter],
                                       .hasSwapchain = swapchains,
                                       .pushConstantsSize = listed.caps.limits.maxPushConstantsSize,
+                                      .queueFamilies = listed.caps.queueFamilies,
                                       .timestampPeriod = adapterProperties.limits.timestampPeriod,
                                       .timestamps = listed.caps.timestamps,
                                       .features = listed.caps.features,
@@ -505,9 +506,8 @@ core::Result<bool> VulkanInstance::queueFamilyPresents(std::size_t adapter, std:
     if (auto listed = checkAdapter(adapter); !listed) {
         return std::unexpected(std::move(listed.error()));
     }
-    if (family >= adapters_[adapter].caps.queueFamilies.size()) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "{} has {} queue families; family {} was asked about",
-                             adapters_[adapter].name, adapters_[adapter].caps.queueFamilies.size(), family);
+    if (auto checked = checkQueueFamily(family, adapters_[adapter].caps.queueFamilies); !checked) {
+        return std::unexpected(std::move(checked.error()));
     }
     // The surface lives only while the family is asked: some window systems
     // allow one surface per window, and a swapchain makes its own.

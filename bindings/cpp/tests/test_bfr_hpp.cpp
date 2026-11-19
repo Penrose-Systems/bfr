@@ -146,7 +146,10 @@ std::uint32_t headlessAdapter(const bfr::Instance& instance) {
             return adapter;
         }
         INFO((*adapters)[adapter].name << ' ' << caps.error().message.text());
-        REQUIRE(caps.error().code == bfr::Result::ErrorPresentUnsupported);
+        // Unsupported: the backend can't be asked, as on a Vulkan loader that
+        // lets NVIDIA's driver crash on a headless window.
+        REQUIRE((caps.error().code == bfr::Result::ErrorPresentUnsupported ||
+                 caps.error().code == bfr::Result::ErrorUnsupported));
     }
     FAIL("no adapter presents to a headless window");
     return 0;

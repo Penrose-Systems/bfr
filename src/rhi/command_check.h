@@ -209,6 +209,19 @@ struct RecordState {
     return false;
 }
 
+/// Fails with RhiUnsupported when a queue of family writes no timestamp at
+/// stage, as its QueueFamily::timestamps and timestampStages say: Vulkan
+/// leaves such a write undefined (VUID-vkCmdWriteTimestamp2-stage-03930 and
+/// its kin, -timestampValidBits-03863).
+[[nodiscard]] inline core::Result<void> checkTimestampWrite(const QueueFamily& family, TimestampStage stage) {
+    if (!family.timestamps || !takes(family.timestampStages, stage)) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the list's queue family writes no timestamp at stage {} (QueueFamily::timestampStages)",
+                             std::to_underlying(stage));
+    }
+    return {};
+}
+
 /// Fails with RhiUnsupported where the device's Features::meshShader is
 /// false. Each backend's mesh draws call it first.
 [[nodiscard]] inline core::Result<void> checkMeshDraws(bool meshShader) {

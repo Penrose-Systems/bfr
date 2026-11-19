@@ -63,6 +63,17 @@ namespace bfr::rhi {
     return {};
 }
 
+/// Fails with RhiInvalidCall when family is not an index into families, the
+/// adapter's. checkQueueFamilies and each backend's queueFamilyPresents call
+/// it.
+[[nodiscard]] inline core::Result<void> checkQueueFamily(std::uint32_t family, std::span<const QueueFamily> families) {
+    if (family >= families.size()) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "family {} was named; the adapter has {}", family,
+                             families.size());
+    }
+    return {};
+}
+
 /// Fails with RhiInvalidCall when a queue in desc names a family not in
 /// families, the adapter's, or a family is asked for more queues than its
 /// count where that is not 0: no backend has such a family to open, and
@@ -72,9 +83,8 @@ namespace bfr::rhi {
 [[nodiscard]] inline core::Result<void> checkQueueFamilies(const DeviceDesc& desc,
                                                            std::span<const QueueFamily> families) {
     for (const QueueDesc& queue : desc.queues) {
-        if (queue.family >= families.size()) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "a queue names family {}; the adapter has {}",
-                                 queue.family, families.size());
+        if (auto checked = checkQueueFamily(queue.family, families); !checked) {
+            return checked;
         }
         const QueueFamily& family = families[queue.family];
         const auto asked = static_cast<std::size_t>(std::ranges::count(desc.queues, queue.family, &QueueDesc::family));

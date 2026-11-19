@@ -104,8 +104,11 @@ public:
     [[nodiscard]] virtual core::Result<FormatCaps> formatCaps(std::size_t adapter, Format format) const = 0;
 
     /// What a swapchain for window may be on adapters()[adapter]. window is as
-    /// Device::createSwapchain requires. Fails with RhiWindowFailed as
-    /// Device::createSwapchain describes, or when a query fails.
+    /// Device::createSwapchain requires. Fails with RhiPresentUnsupported when
+    /// no queue family of the adapter presents to window, RhiUnsupported when
+    /// the backend can't be asked whether one does, naming why, and
+    /// RhiWindowFailed as Device::createSwapchain describes, or when a query
+    /// fails.
     [[nodiscard]] virtual core::Result<SwapchainCaps> swapchainCaps(std::size_t adapter,
                                                                     const core::window::NativeWindow& window) const = 0;
 

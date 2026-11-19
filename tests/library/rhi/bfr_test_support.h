@@ -259,7 +259,10 @@ inline std::uint32_t presentingAdapter(const Instance& instance, const Window& w
             return adapter;
         }
         INFO(adapters[adapter].name << ' ' << failureOf(caps));
-        REQUIRE(caps.error().code == Result::ErrorPresentUnsupported);
+        // Unsupported: the backend can't be asked, as on a Vulkan loader that
+        // lets NVIDIA's driver crash on a headless window.
+        REQUIRE(
+            (caps.error().code == Result::ErrorPresentUnsupported || caps.error().code == Result::ErrorUnsupported));
     }
     FAIL("no adapter presents to the window");
     return 0;

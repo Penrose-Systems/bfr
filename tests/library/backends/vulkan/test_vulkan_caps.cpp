@@ -191,3 +191,37 @@ TEST_CASE("Vulkan device without VK_EXT_memory_budget fails with RhiUnsupported"
     CHECK(budget.error().code == Result::ErrorUnsupported);
     CHECK_THAT(budget.error().message.text(), Catch::Matchers::ContainsSubstring("VK_EXT_memory_budget"));
 }
+
+TEST_CASE("Vulkan refuses a timestamp at a stage the list's queue family doesn't list, with RhiUnsupported",
+          "[vulkan][caps][gpu]") {
+    std::vector<std::string> messages;
+    {
+        auto rhi = Instance::create(recordingInto(Backend::Vulkan, messages));
+        INFO(failureOf(rhi));
+        REQUIRE(rhi.has_value());
+        const auto family = familyWhere(*rhi, kFirstAdapter, [](const QueueFamily& candidate) {
+            return candidate.timestamps && !candidate.timestampStages.vertex;
+        });
+        if (!family) {
+            SKIP("every family of the adapter that writes timestamps takes the vertex stage");
+        }
+        DeviceDesc desc = kTestDevice;
+        desc.adapter = kFirstAdapter;
+        desc.queues = testQueues(*family);
+        auto device = rhi->createDevice(desc);
+        INFO(failureOf(device));
+        REQUIRE(device.has_value());
+        auto pool = device->createTimestampPool({.queue = 0, .count = 1});
+        REQUIRE(pool.has_value());
+        auto commands = device->createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(commands.has_value());
+        const auto list = commands->beginCommands();
+        REQUIRE(list.has_value());
+
+        CHECK(device->writeTimestamp(*list, *pool, 0, TimestampStage::Vertex, TimestampGranularity::Relaxed)
+                  .error()
+                  .code == Result::ErrorUnsupported);
+        CHECK(device->writeTimestamp(*list, *pool, 0, TimestampStage::End, TimestampGranularity::Relaxed).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}

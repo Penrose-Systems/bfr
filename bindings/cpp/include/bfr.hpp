@@ -359,14 +359,18 @@ static_assert(offsetof(QueueDesc, rank) == offsetof(bfr_queue_desc, rank));
 static_assert(offsetof(QueueDesc, level) == offsetof(bfr_queue_desc, level));
 
 /// How to open an adapter. The device's queues are numbered from 0 in the order queues asks for
-/// them. The calls a queue's lists run follow its family's flags: rendering, draws, the calls that
-/// set their state or bind a graphics pipeline or an index buffer, and bfr_resolve_texture where it
-/// runs graphics; dispatches, ray traces, acceleration structure builds and the calls that bind a
-/// compute or ray tracing pipeline where it runs compute; copies where it runs copies; barriers,
-/// bfr_write_timestamp and the debug label calls on any. A copy between a buffer and a texture's
-/// depth or stencil runs only where the family runs graphics, and one where it runs copies but
-/// neither graphics nor compute has a buffer_offset that is a multiple of 4. bfr_texture_layout
-/// says which layouts each family's lists move a texture between.
+/// them. The calls a queue's lists run follow its family's flags, as Vulkan's rules for each
+/// command say. Where it runs graphics: rendering, draws, the calls that set their state or bind a
+/// graphics pipeline or an index buffer, bfr_resolve_texture, and occlusion queries. Where it runs
+/// compute: dispatches, ray traces, the calls that bind a compute or ray tracing pipeline, and
+/// acceleration structure builds, copies, serializes and deserializes. Where it runs graphics or
+/// compute: bfr_push_constants, the other query calls, bfr_resolve_timestamps, and
+/// bfr_reset_timestamps where the family's timestamp_resets is set. Where it runs graphics, compute
+/// or copies: copies, barriers, the debug label calls, and bfr_write_timestamp where the family's
+/// timestamps is set. A family with none of these runs no list. A copy from a buffer into a
+/// texture's depth or stencil runs only where the family runs graphics, and a copy where it runs
+/// copies but neither graphics nor compute has a buffer_offset that is a multiple of 4.
+/// bfr_texture_layout says which layouts each family's lists move a texture between.
 struct DeviceDesc {
     /// Index into the instance's adapter list.
     std::uint32_t adapter{};

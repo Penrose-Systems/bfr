@@ -182,7 +182,7 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
                                                                  VkDevice device, const DeviceDesc& desc,
                                                                  const VulkanDeviceSetup& setup) {
     auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, desc, setup);
-    if (auto opened = made->openQueues(desc); !opened) {
+    if (auto opened = made->openQueues(desc, setup.queueFamilies); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
     // VMA takes Vulkan 1.0 to 1.4 (vk_mem_alloc.h:1142); a later device
@@ -219,6 +219,7 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       hasBudget_(setup.hasBudget),
       hasSwapchain_(setup.hasSwapchain),
       pushConstantsSize_(setup.pushConstantsSize),
+      queueFamilies_(setup.queueFamilies),
       timestampPeriod_(setup.timestampPeriod),
       timestamps_(setup.timestamps),
       features_(setup.features),
@@ -278,23 +279,17 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
     }
 }
 
-core::Result<void> VulkanDevice::openQueues(const DeviceDesc& desc) {
-    const InstanceTable& vk = instance_->instanceTable();
-    std::uint32_t familyCount = 0;
-    vk.vkGetPhysicalDeviceQueueFamilyProperties(adapter_, &familyCount, nullptr);
-    std::vector<VkQueueFamilyProperties> properties(familyCount);
-    vk.vkGetPhysicalDeviceQueueFamilyProperties(adapter_, &familyCount, properties.data());
+core::Result<void> VulkanDevice::openQueues(const DeviceDesc& desc, std::span<const QueueFamily> families) {
     // Each queue is the next of its family's, as the device's create info
     // asked for them in desc's order.
-    std::vector<std::uint32_t> opened(familyCount);
+    std::vector<std::uint32_t> opened(families.size());
     for (const QueueDesc& wanted : desc.queues) {
         const std::uint32_t family = wanted.family;
-        const VkQueueFlags flags = properties[family].queueFlags;
         auto queue = std::make_unique<VulkanQueue>();
         queue->family = family;
-        queue->sparse = (flags & VK_QUEUE_SPARSE_BINDING_BIT) != 0;
-        queue->graphics = (flags & VK_QUEUE_GRAPHICS_BIT) != 0;
-        queue->compute = (flags & VK_QUEUE_COMPUTE_BIT) != 0;
+        queue->sparse = families[family].sparse;
+        queue->graphics = families[family].graphics;
+        queue->compute = families[family].compute;
         table_.vkGetDeviceQueue(device_, family, opened[family]++, &queue->queue);
         VkSemaphoreTypeCreateInfo timeline{};
         timeline.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;

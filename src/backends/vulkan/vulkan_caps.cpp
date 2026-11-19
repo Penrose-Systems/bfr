@@ -513,14 +513,15 @@ QueueLevels levelsFrom(const VkQueueFamilyGlobalPriorityPropertiesKHR& listed) {
 // The stages a timestamp takes on a queue of a family with flags: graphics
 // stages only on a graphics queue (synchronization.adoc:838-841), compute on
 // a compute queue, copies on a graphics, compute or transfer one, and the
-// start and end of the work before it on any; none where flags is 0. The
+// start and end of the work before it on any of those; none on a family with
+// none of them (VUID-vkCmdWriteTimestamp2-commandBuffer-cmdpool). The
 // task and mesh stages need their features (VUID-vkCmdWriteTimestamp2-stage-03934,
 // -03935); the ray tracing and build stages need theirs (-07947, -10751) and
 // a compute queue (vkdocs xml/vk.xml:35792-35797).
 TimestampStages stagesFor(VkQueueFlags flags, const Features& features) {
     const bool graphics = (flags & VK_QUEUE_GRAPHICS_BIT) != 0;
     const bool compute = (flags & VK_QUEUE_COMPUTE_BIT) != 0;
-    const bool any = flags != 0;
+    const bool any = (flags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT)) != 0;
     return {.end = any,
             .start = any,
             .vertex = graphics,
@@ -574,6 +575,11 @@ std::vector<QueueFamily> queueFamiliesFrom(const InstanceTable& vk, VkPhysicalDe
         }
         // (0,0,0) is whole mip levels only (the spec's VkQueueFamilyProperties).
         const VkExtent3D extent = family.minImageTransferGranularity;
+        // vkCmdWriteTimestamp2 takes a graphics, compute or transfer queue of
+        // BFR's (VUID-vkCmdWriteTimestamp2-commandBuffer-cmdpool).
+        const bool writesTimestamps = family.timestampValidBits != 0 &&
+                                      (flags &
+                                       (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT)) != 0;
         families.push_back(
             {.graphics = graphics,
              .compute = compute,
@@ -581,8 +587,8 @@ std::vector<QueueFamily> queueFamiliesFrom(const InstanceTable& vk, VkPhysicalDe
              .sparse = (flags & VK_QUEUE_SPARSE_BINDING_BIT) != 0,
              .count = family.queueCount,
              .timestampBits = family.timestampValidBits,
-             .timestamps = family.timestampValidBits != 0,
-             .timestampStages = family.timestampValidBits != 0 ? stagesFor(flags, features) : TimestampStages{},
+             .timestamps = writesTimestamps,
+             .timestampStages = writesTimestamps ? stagesFor(flags, features) : TimestampStages{},
              .timestampResets = resets(flags),
              .levels = listsLevels ? levelsFrom(listed[index]) : QueueLevels{},
              .granularity = {.width = extent.width,
