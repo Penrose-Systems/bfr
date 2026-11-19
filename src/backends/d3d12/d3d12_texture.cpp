@@ -13,6 +13,7 @@
 #include "d3d12/d3d12_result.h"
 #include "d3d12/d3d12_sparse.h"
 #include "rhi/bindless_slots.h"
+#include "rhi/command_check.h"
 #include "rhi/copy_check.h"
 #include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
@@ -36,8 +37,6 @@
 namespace bfr::rhi::d3d12 {
 
 namespace {
-
-using Microsoft::WRL::ComPtr;
 
 D3D12_RESOURCE_DIMENSION dimensionFor(TextureDimension dimension) {
     switch (dimension) {
@@ -86,12 +85,6 @@ std::uint32_t planeOf(const FormatBlock& block, TextureAspect aspect) {
 
 UINT subresourceOf(const D3D12Texture& texture, std::uint32_t mip, std::uint32_t layer, std::uint32_t plane) {
     return mip + (layer * texture.mipLevels) + (plane * texture.mipLevels * texture.layers);
-}
-
-// The layers a texture's targets are made for: a 3D texture's depth slices at
-// its first level, any other's layers.
-std::uint32_t targetLayers(const D3D12Texture& texture) {
-    return texture.desc.dimension == TextureDimension::D3 ? texture.desc.depth : texture.layers;
 }
 
 } // namespace
@@ -229,74 +222,32 @@ D3D12_BOX boxOf(const FormatBlock& block, std::uint32_t x, std::uint32_t y, std:
 
 namespace {
 
-// A color texture's heap holds a render target view for each level and
-// layer; a depth texture's a writable depth-stencil view and a read-only one.
-constexpr UINT kColorTargetViews = 1;
-constexpr UINT kDepthTargetViews = 2;
-// Every depth slice from the first, as D3D12_TEX3D_RTV.WSize takes it.
-constexpr UINT kAllSlices = std::numeric_limits<UINT>::max();
-
-// A render target view of texture's mipLevel from layer to its last layer,
-// a 3D texture's depth slice.
-D3D12_RENDER_TARGET_VIEW_DESC colorViewFor(const D3D12Texture& texture, std::uint32_t mipLevel, std::uint32_t layer) {
+// A rendering's views name exactly the layers its attachment does, as NVRHI's
+// createRTV and createDSV make a framebuffer's (d3d12-texture.cpp):
+// layerCount layers from layer, a 3D texture's depth slices
+// (D3D12_TEX3D_RTV's FirstWSlice and WSize).
+D3D12_RENDER_TARGET_VIEW_DESC colorViewFor(const D3D12Texture& texture, std::uint32_t mipLevel, std::uint32_t layer,
+                                           std::uint32_t layerCount) {
     D3D12_RENDER_TARGET_VIEW_DESC view{};
-    view.Format = texture.dxgi;
-    const UINT layers = texture.layers - layer;
+    view.Format = texture.targetFormat;
     if (texture.desc.dimension == TextureDimension::D3) {
         view.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE3D;
-        view.Texture3D = {.MipSlice = mipLevel, .FirstWSlice = layer, .WSize = kAllSlices};
+        view.Texture3D = {.MipSlice = mipLevel, .FirstWSlice = layer, .WSize = layerCount};
     }
     else if (texture.desc.dimension == TextureDimension::D1) {
         view.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE1DARRAY;
-        view.Texture1DArray = {.MipSlice = mipLevel, .FirstArraySlice = layer, .ArraySize = layers};
+        view.Texture1DArray = {.MipSlice = mipLevel, .FirstArraySlice = layer, .ArraySize = layerCount};
     }
     else if (texture.samples > 1) {
         view.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY;
-        view.Texture2DMSArray = {.FirstArraySlice = layer, .ArraySize = layers};
+        view.Texture2DMSArray = {.FirstArraySlice = layer, .ArraySize = layerCount};
     }
     else {
         view.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2DARRAY;
-        view.Texture2DArray = {.MipSlice = mipLevel, .FirstArraySlice = layer, .ArraySize = layers, .PlaneSlice = 0};
-    }
-    return view;
-}
-
-// The heap of count descriptors a texture's render target or depth-stencil
-// views live in: made with the texture, so a rendering allocates nothing.
-core::Result<ComPtr<ID3D12DescriptorHeap>> createTargetHeap(ID3D12Device& device, D3D12_DESCRIPTOR_HEAP_TYPE type,
-                                                            UINT count) {
-    const D3D12_DESCRIPTOR_HEAP_DESC heapDesc{.Type = type,
-                                              .NumDescriptors = count,
-                                              .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
-                                              .NodeMask = 0};
-    ComPtr<ID3D12DescriptorHeap> heap;
-    if (const HRESULT result = device.CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&heap)); FAILED(result)) {
-        return failure(core::ErrorCode::RhiDeviceFailed,
-                       {.call = "ID3D12Device::CreateDescriptorHeap", .result = result});
-    }
-    return heap;
-}
-
-// A depth texture's mipLevel from layer to its last layer as a
-// depth-stencil view of format, with flags; a resource made typeless needs
-// the format named.
-D3D12_DEPTH_STENCIL_VIEW_DESC depthViewFor(const D3D12Texture& texture, DXGI_FORMAT format, D3D12_DSV_FLAGS flags,
-                                           std::uint32_t mipLevel, std::uint32_t layer) {
-    D3D12_DEPTH_STENCIL_VIEW_DESC view{};
-    view.Format = format;
-    view.Flags = flags;
-    const UINT layers = texture.layers - layer;
-    if (texture.desc.dimension == TextureDimension::D1) {
-        view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE1DARRAY;
-        view.Texture1DArray = {.MipSlice = mipLevel, .FirstArraySlice = layer, .ArraySize = layers};
-    }
-    else if (texture.samples > 1) {
-        view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY;
-        view.Texture2DMSArray = {.FirstArraySlice = layer, .ArraySize = layers};
-    }
-    else {
-        view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
-        view.Texture2DArray = {.MipSlice = mipLevel, .FirstArraySlice = layer, .ArraySize = layers};
+        view.Texture2DArray = {.MipSlice = mipLevel,
+                               .FirstArraySlice = layer,
+                               .ArraySize = layerCount,
+                               .PlaneSlice = 0};
     }
     return view;
 }
@@ -314,7 +265,61 @@ D3D12_DSV_FLAGS readOnlyFlagsFor(Format format) {
     return flags;
 }
 
+// As colorViewFor, a depth-stencil view, writing neither aspect when readOnly.
+D3D12_DEPTH_STENCIL_VIEW_DESC depthViewFor(const D3D12Texture& texture, std::uint32_t mipLevel, std::uint32_t layer,
+                                           std::uint32_t layerCount, bool readOnly) {
+    D3D12_DEPTH_STENCIL_VIEW_DESC view{};
+    view.Format = texture.targetFormat;
+    view.Flags = readOnly ? readOnlyFlagsFor(texture.desc.format) : D3D12_DSV_FLAG_NONE;
+    if (texture.desc.dimension == TextureDimension::D1) {
+        view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE1DARRAY;
+        view.Texture1DArray = {.MipSlice = mipLevel, .FirstArraySlice = layer, .ArraySize = layerCount};
+    }
+    else if (texture.samples > 1) {
+        view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY;
+        view.Texture2DMSArray = {.FirstArraySlice = layer, .ArraySize = layerCount};
+    }
+    else {
+        view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+        view.Texture2DArray = {.MipSlice = mipLevel, .FirstArraySlice = layer, .ArraySize = layerCount};
+    }
+    return view;
+}
+
+// Fails with RhiInvalidCall unless texture was made for the attachment, as
+// made says, and has layerCount layers from layer at mipLevel.
+core::Result<void> checkTarget(const D3D12Texture& texture, bool made, std::uint32_t mipLevel, std::uint32_t layer,
+                               std::uint32_t layerCount) {
+    if (!made || mipLevel >= texture.mipLevels) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "the texture has no level {} or was not made for this attachment", mipLevel);
+    }
+    return checkAttachmentLayers(layer, layerCount, targetLayersAt(texture, mipLevel));
+}
+
 } // namespace
+
+core::Result<void> writeColorTarget(ID3D12Device& device, const D3D12Texture& texture, std::uint32_t mipLevel,
+                                    std::uint32_t layer, std::uint32_t layerCount, D3D12_CPU_DESCRIPTOR_HANDLE view) {
+    if (auto checked = checkTarget(texture, texture.desc.usage.colorAttachment, mipLevel, layer, layerCount);
+        !checked) {
+        return checked;
+    }
+    const D3D12_RENDER_TARGET_VIEW_DESC desc = colorViewFor(texture, mipLevel, layer, layerCount);
+    device.CreateRenderTargetView(texture.resource.Get(), &desc, view);
+    return {};
+}
+
+core::Result<void> writeDepthTarget(ID3D12Device& device, const D3D12Texture& texture, std::uint32_t mipLevel,
+                                    std::uint32_t layer, std::uint32_t layerCount, bool readOnly,
+                                    D3D12_CPU_DESCRIPTOR_HANDLE view) {
+    if (auto checked = checkTarget(texture, texture.desc.usage.depthStencil, mipLevel, layer, layerCount); !checked) {
+        return checked;
+    }
+    const D3D12_DEPTH_STENCIL_VIEW_DESC desc = depthViewFor(texture, mipLevel, layer, layerCount, readOnly);
+    device.CreateDepthStencilView(texture.resource.Get(), &desc, view);
+    return {};
+}
 
 core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3D12Device& device,
                                               const TextureDesc& desc, const TextureSlotsHeld& slots) {
@@ -335,11 +340,9 @@ core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3
     const bool readToo = desc.usage.sampled || desc.usage.storage;
     D3D12Texture texture{.allocation = {},
                          .resource = {},
-                         .targetHeap = {},
-                         .targets = {},
-                         .targetStride = 0,
                          .desc = desc,
                          .dxgi = depth ? (readToo ? formats.typeless : formats.depth) : formats.texture,
+                         .targetFormat = depth ? formats.depth : formats.texture,
                          .mipLevels = desc.mipLevels,
                          .layers = slices ? 1 : desc.layers,
                          .samples = desc.samples,
@@ -390,50 +393,7 @@ core::Result<D3D12Texture> createD3D12Texture(D3D12MA::Allocator& allocator, ID3
     // MipLevels 0 asks D3D12 for the whole chain, so its subresources are
     // numbered by the levels it made.
     texture.mipLevels = texture.resource->GetDesc().MipLevels;
-    // A target for each level and layer, made now so a rendering makes none.
-    if (desc.usage.colorAttachment || desc.usage.depthStencil) {
-        const D3D12_DESCRIPTOR_HEAP_TYPE type = desc.usage.depthStencil ? D3D12_DESCRIPTOR_HEAP_TYPE_DSV
-                                                                        : D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        const UINT perLayer = desc.usage.depthStencil ? kDepthTargetViews : kColorTargetViews;
-        auto heap = createTargetHeap(device, type, texture.mipLevels * targetLayers(texture) * perLayer);
-        if (!heap) {
-            return std::unexpected(std::move(heap.error()));
-        }
-        texture.targetHeap = std::move(*heap);
-        texture.targets = texture.targetHeap->GetCPUDescriptorHandleForHeapStart();
-        texture.targetStride = device.GetDescriptorHandleIncrementSize(type);
-        for (std::uint32_t mip = 0; mip < texture.mipLevels; ++mip) {
-            for (std::uint32_t layer = 0; layer < targetLayersAt(texture, mip); ++layer) {
-                if (desc.usage.depthStencil) {
-                    const D3D12_DEPTH_STENCIL_VIEW_DESC view = depthViewFor(texture, formats.depth, D3D12_DSV_FLAG_NONE,
-                                                                            mip, layer);
-                    device.CreateDepthStencilView(texture.resource.Get(), &view, targetAt(texture, mip, layer, false));
-                    const D3D12_DEPTH_STENCIL_VIEW_DESC readOnly = depthViewFor(texture, formats.depth,
-                                                                                readOnlyFlagsFor(desc.format), mip,
-                                                                                layer);
-                    device.CreateDepthStencilView(texture.resource.Get(), &readOnly,
-                                                  targetAt(texture, mip, layer, true));
-                }
-                else {
-                    const D3D12_RENDER_TARGET_VIEW_DESC view = colorViewFor(texture, mip, layer);
-                    device.CreateRenderTargetView(texture.resource.Get(), &view, targetAt(texture, mip, layer, false));
-                }
-            }
-        }
-    }
     return texture;
-}
-
-D3D12_CPU_DESCRIPTOR_HANDLE targetAt(const D3D12Texture& texture, std::uint32_t mipLevel, std::uint32_t layer,
-                                     bool readOnly) {
-    if (texture.targets.ptr == 0 || mipLevel >= texture.mipLevels || layer >= targetLayersAt(texture, mipLevel)) {
-        return {};
-    }
-    const bool depth = texture.desc.usage.depthStencil;
-    const std::size_t perLayer = depth ? kDepthTargetViews : kColorTargetViews;
-    const std::size_t index = ((std::size_t{mipLevel} * targetLayers(texture) + layer) * perLayer) +
-                              (depth && readOnly ? 1U : 0U);
-    return {.ptr = texture.targets.ptr + (index * texture.targetStride)};
 }
 
 namespace {

@@ -57,6 +57,45 @@ core::Result<void> deviceFailed(const char* call, HRESULT result) {
     return failure(core::ErrorCode::RhiDeviceFailed, {.call = call, .result = result});
 }
 
+// A heap of count descriptors of type that no shader sees, as render target
+// and depth-stencil views must be in.
+core::Result<ComPtr<ID3D12DescriptorHeap>> createTargetHeap(ID3D12Device& device, D3D12_DESCRIPTOR_HEAP_TYPE type,
+                                                            UINT count) {
+    const D3D12_DESCRIPTOR_HEAP_DESC heapDesc{.Type = type,
+                                              .NumDescriptors = count,
+                                              .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+                                              .NodeMask = 0};
+    ComPtr<ID3D12DescriptorHeap> heap;
+    if (const HRESULT result = device.CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&heap)); FAILED(result)) {
+        return failure(core::ErrorCode::RhiDeviceFailed,
+                       {.call = "ID3D12Device::CreateDescriptorHeap", .result = result});
+    }
+    return heap;
+}
+
+// Makes slot's target heaps, a render target view for each color attachment
+// a rendering may have and a depth-stencil view, and where each view is.
+core::Result<void> makeTargets(ID3D12Device& device, D3D12ListSlot& slot) {
+    constexpr UINT kDepthTargets = 1;
+    auto colors = createTargetHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kMaxColorTargets);
+    if (!colors) {
+        return std::unexpected(std::move(colors.error()));
+    }
+    auto depth = createTargetHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kDepthTargets);
+    if (!depth) {
+        return std::unexpected(std::move(depth.error()));
+    }
+    slot.colorTargetHeap = std::move(*colors);
+    slot.depthTargetHeap = std::move(*depth);
+    const D3D12_CPU_DESCRIPTOR_HANDLE first = slot.colorTargetHeap->GetCPUDescriptorHandleForHeapStart();
+    const SIZE_T stride = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    for (std::size_t i = 0; i < slot.colorTargets.size(); ++i) {
+        slot.colorTargets.at(i) = {.ptr = first.ptr + (i * stride)};
+    }
+    slot.depthTarget = slot.depthTargetHeap->GetCPUDescriptorHandleForHeapStart();
+    return {};
+}
+
 // A barrier that moves image between the states a swapchain image is presented,
 // rendered to and resolved into in.
 D3D12_RESOURCE_BARRIER transition(ID3D12Resource* image, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
@@ -487,6 +526,8 @@ void D3D12Device::releaseSlots(std::uint32_t first) {
     for (std::uint32_t slot = first; slot != core::SlotChains::kEnd; slot = listSlots_.next(slot)) {
         lists_[slot].list.Reset();
         lists_[slot].allocator.Reset();
+        lists_[slot].colorTargetHeap.Reset();
+        lists_[slot].depthTargetHeap.Reset();
     }
     listSlots_.give(first);
 }
@@ -665,6 +706,10 @@ core::Result<CommandPoolHandle> D3D12Device::createCommandPool(const CommandPool
             release();
             return std::unexpected(deviceFailed("ID3D12GraphicsCommandList::Close", result).error());
         }
+        if (auto targets = makeTargets(*device_.Get(), made); !targets) {
+            release();
+            return std::unexpected(std::move(targets.error()));
+        }
     }
     const CommandPoolHandle commandPool = commandPools_.emplace(
         D3D12CommandPool{.queue = desc.queue, .first = *first, .next = *first, .recording = 0, .lastSubmit = 0});
@@ -807,7 +852,11 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
         return checked;
     }
     // Every handle is looked up before anything is recorded, so a bad one
-    // leaves the list as it was.
+    // leaves the list as it was. The views are written into the list slot's
+    // descriptors, which the list reads as it records: "the memory used to
+    // hold the descriptors for this call is immediately available for re-use
+    // after the call" (Microsoft Learn, Non Shader Visible Descriptor Heaps).
+    const D3D12ListSlot& listSlot = lists_[(*list)->slot];
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMaxColorTargets> colors{};
     std::array<std::array<FLOAT, std::tuple_size_v<ClearValues>>, kMaxColorTargets> clears{};
     std::array<D3D12Resolve, kMaxColorTargets> resolves{};
@@ -852,17 +901,13 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
             if (!texture) {
                 return std::unexpected(std::move(texture.error()));
             }
-            if (auto checked = checkAttachmentLayers(attachment.layer, attachment.layerCount,
-                                                     targetLayersAt(**texture, attachment.mipLevel));
-                !checked) {
-                return checked;
+            colors.at(i) = listSlot.colorTargets.at(i);
+            if (auto written = writeColorTarget(*device_.Get(), **texture, attachment.mipLevel, attachment.layer,
+                                                attachment.layerCount, colors.at(i));
+                !written) {
+                return written;
             }
             target = targetOf(**texture, attachment.mipLevel, attachment.layer, attachment.layerCount);
-            colors.at(i) = targetAt(**texture, attachment.mipLevel, attachment.layer, false);
-            if (colors.at(i).ptr == 0) {
-                return core::failure(core::ErrorCode::RhiInvalidCall, "the texture has no level {} or no layer {}",
-                                     attachment.mipLevel, attachment.layer);
-            }
             format = (*texture)->desc.format;
             std::uint32_t resolveMips = 1;
             if (!attachment.resolveTexture.isNull()) {
@@ -910,16 +955,12 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
-        if (auto checked = checkAttachmentLayers(depthStencil.layer, depthStencil.layerCount,
-                                                 targetLayersAt(**texture, depthStencil.mipLevel));
-            !checked) {
-            return checked;
-        }
         depth = *texture;
-        depthView = targetAt(*depth, depthStencil.mipLevel, depthStencil.layer, depthStencil.readOnly);
-        if (depthView.ptr == 0) {
-            return core::failure(core::ErrorCode::RhiInvalidCall, "the texture has no level {} or no layer {}",
-                                 depthStencil.mipLevel, depthStencil.layer);
+        depthView = listSlot.depthTarget;
+        if (auto written = writeDepthTarget(*device_.Get(), *depth, depthStencil.mipLevel, depthStencil.layer,
+                                            depthStencil.layerCount, depthStencil.readOnly, depthView);
+            !written) {
+            return written;
         }
         // ResolveCaps has no mode, so only None passes, which resolves
         // nothing.
@@ -988,10 +1029,11 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
         if (block.stencilBytes != 0 && depthStencil.stencilLoadOp == LoadOp::Clear) {
             flags |= D3D12_CLEAR_FLAG_STENCIL;
         }
+        // checkRenderingDesc lets a read-only attachment only load, so the
+        // view cleared through is writable.
         if (flags != D3D12_CLEAR_FLAGS{}) {
-            recording->ClearDepthStencilView(targetAt(*depth, depthStencil.mipLevel, depthStencil.layer, false), flags,
-                                             depthStencil.clearDepth, static_cast<UINT8>(depthStencil.clearStencil), 0,
-                                             nullptr);
+            recording->ClearDepthStencilView(depthView, flags, depthStencil.clearDepth,
+                                             static_cast<UINT8>(depthStencil.clearStencil), 0, nullptr);
         }
     }
     (*list)->presenting = chain != nullptr ? std::optional{swapchain} : std::nullopt;

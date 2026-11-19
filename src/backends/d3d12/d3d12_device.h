@@ -58,11 +58,20 @@ struct D3D12CommandPool {
 };
 
 /// A list slot: an allocator and a list for it, since D3D12 lets one list
-/// record from an allocator at a time, and the list recording on it.
+/// record from an allocator at a time, and the list recording on it. Its
+/// target heaps hold the render target views, colorTargets, and the
+/// depth-stencil view, depthTarget, each rendering on the list writes for
+/// its attachments as it begins; made with the slot so a rendering makes no
+/// heap. The list reads them as it records, so the next rendering may
+/// overwrite them.
 struct D3D12ListSlot {
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList7> list;
     CommandListHandle live;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> colorTargetHeap;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> depthTargetHeap;
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMaxColorTargets> colorTargets{};
+    D3D12_CPU_DESCRIPTOR_HANDLE depthTarget{};
 };
 
 /// A destroyed pool the GPU may still run lists from, and the fence value
