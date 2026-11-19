@@ -62,7 +62,7 @@ struct VulkanDeviceSetup {
     std::uint32_t pushConstantsSize = 0;
     /// VkPhysicalDeviceLimits::timestampPeriod.
     float timestampPeriod = 0;
-    /// The stages each kind of queue's timestamps take, and what
+    /// The stages a timestamp in rendering takes, and what
     /// vkGetCalibratedTimestampsKHR reads, none when the device has no
     /// calibrated timestamps extension enabled.
     Timestamps timestamps;

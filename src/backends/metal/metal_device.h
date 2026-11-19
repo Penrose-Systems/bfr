@@ -146,8 +146,8 @@ struct MetalCommandList {
 
 class MetalDevice final : public Device {
 public:
-    /// A device on device, which rhi listed with features and resolve, with a
-    /// graphics queue and the queues asked for. Fails with RhiDeviceFailed
+    /// A device on device, which rhi listed with features and resolve, with
+    /// the queues asked for. Fails with RhiDeviceFailed
     /// when Metal gives no queue, event, compiler or bindless tables.
     [[nodiscard]] static core::Result<std::unique_ptr<MetalDevice>> create(MetalInstance& rhi, Ref<MTL::Device> device,
                                                                            const Features& features,
