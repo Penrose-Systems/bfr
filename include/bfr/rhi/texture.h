@@ -26,6 +26,8 @@ struct TextureUsage {
     bool storage = false;
     bool colorAttachment = false;
     bool depthStencil = false;
+    /// Shaders use atomics on it as a storage texture; Metal needs it set.
+    bool storageAtomic = false;
 };
 
 /// A bindless slot a resource doesn't have; no table has a slot this high.

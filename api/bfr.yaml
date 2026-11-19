@@ -1493,6 +1493,7 @@ structs:
       - {name: storage, type: bool, doc: Shaders read and write it.}
       - {name: color_attachment, type: bool, doc: Rendering writes color to it.}
       - {name: depth_stencil, type: bool, doc: Rendering tests and writes depth or stencil in it.}
+      - {name: storage_atomic, type: bool, doc: "Shaders use atomics on it as a storage texture, where its format's bfr_format_caps.storage_atomic says. Metal enables them only for a texture made with this, and then doesn't compress it losslessly (Apple, MTLTextureUsage.shaderAtomic); Vulkan and D3D12 need nothing more than storage."}
 
   texture_desc:
     doc: >-

@@ -248,7 +248,9 @@ FormatCaps formatCapsFor(MTL::Device* device, Format format) {
     if ((format == Format::R32Uint || format == Format::R32Sint) && device->supportsFamily(MTL::GPUFamilyApple6)) {
         caps |= kAtomic;
     }
-    if ((format == Format::Rg32Uint || format == Format::Rg32Sint) && has64BitAtomics(device)) {
+    // Apple's MTLTextureUsage.shaderAtomic lists r32Uint, r32Sint and rg32Uint
+    // alone, so Rg32Sint is not atomic.
+    if (format == Format::Rg32Uint && has64BitAtomics(device)) {
         caps |= kAtomic;
     }
     if (int32 && device->supports32BitMSAA()) {

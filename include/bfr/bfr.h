@@ -1732,6 +1732,11 @@ typedef struct bfr_texture_usage {
     bfr_bool color_attachment;
     // Rendering tests and writes depth or stencil in it.
     bfr_bool depth_stencil;
+    // Shaders use atomics on it as a storage texture, where its format's
+    // bfr_format_caps.storage_atomic says. Metal enables them only for a texture made with this,
+    // and then doesn't compress it losslessly (Apple, MTLTextureUsage.shaderAtomic); Vulkan and
+    // D3D12 need nothing more than storage.
+    bfr_bool storage_atomic;
 } bfr_texture_usage;
 
 // How to create a texture, in device memory. The CPU reaches it only by copies through a buffer.

@@ -77,6 +77,9 @@ MTL::TextureUsage usageFor(const TextureUsage& usage) {
     if (usage.colorAttachment || usage.depthStencil) {
         flags |= MTL::TextureUsageRenderTarget;
     }
+    if (usage.storageAtomic) {
+        flags |= MTL::TextureUsageShaderAtomic;
+    }
     return flags;
 }
 
