@@ -29,8 +29,6 @@ core::Result<TimestampPoolHandle> D3D12Device::createTimestampPool(const Timesta
     if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectRetired();
     // A copy queue writes into its own kind of heap.
     const D3D12_QUERY_HEAP_DESC heapDesc{.Type = queues_[desc.queue]->listType == D3D12_COMMAND_LIST_TYPE_COPY
                                                      ? D3D12_QUERY_HEAP_TYPE_COPY_QUEUE_TIMESTAMP
@@ -59,7 +57,6 @@ core::Result<void> D3D12Device::destroyTimestampPool(TimestampPoolHandle pool) {
     if (!timestampPools_.retire(pool, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the timestamp pool handle is stale");
     }
-    collectRetired();
     return {};
 }
 

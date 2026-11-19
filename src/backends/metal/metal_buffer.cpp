@@ -148,9 +148,6 @@ core::Result<BufferHandle> MetalDevice::createBuffer(const BufferDesc& desc) {
     if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Cold, so buffers the GPU is done with are freed here, never on the
-    // frame path: freeing one frees the allocator's memory.
-    collectRetired();
     // Held until made is gone, which takes it out of the set if it is not kept.
     const std::scoped_lock lock{residencyLock_};
     auto slot = bindless_.takeBuffer(desc);
@@ -239,7 +236,6 @@ core::Result<void> MetalDevice::destroyBuffer(BufferHandle buffer) {
     if (!buffers_.retire(buffer, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the buffer handle is stale");
     }
-    collectRetired();
     return {};
 }
 

@@ -345,9 +345,10 @@ public:
     [[nodiscard]] virtual core::Result<bool> poll(Token token) = 0;
 
     /// Frees the objects destroy calls retired whose submits the GPU has
-    /// passed, and gives their slots back to the tables, as each create call
-    /// also does first. Not for the frame path: it frees memory. Fails with
-    /// RhiDeviceFailed when the backend cannot say what the GPU has passed.
+    /// passed, and gives their slots back to the tables. Nothing else does
+    /// until the device goes. Not for the frame path: it frees memory. Fails
+    /// with RhiDeviceFailed when the backend cannot say what the GPU has
+    /// passed.
     [[nodiscard]] virtual core::Result<void> runGarbageCollection() = 0;
 
     /// Discards a command list that was not submitted; the pool hands it out

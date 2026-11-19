@@ -3879,9 +3879,10 @@ public:
     [[nodiscard]] Expected<bool> poll(const Token& token) const;
 
     /// Frees the objects destroy calls retired whose submits the GPU has passed, and gives their
-    /// slots back to the tables, as each create call also does first. Not for the frame path: it
-    /// frees memory. Fails with error_device_failed when the backend cannot say what the GPU has
-    /// passed.
+    /// slots back to the tables. Nothing else does: a retired object holds its memory and slots
+    /// until this is called or the device goes, as NVRHI's runGarbageCollection. Not for the frame
+    /// path: it frees memory. Fails with error_device_failed when the backend cannot say what the
+    /// GPU has passed.
     [[nodiscard]] Expected<void> runGarbageCollection() const;
 
     /// Discards a command list that was not submitted; the pool hands it out again after its next

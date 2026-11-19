@@ -4096,8 +4096,9 @@ BFR_API bfr_result bfr_wait(bfr_device* device, const bfr_token* token, uint64_t
 BFR_API bfr_result bfr_poll(bfr_device* device, const bfr_token* token, bfr_bool* complete);
 
 // Frees the objects destroy calls retired whose submits the GPU has passed, and gives their slots
-// back to the tables, as each create call also does first. Not for the frame path: it frees memory.
-// Fails with error_device_failed when the backend cannot say what the GPU has passed.
+// back to the tables. Nothing else does: a retired object holds its memory and slots until this is
+// called or the device goes, as NVRHI's runGarbageCollection. Not for the frame path: it frees
+// memory. Fails with error_device_failed when the backend cannot say what the GPU has passed.
 BFR_API bfr_result bfr_run_garbage_collection(bfr_device* device);
 
 // Discards a command list that was not submitted; the pool hands it out again after its next reset.

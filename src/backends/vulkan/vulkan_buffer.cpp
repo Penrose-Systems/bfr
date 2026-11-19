@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <expected>
 #include <format>
+#include <optional>
 #include <span>
 #include <utility>
 
@@ -326,12 +327,21 @@ core::Result<VulkanBuffer*> VulkanDevice::bufferFor(BufferHandle buffer) {
     return found;
 }
 
-void VulkanDevice::collectRetired() {
-    const std::uint64_t completed = submissions_.completed([this](std::uint32_t queue) {
-        // A queue that can't say what it passed has passed nothing yet.
-        const auto passed = completedValue(*queues_[queue]);
-        return passed ? *passed : 0;
+core::Result<void> VulkanDevice::collectRetired() {
+    std::optional<core::Error> failed;
+    const std::uint64_t completed = submissions_.completed([this, &failed](std::uint32_t queue) -> std::uint64_t {
+        auto passed = completedValue(*queues_[queue]);
+        if (!passed) {
+            failed = std::move(passed.error());
+            return 0;
+        }
+        return *passed;
     });
+    // A queue that couldn't say what it passed collects nothing; the caller
+    // hears why.
+    if (failed) {
+        return std::unexpected(std::move(*failed));
+    }
     // A collected resource's slots go back to their tables, so no pending work
     // can see a slot reused.
     buffers_.collect(completed, [this](const VulkanBuffer& buffer) { bindless_.giveBuffer(buffer.slots()); });
@@ -345,18 +355,11 @@ void VulkanDevice::collectRetired() {
     accelerationStructures_.collect(completed, [this](const VulkanAccelerationStructure& structure) {
         bindless_.giveAccelerationStructure(structure.type(), structure.slot());
     });
+    return {};
 }
 
 core::Result<void> VulkanDevice::runGarbageCollection() {
-    // collectRetired takes a queue that cannot say what it passed as having
-    // passed nothing; here the caller hears of it.
-    for (const auto& queue : queues_) {
-        if (auto completed = completedValue(*queue); !completed) {
-            return std::unexpected(std::move(completed.error()));
-        }
-    }
-    collectRetired();
-    return {};
+    return collectRetired();
 }
 
 core::Result<BufferHandle> VulkanDevice::createBuffer(const BufferDesc& desc) {
@@ -366,9 +369,6 @@ core::Result<BufferHandle> VulkanDevice::createBuffer(const BufferDesc& desc) {
     if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Cold, so buffers the GPU is done with are freed here, never on the
-    // frame path: freeing one frees the allocator's memory.
-    collectRetired();
     auto slot = bindless_.takeBuffer(desc);
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
@@ -463,7 +463,6 @@ core::Result<void> VulkanDevice::destroyBuffer(BufferHandle buffer) {
     if (!buffers_.retire(buffer, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the buffer handle is stale");
     }
-    collectRetired();
     return {};
 }
 

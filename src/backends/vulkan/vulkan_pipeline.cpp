@@ -864,9 +864,6 @@ core::Result<PipelineHandle> VulkanDevice::createComputePipeline(const ComputePi
     if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Cold, so pipelines the GPU is done with are freed here, never on the
-    // frame path.
-    collectRetired();
     const auto cache = pipelineCacheFor(desc.cache);
     if (!cache) {
         return std::unexpected(std::move(cache.error()));
@@ -896,7 +893,6 @@ core::Result<PipelineHandle> VulkanDevice::createGraphicsPipeline(const Graphics
     if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    collectRetired();
     const auto cache = pipelineCacheFor(desc.cache);
     if (!cache) {
         return std::unexpected(std::move(cache.error()));
@@ -931,7 +927,6 @@ core::Result<void> VulkanDevice::destroyPipeline(PipelineHandle pipeline) {
     if (!pipelines_.retire(pipeline, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline handle is stale");
     }
-    collectRetired();
     return {};
 }
 
@@ -976,7 +971,6 @@ core::Result<PipelineHandle> VulkanDevice::createRayTracingPipeline(const RayTra
     if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    collectRetired();
     const auto cache = pipelineCacheFor(desc.cache);
     if (!cache) {
         return std::unexpected(std::move(cache.error()));

@@ -432,8 +432,6 @@ core::Result<PipelineHandle> MetalDevice::createComputePipeline(const ComputePip
     if (!desc.cache.isNull()) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline cache handle is stale");
     }
-    // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectRetired();
     auto made = createMetalComputePipeline(*device_.get(), *compiler_.get(), desc);
     if (!made) {
         return std::unexpected(std::move(made.error()));
@@ -464,7 +462,6 @@ core::Result<PipelineHandle> MetalDevice::createGraphicsPipeline(const GraphicsP
     if (!desc.cache.isNull()) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline cache handle is stale");
     }
-    collectRetired();
     auto made = createMetalGraphicsPipeline(*device_.get(), *compiler_.get(), desc);
     if (!made) {
         return std::unexpected(std::move(made.error()));
@@ -490,7 +487,6 @@ core::Result<void> MetalDevice::destroyPipeline(PipelineHandle pipeline) {
     if (!pipelines_.retire(pipeline, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline handle is stale");
     }
-    collectRetired();
     return {};
 }
 

@@ -117,8 +117,6 @@ core::Result<SamplerHandle> MetalDevice::createSampler(const SamplerDesc& desc) 
     if (auto checked = checkEnums(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectRetired();
     auto slot = bindless_.takeSampler();
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
@@ -160,7 +158,6 @@ core::Result<void> MetalDevice::destroySampler(SamplerHandle sampler) {
     if (!samplers_.retire(sampler, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the sampler handle is stale");
     }
-    collectRetired();
     return {};
 }
 

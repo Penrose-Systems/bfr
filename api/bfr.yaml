@@ -3827,9 +3827,11 @@ functions:
   run_garbage_collection:
     doc: >-
       Frees the objects destroy calls retired whose submits the GPU has passed,
-      and gives their slots back to the tables, as each create call also does
-      first. Not for the frame path: it frees memory. Fails with
-      error_device_failed when the backend cannot say what the GPU has passed.
+      and gives their slots back to the tables. Nothing else does: a retired
+      object holds its memory and slots until this is called or the device
+      goes, as NVRHI's runGarbageCollection. Not for the frame path: it frees
+      memory. Fails with error_device_failed when the backend cannot say what
+      the GPU has passed.
     returns: result
     params:
       - {name: device, type: device}

@@ -302,6 +302,9 @@ TEST_CASE("Device holds as many buffers as its desc's maxBuffers, and fails with
         Buffer buffer = created(device, kUploadBuffer);
         CHECK(device.createBuffer(kUploadBuffer).error().code == Result::ErrorLimitReached);
         CHECK(slotsResult(device, destroyed(buffer)) == Result::ErrorInvalidHandle);
+        // A destroyed buffer holds its place until garbage collection frees it.
+        CHECK(device.createBuffer(kUploadBuffer).error().code == Result::ErrorLimitReached);
+        REQUIRE(device.runGarbageCollection().has_value());
         auto again = device.createBuffer(kUploadBuffer);
         INFO(failureOf(again));
         REQUIRE(again.has_value());

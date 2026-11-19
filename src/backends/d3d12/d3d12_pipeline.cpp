@@ -436,8 +436,6 @@ core::Result<PipelineHandle> D3D12Device::createComputePipeline(const ComputePip
     if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectRetired();
     auto library = pipelineLibraryFor(desc.cache);
     if (!library) {
         return std::unexpected(std::move(library.error()));
@@ -469,7 +467,6 @@ core::Result<PipelineHandle> D3D12Device::createGraphicsPipeline(const GraphicsP
     }
     // Features::meshShader and taskShader are false until BFR has D3D12
     // mesh pipelines, so checkMeshStages refuses every mesh desc.
-    collectRetired();
     auto library = pipelineLibraryFor(desc.cache);
     if (!library) {
         return std::unexpected(std::move(library.error()));
@@ -499,7 +496,6 @@ core::Result<void> D3D12Device::destroyPipeline(PipelineHandle pipeline) {
     if (!pipelines_.retire(pipeline, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the pipeline handle is stale");
     }
-    collectRetired();
     return {};
 }
 

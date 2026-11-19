@@ -85,8 +85,6 @@ core::Result<TimestampPoolHandle> VulkanDevice::createTimestampPool(const Timest
     if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectRetired();
     VkQueryPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
     info.queryType = VK_QUERY_TYPE_TIMESTAMP;
@@ -117,7 +115,6 @@ core::Result<void> VulkanDevice::destroyTimestampPool(TimestampPoolHandle pool) 
     if (!timestampPools_.retire(pool, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the timestamp pool handle is stale");
     }
-    collectRetired();
     return {};
 }
 

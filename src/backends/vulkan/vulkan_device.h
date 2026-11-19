@@ -398,8 +398,9 @@ private:
     void end(CommandListHandle commandList);
     // Destroys the buffers, textures, samplers, timestamp pools, sparse
     // memories, property pools, pipelines and acceleration structures retired
-    // under submission IDs every queue has passed.
-    void collectRetired();
+    // under submission IDs every queue has passed. Fails as completedValue
+    // does, collecting nothing.
+    [[nodiscard]] core::Result<void> collectRetired();
     // Warns of each kind of object the caller left when the device goes.
     void warnLeftovers() const;
     // Waits for everything the device has submitted.

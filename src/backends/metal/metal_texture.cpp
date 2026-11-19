@@ -195,8 +195,6 @@ core::Result<TextureHandle> MetalDevice::createTexture(const TextureDesc& desc) 
     if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectRetired();
     // Held until made is gone, which takes it out of the set if it is not kept.
     const std::scoped_lock lock{residencyLock_};
     auto slots = bindless_.takeTexture(desc);
@@ -247,7 +245,6 @@ core::Result<void> MetalDevice::destroyTexture(TextureHandle texture) {
     if (!textures_.retire(texture, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the texture handle is stale");
     }
-    collectRetired();
     return {};
 }
 

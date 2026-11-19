@@ -176,9 +176,6 @@ core::Result<BufferHandle> D3D12Device::createBuffer(const BufferDesc& desc) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "a storage buffer of {} bytes is more than D3D12 views",
                              desc.size);
     }
-    // Cold, so buffers the GPU is done with are freed here, never on the
-    // frame path: freeing one frees the allocator's memory.
-    collectRetired();
     auto slot = bindless_.takeBuffer(desc);
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
@@ -266,7 +263,6 @@ core::Result<void> D3D12Device::destroyBuffer(BufferHandle buffer) {
     if (!buffers_.retire(buffer, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the buffer handle is stale");
     }
-    collectRetired();
     return {};
 }
 

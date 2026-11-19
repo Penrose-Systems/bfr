@@ -723,8 +723,6 @@ core::Result<AccelerationStructureHandle> VulkanDevice::createAccelerationStruct
     if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Cold, so structures the GPU is done with are freed here.
-    collectRetired();
     auto slot = bindless_.takeAccelerationStructure(desc.type);
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
@@ -916,7 +914,6 @@ core::Result<void> VulkanDevice::destroyAccelerationStructure(AccelerationStruct
     if (!accelerationStructures_.retire(structure, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the acceleration structure handle is stale");
     }
-    collectRetired();
     return {};
 }
 
@@ -1392,7 +1389,6 @@ core::Result<AccelerationStructurePropertyPoolHandle> VulkanDevice::createAccele
                              "Vulkan writes no property {} of opacity micromaps, only compacted and serialized sizes",
                              static_cast<std::uint32_t>(desc.property));
     }
-    collectRetired();
     VkQueryPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
     info.queryType = desc.opacityMicromaps ? *micromapType : queryTypeFor(desc.property);
@@ -1422,7 +1418,6 @@ core::Result<void> VulkanDevice::destroyAccelerationStructurePropertyPool(
     if (!propertyPools_.retire(pool, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the property pool handle is stale");
     }
-    collectRetired();
     return {};
 }
 

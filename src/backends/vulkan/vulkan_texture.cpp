@@ -436,8 +436,6 @@ core::Result<TextureHandle> VulkanDevice::createTexture(const TextureDesc& desc)
     if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectRetired();
     auto slots = bindless_.takeTexture(desc);
     if (!slots) {
         return std::unexpected(std::move(slots.error()));
@@ -489,7 +487,6 @@ core::Result<void> VulkanDevice::destroyTexture(TextureHandle texture) {
     if (!textures_.retire(texture, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the texture handle is stale");
     }
-    collectRetired();
     return {};
 }
 

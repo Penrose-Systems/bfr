@@ -81,8 +81,11 @@ TEST_CASE("Device gives each sampler its own slot, and refuses one past the tabl
         CHECK(*secondSlot < kSlots);
         CHECK(device.createSampler({}).error().code == Result::ErrorLimitReached);
 
-        // No submit uses it, so its slot is free again once it is destroyed.
+        // No submit uses it, so garbage collection frees its slot once it is
+        // destroyed; until then the slot is held.
         CHECK(slotResult(device, destroyed(first)) == Result::ErrorInvalidHandle);
+        CHECK(device.createSampler({}).error().code == Result::ErrorLimitReached);
+        REQUIRE(device.runGarbageCollection().has_value());
         Sampler third = created(device, SamplerDesc{});
         CHECK(third.samplerSlot().has_value());
         CHECK(slotResult(device, destroyed(second)) == Result::ErrorInvalidHandle);

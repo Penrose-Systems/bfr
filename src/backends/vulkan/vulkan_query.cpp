@@ -118,8 +118,6 @@ core::Result<QueryPoolHandle> VulkanDevice::createQueryPool(const QueryPoolDesc&
     if (auto checked = checkObjectName(features_, desc.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Cold, as createBuffer is: what the GPU is done with is freed here.
-    collectRetired();
     VkQueryPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
     info.queryType = queryTypeFor(desc.type);
@@ -158,7 +156,6 @@ core::Result<void> VulkanDevice::destroyQueryPool(QueryPoolHandle pool) {
     if (!queryPools_.retire(pool, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the query pool handle is stale");
     }
-    collectRetired();
     return {};
 }
 
