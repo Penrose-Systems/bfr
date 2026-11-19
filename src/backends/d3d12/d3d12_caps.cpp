@@ -510,7 +510,8 @@ Caps readCaps(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
     caps.queueFamilies = queueFamiliesOf(device, caps.sparse);
     // D3D12 doesn't rank a device's queues, so caps.queueRanks stays 0.
     caps.timestamps = timestampsOf();
-    // caps.resolve stays 0. ResolveSubresourceRegion takes MIN, MAX and
+    caps.resolve.texture = true;
+    // caps.resolve's modes stay 0. ResolveSubresourceRegion takes MIN, MAX and
     // AVERAGE modes (d3d12.h:7284, :3378-3386), but no D3D12 query says which
     // depth or stencil formats it resolves, and no engine resolves them:
     // Godot's D3D12 driver resolves color only, by ResolveSubresource

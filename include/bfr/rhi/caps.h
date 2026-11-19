@@ -478,6 +478,9 @@ inline constexpr std::size_t kMaxSparseTileSizes = 3;
 /// device takes; independent: depth and stencil may take different modes;
 /// independentNone: they may differ where one is None.
 struct ResolveCaps {
+    /// Device::resolveTexture resolves outside a rendering; false on Metal,
+    /// which resolves only as a render pass ends.
+    bool texture = false;
     std::uint32_t depthModes = 0;
     std::uint32_t stencilModes = 0;
     bool independent = false;

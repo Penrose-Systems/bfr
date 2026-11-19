@@ -1440,7 +1440,8 @@ bfr_caps_sparse toC(const bfr::rhi::Sparse& sparse) {
 }
 
 bfr_caps_resolve toC(const bfr::rhi::ResolveCaps& resolve) {
-    return {.depth_modes = resolve.depthModes,
+    return {.texture = toC(resolve.texture),
+            .depth_modes = resolve.depthModes,
             .stencil_modes = resolve.stencilModes,
             .independent = toC(resolve.independent),
             .independent_none = toC(resolve.independentNone)};

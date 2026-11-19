@@ -465,13 +465,6 @@ core::Result<CommandPoolHandle> MetalDevice::createCommandPool(const CommandPool
         for (std::uint32_t i = 0; i < kMaxColorTargets; ++i) {
             std::ignore = pass->colorAttachments()->object(i);
         }
-        MTL4::RenderPassDescriptor* resolvePass = MTL4::RenderPassDescriptor::alloc()->init();
-        if (resolvePass == nullptr) {
-            release();
-            return std::unexpected(deviceFailed("render pass descriptor").error());
-        }
-        lists_[slot].resolvePass = adopt(resolvePass);
-        std::ignore = resolvePass->colorAttachments()->object(0);
         auto arguments = createArgumentTable(*device_.get());
         if (!arguments) {
             release();

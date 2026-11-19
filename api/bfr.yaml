@@ -3034,8 +3034,10 @@ structs:
 
   caps_resolve:
     doc: >-
-      How a rendering's depth-stencil attachment resolves.
+      How the device resolves multisampled textures outside a rendering, and
+      how a rendering's depth-stencil attachment resolves.
     members:
+      - {name: texture, type: bool, doc: "bfr_resolve_texture resolves a color texture: Vulkan's vkCmdResolveImage and D3D12's ResolveSubresource. Metal has no call that resolves outside a render pass, so there it is false, and a rendering's resolve_texture resolves instead."}
       - {name: depth_modes, type: u32, doc: "Bit 1 << mode set for each resolve_mode but none the device takes for depth."}
       - {name: stencil_modes, type: u32, doc: "As depth_modes, for stencil."}
       - {name: independent, type: bool, doc: Depth and stencil may take different modes.}
@@ -3775,8 +3777,8 @@ functions:
       rendering: the whole level, of the same size in both. src has
       color_attachment and copy_src usage, dst color_attachment and copy_dst;
       its format resolves, as bfr_format_caps.resolve says, and each texture
-      has the mip level and layer named. Fails with error_device_failed when
-      the backend gives no encoder for it (Metal). What was resolved is seen
+      has the mip level and layer named. Fails with error_unsupported where
+      bfr_caps_resolve.texture is false (Metal). What was resolved is seen
       as bfr_copy_buffer says.
     returns: result
     params:

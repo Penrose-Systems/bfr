@@ -1127,7 +1127,8 @@ std::uint32_t resolveModesFrom(VkResolveModeFlags modes) {
 
 ResolveCaps resolveFrom(const PropertyQuery& properties) {
     const VkPhysicalDeviceVulkan12Properties& vulkan12 = properties.vulkan12;
-    return {.depthModes = resolveModesFrom(vulkan12.supportedDepthResolveModes),
+    return {.texture = true,
+            .depthModes = resolveModesFrom(vulkan12.supportedDepthResolveModes),
             .stencilModes = resolveModesFrom(vulkan12.supportedStencilResolveModes),
             .independent = on(vulkan12.independentResolve),
             .independentNone = on(vulkan12.independentResolveNone)};

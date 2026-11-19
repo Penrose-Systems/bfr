@@ -1475,8 +1475,9 @@ TEST_CASE("Device draws indirectly the arguments a buffer holds, many at a strid
     static constexpr std::array kStrides{kStride};
     std::vector<std::string> messages;
     {
-        const FirstAdapterDevice made{recordingInto(backend, messages),
-                                      [](DeviceDesc& desc) { desc.indirectStrides = kStrides; }};
+        const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc) {
+                                          desc.indirectStrides = kStrides;
+                                      }};
         const Device& device = made.device;
         const Caps caps = capsOf(made.instance, kFirstAdapter);
         // The top half of clip space, then the bottom half.
@@ -1892,6 +1893,9 @@ TEST_CASE("Device tests depth, and resolves a multisampled attachment as renderi
             Pipeline multisampled = created(device, desc);
             const bool byCommand = GENERATE(false, true);
             INFO((byCommand ? "by resolveTexture" : "as rendering ends"));
+            if (byCommand && !caps.resolve.texture) {
+                SKIP("the device resolves only as a rendering ends (Caps::resolve.texture)");
+            }
             const Rendered image{device,
                                  caps.limits,
                                  [&](CommandList commands) { draw(commands, multisampled, half, {1, 0, 0, 1}); },
@@ -1911,8 +1915,9 @@ TEST_CASE("Device tests depth, and resolves a multisampled attachment as renderi
             GraphicsPipelineDesc desc = colorPipeline();
             desc.sampleMask = 0;
             Pipeline masked = created(device, desc);
-            const Rendered image{device, caps.limits,
-                                 [&](CommandList commands) { draw(commands, masked, near, {1, 0, 0, 1}); }};
+            const Rendered image{device, caps.limits, [&](CommandList commands) {
+                                     draw(commands, masked, near, {1, 0, 0, 1});
+                                 }};
             CHECK(image.at(kSide / 2, kSide / 2) == kBlack);
             CHECK(bindResult(device, 0, destroyed(masked)) == Result::ErrorInvalidHandle);
         }

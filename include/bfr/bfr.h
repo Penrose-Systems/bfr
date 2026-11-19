@@ -3478,8 +3478,13 @@ typedef struct bfr_caps_sparse {
     uint32_t tile_bytes[3];
 } bfr_caps_sparse;
 
-// How a rendering's depth-stencil attachment resolves.
+// How the device resolves multisampled textures outside a rendering, and how a rendering's depth-
+// stencil attachment resolves.
 typedef struct bfr_caps_resolve {
+    // bfr_resolve_texture resolves a color texture: Vulkan's vkCmdResolveImage and D3D12's
+    // ResolveSubresource. Metal has no call that resolves outside a render pass, so there it is
+    // false, and a rendering's resolve_texture resolves instead.
+    bfr_bool texture;
     // Bit 1 << mode set for each resolve_mode but none the device takes for depth.
     uint32_t depth_modes;
     // As depth_modes, for stencil.
@@ -4067,8 +4072,8 @@ BFR_API bfr_result bfr_copy_texture(
 // outside rendering: the whole level, of the same size in both. src has color_attachment and
 // copy_src usage, dst color_attachment and copy_dst; its format resolves, as
 // bfr_format_caps.resolve says, and each texture has the mip level and layer named. Fails with
-// error_device_failed when the backend gives no encoder for it (Metal). What was resolved is seen
-// as bfr_copy_buffer says.
+// error_unsupported where bfr_caps_resolve.texture is false (Metal). What was resolved is seen as
+// bfr_copy_buffer says.
 BFR_API bfr_result bfr_resolve_texture(
     bfr_device* device,
     bfr_command_list command_list,

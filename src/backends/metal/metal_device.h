@@ -73,10 +73,8 @@ struct MetalListSlot {
     Ref<MTL4::CommandAllocator> allocator;
     Ref<MTL4::CommandBuffer> buffer;
     // Made with the slot and filled in by each beginRendering, so a pass
-    // allocates no descriptor; resolvePass likewise by each resolveTexture,
-    // apart, so neither inherits the other's attachments, levels or slices.
+    // allocates no descriptor.
     Ref<MTL4::RenderPassDescriptor> pass;
-    Ref<MTL4::RenderPassDescriptor> resolvePass;
     Ref<MTL4::ArgumentTable> arguments;
     Ref<MTL::Buffer> pushRing;
     std::optional<Resident> pushResident;

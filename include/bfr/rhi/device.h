@@ -317,8 +317,8 @@ public:
     /// colorAttachment and copySrc usage, dst colorAttachment and copyDst; its
     /// format resolves, as FormatCaps::resolve says, and each texture has the
     /// mip level and layer named. Fails with RhiInvalidHandle when the list or
-    /// a texture is gone, and RhiDeviceFailed when the backend gives no
-    /// encoder for it (Metal).
+    /// a texture is gone, and RhiUnsupported where Caps::resolve.texture is
+    /// false (Metal).
     [[nodiscard]] virtual core::Result<void> resolveTexture(CommandListHandle commandList, TextureHandle src,
                                                             std::uint32_t srcMipLevel, std::uint32_t srcLayer,
                                                             TextureHandle dst, std::uint32_t dstMipLevel,

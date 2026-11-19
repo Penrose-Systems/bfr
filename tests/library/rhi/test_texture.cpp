@@ -584,3 +584,36 @@ TEST_CASE("Device refuses a read-only depth-stencil attachment that would clear 
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
+
+TEST_CASE("Device refuses resolveTexture with RhiUnsupported where the caps say it resolves only as rendering ends",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        if (capsOf(made.instance, kFirstAdapter).resolve.texture) {
+            SKIP("the device resolves outside a rendering");
+        }
+        const Device& device = made.device;
+        const auto texture = [&device](std::uint32_t samples) {
+            return created(device, {.dimension = TextureDimension::D2,
+                                    .format = Format::Rgba8Unorm,
+                                    .width = kWidth,
+                                    .height = kHeight,
+                                    .depth = 1,
+                                    .layers = 1,
+                                    .mipLevels = 1,
+                                    .samples = samples,
+                                    .usage = {.copySrc = true, .copyDst = true, .colorAttachment = true}});
+        };
+        constexpr std::uint32_t kFourSamples = 4;
+        Texture multisampled = texture(kFourSamples);
+        Texture single = texture(1);
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = pool->beginCommands();
+        REQUIRE(list.has_value());
+        CHECK(device.resolveTexture(*list, multisampled, 0, 0, single, 0, 0).error().code == Result::ErrorUnsupported);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}

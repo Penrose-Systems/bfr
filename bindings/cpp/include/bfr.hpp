@@ -2380,8 +2380,13 @@ struct CapsSparse {
     std::array<std::uint32_t, 3> tileBytes{};
 };
 
-/// How a rendering's depth-stencil attachment resolves.
+/// How the device resolves multisampled textures outside a rendering, and how a rendering's depth-
+/// stencil attachment resolves.
 struct CapsResolve {
+    /// bfr_resolve_texture resolves a color texture: Vulkan's vkCmdResolveImage and D3D12's
+    /// ResolveSubresource. Metal has no call that resolves outside a render pass, so there it is
+    /// false, and a rendering's resolve_texture resolves instead.
+    bool texture{};
     /// Bit 1 << mode set for each resolve_mode but none the device takes for depth.
     std::uint32_t depthModes{};
     /// As depth_modes, for stencil.
@@ -3504,6 +3509,7 @@ inline CapsSparse fromC(const bfr_caps_sparse& value) {
 
 inline CapsResolve fromC(const bfr_caps_resolve& value) {
     return {
+        .texture = value.texture != BFR_FALSE,
         .depthModes = value.depth_modes,
         .stencilModes = value.stencil_modes,
         .independent = value.independent != BFR_FALSE,
@@ -3861,8 +3867,8 @@ public:
     /// layout resolve_dst, outside rendering: the whole level, of the same size in both. src has
     /// color_attachment and copy_src usage, dst color_attachment and copy_dst; its format resolves,
     /// as bfr_format_caps.resolve says, and each texture has the mip level and layer named. Fails
-    /// with error_device_failed when the backend gives no encoder for it (Metal). What was resolved
-    /// is seen as bfr_copy_buffer says.
+    /// with error_unsupported where bfr_caps_resolve.texture is false (Metal). What was resolved is
+    /// seen as bfr_copy_buffer says.
     [[nodiscard]] Expected<void> resolveTexture(CommandList commandList, const Texture& src, std::uint32_t srcMipLevel, std::uint32_t srcLayer, const Texture& dst, std::uint32_t dstMipLevel, std::uint32_t dstLayer) const;
 
     /// Sends recorded command lists to a queue, which runs them after what it was sent before and
