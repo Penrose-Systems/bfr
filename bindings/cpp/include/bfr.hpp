@@ -1885,6 +1885,8 @@ struct CapsLimits {
     /// Bytes of push constants every pipeline's shaders read, and the most bfr_push_constants
     /// takes: the device's limit on Vulkan, the root signature's room on D3D12, 128 on Metal.
     std::uint32_t maxPushConstantsSize{};
+    /// The device's count of color attachments a rendering may have, as the backend reports it;
+    /// BFR's descs hold at most max_color_targets, so a larger count is reachable only up to that.
     std::uint32_t maxColorAttachments{};
     /// Widest render area.
     std::uint32_t maxRenderWidth{};

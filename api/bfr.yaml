@@ -2672,7 +2672,7 @@ structs:
       - {name: max_storage_buffer_range, type: u32, doc: Most bytes a shader reaches through one storage buffer view.}
       - {name: max_texel_buffer_elements, type: u32, doc: Most elements in a texel buffer view.}
       - {name: max_push_constants_size, type: u32, doc: "Bytes of push constants every pipeline's shaders read, and the most bfr_push_constants takes: the device's limit on Vulkan, the root signature's room on D3D12, 128 on Metal."}
-      - {name: max_color_attachments, type: u32}
+      - {name: max_color_attachments, type: u32, doc: "The device's count of color attachments a rendering may have, as the backend reports it; BFR's descs hold at most max_color_targets, so a larger count is reachable only up to that."}
       - {name: max_render_width, type: u32, doc: Widest render area.}
       - {name: max_render_height, type: u32, doc: Tallest render area.}
       - {name: max_render_layers, type: u32, doc: Most layers rendered at once.}

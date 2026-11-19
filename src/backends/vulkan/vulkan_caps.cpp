@@ -205,8 +205,9 @@ Limits limitsFrom(const PropertyQuery& properties, const DeviceFeatures& feature
         .maxStorageBufferRange = core.maxStorageBufferRange,
         .maxTexelBufferElements = core.maxTexelBufferElements,
         .maxPushConstantsSize = core.maxPushConstantsSize,
-        // The device's count, up to the kMaxColorTargets a rendering holds.
-        .maxColorAttachments = std::min(core.maxColorAttachments, kMaxColorTargets),
+        // The device's count; a rendering and a pipeline hold at most
+        // kMaxColorTargets (BFR_MAX_COLOR_TARGETS) whatever it is.
+        .maxColorAttachments = core.maxColorAttachments,
         .maxRenderWidth = core.maxFramebufferWidth,
         .maxRenderHeight = core.maxFramebufferHeight,
         .maxRenderLayers = core.maxFramebufferLayers,
