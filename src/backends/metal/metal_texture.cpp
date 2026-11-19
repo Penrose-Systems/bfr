@@ -16,7 +16,6 @@
 #include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
 #include "rhi/name_check.h"
-#include "rhi/tile_extent.h"
 
 #include <Foundation/NSTypes.hpp>
 #include <Metal/MTL4CommandBuffer.hpp>
@@ -454,12 +453,11 @@ core::Result<SparseFormat> MetalDevice::sparseFormat(const SparseFormatDesc& des
     return SparseFormat{};
 }
 
-// A region in texels: its tiles times the tile's shape, clamped to the mip
-// level's edge, at the level and slice it names. The heap offset is in bytes,
-// tiles times the texture's tile bytes. The header (MTL4CommandQueue.hpp:63-70)
-// names neither unit, and Metal has both pixel and tile regions
-// (MTLDevice.hpp:333-335), so texels and bytes are both unverified. The tail is refused: Metal 4's op
-// takes a region, with no offset into the tail.
+// The region and the heap offset are in tiles, as the consumer gives them:
+// Apple's MTL4UpdateSparseTextureMappingOperation page gives textureRegion
+// and heapOffset "in tiles". The tail is BFR's refusal, not Metal's: the same
+// page addresses it through the region at firstMipmapInTail, which BFR doesn't
+// map yet.
 core::Result<const MTL::Texture*> MetalDevice::addTextureMappings(MetalQueue& queue, const TileMappingDesc& desc,
                                                                   const MetalSparseMemory* memory) {
     if (desc.texture.isNull()) {
@@ -492,28 +490,18 @@ core::Result<const MTL::Texture*> MetalDevice::addTextureMappings(MetalQueue& qu
         }
         if (region.mipLevel >= tiling.firstTailMip) {
             return core::failure(core::ErrorCode::RhiUnsupported,
-                                 "mip level {} is in the tail, which Metal 4's mapping op has no offset into",
-                                 region.mipLevel);
+                                 "BFR maps no Metal mip tail yet; mip level {} is in it", region.mipLevel);
         }
-        const NS::UInteger x = NS::UInteger{region.x} * tiling.shape.width;
-        const NS::UInteger y = NS::UInteger{region.y} * tiling.shape.height;
-        const NS::UInteger z = NS::UInteger{region.z} * tiling.shape.depth;
-        const MTL::Region pixels =
-            MTL::Region::Make3D(x, y, z,
-                                extentWithin(NS::UInteger{region.width} * tiling.shape.width, x,
-                                             NS::UInteger{levelSize(texture.width, region.mipLevel)}),
-                                extentWithin(NS::UInteger{region.height} * tiling.shape.height, y,
-                                             NS::UInteger{levelSize(texture.height, region.mipLevel)}),
-                                extentWithin(NS::UInteger{region.depth} * tiling.shape.depth, z,
-                                             NS::UInteger{levelSize(texture.depth, region.mipLevel)}));
+        const MTL::Region tiles = MTL::Region::Make3D(region.x, region.y, region.z, region.width, region.height,
+                                                      region.depth);
         // The texture's regions are at most maxTileMappings, which the array holds.
         std::ignore = queue.textureMappings.push(
             MTL4::UpdateSparseTextureMappingOperation{.mode = maps ? MTL::SparseTextureMappingModeMap
                                                                    : MTL::SparseTextureMappingModeUnmap,
-                                                      .textureRegion = pixels,
+                                                      .textureRegion = tiles,
                                                       .textureLevel = region.mipLevel,
                                                       .textureSlice = region.layer,
-                                                      .heapOffset = maps ? region.memoryTile * tiling.tileBytes : 0});
+                                                      .heapOffset = maps ? region.memoryTile : 0});
     }
     return texture.texture.get();
 }

@@ -821,12 +821,10 @@ core::Result<void> VulkanDevice::addTextureBinds(VulkanQueue& queue, const TileM
                                                                   .flags = 0});
             continue;
         }
-        // Vulkan binds in texels: whole tiles, or to the mip level's edge.
+        // Vulkan binds in texels; whole tiles are valid even past the mip
+        // level's edge (VUID-VkSparseImageMemoryBind-extent-01108, -01110,
+        // -01112), as NVRHI binds them (vulkan-queue.cpp:275-278).
         const VkExtent3D& shape = requirements->formatProperties.imageGranularity;
-        const VkExtent3D size = texture.size();
-        const std::uint32_t levelWidth = levelSize(size.width, region.mipLevel);
-        const std::uint32_t levelHeight = levelSize(size.height, region.mipLevel);
-        const std::uint32_t levelDepth = levelSize(size.depth, region.mipLevel);
         const std::uint32_t x = region.x * shape.width;
         const std::uint32_t y = region.y * shape.height;
         const std::uint32_t z = region.z * shape.depth;
@@ -841,9 +839,9 @@ core::Result<void> VulkanDevice::addTextureBinds(VulkanQueue& queue, const TileM
                                     .offset = {.x = static_cast<std::int32_t>(x),
                                                .y = static_cast<std::int32_t>(y),
                                                .z = static_cast<std::int32_t>(z)},
-                                    .extent = {.width = extentWithin(region.width * shape.width, x, levelWidth),
-                                               .height = extentWithin(region.height * shape.height, y, levelHeight),
-                                               .depth = extentWithin(region.depth * shape.depth, z, levelDepth)},
+                                    .extent = {.width = region.width * shape.width,
+                                               .height = region.height * shape.height,
+                                               .depth = region.depth * shape.depth},
                                     .memory = bound,
                                     .memoryOffset = boundOffset,
                                     .flags = 0});
