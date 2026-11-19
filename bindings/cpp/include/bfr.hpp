@@ -852,7 +852,9 @@ struct BufferSlots {
 /// index shaders use. A table the texture's usage does not set has no slot for it, and reads
 /// BFR_NO_SLOT.
 struct TextureSlots {
-    /// Its index in the texture table; only with sampled usage.
+    /// Its index in the texture table; only with sampled usage. A depth-stencil texture's slot
+    /// reads its depth on every backend (Vulkan's view of the depth aspect, D3D12's plane 0,
+    /// Metal's depth); shaders read no stencil through it.
     std::uint32_t sampled{};
     /// Its index in the storage texture table; only with storage usage.
     std::uint32_t storage{};
