@@ -9,6 +9,7 @@
 #include "rhi/acceleration_structure_check.h"
 #include "rhi/command_check.h"
 #include "rhi/enum_check.h"
+#include "rhi/pipeline_check.h"
 #include "rhi/ray_tracing_check.h"
 
 #include <Foundation/NSTypes.hpp>
@@ -188,6 +189,9 @@ core::Result<void> MetalDevice::bindPipeline(CommandListHandle commandList, Pipe
 
 core::Result<void> MetalDevice::setTopology(CommandListHandle commandList, Topology topology) {
     if (auto checked = checkKnown(topology, "topology"); !checked) {
+        return checked;
+    }
+    if (auto checked = checkTopology(topology, features_); !checked) {
         return checked;
     }
     auto list = commandListFor(commandList);

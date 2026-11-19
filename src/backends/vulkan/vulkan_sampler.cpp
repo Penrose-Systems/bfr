@@ -5,6 +5,7 @@
 #include "rhi/bindless_slots.h"
 #include "rhi/enum_check.h"
 #include "rhi/sampler_border.h"
+#include "rhi/sampler_check.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_pipeline.h"
 #include "vulkan/vulkan_result.h"
@@ -81,9 +82,6 @@ VulkanSampler::~VulkanSampler() {
 
 core::Result<VulkanSampler> createVulkanSampler(const VolkDeviceTable& table, VkDevice device, const SamplerDesc& desc,
                                                 std::uint32_t slot) {
-    if (desc.lodAverage) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "Vulkan has no LOD averaging");
-    }
     const BorderPreset preset = borderPreset(desc);
     VkSamplerCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -137,6 +135,9 @@ core::Result<VulkanSampler> createVulkanSampler(const VolkDeviceTable& table, Vk
 
 core::Result<SamplerHandle> VulkanDevice::createSampler(const SamplerDesc& desc) {
     if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkSamplerFeatures(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     auto slot = bindless_.takeSampler();

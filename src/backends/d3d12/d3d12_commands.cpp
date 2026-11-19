@@ -7,6 +7,7 @@
 #include "rhi/acceleration_structure_check.h"
 #include "rhi/command_check.h"
 #include "rhi/enum_check.h"
+#include "rhi/pipeline_check.h"
 #include "rhi/ray_tracing_check.h"
 
 #include <d3d12.h>
@@ -133,6 +134,9 @@ core::Result<void> D3D12Device::bindPipeline(CommandListHandle commandList, Pipe
 
 core::Result<void> D3D12Device::setTopology(CommandListHandle commandList, Topology topology) {
     if (auto checked = checkKnown(topology, "topology"); !checked) {
+        return checked;
+    }
+    if (auto checked = checkTopology(topology, features_); !checked) {
         return checked;
     }
     auto list = commandListFor(commandList);

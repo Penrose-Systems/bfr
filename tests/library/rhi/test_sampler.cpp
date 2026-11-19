@@ -26,6 +26,7 @@
 #include <expected>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -67,8 +68,9 @@ TEST_CASE("Device gives each sampler its own slot, and refuses one past the tabl
     constexpr std::uint32_t kSlots = 2;
     std::vector<std::string> messages;
     {
-        const FirstAdapterDevice made{recordingInto(backend, messages),
-                                      [](DeviceDesc& desc) { desc.maxBindlessSamplers = kSlots; }};
+        const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc) {
+                                          desc.maxBindlessSamplers = kSlots;
+                                      }};
         const Device& device = made.device;
         Sampler first = created(device, SamplerDesc{});
         Sampler second = created(device, {.magFilter = Filter::Linear, .minFilter = Filter::Linear});
@@ -247,6 +249,60 @@ TEST_CASE("Device samples a texture through a sampler's slot: nearest and linear
         }
         CHECK(slotsResult(device, destroyed(*texture)) == Result::ErrorInvalidHandle);
         CHECK(resetResult(device, destroyed(*pool)) == Result::ErrorInvalidHandle);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device makes a sampler with each setting its features have, and refuses one they lack with RhiUnsupported",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const CapsFeatures features = capsOf(made.instance, kFirstAdapter).features;
+        constexpr std::uint32_t kAnisotropy = 4;
+        constexpr float kLodBias = 0.5F;
+        constexpr float kCustomGray = 0.5F;
+        SamplerDesc anisotropic{};
+        anisotropic.maxAnisotropy = kAnisotropy;
+        SamplerDesc minimum{};
+        minimum.reduction = SamplerReduction::Minimum;
+        SamplerDesc mirrorClamp{};
+        mirrorClamp.addressU = AddressMode::MirrorClampToEdge;
+        SamplerDesc customBorder{};
+        customBorder.addressU = AddressMode::ClampToBorder;
+        customBorder.borderColor = {kCustomGray, kCustomGray, kCustomGray, 1};
+        SamplerDesc integerBorder{};
+        integerBorder.borderInteger = true;
+        SamplerDesc unnormalized{};
+        unnormalized.unnormalizedCoordinates = true;
+        unnormalized.addressU = AddressMode::ClampToEdge;
+        unnormalized.addressV = AddressMode::ClampToEdge;
+        SamplerDesc biased{};
+        biased.lodBias = kLodBias;
+        SamplerDesc averaged{};
+        averaged.lodAverage = true;
+
+        for (const auto& [desc, has, name] :
+             {std::tuple{anisotropic, features.samplerAnisotropy, "anisotropy"},
+              std::tuple{minimum, features.samplerMinmax, "min reduction"},
+              std::tuple{mirrorClamp, features.samplerMirrorClampToEdge, "mirror clamp to edge"},
+              std::tuple{customBorder, features.samplerCustomBorderColor, "custom border"},
+              std::tuple{integerBorder, features.samplerIntegerBorderColor, "integer border"},
+              std::tuple{unnormalized, features.samplerUnnormalizedCoordinates, "unnormalized coordinates"},
+              std::tuple{biased, features.samplerLodBias, "LOD bias"},
+              std::tuple{averaged, features.samplerLodAverage, "LOD average"}}) {
+            INFO(name);
+            const auto sampler = made.device.createSampler(desc);
+            INFO(failureOf(sampler));
+            if (has) {
+                CHECK(sampler.has_value());
+            }
+            else {
+                REQUIRE_FALSE(sampler.has_value());
+                CHECK(sampler.error().code == Result::ErrorUnsupported);
+            }
+        }
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }

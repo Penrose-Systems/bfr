@@ -8,6 +8,7 @@
 #include "rhi/bindless_slots.h"
 #include "rhi/enum_check.h"
 #include "rhi/sampler_border.h"
+#include "rhi/sampler_check.h"
 
 #include <Metal/Metal.hpp>
 
@@ -115,6 +116,9 @@ core::Result<Ref<MTL::SamplerState>> createMetalSampler(MTL::Device& device, con
 
 core::Result<SamplerHandle> MetalDevice::createSampler(const SamplerDesc& desc) {
     if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkSamplerFeatures(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     auto slot = bindless_.takeSampler();

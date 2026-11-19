@@ -459,6 +459,9 @@ core::Result<PipelineHandle> D3D12Device::createGraphicsPipeline(const GraphicsP
     if (auto checked = checkMultisample(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkTopology(desc.topology, features_); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     if (auto checked = checkMeshStages(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }

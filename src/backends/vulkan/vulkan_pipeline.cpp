@@ -887,6 +887,9 @@ core::Result<PipelineHandle> VulkanDevice::createGraphicsPipeline(const Graphics
     if (auto checked = checkGraphicsPipelineDesc(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkTopology(desc.topology, features_); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     if (auto checked = checkMeshStages(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }

@@ -7,6 +7,7 @@
 #include "d3d12/d3d12_pipeline.h"
 #include "rhi/bindless_slots.h"
 #include "rhi/enum_check.h"
+#include "rhi/sampler_check.h"
 
 #include <d3d12.h>
 
@@ -126,6 +127,9 @@ core::Result<void> writeD3D12Sampler(ID3D12Device& device, ID3D12Device11* devic
 
 core::Result<SamplerHandle> D3D12Device::createSampler(const SamplerDesc& desc) {
     if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkSamplerFeatures(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     auto slot = bindless_.takeSampler();

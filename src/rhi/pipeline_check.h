@@ -40,6 +40,16 @@ namespace bfr::rhi {
     return {};
 }
 
+/// Fails with RhiUnsupported for a triangle fan the device's features lack.
+/// Each backend's createGraphicsPipeline and setTopology call it.
+[[nodiscard]] inline core::Result<void> checkTopology(Topology topology, const Features& features) {
+    if (topology == Topology::TriangleFan && !features.triangleFans) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device has no triangle fans (Features::triangleFans)");
+    }
+    return {};
+}
+
 /// The samples a mask of samples bits holds: bit i for sample i.
 [[nodiscard]] constexpr std::uint64_t everySample(std::uint32_t samples) {
     return samples >= std::numeric_limits<std::uint64_t>::digits ? ~std::uint64_t{0}

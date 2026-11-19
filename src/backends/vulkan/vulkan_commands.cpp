@@ -4,6 +4,7 @@
 #include "bfr/rhi/pipeline.h"
 #include "rhi/command_check.h"
 #include "rhi/enum_check.h"
+#include "rhi/pipeline_check.h"
 #include "rhi/ray_tracing_check.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_pipeline.h"
@@ -104,6 +105,9 @@ core::Result<void> VulkanDevice::bindPipeline(CommandListHandle commandList, Pip
 
 core::Result<void> VulkanDevice::setTopology(CommandListHandle commandList, Topology topology) {
     if (auto checked = checkKnown(topology, "topology"); !checked) {
+        return checked;
+    }
+    if (auto checked = checkTopology(topology, features_); !checked) {
         return checked;
     }
     auto list = commandListFor(commandList);
