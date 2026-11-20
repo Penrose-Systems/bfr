@@ -19,9 +19,9 @@ struct MetalSampler {
     std::uint32_t slot = 0;
 };
 
-/// A sampler state on device as desc says. Fails with RhiUnsupported for a
-/// border colour other than Metal's three, and RhiDeviceFailed when Metal
-/// gives no sampler.
+/// A sampler state on device as desc says, which has passed
+/// checkSamplerFeatures against the device's features. Fails with
+/// RhiDeviceFailed when Metal gives no sampler.
 [[nodiscard]] core::Result<Ref<MTL::SamplerState>> createMetalSampler(MTL::Device& device, const SamplerDesc& desc);
 
 } // namespace bfr::rhi::metal

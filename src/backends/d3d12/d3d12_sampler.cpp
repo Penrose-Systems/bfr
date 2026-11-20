@@ -70,17 +70,8 @@ D3D12_FILTER encodedFilterFor(const SamplerDesc& desc) {
 
 } // namespace
 
-core::Result<void> writeD3D12Sampler(ID3D12Device& device, ID3D12Device11* device11, const SamplerDesc& desc,
-                                     D3D12_CPU_DESCRIPTOR_HANDLE destination) {
-    if (desc.lodAverage) {
-        return core::failure(core::ErrorCode::RhiUnsupported, "D3D12 has no LOD averaging");
-    }
-    if ((desc.borderInteger || desc.unnormalizedCoordinates) && device11 == nullptr) {
-        return core::failure(
-            core::ErrorCode::RhiUnsupported,
-            "the device has no ID3D12Device11, whose sampler desc alone holds integer border colours and unnormalized "
-            "coordinates");
-    }
+void writeD3D12Sampler(ID3D12Device& device, ID3D12Device11* device11, const SamplerDesc& desc,
+                       D3D12_CPU_DESCRIPTOR_HANDLE destination) {
     D3D12_SAMPLER_DESC2 sampler{};
     sampler.Filter = encodedFilterFor(desc);
     sampler.AddressU = addressFor(desc.addressU);
@@ -104,10 +95,11 @@ core::Result<void> writeD3D12Sampler(ID3D12Device& device, ID3D12Device11* devic
     sampler.MaxLOD = desc.maxLod;
     if (device11 != nullptr) {
         device11->CreateSampler2(&sampler, destination);
-        return {};
+        return;
     }
-    // Without ID3D12Device11 no flag is set, as the checks above refused
-    // every member that needs one, so the older desc holds all of it.
+    // Without ID3D12Device11 no flag is set: the caps report no integer
+    // border colours or unnormalized coordinates, so checkSamplerFeatures
+    // refused every member that needs one, and the older desc holds all of it.
     D3D12_SAMPLER_DESC older{.Filter = sampler.Filter,
                              .AddressU = sampler.AddressU,
                              .AddressV = sampler.AddressV,
@@ -120,7 +112,6 @@ core::Result<void> writeD3D12Sampler(ID3D12Device& device, ID3D12Device11* devic
                              .MaxLOD = sampler.MaxLOD};
     std::ranges::copy(sampler.FloatBorderColor, std::begin(older.BorderColor));
     device.CreateSampler(&older, destination);
-    return {};
 }
 
 // The device's sampler calls, beside the samplers they write.
@@ -142,11 +133,7 @@ core::Result<SamplerHandle> D3D12Device::createSampler(const SamplerDesc& desc) 
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} samplers",
                              desc_.maxBindlessSamplers);
     }
-    if (auto written = writeD3D12Sampler(*device_.Get(), device11_.Get(), desc, layout_.samplerAt(*slot)); !written) {
-        samplers_.erase(sampler);
-        bindless_.giveSampler(*slot);
-        return std::unexpected(std::move(written.error()));
-    }
+    writeD3D12Sampler(*device_.Get(), device11_.Get(), desc, layout_.samplerAt(*slot));
     return sampler;
 }
 

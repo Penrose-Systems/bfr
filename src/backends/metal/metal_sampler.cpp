@@ -75,11 +75,6 @@ MTL::SamplerBorderColor borderFor(BorderPreset preset) {
 } // namespace
 
 core::Result<Ref<MTL::SamplerState>> createMetalSampler(MTL::Device& device, const SamplerDesc& desc) {
-    const BorderPreset preset = borderPreset(desc);
-    if (preset == BorderPreset::Custom) {
-        return core::failure(core::ErrorCode::RhiUnsupported,
-                             "Metal has only transparent black, opaque black and opaque white border colours");
-    }
     const Ref<MTL::SamplerDescriptor> descriptor = adopt(MTL::SamplerDescriptor::alloc()->init());
     descriptor->setMagFilter(filterFor(desc.magFilter));
     descriptor->setMinFilter(filterFor(desc.minFilter));
@@ -100,7 +95,7 @@ core::Result<Ref<MTL::SamplerState>> createMetalSampler(MTL::Device& device, con
     if (desc.reduction == SamplerReduction::Compare) {
         descriptor->setCompareFunction(compareFor(desc.compareOp));
     }
-    descriptor->setBorderColor(borderFor(preset));
+    descriptor->setBorderColor(borderFor(borderPreset(desc)));
     descriptor->setNormalizedCoordinates(!desc.unnormalizedCoordinates);
     descriptor->setLodAverage(desc.lodAverage);
     // The tables hold its resource ID, which needs this.
