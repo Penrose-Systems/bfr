@@ -93,8 +93,6 @@ struct DeviceFeatures {
     VkPhysicalDeviceShaderSubgroupRotateFeaturesKHR subgroupRotate{};
     VkPhysicalDeviceShaderFloatControls2FeaturesKHR floatControls2{};
     VkPhysicalDeviceShaderExpectAssumeFeaturesKHR expectAssume{};
-    /// A device with no queues needs its maintenance9.
-    VkPhysicalDeviceMaintenance9FeaturesKHR maintenance9{};
     /// Primitive restart on list topologies.
     VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT listRestart{};
     /// Mesh and task shaders. Its primitiveFragmentShadingRateMeshShader

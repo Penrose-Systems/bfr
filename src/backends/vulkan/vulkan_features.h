@@ -52,11 +52,16 @@ using VulkanFormOf = VulkanForm (*)(DeviceFeatures& chain, std::span<const VkExt
 /// rendering, synchronization2; missingRequirements), what the Vulkan spec
 /// makes it enable (VK_KHR_portability_subset where listed,
 /// VUID-VkDeviceCreateInfo-pProperties-04451, with the members the adapter
-/// reports other than those requestable), queue levels and devices with no
-/// queues as the adapter has them (global priority, maintenance9), each
+/// reports other than those requestable), below 1.4 VK_KHR_global_priority
+/// where desc's queues ask for a level other than normal (setsLevels), each
 /// requested feature's form, and the uniform buffer and acceleration
 /// structure tables' update-after-bind where desc asks for slots in them and
 /// the adapter has it. checkFeatures has passed request.
+/// Whether desc's queues ask for a level other than normal, which Vulkan
+/// sets with VkDeviceQueueGlobalPriorityCreateInfo; normal is the level a
+/// queue has with none set.
+[[nodiscard]] bool setsLevels(const DeviceDesc& desc);
+
 class EnabledFeatures {
 public:
     EnabledFeatures(const DeviceFeatures& supported, std::span<const VkExtensionProperties> listed,

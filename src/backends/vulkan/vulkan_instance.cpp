@@ -111,7 +111,8 @@ VkQueueGlobalPriorityKHR vulkanLevel(QueueLevel level) {
 // The queues to open: one create info for each family asked for, as Vulkan
 // takes no two for one family (VUID-VkDeviceCreateInfo-queueFamilyIndex-02802),
 // pointing at its queues' ranks in the order wanted asks for them, and with
-// the family's level where the device has VK_KHR_global_priority. The arrays
+// the family's level where it is not normal, the level a queue has with none
+// set, and the device has VK_KHR_global_priority or 1.4. The arrays
 // are sized before they are filled, so the pointers into them stay.
 struct QueueCreateInfos {
     std::vector<VkDeviceQueueCreateInfo> infos;
@@ -158,7 +159,7 @@ core::Result<QueueCreateInfos> queueCreateInfos(const DeviceDesc& wanted, std::u
         queue.queueFamilyIndex = family;
         queue.queueCount = static_cast<std::uint32_t>(queues.ranks.size() - start);
         queue.pQueuePriorities = std::span{queues.ranks}.subspan(start).data();
-        if (hasLevels) {
+        if (hasLevels && level != QueueLevel::Normal) {
             VkDeviceQueueGlobalPriorityCreateInfoKHR& global = queues.levels.emplace_back();
             global.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR;
             global.globalPriority = vulkanLevel(level);

@@ -691,10 +691,11 @@ bool has(const VulkanForm& form, std::span<const VkExtensionProperties> extensio
 }
 
 // The extensions a device enables for request: those of BFR's own needs and
-// the spec's, those of queue levels and of devices with no queues where
-// listed, and each requested feature's, once each.
+// the spec's, global priority's below 1.4 where levels (queues ask for a
+// level other than normal, which it sets), and each requested feature's, once
+// each.
 std::vector<const char*> namesFor(std::uint32_t version, std::span<const VkExtensionProperties> listed,
-                                  const FeatureRequest& request) {
+                                  const FeatureRequest& request, bool levels) {
     // Only for the forms' extensions, which name no member of it.
     DeviceFeatures forms(version, {});
     std::vector<const char*> names;
@@ -708,11 +709,11 @@ std::vector<const char*> namesFor(std::uint32_t version, std::span<const VkExten
         add(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
         add(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
     }
-    for (const char* needed : {VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME,
-                               VK_KHR_MAINTENANCE_9_EXTENSION_NAME}) {
-        if (lists(listed, needed)) {
-            add(needed);
-        }
+    if (lists(listed, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME)) {
+        add(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+    }
+    if (levels && version < VK_API_VERSION_1_4 && lists(listed, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME)) {
+        add(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME);
     }
     for (const VulkanFeature& feature : kVulkanFeatures) {
         if (request.*feature.requested) {
@@ -760,6 +761,10 @@ std::array<bool, kRequestableFeatures.size()> requestableIn(DeviceFeatures& chai
     return had;
 }
 
+bool setsLevels(const DeviceDesc& desc) {
+    return std::ranges::any_of(desc.queues, [](const QueueDesc& queue) { return queue.level != QueueLevel::Normal; });
+}
+
 std::array<bool, kRequestableFeatures.size()> factsIn(DeviceFeatures& chain,
                                                       std::span<const VkExtensionProperties> listed) {
     std::array<bool, kRequestableFeatures.size()> facts{};
@@ -771,16 +776,13 @@ std::array<bool, kRequestableFeatures.size()> factsIn(DeviceFeatures& chain,
 
 EnabledFeatures::EnabledFeatures(const DeviceFeatures& supported, std::span<const VkExtensionProperties> listed,
                                  const FeatureRequest& request, const DeviceDesc& desc)
-    : names(namesFor(supported.version, listed, request)),
+    : names(namesFor(supported.version, listed, request, setsLevels(desc))),
       extensions(listingOf(names)),
       chain(supported.version, extensions) {
     enableRequirements(chain);
-    // Queue levels and devices with no queues, and a portability driver's
-    // limits on what the core calls BFR makes do, as the adapter has them;
-    // the requestable portability members follow the request below.
-    chain.vulkan14.globalPriorityQuery = supported.vulkan14.globalPriorityQuery;
-    chain.globalPriority.globalPriorityQuery = supported.globalPriority.globalPriorityQuery;
-    chain.maintenance9.maintenance9 = supported.maintenance9.maintenance9;
+    // A portability driver's limits on what the core calls BFR makes do, as
+    // the adapter has them; the requestable portability members follow the
+    // request below.
     void* const portabilityNext = chain.portability.pNext;
     chain.portability = supported.portability;
     chain.portability.pNext = portabilityNext;
