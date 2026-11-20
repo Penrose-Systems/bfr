@@ -527,13 +527,21 @@ struct Features {
     bool pipelineStatistics{};
     bool occlusionQueryPrecise{};
     bool sparseBinding{};
+    /// Needs sparse_binding.
     bool sparseBuffers{};
+    /// Needs sparse_binding.
     bool sparseTextures2d{};
+    /// Needs sparse_binding.
     bool sparseTextures3d{};
+    /// Needs sparse_binding.
     bool sparseSamples2{};
+    /// Needs sparse_binding.
     bool sparseSamples4{};
+    /// Needs sparse_binding.
     bool sparseSamples8{};
+    /// Needs sparse_binding.
     bool sparseSamples16{};
+    /// Needs sparse_binding.
     bool sparseAliased{};
     bool sparseShaderResidency{};
 };

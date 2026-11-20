@@ -1255,14 +1255,14 @@ structs:
       - {name: pipeline_statistics, type: bool}
       - {name: occlusion_query_precise, type: bool}
       - {name: sparse_binding, type: bool}
-      - {name: sparse_buffers, type: bool}
-      - {name: sparse_textures_2d, type: bool}
-      - {name: sparse_textures_3d, type: bool}
-      - {name: sparse_samples_2, type: bool}
-      - {name: sparse_samples_4, type: bool}
-      - {name: sparse_samples_8, type: bool}
-      - {name: sparse_samples_16, type: bool}
-      - {name: sparse_aliased, type: bool}
+      - {name: sparse_buffers, type: bool, doc: "Needs sparse_binding."}
+      - {name: sparse_textures_2d, type: bool, doc: "Needs sparse_binding."}
+      - {name: sparse_textures_3d, type: bool, doc: "Needs sparse_binding."}
+      - {name: sparse_samples_2, type: bool, doc: "Needs sparse_binding."}
+      - {name: sparse_samples_4, type: bool, doc: "Needs sparse_binding."}
+      - {name: sparse_samples_8, type: bool, doc: "Needs sparse_binding."}
+      - {name: sparse_samples_16, type: bool, doc: "Needs sparse_binding."}
+      - {name: sparse_aliased, type: bool, doc: "Needs sparse_binding."}
       - {name: sparse_shader_residency, type: bool}
 
   device_desc:

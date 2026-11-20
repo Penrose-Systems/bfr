@@ -287,6 +287,14 @@ TEST_CASE("Device refuses a feature asked for without one it needs, naming both,
                    Catch::Matchers::ContainsSubstring("ray_query needs acceleration_structure") &&
                        !Catch::Matchers::ContainsSubstring("ray_query_graphics needs"));
 
+        const auto unbound = instance.createDevice(
+            testDeviceWith(instance, kFirstAdapter, kNoWindow,
+                           [](DeviceDesc& desc) { desc.features.sparseBuffers = true; }));
+        REQUIRE_FALSE(unbound.has_value());
+        CHECK(unbound.error().code == Result::ErrorInvalidArgument);
+        CHECK_THAT(unbound.error().message.text(),
+                   Catch::Matchers::ContainsSubstring("sparse_buffers needs sparse_binding"));
+
         const auto noCall = instance.createDevice(
             testDeviceWith(instance, kFirstAdapter, kNoWindow,
                            [](DeviceDesc& desc) { desc.features.meshShadingRate = true; }));

@@ -1527,13 +1527,21 @@ typedef struct bfr_features {
     bfr_bool pipeline_statistics;
     bfr_bool occlusion_query_precise;
     bfr_bool sparse_binding;
+    // Needs sparse_binding.
     bfr_bool sparse_buffers;
+    // Needs sparse_binding.
     bfr_bool sparse_textures_2d;
+    // Needs sparse_binding.
     bfr_bool sparse_textures_3d;
+    // Needs sparse_binding.
     bfr_bool sparse_samples_2;
+    // Needs sparse_binding.
     bfr_bool sparse_samples_4;
+    // Needs sparse_binding.
     bfr_bool sparse_samples_8;
+    // Needs sparse_binding.
     bfr_bool sparse_samples_16;
+    // Needs sparse_binding.
     bfr_bool sparse_aliased;
     bfr_bool sparse_shader_residency;
 } bfr_features;
