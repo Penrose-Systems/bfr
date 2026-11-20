@@ -1380,8 +1380,10 @@ core::Result<D3D12_COMMAND_LIST_TYPE> D3D12Device::listTypeOf(const D3D12Command
 // Every barrier is checked, its texture looked up, before any is recorded,
 // then they are recorded kBarrierChunk of each kind to a Barrier call, a
 // group of each kind it has. A side with no stages is SYNC_NONE and no
-// accesses NO_ACCESS. Moving a texture from UNDEFINED discards it, which a
-// placed render target or depth texture needs before its first use.
+// accesses NO_ACCESS. Moving a texture from UNDEFINED to another layout
+// discards it, which a placed render target or depth texture needs before its
+// first use; UNDEFINED to UNDEFINED is a barrier on its memory alone, which
+// takes any accesses ("Layout Access Compatibility"), so it keeps the texture.
 core::Result<void> D3D12Device::barrier(CommandListHandle commandList, const BarrierDesc& desc) {
     if (auto checked = checkBarrierLayouts(desc); !checked) {
         return checked;
@@ -1437,7 +1439,8 @@ core::Result<void> D3D12Device::barrier(CommandListHandle commandList, const Bar
             const TextureBarrier& moved = chunkTextures[i];
             // Looked up above, in this same call.
             const D3D12Texture& texture = **textureFor(moved.texture);
-            const bool discard = moved.layoutBefore == TextureLayout::Undefined;
+            const bool discard = moved.layoutBefore == TextureLayout::Undefined &&
+                                 moved.layoutAfter != TextureLayout::Undefined;
             textures.at(i) = {.SyncBefore = syncOf(syncBitsFor(moved.before.stages)),
                               .SyncAfter = syncOf(syncBitsFor(moved.after.stages)),
                               .AccessBefore = accessFor(accessBitsFor(moved.before.accesses)),

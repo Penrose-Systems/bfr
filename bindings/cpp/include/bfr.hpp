@@ -1080,7 +1080,9 @@ struct TextureRange {
 /// stage, draw_indirect, index_input, early_fragment_tests, late_fragment_tests and color_output
 /// are MTLStageAll. None set waits on, or holds back, no work; on D3D12 that is SYNC_NONE, which
 /// also promises the resources the barrier names are not used before it, or after it, in the same
-/// submit. A stage the list's queue family does not run fails with error_unsupported on Vulkan
+/// submit, and on Vulkan NONE, "no stages of execution" (synchronization.adoc), which orders
+/// nothing; Metal records no barrier with a side of none, as such a barrier orders nothing there
+/// either. A stage the list's queue family does not run fails with error_unsupported on Vulkan
 /// (VUID-vkCmdPipelineBarrier2-srcStageMask-09673) and D3D12 ("Command Queue Sync Compatibility"),
 /// as does, on Vulkan only, a stage of a feature the device was created without (VUID-
 /// VkMemoryBarrier2-srcStageMask-03934 and its kin).
@@ -1100,13 +1102,18 @@ struct Stages {
     /// Rendering reading and writing color attachments.
     bool colorOutput{};
     bool computeShader{};
-    /// Copies, query resolves among them.
+    /// Copies.
     bool copy{};
     /// bfr_resolve_texture. Fails with error_unsupported on Metal, which resolves only as rendering
     /// ends.
     bool resolve{};
     /// Fails with error_unsupported on Metal, whose MTLStages has no such stage.
     bool rayTracingShader{};
+    /// Builds. The acceleration structure stages also cover opacity micromaps: on Vulkan, where
+    /// bfr_caps_features.opacity_micromap, each adds the micromap build stage micromap builds,
+    /// copies and property writes run in (micromaps.adoc), and the acceleration structure accesses
+    /// their micromap twins where the side's stages take them (VUID-
+    /// VkMemoryBarrier2-srcAccessMask-07457, -07458).
     bool accelerationStructureBuild{};
     /// Copies, compactions, serializations and deserializations of acceleration structures: D3D12's
     /// SYNC_COPY_RAYTRACING_ACCELERATION_STRUCTURE, and on Vulkan the acceleration structure build
@@ -1131,7 +1138,10 @@ struct Accesses {
     bool indirectRead{};
     /// The index buffer; with index_input.
     bool indexRead{};
-    /// Uniform buffers; with a shader stage.
+    /// Uniform buffers; with a shader stage. On D3D12 ray_tracing_shader is not one:
+    /// ACCESS_CONSTANT_BUFFER pairs with no SYNC_RAYTRACING (Enhanced Barriers spec, "Access Bits
+    /// Barrier Sync Compatibility"), so with no other shader stage, or all, it fails with
+    /// error_invalid_argument there.
     bool uniformRead{};
     /// The texture table; with a shader stage.
     bool sampledRead{};
@@ -1147,16 +1157,24 @@ struct Accesses {
     bool depthStencilRead{};
     /// With early_fragment_tests or late_fragment_tests.
     bool depthStencilWrite{};
-    /// With copy.
+    /// With copy; see copy_write.
     bool copyRead{};
-    /// With copy.
+    /// With copy. On D3D12 acceleration_structure_copy is not one: ACCESS_COPY_SOURCE and
+    /// ACCESS_COPY_DEST pair only with SYNC_ALL and SYNC_COPY (Enhanced Barriers spec, "Access Bits
+    /// Barrier Sync Compatibility"), so a serialization's or deserialization's buffer access with
+    /// that stage alone fails with error_invalid_argument there.
     bool copyWrite{};
     /// With resolve.
     bool resolveRead{};
     /// With resolve.
     bool resolveWrite{};
     /// A build's vertices, indices, transforms, instances and other inputs; with
-    /// acceleration_structure_build.
+    /// acceleration_structure_build. On D3D12 that is ACCESS_SHADER_RESOURCE with
+    /// SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE, which the compatibility table allows but whose
+    /// own section says needs ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_WRITE beside it (Enhanced
+    /// Barriers spec, "Access Bits Barrier Sync Compatibility",
+    /// D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE); setting
+    /// acceleration_structure_write on that side too meets both readings.
     bool accelerationStructureInputRead{};
     /// With acceleration_structure_build, acceleration_structure_copy or
     /// acceleration_structure_properties, or a shader stage that queries rays; on Vulkan a shader
@@ -1191,7 +1209,9 @@ static_assert(offsetof(GlobalBarrier, after) == offsetof(bfr_global_barrier, aft
 /// sampled, copy reads and copy writes, and depth_stencil_read LAYOUT_DIRECT_QUEUE_GENERIC_READ,
 /// which takes sampled, copy, depth and stencil, and resolve reads), and a side whose layout is
 /// undefined, the other not, has none; either fails with error_invalid_argument. Moving from
-/// undefined discards on D3D12.
+/// undefined to another layout discards on D3D12; undefined to undefined is a barrier on its memory
+/// alone there, which keeps it. layout_after undefined fails with error_invalid_argument on Vulkan
+/// (VUID-VkImageMemoryBarrier2-newLayout-01198).
 struct TextureBarrier {
     TextureRef texture{};
     BarrierScope before{};
@@ -4573,18 +4593,20 @@ public:
     [[nodiscard]] Expected<void> drawIndexed(CommandList commandList, std::uint32_t indexCount, std::uint32_t instanceCount, std::uint32_t firstIndex, std::int32_t vertexOffset, std::uint32_t firstInstance) const;
 
     /// Records a dispatch of x by y by z workgroups of the bound compute pipeline, outside
-    /// rendering. Commands after a bfr_barrier see what it wrote.
+    /// rendering. Commands after it see what it wrote through a bfr_barrier naming compute_shader
+    /// and the accesses it made, such as storage_write, before.
     [[nodiscard]] Expected<void> dispatch(CommandList commandList, std::uint32_t x, std::uint32_t y, std::uint32_t z) const;
 
     /// Records draw_count draws as bfr_draw does, each with the bfr_draw_indirect_args buffer holds
     /// from offset, stride bytes apart. buffer has indirect usage; work that wrote the arguments is
-    /// ordered before by a bfr_barrier. Fails with error_unsupported for draw_count above 1 where
-    /// the device's (bfr_get_device_caps) multi_draw_indirect is false, as it always is on Metal,
-    /// whose indirect draw has no count, and, on D3D12, a stride not in the device's
-    /// indirect_strides; with error_invalid_argument, on Vulkan, for an offset or, past one draw, a
-    /// stride that is not a multiple of 4, a stride smaller than the arguments, draws running past
-    /// the buffer, or draw_count above bfr_caps_limits.max_draw_indirect_count, and on D3D12 for a
-    /// stride smaller than the arguments; and as bfr_draw does.
+    /// ordered before it by a bfr_barrier naming draw_indirect and indirect_read after. Fails with
+    /// error_unsupported for draw_count above 1 where the device's (bfr_get_device_caps)
+    /// multi_draw_indirect is false, as it always is on Metal, whose indirect draw has no count,
+    /// and, on D3D12, a stride not in the device's indirect_strides; with error_invalid_argument,
+    /// on Vulkan, for an offset or, past one draw, a stride that is not a multiple of 4, a stride
+    /// smaller than the arguments, draws running past the buffer, or draw_count above
+    /// bfr_caps_limits.max_draw_indirect_count, and on D3D12 for a stride smaller than the
+    /// arguments; and as bfr_draw does.
     [[nodiscard]] Expected<void> drawIndirect(CommandList commandList, const Buffer& buffer, std::uint64_t offset, std::uint32_t drawCount, std::uint32_t stride) const;
 
     /// Records draw_count draws as bfr_draw_indexed does, each with the
@@ -4622,8 +4644,8 @@ public:
 
     /// Records copies of regions from src to dst, outside rendering. src has copy_src usage and is
     /// device or upload memory; dst has copy_dst usage and is device or readback memory. Commands
-    /// after a bfr_barrier in the list, or in a later submit that waits on its token, see what was
-    /// copied.
+    /// after it in the list see what was copied through a bfr_barrier naming copy and copy_write
+    /// before, and those in a later submit that waits on its token see it.
     [[nodiscard]] Expected<void> copyBuffer(CommandList commandList, const Buffer& src, const Buffer& dst, std::span<const BufferCopy> regions) const;
 
     /// Records desc's barriers, outside rendering: the work of each one's before stages, recorded
@@ -4899,8 +4921,10 @@ public:
     /// and a bottom_structure is named where it is not null, else bottom_reference.
     [[nodiscard]] Expected<void> writeInstances(std::span<const AccelerationStructureInstance> instances, void* data, std::size_t size) const;
 
-    /// Records build, outside rendering, on a queue whose family runs compute. A barrier orders the
-    /// work that wrote its inputs before it, and its readers and any reuse of its scratch after.
+    /// Records build, outside rendering, on a queue whose family runs compute. A bfr_barrier naming
+    /// acceleration_structure_build and acceleration_structure_input_read after orders the work
+    /// that wrote its inputs before it, and one naming acceleration_structure_build and
+    /// acceleration_structure_write before orders its readers and any reuse of its scratch after.
     /// Fails with error_unsupported where bfr_caps_features.acceleration_structure is false,
     /// error_invalid_argument for inputs bfr_get_acceleration_structure_sizes refuses, an opacity
     /// micromap updated where the backend builds one only whole (Vulkan), or a buffer with no
@@ -4927,10 +4951,12 @@ public:
     [[nodiscard]] Expected<AccelerationStructureSizes> clusterSizes(const ClusterInputs& inputs) const;
 
     /// Records build, a cluster operation, outside rendering, on a queue whose family runs compute:
-    /// the GPU reads its records and count as it runs. A barrier orders the work that wrote its
-    /// records, count and the structures it reads before it, and their readers and any reuse of its
-    /// scratch after. Traces reach the cluster bottom structures it builds only through pipelines
-    /// made with allow_clusters. Fails with error_unsupported as bfr_get_cluster_sizes does,
+    /// the GPU reads its records and count as it runs. A bfr_barrier naming
+    /// acceleration_structure_build after orders the work that wrote its records, count and the
+    /// structures it reads before it, and one naming acceleration_structure_build and
+    /// acceleration_structure_write before orders their readers and any reuse of its scratch after.
+    /// Traces reach the cluster bottom structures it builds only through pipelines made with
+    /// allow_clusters. Fails with error_unsupported as bfr_get_cluster_sizes does,
     /// error_invalid_argument for inputs bfr_get_cluster_sizes refuses or a buffer with no address,
     /// and error_invalid_handle for a list or buffer that is gone.
     [[nodiscard]] Expected<void> buildClusters(CommandList commandList, const ClusterBuild& build) const;
@@ -4964,8 +4990,9 @@ public:
     [[nodiscard]] Expected<Pipeline> createRayTracingPipeline(const RayTracingPipelineDesc& desc) const;
 
     /// Records a trace of desc's rays with the bound ray tracing pipeline, outside rendering, on a
-    /// queue whose family runs compute; commands after a barrier see what it wrote. Fails with
-    /// error_unsupported where bfr_caps_features.ray_tracing_pipeline is false,
+    /// queue whose family runs compute; commands after it see what it wrote through a bfr_barrier
+    /// naming ray_tracing_shader and the accesses it made, such as storage_write, before. Fails
+    /// with error_unsupported where bfr_caps_features.ray_tracing_pipeline is false,
     /// error_invalid_argument for a table buffer with no address, and error_invalid_handle for a
     /// buffer that is gone.
     [[nodiscard]] Expected<void> traceRays(CommandList commandList, const TraceRaysDesc& desc) const;
@@ -4990,11 +5017,13 @@ public:
     [[nodiscard]] Expected<void> resetAccelerationStructureProperties(CommandList commandList, const AccelerationStructurePropertyPool& pool, std::uint32_t first, std::uint32_t count) const;
 
     /// Records writes of structures' property into the pool's entries from first, in order, outside
-    /// rendering, on a queue whose family runs compute. A barrier orders their builds before it. A
-    /// compacted_size is of structures built with allow_compaction, a serialized_bottom_count of
-    /// top ones. Fails with error_invalid_argument for more structures than the pool holds from
-    /// first, or for a partitioned top structure where the backend writes none of its properties
-    /// (Vulkan), and error_invalid_handle for a structure that is gone.
+    /// rendering, on a queue whose family runs compute. A bfr_barrier naming
+    /// acceleration_structure_build and acceleration_structure_write before, and
+    /// acceleration_structure_properties and acceleration_structure_read after, orders their builds
+    /// before it. A compacted_size is of structures built with allow_compaction, a
+    /// serialized_bottom_count of top ones. Fails with error_invalid_argument for more structures
+    /// than the pool holds from first, or for a partitioned top structure where the backend writes
+    /// none of its properties (Vulkan), and error_invalid_handle for a structure that is gone.
     [[nodiscard]] Expected<void> writeAccelerationStructureProperties(CommandList commandList, const AccelerationStructurePropertyPool& pool, std::uint32_t first, std::span<const AccelerationStructureRef> structures) const;
 
     /// Records a copy of count entries from first into buffer at offset, a multiple of 8, as

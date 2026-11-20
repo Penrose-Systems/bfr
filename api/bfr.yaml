@@ -1805,7 +1805,10 @@ structs:
       index_input, early_fragment_tests, late_fragment_tests and color_output
       are MTLStageAll. None set waits on, or holds back, no work; on D3D12
       that is SYNC_NONE, which also promises the resources the barrier names
-      are not used before it, or after it, in the same submit. A stage the
+      are not used before it, or after it, in the same submit, and on Vulkan
+      NONE, "no stages of execution" (synchronization.adoc), which orders
+      nothing; Metal records no barrier with a side of none, as such a
+      barrier orders nothing there either. A stage the
       list's queue family does not run fails with error_unsupported on Vulkan
       (VUID-vkCmdPipelineBarrier2-srcStageMask-09673) and D3D12 ("Command
       Queue Sync Compatibility"), as does, on Vulkan only, a stage of a
@@ -1823,10 +1826,18 @@ structs:
       - {name: late_fragment_tests, type: bool}
       - {name: color_output, type: bool, doc: Rendering reading and writing color attachments.}
       - {name: compute_shader, type: bool}
-      - {name: copy, type: bool, doc: "Copies, query resolves among them."}
+      - {name: copy, type: bool, doc: Copies.}
       - {name: resolve, type: bool, doc: "bfr_resolve_texture. Fails with error_unsupported on Metal, which resolves only as rendering ends."}
       - {name: ray_tracing_shader, type: bool, doc: "Fails with error_unsupported on Metal, whose MTLStages has no such stage."}
-      - {name: acceleration_structure_build, type: bool}
+      - name: acceleration_structure_build
+        type: bool
+        doc: >-
+          Builds. The acceleration structure stages also cover opacity
+          micromaps: on Vulkan, where bfr_caps_features.opacity_micromap, each
+          adds the micromap build stage micromap builds, copies and property
+          writes run in (micromaps.adoc), and the acceleration structure
+          accesses their micromap twins where the side's stages take them
+          (VUID-VkMemoryBarrier2-srcAccessMask-07457, -07458).
       - name: acceleration_structure_copy
         type: bool
         doc: >-
@@ -1856,7 +1867,14 @@ structs:
     members:
       - {name: indirect_read, type: bool, doc: Indirect arguments; with draw_indirect.}
       - {name: index_read, type: bool, doc: The index buffer; with index_input.}
-      - {name: uniform_read, type: bool, doc: Uniform buffers; with a shader stage.}
+      - name: uniform_read
+        type: bool
+        doc: >-
+          Uniform buffers; with a shader stage. On D3D12 ray_tracing_shader
+          is not one: ACCESS_CONSTANT_BUFFER pairs with no SYNC_RAYTRACING
+          (Enhanced Barriers spec, "Access Bits Barrier Sync Compatibility"),
+          so with no other shader stage, or all, it fails with
+          error_invalid_argument there.
       - {name: sampled_read, type: bool, doc: The texture table; with a shader stage.}
       - {name: storage_read, type: bool, doc: Storage buffers and textures; with a shader stage.}
       - {name: storage_write, type: bool, doc: Storage buffers and textures; with a shader stage.}
@@ -1864,11 +1882,29 @@ structs:
       - {name: color_target_write, type: bool, doc: With color_output.}
       - {name: depth_stencil_read, type: bool, doc: With early_fragment_tests or late_fragment_tests.}
       - {name: depth_stencil_write, type: bool, doc: With early_fragment_tests or late_fragment_tests.}
-      - {name: copy_read, type: bool, doc: With copy.}
-      - {name: copy_write, type: bool, doc: With copy.}
+      - {name: copy_read, type: bool, doc: With copy; see copy_write.}
+      - name: copy_write
+        type: bool
+        doc: >-
+          With copy. On D3D12 acceleration_structure_copy is not one:
+          ACCESS_COPY_SOURCE and ACCESS_COPY_DEST pair only with SYNC_ALL and
+          SYNC_COPY (Enhanced Barriers spec, "Access Bits Barrier Sync
+          Compatibility"), so a serialization's or deserialization's buffer
+          access with that stage alone fails with error_invalid_argument
+          there.
       - {name: resolve_read, type: bool, doc: With resolve.}
       - {name: resolve_write, type: bool, doc: With resolve.}
-      - {name: acceleration_structure_input_read, type: bool, doc: "A build's vertices, indices, transforms, instances and other inputs; with acceleration_structure_build."}
+      - name: acceleration_structure_input_read
+        type: bool
+        doc: >-
+          A build's vertices, indices, transforms, instances and other inputs;
+          with acceleration_structure_build. On D3D12 that is
+          ACCESS_SHADER_RESOURCE with SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE,
+          which the compatibility table allows but whose own section says
+          needs ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_WRITE beside it
+          (Enhanced Barriers spec, "Access Bits Barrier Sync Compatibility",
+          D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE); setting
+          acceleration_structure_write on that side too meets both readings.
       - name: acceleration_structure_read
         type: bool
         doc: >-
@@ -1905,7 +1941,10 @@ structs:
       LAYOUT_DIRECT_QUEUE_GENERIC_READ, which takes sampled, copy, depth and
       stencil, and resolve reads), and a side whose layout is undefined, the
       other not, has none; either fails with error_invalid_argument. Moving
-      from undefined discards on D3D12.
+      from undefined to another layout discards on D3D12; undefined to
+      undefined is a barrier on its memory alone there, which keeps it.
+      layout_after undefined fails with error_invalid_argument on Vulkan
+      (VUID-VkImageMemoryBarrier2-newLayout-01198).
     members:
       - {name: texture, type: texture}
       - {name: before, type: barrier_scope}
@@ -3944,8 +3983,9 @@ functions:
   dispatch:
     doc: >-
       Records a dispatch of x by y by z workgroups of the bound compute
-      pipeline, outside rendering. Commands after a bfr_barrier see what it
-      wrote.
+      pipeline, outside rendering. Commands after it see what it wrote
+      through a bfr_barrier naming compute_shader and the accesses it made,
+      such as storage_write, before.
     returns: result
     params:
       - {name: device, type: device}
@@ -3959,7 +3999,7 @@ functions:
       Records draw_count draws as bfr_draw does, each with the
       bfr_draw_indirect_args buffer holds from offset, stride bytes apart.
       buffer has indirect usage; work that wrote the arguments is ordered before
-      by a bfr_barrier. Fails with error_unsupported for draw_count above 1
+      it by a bfr_barrier naming draw_indirect and indirect_read after. Fails with error_unsupported for draw_count above 1
       where the device's (bfr_get_device_caps) multi_draw_indirect is false, as
       it always is on Metal, whose indirect draw has no count, and, on D3D12, a
       stride not in the device's indirect_strides; with error_invalid_argument,
@@ -4084,8 +4124,9 @@ functions:
     doc: >-
       Records copies of regions from src to dst, outside rendering. src has
       copy_src usage and is device or upload memory; dst has copy_dst usage and
-      is device or readback memory. Commands after a bfr_barrier in the list,
-      or in a later submit that waits on its token, see what was copied.
+      is device or readback memory. Commands after it in the list see what was
+      copied through a bfr_barrier naming copy and copy_write before, and
+      those in a later submit that waits on its token see it.
     returns: result
     params:
       - {name: device, type: device}
@@ -4895,8 +4936,11 @@ functions:
   build_acceleration_structure:
     doc: >-
       Records build, outside rendering, on a queue whose family runs compute. A
-      barrier orders the work that wrote its inputs before it, and its readers
-      and any reuse of its scratch after. Fails with error_unsupported where
+      bfr_barrier naming acceleration_structure_build and
+      acceleration_structure_input_read after orders the work that wrote its
+      inputs before it, and one naming acceleration_structure_build and
+      acceleration_structure_write before orders its readers and any reuse of
+      its scratch after. Fails with error_unsupported where
       bfr_caps_features.acceleration_structure is false,
       error_invalid_argument for inputs bfr_get_acceleration_structure_sizes
       refuses, an opacity micromap updated where the backend builds one only
@@ -4951,9 +4995,11 @@ functions:
     doc: >-
       Records build, a cluster operation, outside rendering, on a queue whose
       family runs compute: the GPU reads its records and count as it runs. A
-      barrier orders the work that wrote its records, count and the
-      structures it reads before it, and their readers and any reuse of its
-      scratch after. Traces reach the cluster bottom structures it builds
+      bfr_barrier naming acceleration_structure_build after orders the work
+      that wrote its records, count and the structures it reads before it,
+      and one naming acceleration_structure_build and
+      acceleration_structure_write before orders their readers and any reuse
+      of its scratch after. Traces reach the cluster bottom structures it builds
       only through pipelines made with allow_clusters. Fails with
       error_unsupported as bfr_get_cluster_sizes does,
       error_invalid_argument for inputs bfr_get_cluster_sizes refuses or a
@@ -5063,8 +5109,9 @@ functions:
   trace_rays:
     doc: >-
       Records a trace of desc's rays with the bound ray tracing pipeline,
-      outside rendering, on a queue whose family runs compute; commands after a
-      barrier see what it wrote. Fails with error_unsupported where
+      outside rendering, on a queue whose family runs compute; commands after
+      it see what it wrote through a bfr_barrier naming ray_tracing_shader and
+      the accesses it made, such as storage_write, before. Fails with error_unsupported where
       bfr_caps_features.ray_tracing_pipeline is false,
       error_invalid_argument for a table buffer with no address, and
       error_invalid_handle for a buffer that is gone.
@@ -5145,7 +5192,10 @@ functions:
     doc: >-
       Records writes of structures' property into the pool's entries from
       first, in order, outside rendering, on a queue whose family runs compute.
-      A barrier orders their builds before it. A compacted_size is of
+      A bfr_barrier naming acceleration_structure_build and
+      acceleration_structure_write before, and
+      acceleration_structure_properties and acceleration_structure_read
+      after, orders their builds before it. A compacted_size is of
       structures built with allow_compaction, a serialized_bottom_count of top
       ones. Fails with error_invalid_argument for more structures than the
       pool holds from first, or for a partitioned top structure where the backend

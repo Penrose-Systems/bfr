@@ -110,6 +110,45 @@ VkAccessFlags2 accessesFor(const Accesses& accesses) {
     return native;
 }
 
+struct NativeScope {
+    VkPipelineStageFlags2 stages;
+    VkAccessFlags2 accesses;
+};
+
+// scope as recorded. Where the device has opacity micromaps, the acceleration
+// structure stages and accesses also cover them: micromap builds, copies and
+// property writes run in MICROMAP_BUILD with MICROMAP_READ and MICROMAP_WRITE
+// (micromaps.adoc, vkCmdBuildMicromapsEXT, vkCmdCopyMicromapEXT and its kin,
+// vkCmdWriteMicromapsPropertiesEXT), so the AS stages add MICROMAP_BUILD, and
+// the AS accesses their micromap twins on a side whose stages take them:
+// MICROMAP_BUILD, or ALL_COMMANDS, "all operations performed by all commands
+// supported on the queue" (synchronization.adoc), on a family that runs
+// compute, where MICROMAP_BUILD runs (vk.xml:32881-32883)
+// (VUID-VkMemoryBarrier2-srcAccessMask-07457, -07458). The micromap stage
+// needs the micromap feature (VUID-VkMemoryBarrier2-srcStageMask-10753),
+// which Features::opacityMicromap enables.
+NativeScope nativeScope(const BarrierScope& scope, bool micromaps, const QueueFamily& family) {
+    NativeScope native{.stages = stagesFor(scope.stages), .accesses = accessesFor(scope.accesses)};
+    if (!micromaps) {
+        return native;
+    }
+    if ((native.stages & VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR) != 0) {
+        native.stages |= VK_PIPELINE_STAGE_2_MICROMAP_BUILD_BIT_EXT;
+    }
+    const bool micromapStages = (native.stages & VK_PIPELINE_STAGE_2_MICROMAP_BUILD_BIT_EXT) != 0 ||
+                                ((native.stages & VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT) != 0 && family.compute);
+    if (!micromapStages) {
+        return native;
+    }
+    if ((native.accesses & VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR) != 0) {
+        native.accesses |= VK_ACCESS_2_MICROMAP_WRITE_BIT_EXT;
+    }
+    if ((native.accesses & VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR) != 0) {
+        native.accesses |= VK_ACCESS_2_MICROMAP_READ_BIT_EXT;
+    }
+    return native;
+}
+
 // The VK_PIPELINE_STAGE_*_SHADER_BIT stages BFR records, which the shader
 // accesses pair with.
 constexpr VkPipelineStageFlags2 kShaderStages = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
@@ -256,14 +295,19 @@ core::Result<void> VulkanDevice::checkBarrierScope(const BarrierScope& scope, co
                              "(VUID-vkCmdPipelineBarrier2-srcStageMask-09673)");
     }
     // The acceleration structure accesses are VK_KHR_acceleration_structure's
-    // (vk.xml:25397-25400), which a device without the feature lacks
-    // (VUID-VkMemoryBarrier2-srcAccessMask-parameter).
+    // (vk.xml:25397-25400). A flag is valid only where the extension that
+    // added it is enabled for the device (fundamentals.adoc, "Valid Usage for
+    // Enumerated Types" and "Valid Usage for Flags";
+    // VUID-VkMemoryBarrier2-srcAccessMask-parameter), and BFR enables that
+    // extension only with Features::accelerationStructure
+    // (vulkan_features.cpp).
     constexpr VkAccessFlags2 kStructureAccesses = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
                                                   VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
     if ((accesses & kStructureAccesses) != 0 && !features_.accelerationStructure) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "a barrier's acceleration structure accesses need the accelerationStructure feature "
-                             "(VUID-VkMemoryBarrier2-srcAccessMask-parameter)");
+                             "(VUID-VkMemoryBarrier2-srcAccessMask-parameter, fundamentals.adoc \"Valid Usage "
+                             "for Flags\")");
     }
     if ((accesses & VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR) != 0 && !features_.rayQuery &&
         (stages & kShaderStages & ~VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR) != 0) {
@@ -312,6 +356,11 @@ core::Result<void> VulkanDevice::barrier(CommandListHandle commandList, const Ba
                 return checked;
             }
         }
+        if (moved.layoutAfter == TextureLayout::Undefined) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 "a texture barrier moves to layout undefined, which Vulkan takes only as a layout to "
+                                 "move from (VUID-VkImageMemoryBarrier2-newLayout-01198)");
+        }
         auto found = textureFor(moved.texture);
         if (!found) {
             return std::unexpected(std::move(found.error()));
@@ -323,6 +372,7 @@ core::Result<void> VulkanDevice::barrier(CommandListHandle commandList, const Ba
     // kRemaining is Vulkan's VK_REMAINING_MIP_LEVELS and _ARRAY_LAYERS.
     static_assert(kRemaining == VK_REMAINING_MIP_LEVELS);
     static_assert(kRemaining == VK_REMAINING_ARRAY_LAYERS);
+    const bool micromaps = features_.opacityMicromap;
     std::array<VkMemoryBarrier2, kBarrierChunk> globals{};
     std::array<VkImageMemoryBarrier2, kBarrierChunk> images{};
     for (std::size_t chunk = 0; chunk < barrierChunks(desc); ++chunk) {
@@ -330,23 +380,27 @@ core::Result<void> VulkanDevice::barrier(CommandListHandle commandList, const Ba
         const std::span chunkTextures = barrierChunk(desc.textures, chunk);
         for (std::size_t i = 0; i < chunkGlobals.size(); ++i) {
             const GlobalBarrier& global = chunkGlobals[i];
+            const NativeScope before = nativeScope(global.before, micromaps, family);
+            const NativeScope after = nativeScope(global.after, micromaps, family);
             globals.at(i) = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
                              .pNext = nullptr,
-                             .srcStageMask = stagesFor(global.before.stages),
-                             .srcAccessMask = accessesFor(global.before.accesses),
-                             .dstStageMask = stagesFor(global.after.stages),
-                             .dstAccessMask = accessesFor(global.after.accesses)};
+                             .srcStageMask = before.stages,
+                             .srcAccessMask = before.accesses,
+                             .dstStageMask = after.stages,
+                             .dstAccessMask = after.accesses};
         }
         for (std::size_t i = 0; i < chunkTextures.size(); ++i) {
             const TextureBarrier& moved = chunkTextures[i];
             // Looked up above, in this same call.
             const VulkanTexture& texture = **textureFor(moved.texture);
+            const NativeScope before = nativeScope(moved.before, micromaps, family);
+            const NativeScope after = nativeScope(moved.after, micromaps, family);
             images.at(i) = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                             .pNext = nullptr,
-                            .srcStageMask = stagesFor(moved.before.stages),
-                            .srcAccessMask = accessesFor(moved.before.accesses),
-                            .dstStageMask = stagesFor(moved.after.stages),
-                            .dstAccessMask = accessesFor(moved.after.accesses),
+                            .srcStageMask = before.stages,
+                            .srcAccessMask = before.accesses,
+                            .dstStageMask = after.stages,
+                            .dstAccessMask = after.accesses,
                             .oldLayout = layoutFor(moved.layoutBefore, texture.aspects()),
                             .newLayout = layoutFor(moved.layoutAfter, texture.aspects()),
                             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,

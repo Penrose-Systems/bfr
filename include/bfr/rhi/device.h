@@ -207,15 +207,17 @@ public:
                                                          std::int32_t vertexOffset, std::uint32_t firstInstance) = 0;
 
     /// Records a dispatch of x by y by z workgroups of the bound compute
-    /// pipeline, outside rendering; commands after a barrier see what it
-    /// wrote. Fails with RhiInvalidHandle when the list or the bound pipeline
+    /// pipeline, outside rendering; commands after it see what it wrote
+    /// through a barrier naming computeShader and the accesses it made, such
+    /// as storageWrite, before. Fails with RhiInvalidHandle when the list or the bound pipeline
     /// is gone.
     [[nodiscard]] virtual core::Result<void> dispatch(CommandListHandle commandList, std::uint32_t x, std::uint32_t y,
                                                       std::uint32_t z) = 0;
 
     /// Records drawCount draws as draw does, each with the DrawIndirectArgs
     /// buffer holds from offset, stride bytes apart. buffer has indirect
-    /// usage; work that wrote the arguments is ordered before by a barrier.
+    /// usage; work that wrote the arguments is ordered before it by a
+    /// barrier naming drawIndirect and indirectRead after.
     /// Fails with RhiUnsupported for drawCount above 1 where the device's
     /// Features::multiDrawIndirect is false (checkDrawCount), and, on D3D12,
     /// a stride not in DeviceDesc::indirectStrides; with RhiInvalidCall, on
@@ -282,8 +284,9 @@ public:
 
     /// Records copies of regions from src to dst, outside rendering. src has
     /// copySrc usage and is device or upload memory; dst has copyDst usage and
-    /// is device or readback memory. Commands after a barrier in the list, or
-    /// in a later submit that waits on its token, see what was copied. Fails
+    /// is device or readback memory. Commands after it in the list see what
+    /// was copied through a barrier naming copy and copyWrite before, and
+    /// those in a later submit that waits on its token see it. Fails
     /// with RhiInvalidHandle when the list or a buffer is gone.
     [[nodiscard]] virtual core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src,
                                                         BufferHandle dst, std::span<const BufferCopy> regions) = 0;
@@ -754,8 +757,11 @@ public:
         std::span<std::byte> out) = 0;
 
     /// Records build, outside rendering, on a queue whose family runs compute.
-    /// A barrier orders the work that wrote its inputs before it, and its
-    /// readers and any reuse of its scratch after. Fails with RhiUnsupported
+    /// A barrier naming accelerationStructureBuild and
+    /// accelerationStructureInputRead after orders the work that wrote its
+    /// inputs before it, and one naming accelerationStructureBuild and
+    /// accelerationStructureWrite before orders its readers and any reuse of
+    /// its scratch after. Fails with RhiUnsupported
     /// where Features::accelerationStructure is false, RhiInvalidCall for
     /// inputs Device::accelerationStructureSizes refuses, an opacity micromap
     /// updated where the backend builds one only whole (Vulkan), or a buffer
@@ -793,13 +799,13 @@ public:
 
     /// Records build, a cluster operation, outside rendering, on a queue whose
     /// family runs compute: the GPU reads its records and count as it runs. A
-    /// barrier orders the work that wrote its records, count and the
-    /// structures it reads before it, and their readers and any reuse of its
-    /// scratch after. Traces reach the cluster bottom structures it builds
-    /// only through pipelines made with allowClusters. Fails with
-    /// RhiUnsupported as clusterSizes does, RhiInvalidCall
-    /// for inputs clusterSizes refuses or a buffer with no address, and
-    /// RhiInvalidHandle for a list or buffer that is gone.
+    /// barrier naming accelerationStructureBuild after orders the work that
+    /// wrote its records, count and the structures it reads before it, and
+    /// one naming accelerationStructureBuild and accelerationStructureWrite
+    /// before orders their readers and any reuse of its scratch after. Traces reach the cluster bottom structures it
+    /// builds only through pipelines made with allowClusters. Fails with RhiUnsupported as clusterSizes does,
+    /// RhiInvalidCall for inputs clusterSizes refuses or a buffer with no address, and RhiInvalidHandle for a list or
+    /// buffer that is gone.
     [[nodiscard]] virtual core::Result<void> buildClusters(CommandListHandle commandList,
                                                            const ClusterBuild& build) = 0;
 
@@ -844,7 +850,9 @@ public:
 
     /// Records writes of structures' property into the pool's entries from
     /// first, in order, outside rendering, on a queue whose family runs
-    /// compute. A barrier orders their builds before it. A CompactedSize is of
+    /// compute. A barrier naming accelerationStructureBuild and
+    /// accelerationStructureWrite before, and accelerationStructureProperties
+    /// and accelerationStructureRead after, orders their builds before it. A CompactedSize is of
     /// structures built with allowCompaction, a SerializedBottomCount of top
     /// ones. Fails with RhiInvalidCall for more structures than the pool
     /// holds from first, or for a partitioned top structure where the backend writes none of
@@ -954,7 +962,8 @@ public:
 
     /// Records a trace of desc's rays with the bound ray tracing pipeline,
     /// outside rendering, on a queue whose family runs compute; commands after
-    /// a barrier see what it wrote. Fails with RhiUnsupported where
+    /// it see what it wrote through a barrier naming rayTracingShader and the
+    /// accesses it made, such as storageWrite, before. Fails with RhiUnsupported where
     /// Features::rayTracingPipeline is false, RhiInvalidCall for a table
     /// buffer with no address, and
     /// RhiInvalidHandle for a list or buffer that is gone.

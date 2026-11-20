@@ -865,7 +865,10 @@ core::Result<void> checkStages(const Stages& stages) {
 // device's coherence point, the visibility Apple's Swift API defaults to
 // (barrier(afterQueueStages:beforeStages:visibilityOptions:), visibilityOptions
 // = [.device]). Every barrier is checked, its texture looked up, before any is
-// recorded.
+// recorded. A barrier with no stages on a side orders nothing, as a Vulkan
+// barrier whose side is NONE, "no stages of execution" (synchronization.adoc),
+// orders nothing; Apple documents no barrier of no stages, so Metal records
+// none for it, and opens no encoder when there is none to record.
 core::Result<void> MetalDevice::barrier(CommandListHandle commandList, const BarrierDesc& desc) {
     if (auto checked = checkBarrierLayouts(desc); !checked) {
         return checked;
@@ -895,7 +898,17 @@ core::Result<void> MetalDevice::barrier(CommandListHandle commandList, const Bar
             return checked;
         }
     }
-    if (desc.globals.empty() && desc.textures.empty()) {
+    const auto orders = [](const BarrierScope& before, const BarrierScope& after) {
+        return stagesFor(before.stages) != 0 && stagesFor(after.stages) != 0;
+    };
+    const bool anyOrders = std::ranges::any_of(desc.globals,
+                                               [&](const GlobalBarrier& global) {
+                                                   return orders(global.before, global.after);
+                                               }) ||
+                           std::ranges::any_of(desc.textures, [&](const TextureBarrier& moved) {
+                               return orders(moved.before, moved.after);
+                           });
+    if (!anyOrders) {
         return {};
     }
     // The pool drains the autoreleased encoder reference.
@@ -904,9 +917,11 @@ core::Result<void> MetalDevice::barrier(CommandListHandle commandList, const Bar
     if (encoder == nullptr) {
         return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no compute command encoder");
     }
-    const auto record = [encoder](const BarrierScope& before, const BarrierScope& after) {
-        encoder->barrierAfterQueueStages(stagesFor(before.stages), stagesFor(after.stages),
-                                         MTL4::VisibilityOptionDevice);
+    const auto record = [encoder, &orders](const BarrierScope& before, const BarrierScope& after) {
+        if (orders(before, after)) {
+            encoder->barrierAfterQueueStages(stagesFor(before.stages), stagesFor(after.stages),
+                                             MTL4::VisibilityOptionDevice);
+        }
     };
     for (const GlobalBarrier& global : desc.globals) {
         record(global.before, global.after);

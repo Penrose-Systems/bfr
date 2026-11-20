@@ -2106,8 +2106,10 @@ typedef struct bfr_texture_range {
 // and late_fragment_tests both SYNC_DEPTH_STENCIL; on Metal, whose MTLStages names no narrower
 // stage, draw_indirect, index_input, early_fragment_tests, late_fragment_tests and color_output are
 // MTLStageAll. None set waits on, or holds back, no work; on D3D12 that is SYNC_NONE, which also
-// promises the resources the barrier names are not used before it, or after it, in the same submit.
-// A stage the list's queue family does not run fails with error_unsupported on Vulkan (VUID-
+// promises the resources the barrier names are not used before it, or after it, in the same submit,
+// and on Vulkan NONE, "no stages of execution" (synchronization.adoc), which orders nothing; Metal
+// records no barrier with a side of none, as such a barrier orders nothing there either. A stage
+// the list's queue family does not run fails with error_unsupported on Vulkan (VUID-
 // vkCmdPipelineBarrier2-srcStageMask-09673) and D3D12 ("Command Queue Sync Compatibility"), as
 // does, on Vulkan only, a stage of a feature the device was created without (VUID-
 // VkMemoryBarrier2-srcStageMask-03934 and its kin).
@@ -2127,13 +2129,18 @@ typedef struct bfr_stages {
     // Rendering reading and writing color attachments.
     bfr_bool color_output;
     bfr_bool compute_shader;
-    // Copies, query resolves among them.
+    // Copies.
     bfr_bool copy;
     // bfr_resolve_texture. Fails with error_unsupported on Metal, which resolves only as rendering
     // ends.
     bfr_bool resolve;
     // Fails with error_unsupported on Metal, whose MTLStages has no such stage.
     bfr_bool ray_tracing_shader;
+    // Builds. The acceleration structure stages also cover opacity micromaps: on Vulkan, where
+    // bfr_caps_features.opacity_micromap, each adds the micromap build stage micromap builds,
+    // copies and property writes run in (micromaps.adoc), and the acceleration structure accesses
+    // their micromap twins where the side's stages take them (VUID-
+    // VkMemoryBarrier2-srcAccessMask-07457, -07458).
     bfr_bool acceleration_structure_build;
     // Copies, compactions, serializations and deserializations of acceleration structures: D3D12's
     // SYNC_COPY_RAYTRACING_ACCELERATION_STRUCTURE, and on Vulkan the acceleration structure build
@@ -2158,7 +2165,10 @@ typedef struct bfr_accesses {
     bfr_bool indirect_read;
     // The index buffer; with index_input.
     bfr_bool index_read;
-    // Uniform buffers; with a shader stage.
+    // Uniform buffers; with a shader stage. On D3D12 ray_tracing_shader is not one:
+    // ACCESS_CONSTANT_BUFFER pairs with no SYNC_RAYTRACING (Enhanced Barriers spec, "Access Bits
+    // Barrier Sync Compatibility"), so with no other shader stage, or all, it fails with
+    // error_invalid_argument there.
     bfr_bool uniform_read;
     // The texture table; with a shader stage.
     bfr_bool sampled_read;
@@ -2174,16 +2184,24 @@ typedef struct bfr_accesses {
     bfr_bool depth_stencil_read;
     // With early_fragment_tests or late_fragment_tests.
     bfr_bool depth_stencil_write;
-    // With copy.
+    // With copy; see copy_write.
     bfr_bool copy_read;
-    // With copy.
+    // With copy. On D3D12 acceleration_structure_copy is not one: ACCESS_COPY_SOURCE and
+    // ACCESS_COPY_DEST pair only with SYNC_ALL and SYNC_COPY (Enhanced Barriers spec, "Access Bits
+    // Barrier Sync Compatibility"), so a serialization's or deserialization's buffer access with
+    // that stage alone fails with error_invalid_argument there.
     bfr_bool copy_write;
     // With resolve.
     bfr_bool resolve_read;
     // With resolve.
     bfr_bool resolve_write;
     // A build's vertices, indices, transforms, instances and other inputs; with
-    // acceleration_structure_build.
+    // acceleration_structure_build. On D3D12 that is ACCESS_SHADER_RESOURCE with
+    // SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE, which the compatibility table allows but whose
+    // own section says needs ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_WRITE beside it (Enhanced
+    // Barriers spec, "Access Bits Barrier Sync Compatibility",
+    // D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE); setting
+    // acceleration_structure_write on that side too meets both readings.
     bfr_bool acceleration_structure_input_read;
     // With acceleration_structure_build, acceleration_structure_copy or
     // acceleration_structure_properties, or a shader stage that queries rays; on Vulkan a shader
@@ -2214,7 +2232,9 @@ typedef struct bfr_global_barrier {
 // sampled, copy reads and copy writes, and depth_stencil_read LAYOUT_DIRECT_QUEUE_GENERIC_READ,
 // which takes sampled, copy, depth and stencil, and resolve reads), and a side whose layout is
 // undefined, the other not, has none; either fails with error_invalid_argument. Moving from
-// undefined discards on D3D12.
+// undefined to another layout discards on D3D12; undefined to undefined is a barrier on its memory
+// alone there, which keeps it. layout_after undefined fails with error_invalid_argument on Vulkan
+// (VUID-VkImageMemoryBarrier2-newLayout-01198).
 typedef struct bfr_texture_barrier {
     bfr_texture texture;
     bfr_barrier_scope before;
@@ -4396,7 +4416,8 @@ BFR_API bfr_result bfr_draw_indexed(
     uint32_t first_instance);
 
 // Records a dispatch of x by y by z workgroups of the bound compute pipeline, outside rendering.
-// Commands after a bfr_barrier see what it wrote.
+// Commands after it see what it wrote through a bfr_barrier naming compute_shader and the accesses
+// it made, such as storage_write, before.
 BFR_API bfr_result bfr_dispatch(
     bfr_device* device,
     bfr_command_list command_list,
@@ -4406,13 +4427,14 @@ BFR_API bfr_result bfr_dispatch(
 
 // Records draw_count draws as bfr_draw does, each with the bfr_draw_indirect_args buffer holds from
 // offset, stride bytes apart. buffer has indirect usage; work that wrote the arguments is ordered
-// before by a bfr_barrier. Fails with error_unsupported for draw_count above 1 where the device's
-// (bfr_get_device_caps) multi_draw_indirect is false, as it always is on Metal, whose indirect draw
-// has no count, and, on D3D12, a stride not in the device's indirect_strides; with
-// error_invalid_argument, on Vulkan, for an offset or, past one draw, a stride that is not a
-// multiple of 4, a stride smaller than the arguments, draws running past the buffer, or draw_count
-// above bfr_caps_limits.max_draw_indirect_count, and on D3D12 for a stride smaller than the
-// arguments; and as bfr_draw does.
+// before it by a bfr_barrier naming draw_indirect and indirect_read after. Fails with
+// error_unsupported for draw_count above 1 where the device's (bfr_get_device_caps)
+// multi_draw_indirect is false, as it always is on Metal, whose indirect draw has no count, and, on
+// D3D12, a stride not in the device's indirect_strides; with error_invalid_argument, on Vulkan, for
+// an offset or, past one draw, a stride that is not a multiple of 4, a stride smaller than the
+// arguments, draws running past the buffer, or draw_count above
+// bfr_caps_limits.max_draw_indirect_count, and on D3D12 for a stride smaller than the arguments;
+// and as bfr_draw does.
 // offset: Bytes into the buffer.
 // stride: Bytes between two draws' arguments.
 BFR_API bfr_result bfr_draw_indirect(
@@ -4516,7 +4538,8 @@ BFR_API bfr_result bfr_draw_mesh_indirect_count(
 
 // Records copies of regions from src to dst, outside rendering. src has copy_src usage and is
 // device or upload memory; dst has copy_dst usage and is device or readback memory. Commands after
-// a bfr_barrier in the list, or in a later submit that waits on its token, see what was copied.
+// it in the list see what was copied through a bfr_barrier naming copy and copy_write before, and
+// those in a later submit that waits on its token see it.
 // regions: An array of region_count elements.
 BFR_API bfr_result bfr_copy_buffer(
     bfr_device* device,
@@ -5077,12 +5100,15 @@ BFR_API bfr_result bfr_write_instances(
     void* data,
     size_t size);
 
-// Records build, outside rendering, on a queue whose family runs compute. A barrier orders the work
-// that wrote its inputs before it, and its readers and any reuse of its scratch after. Fails with
-// error_unsupported where bfr_caps_features.acceleration_structure is false, error_invalid_argument
-// for inputs bfr_get_acceleration_structure_sizes refuses, an opacity micromap updated where the
-// backend builds one only whole (Vulkan), or a buffer with no address, error_limit_reached past the
-// device's max_build_geometries, and error_invalid_handle for a structure or buffer that is gone.
+// Records build, outside rendering, on a queue whose family runs compute. A bfr_barrier naming
+// acceleration_structure_build and acceleration_structure_input_read after orders the work that
+// wrote its inputs before it, and one naming acceleration_structure_build and
+// acceleration_structure_write before orders its readers and any reuse of its scratch after. Fails
+// with error_unsupported where bfr_caps_features.acceleration_structure is false,
+// error_invalid_argument for inputs bfr_get_acceleration_structure_sizes refuses, an opacity
+// micromap updated where the backend builds one only whole (Vulkan), or a buffer with no address,
+// error_limit_reached past the device's max_build_geometries, and error_invalid_handle for a
+// structure or buffer that is gone.
 BFR_API bfr_result bfr_build_acceleration_structure(
     bfr_device* device,
     bfr_command_list command_list,
@@ -5117,12 +5143,13 @@ BFR_API bfr_result bfr_get_cluster_sizes(
     bfr_acceleration_structure_sizes* sizes);
 
 // Records build, a cluster operation, outside rendering, on a queue whose family runs compute: the
-// GPU reads its records and count as it runs. A barrier orders the work that wrote its records,
-// count and the structures it reads before it, and their readers and any reuse of its scratch
-// after. Traces reach the cluster bottom structures it builds only through pipelines made with
-// allow_clusters. Fails with error_unsupported as bfr_get_cluster_sizes does,
-// error_invalid_argument for inputs bfr_get_cluster_sizes refuses or a buffer with no address, and
-// error_invalid_handle for a list or buffer that is gone.
+// GPU reads its records and count as it runs. A bfr_barrier naming acceleration_structure_build
+// after orders the work that wrote its records, count and the structures it reads before it, and
+// one naming acceleration_structure_build and acceleration_structure_write before orders their
+// readers and any reuse of its scratch after. Traces reach the cluster bottom structures it builds
+// only through pipelines made with allow_clusters. Fails with error_unsupported as
+// bfr_get_cluster_sizes does, error_invalid_argument for inputs bfr_get_cluster_sizes refuses or a
+// buffer with no address, and error_invalid_handle for a list or buffer that is gone.
 BFR_API bfr_result bfr_build_clusters(
     bfr_device* device,
     bfr_command_list command_list,
@@ -5199,7 +5226,8 @@ BFR_API bfr_result bfr_get_capture_replay_identifiers(
     size_t size);
 
 // Records a trace of desc's rays with the bound ray tracing pipeline, outside rendering, on a queue
-// whose family runs compute; commands after a barrier see what it wrote. Fails with
+// whose family runs compute; commands after it see what it wrote through a bfr_barrier naming
+// ray_tracing_shader and the accesses it made, such as storage_write, before. Fails with
 // error_unsupported where bfr_caps_features.ray_tracing_pipeline is false, error_invalid_argument
 // for a table buffer with no address, and error_invalid_handle for a buffer that is gone.
 BFR_API bfr_result bfr_trace_rays(
@@ -5251,11 +5279,13 @@ BFR_API bfr_result bfr_reset_acceleration_structure_properties(
     uint32_t count);
 
 // Records writes of structures' property into the pool's entries from first, in order, outside
-// rendering, on a queue whose family runs compute. A barrier orders their builds before it. A
-// compacted_size is of structures built with allow_compaction, a serialized_bottom_count of top
-// ones. Fails with error_invalid_argument for more structures than the pool holds from first, or
-// for a partitioned top structure where the backend writes none of its properties (Vulkan), and
-// error_invalid_handle for a structure that is gone.
+// rendering, on a queue whose family runs compute. A bfr_barrier naming
+// acceleration_structure_build and acceleration_structure_write before, and
+// acceleration_structure_properties and acceleration_structure_read after, orders their builds
+// before it. A compacted_size is of structures built with allow_compaction, a
+// serialized_bottom_count of top ones. Fails with error_invalid_argument for more structures than
+// the pool holds from first, or for a partitioned top structure where the backend writes none of
+// its properties (Vulkan), and error_invalid_handle for a structure that is gone.
 // structures: An array of structure_count elements. May be null.
 BFR_API bfr_result bfr_write_acceleration_structure_properties(
     bfr_device* device,

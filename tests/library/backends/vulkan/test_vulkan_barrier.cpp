@@ -154,6 +154,10 @@ TEST_CASE("Vulkan device records more barriers than a chunk holds, and records n
             layer.layoutBefore = TextureLayout::CopySrc;
         }
         layers.back().range = {.layer = kChunkedLayers, .layerCount = 1};
+        // Undefined is only a layout to move from on Vulkan
+        // (VUID-VkImageMemoryBarrier2-newLayout-01198).
+        CHECK(resultOf(textureBarrier(device, *list, texture, TextureLayout::CopyDst, TextureLayout::Undefined)) ==
+              Result::ErrorInvalidArgument);
         CHECK(resultOf(device.barrier(*list, {.globals = globals, .textures = layers})) ==
               Result::ErrorInvalidArgument);
         const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
