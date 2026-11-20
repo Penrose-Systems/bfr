@@ -3,11 +3,11 @@
 #include "bfr/core/error.h"
 #include "bfr/rhi/texture.h"
 #include "rhi/bindless_slots.h"
+#include "rhi/tile_extent.h"
 #include "vulkan/vma.h"
 
 #include <volk.h>
 
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <span>
@@ -61,7 +61,7 @@ public:
     /// The layers a rendering may draw to at mipLevel: the texture's layers,
     /// or a 3D texture's depth slices at that level.
     [[nodiscard]] std::uint32_t attachmentLayers(std::uint32_t mipLevel) const {
-        return size_.depth > 1 ? std::max(size_.depth >> mipLevel, 1U) : layers_;
+        return size_.depth > 1 ? levelSize(size_.depth, mipLevel) : layers_;
     }
     /// Makes attachmentView's views as desc says, of format, one for each
     /// level and layer, or each level's depth slices for a 3D texture made

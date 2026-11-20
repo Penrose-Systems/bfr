@@ -18,6 +18,7 @@
 #include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
 #include "rhi/name_check.h"
+#include "rhi/tile_extent.h"
 
 #include <d3d12.h>
 #include <D3D12MemAlloc.h>
@@ -93,7 +94,7 @@ std::uint32_t targetLayersAt(const D3D12Texture& texture, std::uint32_t mipLevel
     if (texture.desc.dimension != TextureDimension::D3) {
         return texture.layers;
     }
-    return std::max(mipLevel < std::numeric_limits<std::uint32_t>::digits ? texture.desc.depth >> mipLevel : 0U, 1U);
+    return levelSize(texture.desc.depth, mipLevel);
 }
 
 D3D12Target targetOf(const D3D12Texture& texture, std::uint32_t mipLevel, std::uint32_t layer,

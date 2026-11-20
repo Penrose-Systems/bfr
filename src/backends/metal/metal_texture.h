@@ -6,12 +6,11 @@
 #include "metal/metal_buffer.h"
 #include "metal/metal_util.h"
 #include "rhi/bindless_slots.h"
+#include "rhi/tile_extent.h"
 
 #include <Metal/Metal.hpp>
 
-#include <algorithm>
 #include <cstdint>
-#include <limits>
 #include <optional>
 
 namespace bfr::rhi::metal {
@@ -47,9 +46,7 @@ struct MetalTexture {
 /// The layers a rendering may draw to at mipLevel of texture: its layers, or
 /// a 3D texture's depth slices at that level.
 [[nodiscard]] inline std::uint32_t attachmentLayers(const MetalTexture& texture, std::uint32_t mipLevel) {
-    return texture.depth > 1
-               ? std::max(mipLevel < std::numeric_limits<std::uint32_t>::digits ? texture.depth >> mipLevel : 0U, 1U)
-               : texture.layers;
+    return texture.depth > 1 ? levelSize(texture.depth, mipLevel) : texture.layers;
 }
 
 } // namespace bfr::rhi::metal
