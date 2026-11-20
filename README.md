@@ -43,7 +43,7 @@ if (!family) {
     return report(family.error());
 }
 const std::array queues{bfr::QueueDesc{.family = *family}};
-auto device = instance->createDevice({.adapter = 0, .queues = queues});
+auto device = instance->createDevice({.adapter = 0, .queues = queues, .features = {.swapchain = true}});
 if (!device) {
     return report(device.error());
 }
@@ -140,9 +140,10 @@ flowchart TB
    requirements, which each backend value in `api/bfr.yaml` states, is
    listed.
 3. **Create a device** from one adapter, naming the queues you want, each
-   of a queue family the adapter lists. It
-   turns on what the adapter has at your version; caps say what that is, and
-   a call that needs what the device lacks fails with RhiUnsupported.
+   of a queue family the adapter lists, and the optional features you want
+   (`features`), each one the adapter has. It turns on only those; the
+   device's caps say what it has, and a call that needs what the device lacks
+   fails with RhiUnsupported.
 4. **Create a swapchain** per window from a native window handle and the
    queue that presents. Tools can have as many as they like.
 
