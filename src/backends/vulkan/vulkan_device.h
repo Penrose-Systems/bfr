@@ -232,10 +232,7 @@ public:
                                                            std::uint32_t stride) override;
     [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
                                                 std::span<const BufferCopy> regions) override;
-    [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
-    [[nodiscard]] core::Result<void> textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                                    TextureLayout before, TextureLayout after,
-                                                    const TextureRange& range) override;
+    [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList, const BarrierDesc& desc) override;
     [[nodiscard]] core::Result<void> copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,
                                                          TextureHandle texture,
                                                          std::span<const BufferTextureCopy> regions) override;
@@ -403,6 +400,10 @@ private:
     // The queue list records for. Fails with RhiInvalidHandle when its pool is
     // gone.
     [[nodiscard]] core::Result<const VulkanQueue*> queueOf(const VulkanCommandList& list);
+    // Fails as barrier says when a side of a barrier recorded on a queue of
+    // family has a stage the device or the family lacks, or an access none
+    // of its stages pairs with.
+    [[nodiscard]] core::Result<void> checkBarrierScope(const BarrierScope& scope, const QueueFamily& family) const;
     // The pool a handle names; RhiInvalidHandle when it is gone.
     [[nodiscard]] core::Result<const VulkanQueryPool*> queryPoolFor(QueryPoolHandle pool);
     // The list or queue a label call records on. Fail with RhiUnsupported

@@ -48,6 +48,17 @@ constexpr std::uint32_t kMiss = 0xFFFFFFFF;
 constexpr std::uint32_t kTableSlots = 4;
 constexpr std::uint32_t kGeometries = 4;
 constexpr std::uint32_t kPropertyPools = 4;
+// A trace or a ray query writing its results, before a copy reads them.
+constexpr BarrierScope kTraceWrites{.stages = {.all = true}, .accesses = {.storageWrite = true}};
+// Property writes, before the copy that resolves them; the pool is BFR's, so
+// they name no access.
+constexpr BarrierScope kPropertiesWritten{.stages = {.accelerationStructureProperties = true}};
+constexpr BarrierScope kPropertiesResolved{.stages = {.copy = true}};
+// A compaction and property writes, before anything reads the compacted
+// structure or resolves the properties.
+constexpr BarrierScope kCompactedAndWritten{.stages = {.accelerationStructureCopy = true,
+                                                       .accelerationStructureProperties = true},
+                                            .accesses = {.accelerationStructureWrite = true}};
 // What the scene's instances answer a hit with.
 constexpr std::uint32_t kFirst = 7;
 constexpr std::uint32_t kSecond = 9;
@@ -280,7 +291,7 @@ struct Scene {
             INFO(failureOf(recorded));
             CHECK(recorded.has_value());
         }
-        CHECK(device->barrier(list).has_value());
+        CHECK(globalBarrier(*device, list, kStructureWrites, kStructureReads).has_value());
         buildTop(list, false);
     }
 
@@ -293,7 +304,7 @@ struct Scene {
                    .scratch = top.scratch});
         INFO(failureOf(recorded));
         CHECK(recorded.has_value());
-        CHECK(device->barrier(list).has_value());
+        CHECK(globalBarrier(*device, list, kStructureWrites, kStructureReads).has_value());
     }
 
     const Device* device;
@@ -339,7 +350,7 @@ std::array<std::uint32_t, kRays> traced(const Device& device, AccelerationStruct
     record(*list);
     const auto push = std::bit_cast<PushBytes>(Push{*slot, *resultSlot});
     trace(*list, std::span<const std::uint8_t>{push});
-    CHECK(device.barrier(*list).has_value());
+    CHECK(globalBarrier(device, *list, kTraceWrites, kCopyReads).has_value());
     const BufferCopy whole{.srcOffset = 0, .dstOffset = 0, .size = kBytes};
     CHECK(device.copyBuffer(*list, results, readback, std::span{&whole, 1}).has_value());
     const auto sent = device.submit({.queue = kQueue, .commandLists = std::span{&*list, 1}, .waits = {}});
@@ -586,7 +597,7 @@ std::vector<std::uint64_t> propertyOf(const Device& device, const Caps& caps, Ac
         const auto written = device.writeAccelerationStructureProperties(list, *pool, 0, structures);
         INFO(failureOf(written));
         CHECK(written.has_value());
-        CHECK(device.barrier(list).has_value());
+        CHECK(globalBarrier(device, list, kPropertiesWritten, kPropertiesResolved).has_value());
         CHECK(device.resolveAccelerationStructureProperties(list, *pool, 0, count, readback, 0).has_value());
     });
     std::vector<std::uint64_t> values(count);
@@ -648,7 +659,7 @@ struct Micromap {
                                                                         .scratch = built.scratch});
         INFO(failureOf(recorded));
         CHECK(recorded.has_value());
-        CHECK(device->barrier(list).has_value());
+        CHECK(globalBarrier(*device, list, kStructureWrites, kStructureReads).has_value());
     }
 
     const Device* device;
@@ -695,7 +706,7 @@ TEST_CASE("Device builds triangles, boxes and instances, and rays traced inline 
             const auto copied = [&](CommandList list) {
                 scene.build(list);
                 CHECK(device.copyAccelerationStructure(list, copy, scene.top.structure).has_value());
-                CHECK(device.barrier(list).has_value());
+                CHECK(globalBarrier(device, list, kStructureWrites, kStructureReads).has_value());
             };
             CHECK(traced(device, copy, copied, query) == kPlaced);
             CHECK(goneStale(device, copy));
@@ -945,12 +956,12 @@ TEST_CASE("Device makes structures again at the references another device captur
                 CHECK(device.buildAccelerationStructure(list, {.dst = structure, .inputs = inputs, .scratch = scratch})
                           .has_value());
             }
-            CHECK(device.barrier(list).has_value());
+            CHECK(globalBarrier(device, list, kStructureWrites, kStructureReads).has_value());
             CHECK(device
                       .buildAccelerationStructure(
                           list, {.dst = replayed[1], .inputs = scene.topInputs(), .scratch = scene.top.scratch})
                       .has_value());
-            CHECK(device.barrier(list).has_value());
+            CHECK(globalBarrier(device, list, kStructureWrites, kStructureReads).has_value());
         };
         CHECK(traced(device, replayed[1], built, query) == kPlaced);
         for (AccelerationStructure& structure : replayed) {
@@ -1033,12 +1044,12 @@ TEST_CASE("Device allocates nothing tracing rays frame after frame", "[rhi][agno
                 check("buildAccelerationStructure",
                       device.buildAccelerationStructure(
                           *list, {.dst = scene.top.structure, .inputs = topInputs, .scratch = scene.top.scratch}));
-                check("barrier", device.barrier(*list));
+                check("barrier", globalBarrier(device, *list, kStructureWrites, kStructureReads));
                 check("writeAccelerationStructureProperties",
                       device.writeAccelerationStructureProperties(*list, *properties, 0, compacted));
                 check("compactAccelerationStructure",
                       device.compactAccelerationStructure(*list, compact, scene.top.structure));
-                check("barrier", device.barrier(*list));
+                check("barrier", globalBarrier(device, *list, kCompactedAndWritten, kStructureReads));
                 check("resolveAccelerationStructureProperties",
                       device.resolveAccelerationStructureProperties(*list, *properties, 0, 1, sizes, 0));
                 check("bindPipeline", device.bindPipeline(*list, tracing.pipeline));
@@ -1142,7 +1153,7 @@ TEST_CASE("Device refuses ray tracing pipeline work it can't pass on", "[rhi][ag
         }
         CHECK(goneStale(device, readback));
         device.destroyCommandList(*list);
-        CHECK(resultOf(device.barrier(*list)) == Result::ErrorInvalidHandle);
+        CHECK(resultOf(device.barrier(*list, {})) == Result::ErrorInvalidHandle);
         CHECK(goneStale(device, *pool));
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
@@ -1378,7 +1389,7 @@ TEST_CASE("Device builds opacity micromaps, and rays take triangles' opacity fro
             CHECK(resultOf(device.writeInstances(std::span{&instance, 1}, out.data(), out.size())) ==
                   Result::ErrorInvalidArgument);
             device.destroyCommandList(*list);
-            CHECK(resultOf(device.barrier(*list)) == Result::ErrorInvalidHandle);
+            CHECK(resultOf(device.barrier(*list, {})) == Result::ErrorInvalidHandle);
             CHECK(goneStale(device, *pool));
         }
         SECTION("a copied micromap says what the built one does") {
@@ -1428,7 +1439,7 @@ TEST_CASE("Device builds opacity micromaps, and rays take triangles' opacity fro
                     const auto written = device.writeAccelerationStructureProperties(list, *pool, 0, structures);
                     INFO(failureOf(written));
                     CHECK(written.has_value());
-                    CHECK(device.barrier(list).has_value());
+                    CHECK(globalBarrier(device, list, kPropertiesWritten, kPropertiesResolved).has_value());
                     CHECK(device.resolveAccelerationStructureProperties(list, *pool, 0, 1, readback, 0).has_value());
                 });
                 std::uint64_t value = 0;
@@ -1605,13 +1616,13 @@ TEST_CASE("Device builds structures with motion, and rays traced at a time hit t
                 INFO(failureOf(recorded));
                 CHECK(recorded.has_value());
             }
-            CHECK(device.barrier(list).has_value());
+            CHECK(globalBarrier(device, list, kStructureWrites, kStructureReads).has_value());
             const auto recorded = device.buildAccelerationStructure(list, {.dst = top.structure,
                                                                            .inputs = topInputs,
                                                                            .scratch = top.scratch});
             INFO(failureOf(recorded));
             CHECK(recorded.has_value());
-            CHECK(device.barrier(list).has_value());
+            CHECK(globalBarrier(device, list, kStructureWrites, kStructureReads).has_value());
         };
         // The rays traced at time, indirectly where args is a buffer.
         const auto at = [&](float time, const Buffer* args = nullptr) {
@@ -1776,7 +1787,7 @@ TEST_CASE("Device builds partitioned top structures from records the GPU reads, 
                        .scratch = top.scratch});
             INFO(failureOf(recorded));
             CHECK(recorded.has_value());
-            CHECK(device.barrier(list).has_value());
+            CHECK(globalBarrier(device, list, kStructureWrites, kStructureReads).has_value());
         };
 
         const std::array<std::uint32_t, kRays> built{kFirst, kMiss, kSecond, kMiss, kBox, kMiss, kMiss, kMiss};
@@ -1791,7 +1802,7 @@ TEST_CASE("Device builds partitioned top structures from records the GPU reads, 
                                                                        .scratch = bottom->scratch})
                                     .has_value());
                       }
-                      CHECK(device.barrier(list).has_value());
+                      CHECK(globalBarrier(device, list, kStructureWrites, kStructureReads).has_value());
                       build(list, false);
                   },
                   query) == built);
@@ -1956,7 +1967,7 @@ TEST_CASE("Device builds clusters and cluster bottom structures from records the
                                                                    .records = clusterRecords});
             INFO(failureOf(clustersBuilt));
             CHECK(clustersBuilt.has_value());
-            CHECK(device.barrier(list).has_value());
+            CHECK(globalBarrier(device, list, kStructureWrites, kStructureReads).has_value());
             const auto bottomsBuilt = device.buildClusters(list, {.inputs = bottomInputs,
                                                                   .scratch = scratch,
                                                                   .addresses = destinations,
@@ -1965,12 +1976,12 @@ TEST_CASE("Device builds clusters and cluster bottom structures from records the
                                                                   .records = bottomRecords});
             INFO(failureOf(bottomsBuilt));
             CHECK(bottomsBuilt.has_value());
-            CHECK(device.barrier(list).has_value());
+            CHECK(globalBarrier(device, list, kStructureWrites, kStructureReads).has_value());
             CHECK(device
                       .buildAccelerationStructure(list,
                                                   {.dst = top.structure, .inputs = topInputs, .scratch = top.scratch})
                       .has_value());
-            CHECK(device.barrier(list).has_value());
+            CHECK(globalBarrier(device, list, kStructureWrites, kStructureReads).has_value());
         };
         constexpr std::array<std::uint32_t, kRays> kClustered{kFirst, kMiss, kSecond, kMiss,
                                                               kMiss,  kMiss, kMiss,   kMiss};
@@ -2118,7 +2129,7 @@ TEST_CASE("Device refuses acceleration structure work it can't pass on", "[rhi][
             CHECK(goneStale(device, vertices));
         }
         device.destroyCommandList(*list);
-        CHECK(resultOf(device.barrier(*list)) == Result::ErrorInvalidHandle);
+        CHECK(resultOf(device.barrier(*list, {})) == Result::ErrorInvalidHandle);
         CHECK(goneStale(device, *pool));
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());

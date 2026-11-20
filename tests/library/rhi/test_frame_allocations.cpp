@@ -150,9 +150,9 @@ TEST_CASE("Device allocates and frees nothing on the heap frame after frame", "[
                     }
                     if (index == kRenderingLists) {
                         check("copyBuffer", device.copyBuffer(*commands, *source, *target, std::span{&kCopy, 1}));
-                        check("barrier", device.barrier(*commands));
-                        check("textureBarrier", device.textureBarrier(*commands, *texture, TextureLayout::Undefined,
-                                                                      TextureLayout::CopyDst, {}));
+                        check("barrier", globalBarrier(device, *commands, kCopyWrites, kCopyReads));
+                        check("textureBarrier", textureBarrier(device, *commands, *texture, TextureLayout::Undefined,
+                                                               TextureLayout::CopyDst, {}));
                         check("copyBufferToTexture",
                               device.copyBufferToTexture(*commands, *source, *texture, std::span{&kTextureCopy, 1}));
                     }
@@ -299,7 +299,7 @@ TEST_CASE("Device allocates nothing building acceleration structures frame after
                 check("buildAccelerationStructure",
                       device.buildAccelerationStructure(
                           *commands, {.dst = *bottom, .inputs = bottomInputs, .scratch = *bottomScratch}));
-                check("barrier", device.barrier(*commands));
+                check("barrier", globalBarrier(device, *commands, kStructureWrites, kStructureReads));
                 check("buildAccelerationStructure",
                       device.buildAccelerationStructure(*commands,
                                                         {.dst = *top, .inputs = topInputs, .scratch = *topScratch}));

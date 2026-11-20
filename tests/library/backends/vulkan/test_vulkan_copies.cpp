@@ -84,7 +84,7 @@ TEST_CASE("Vulkan device refuses a copy whose rows are not whole texels or whose
         CHECK(device.copyTexture(*list, *texture, *other, std::span{&farBetween, 1}).error().code ==
               Result::ErrorInvalidArgument);
         device.destroyCommandList(*list);
-        CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+        CHECK(device.barrier(*list, {}).error().code == Result::ErrorInvalidHandle);
         const bfr_command_pool poolHandle = pool->get();
         *pool = {};
         CHECK(resetResult(device, poolHandle) == Result::ErrorInvalidHandle);

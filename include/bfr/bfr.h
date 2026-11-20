@@ -476,7 +476,6 @@ typedef enum bfr_call {
     BFR_CALL_DISPATCH = 20,
     BFR_CALL_COPY_BUFFER = 21,
     BFR_CALL_BARRIER = 22,
-    BFR_CALL_TEXTURE_BARRIER = 23,
     BFR_CALL_COPY_BUFFER_TO_TEXTURE = 24,
     BFR_CALL_COPY_TEXTURE_TO_BUFFER = 25,
     BFR_CALL_COPY_TEXTURE = 26,
@@ -730,9 +729,9 @@ typedef enum bfr_texture_dimension {
     BFR_TEXTURE_DIMENSION_FORCE32 = 0x7FFFFFFF
 } bfr_texture_dimension;
 
-// How a texture's memory is arranged for what the GPU does with it next. bfr_texture_barrier moves
-// a texture between layouts; BFR keeps no record of the one it is in. The lists of a queue whose
-// family runs copies but neither graphics nor compute move a texture only between undefined,
+// How a texture's memory is arranged for what the GPU does with it next. A bfr_texture_barrier
+// moves a texture between layouts; BFR keeps no record of the one it is in. The lists of a queue
+// whose family runs copies but neither graphics nor compute move a texture only between undefined,
 // copy_src and copy_dst, and those of one whose family runs compute but not graphics never to or
 // from color_target, depth_stencil_target, depth_stencil_read, resolve_src or resolve_dst, as
 // D3D12's layouts for its copy and compute queues allow; so a texture crosses between queues in a
@@ -2100,6 +2099,139 @@ typedef struct bfr_texture_range {
     uint32_t layer;
     uint32_t layer_count;
 } bfr_texture_range;
+
+// The work a barrier waits on, as its before scope, or holds back, as its after scope. Each maps to
+// one stage of each backend, or to the one scope the backend has that covers it: on D3D12
+// vertex_shader, task_shader and mesh_shader are all SYNC_VERTEX_SHADING, and early_fragment_tests
+// and late_fragment_tests both SYNC_DEPTH_STENCIL; on Metal, whose MTLStages names no narrower
+// stage, draw_indirect, index_input, early_fragment_tests, late_fragment_tests and color_output are
+// MTLStageAll. None set waits on, or holds back, no work; on D3D12 that is SYNC_NONE, which also
+// promises the resources the barrier names are not used before it, or after it, in the same submit.
+// A stage of a feature the device was created without, or one the list's queue family does not run,
+// fails with error_unsupported on Vulkan (VUID-VkMemoryBarrier2-srcStageMask-03934 and its kin,
+// VUID-vkCmdPipelineBarrier2-srcStageMask-09673) and D3D12 ("Command Queue Sync Compatibility").
+typedef struct bfr_stages {
+    // Every command.
+    bfr_bool all;
+    // Indirect draws, dispatches and traces reading their arguments.
+    bfr_bool draw_indirect;
+    // Draws reading the index buffer.
+    bfr_bool index_input;
+    bfr_bool vertex_shader;
+    bfr_bool task_shader;
+    bfr_bool mesh_shader;
+    bfr_bool fragment_shader;
+    bfr_bool early_fragment_tests;
+    bfr_bool late_fragment_tests;
+    // Rendering reading and writing color attachments.
+    bfr_bool color_output;
+    bfr_bool compute_shader;
+    // Copies, query resolves among them.
+    bfr_bool copy;
+    // bfr_resolve_texture. Fails with error_unsupported on Metal, which resolves only as rendering
+    // ends.
+    bfr_bool resolve;
+    // Fails with error_unsupported on Metal, whose MTLStages has no such stage.
+    bfr_bool ray_tracing_shader;
+    bfr_bool acceleration_structure_build;
+    // Copies, compactions, serializations and deserializations of acceleration structures: D3D12's
+    // SYNC_COPY_RAYTRACING_ACCELERATION_STRUCTURE, and on Vulkan the acceleration structure build
+    // stage, which takes them (accelstructures.adoc, vkCmdCopyAccelerationStructureKHR).
+    bfr_bool acceleration_structure_copy;
+    // bfr_write_acceleration_structure_properties: D3D12's
+    // SYNC_EMIT_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO, and on Vulkan the acceleration
+    // structure build stage, which takes it (accelstructures.adoc,
+    // vkCmdWriteAccelerationStructuresPropertiesKHR).
+    bfr_bool acceleration_structure_properties;
+} bfr_stages;
+
+// The memory accesses of a barrier's stages: before it, those whose writes it makes visible; after
+// it, those that see them. Each needs one of its stages, or all, set in the same scope, as Vulkan
+// (VUID-VkMemoryBarrier2-srcAccessMask-03900 and its kin) and D3D12 ("Access Bits Barrier Sync
+// Compatibility") require; one without fails with error_invalid_argument there. On D3D12
+// storage_read and storage_write are both ACCESS_UNORDERED_ACCESS, and color_target_read and
+// color_target_write both ACCESS_RENDER_TARGET. Metal takes no access: each of its barriers makes
+// every write visible to the device.
+typedef struct bfr_accesses {
+    // Indirect arguments; with draw_indirect.
+    bfr_bool indirect_read;
+    // The index buffer; with index_input.
+    bfr_bool index_read;
+    // Uniform buffers; with a shader stage.
+    bfr_bool uniform_read;
+    // The texture table; with a shader stage.
+    bfr_bool sampled_read;
+    // Storage buffers and textures; with a shader stage.
+    bfr_bool storage_read;
+    // Storage buffers and textures; with a shader stage.
+    bfr_bool storage_write;
+    // With color_output.
+    bfr_bool color_target_read;
+    // With color_output.
+    bfr_bool color_target_write;
+    // With early_fragment_tests or late_fragment_tests.
+    bfr_bool depth_stencil_read;
+    // With early_fragment_tests or late_fragment_tests.
+    bfr_bool depth_stencil_write;
+    // With copy.
+    bfr_bool copy_read;
+    // With copy.
+    bfr_bool copy_write;
+    // With resolve.
+    bfr_bool resolve_read;
+    // With resolve.
+    bfr_bool resolve_write;
+    // A build's vertices, indices, transforms, instances and other inputs; with
+    // acceleration_structure_build.
+    bfr_bool acceleration_structure_input_read;
+    // With acceleration_structure_build, acceleration_structure_copy or
+    // acceleration_structure_properties, or a shader stage that queries rays; on Vulkan a shader
+    // stage other than ray_tracing_shader takes it only where bfr_caps_features.ray_query (VUID-
+    // VkMemoryBarrier2-srcAccessMask-06256), and on D3D12 no graphics shader stage does.
+    bfr_bool acceleration_structure_read;
+    // With acceleration_structure_build or acceleration_structure_copy.
+    bfr_bool acceleration_structure_write;
+    // A trace's shader binding tables; with ray_tracing_shader.
+    bfr_bool shader_binding_table_read;
+} bfr_accesses;
+
+// One side of a barrier.
+typedef struct bfr_barrier_scope {
+    bfr_stages stages;
+    bfr_accesses accesses;
+} bfr_barrier_scope;
+
+// A barrier over all memory, buffers and textures alike, that moves no texture's layout.
+typedef struct bfr_global_barrier {
+    bfr_barrier_scope before;
+    bfr_barrier_scope after;
+} bfr_global_barrier;
+
+// A barrier over range's mip levels and layers of texture that moves them from layout_before to
+// layout_after; the rest stay as they are. On D3D12 each side's accesses are ones its layout takes
+// ("Layout Access Compatibility"; copy_src and copy_dst are LAYOUT_COMMON there, which takes
+// sampled, copy reads and copy writes, and depth_stencil_read LAYOUT_DIRECT_QUEUE_GENERIC_READ,
+// which takes sampled, copy, depth and stencil, and resolve reads), and a side whose layout is
+// undefined, the other not, has none; either fails with error_invalid_argument. Moving from
+// undefined discards on D3D12.
+typedef struct bfr_texture_barrier {
+    bfr_texture texture;
+    bfr_barrier_scope before;
+    bfr_barrier_scope after;
+    bfr_texture_layout layout_before;
+    bfr_texture_layout layout_after;
+    bfr_texture_range range;
+} bfr_texture_barrier;
+
+// The barriers one bfr_barrier records.
+typedef struct bfr_barrier_desc {
+    // An array of global_count elements. May be null.
+    const bfr_global_barrier* globals;
+    uint32_t global_count;
+    // An array of texture_count elements. May be null.
+    const bfr_texture_barrier* textures;
+    uint32_t texture_count;
+} bfr_barrier_desc;
 
 // One region copied between a buffer and one layer and mip level of a single-sampled texture.
 // bytes_per_row is a multiple of the format's block bytes and, when it is not 0, of
@@ -4393,19 +4525,20 @@ BFR_API bfr_result bfr_copy_buffer(
     const bfr_buffer_copy* regions,
     uint32_t region_count);
 
-// Records a barrier, outside rendering: commands recorded after it in the list start once those
-// before it have finished, and see what they wrote.
-BFR_API bfr_result bfr_barrier(bfr_device* device, bfr_command_list command_list);
-
-// Records a barrier, as bfr_barrier does, that also moves range's mip levels and layers of texture
-// from layout before to layout after; the rest stay as they are. Outside rendering.
-BFR_API bfr_result bfr_texture_barrier(
+// Records desc's barriers, outside rendering: the work of each one's before stages, recorded ahead
+// of it in the list, finishes, and the writes of its before accesses are made visible to its after
+// accesses, before the work of its after stages recorded after it starts. Every barrier is checked
+// before any is recorded; each backend records them in calls of a fixed size it holds, each its own
+// dependency, so any number are taken. Metal records one barrier after the queue stages of each, on
+// a pass of its own, with MTL4VisibilityOptionDevice, the visibility Apple's Swift API defaults to
+// (MTL4CommandEncoder barrier(afterQueueStages:beforeStages:visibilityOptions:)). Fails with
+// error_invalid_argument for a layout BFR doesn't have, a texture range bfr_texture_range refuses,
+// or a stage and access the backend doesn't pair, error_unsupported for a stage the device or the
+// list's queue family doesn't have, and error_invalid_handle for a texture that is gone.
+BFR_API bfr_result bfr_barrier(
     bfr_device* device,
     bfr_command_list command_list,
-    bfr_texture texture,
-    bfr_texture_layout before,
-    bfr_texture_layout after,
-    const bfr_texture_range* range);
+    const bfr_barrier_desc* desc);
 
 // Records copies of regions from buffer to texture, which is in layout copy_dst, outside rendering.
 // buffer has copy_src usage and texture copy_dst. What was copied is seen as bfr_copy_buffer says.

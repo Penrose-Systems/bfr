@@ -3,6 +3,7 @@
 #include "bfr/core/error.h"
 #include "bfr/core/window.h"
 #include "bfr/rhi/acceleration_structure.h"
+#include "bfr/rhi/barrier.h"
 #include "bfr/rhi/buffer.h"
 #include "bfr/rhi/call_timing.h"
 #include "bfr/rhi/caps.h"
@@ -287,18 +288,18 @@ public:
     [[nodiscard]] virtual core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src,
                                                         BufferHandle dst, std::span<const BufferCopy> regions) = 0;
 
-    /// Records a barrier, outside rendering: commands recorded after it in the
-    /// list start once those before it have finished, and see what they
-    /// wrote. Fails with RhiInvalidHandle when the list is gone.
-    [[nodiscard]] virtual core::Result<void> barrier(CommandListHandle commandList) = 0;
-
-    /// Records a barrier, as barrier does, that also moves range's mip levels
-    /// and layers of texture from layout before to layout after; the rest
-    /// stay as they are. Outside rendering. Fails with RhiInvalidHandle when
-    /// the list or texture is gone.
-    [[nodiscard]] virtual core::Result<void> textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                                            TextureLayout before, TextureLayout after,
-                                                            const TextureRange& range) = 0;
+    /// Records desc's barriers, outside rendering, as api/bfr.yaml states
+    /// under bfr_barrier: each orders the work of its before stages ahead of
+    /// it before the work of its after stages behind it, and makes the writes
+    /// of its before accesses visible to its after accesses. Every barrier is
+    /// checked before any is recorded; each backend then records them in
+    /// native calls of a fixed size it holds on the stack, each its own
+    /// dependency, so any number are taken with no allocation.
+    /// Fails with RhiInvalidCall for a layout BFR doesn't have, a range past
+    /// the texture, or a stage and access the backend doesn't pair,
+    /// RhiUnsupported for a stage the device or the list's queue family
+    /// doesn't have, and RhiInvalidHandle when the list or a texture is gone.
+    [[nodiscard]] virtual core::Result<void> barrier(CommandListHandle commandList, const BarrierDesc& desc) = 0;
 
     /// Records copies of regions from buffer to texture, which is in layout
     /// CopyDst, outside rendering; api/bfr.yaml states the alignment the

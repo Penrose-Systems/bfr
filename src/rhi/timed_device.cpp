@@ -219,14 +219,8 @@ core::Result<void> TimedDevice::copyBuffer(CommandListHandle commandList, Buffer
     return counters_.time(Call::CopyBuffer, [&] { return device_->copyBuffer(commandList, src, dst, regions); });
 }
 
-core::Result<void> TimedDevice::barrier(CommandListHandle commandList) {
-    return counters_.time(Call::Barrier, [&] { return device_->barrier(commandList); });
-}
-
-core::Result<void> TimedDevice::textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                               TextureLayout before, TextureLayout after, const TextureRange& range) {
-    return counters_.time(Call::TextureBarrier,
-                          [&] { return device_->textureBarrier(commandList, texture, before, after, range); });
+core::Result<void> TimedDevice::barrier(CommandListHandle commandList, const BarrierDesc& desc) {
+    return counters_.time(Call::Barrier, [&] { return device_->barrier(commandList, desc); });
 }
 
 core::Result<void> TimedDevice::copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,

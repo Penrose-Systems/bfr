@@ -445,7 +445,7 @@ TEST_CASE("Vulkan without VK_EXT_mesh_shader reports no mesh shaders, and refuse
             CHECK(result->error().code == Result::ErrorUnsupported);
         }
         device.destroyCommandList(*list);
-        CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+        CHECK(device.barrier(*list, {}).error().code == Result::ErrorInvalidHandle);
         const bfr_command_pool poolHandle = pool->get();
         *pool = {};
         CHECK(resetResult(device, poolHandle) == Result::ErrorInvalidHandle);
@@ -499,7 +499,7 @@ TEST_CASE("Vulkan without VK_KHR_acceleration_structure reports none, and refuse
             CHECK(result->error().code == Result::ErrorUnsupported);
         }
         device.destroyCommandList(*list);
-        CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+        CHECK(device.barrier(*list, {}).error().code == Result::ErrorInvalidHandle);
         const bfr_command_pool poolHandle = pool->get();
         *pool = {};
         CHECK(resetResult(device, poolHandle) == Result::ErrorInvalidHandle);
@@ -543,7 +543,7 @@ TEST_CASE("Vulkan without VK_KHR_ray_tracing_pipeline reports none, and refuses 
             CHECK(result->error().code == Result::ErrorUnsupported);
         }
         device.destroyCommandList(*list);
-        CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+        CHECK(device.barrier(*list, {}).error().code == Result::ErrorInvalidHandle);
         const bfr_command_pool poolHandle = pool->get();
         *pool = {};
         CHECK(resetResult(device, poolHandle) == Result::ErrorInvalidHandle);
@@ -800,7 +800,7 @@ TEST_CASE("Vulkan refuses partitioned top structure work it has no call for", "[
     CHECK(resultOf(bfr_reset_acceleration_structure_properties(device.get(), list->get(), propertyPoolHandle, 0, 1)) ==
           Result::ErrorInvalidHandle);
     device.destroyCommandList(*list);
-    CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+    CHECK(device.barrier(*list, {}).error().code == Result::ErrorInvalidHandle);
     const bfr_command_pool poolHandle = commandPool->get();
     *commandPool = {};
     CHECK(resetResult(device, poolHandle) == Result::ErrorInvalidHandle);
@@ -912,7 +912,7 @@ TEST_CASE("Vulkan refuses opacity micromap work it has no call for", "[vulkan][g
                                                     .inputs = {.type = AccelerationStructureType::OpacityMicromap}})) ==
         Result::ErrorInvalidArgument);
     device.destroyCommandList(*list);
-    CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+    CHECK(device.barrier(*list, {}).error().code == Result::ErrorInvalidHandle);
     const bfr_command_pool poolHandle = pool->get();
     *pool = {};
     CHECK(resetResult(device, poolHandle) == Result::ErrorInvalidHandle);
@@ -1021,7 +1021,7 @@ TEST_CASE("Vulkan with mesh shaders but no task shaders refuses a task pipeline"
     const auto list = pool->beginCommands();
     REQUIRE(list.has_value());
     device.destroyCommandList(*list);
-    CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+    CHECK(device.barrier(*list, {}).error().code == Result::ErrorInvalidHandle);
     const bfr_command_pool poolHandle = pool->get();
     *pool = {};
     CHECK(resetResult(device, poolHandle) == Result::ErrorInvalidHandle);
@@ -1069,7 +1069,7 @@ TEST_CASE("Vulkan at 1.2 without VK_EXT_extended_dynamic_state reports no dynami
         CHECK(set.error().code == Result::ErrorUnsupported);
 
         device.destroyCommandList(*list);
-        CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+        CHECK(device.barrier(*list, {}).error().code == Result::ErrorInvalidHandle);
         const bfr_command_pool poolHandle = pool->get();
         *pool = {};
         CHECK(resetResult(device, poolHandle) == Result::ErrorInvalidHandle);

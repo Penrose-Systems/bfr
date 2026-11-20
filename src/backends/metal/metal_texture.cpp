@@ -11,7 +11,6 @@
 #include "metal/metal_formats.h"
 #include "metal/metal_sparse.h"
 #include "metal/metal_util.h"
-#include "rhi/barrier_check.h"
 #include "rhi/bindless_slots.h"
 #include "rhi/copy_check.h"
 #include "rhi/enum_check.h"
@@ -256,24 +255,6 @@ core::Result<void> MetalDevice::destroyTexture(TextureHandle texture) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the texture handle is stale");
     }
     return {};
-}
-
-// Metal 4 has no texture layouts, so moving one is the full barrier alone.
-core::Result<void> MetalDevice::textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                               TextureLayout before, TextureLayout after, const TextureRange& range) {
-    // Metal 4 has no layouts, but a layout BFR doesn't have fails here as on
-    // every backend.
-    if (auto checked = checkLayouts(before, after); !checked) {
-        return checked;
-    }
-    auto found = textureFor(texture);
-    if (!found) {
-        return std::unexpected(std::move(found.error()));
-    }
-    if (auto checked = checkTextureRange(range, (*found)->mipLevels, (*found)->layers); !checked) {
-        return checked;
-    }
-    return barrier(commandList);
 }
 
 core::Result<void> MetalDevice::copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,

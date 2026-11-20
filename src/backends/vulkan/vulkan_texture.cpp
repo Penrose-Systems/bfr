@@ -7,7 +7,6 @@
 #include "bfr/rhi/sparse.h"
 #include "bfr/rhi/texture.h"
 #include "core/slot_chains.h"
-#include "rhi/barrier_check.h"
 #include "rhi/bindless_slots.h"
 #include "rhi/copy_check.h"
 #include "rhi/enum_check.h"
@@ -75,6 +74,8 @@ VkImageLayout sampledLayoutFor(VkImageAspectFlags aspects) {
                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
+} // namespace
+
 VkImageLayout layoutFor(TextureLayout layout, VkImageAspectFlags aspects) {
     switch (layout) {
         case TextureLayout::CopySrc:
@@ -101,6 +102,8 @@ VkImageLayout layoutFor(TextureLayout layout, VkImageAspectFlags aspects) {
             return VK_IMAGE_LAYOUT_UNDEFINED;
     }
 }
+
+namespace {
 
 // The view type of the whole texture: an array type when it has layers, so
 // the shader declares what the desc made.
@@ -495,59 +498,6 @@ core::Result<void> VulkanDevice::destroyTexture(TextureHandle texture) {
     if (!textures_.retire(texture, id)) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the texture handle is stale");
     }
-    return {};
-}
-
-core::Result<void> VulkanDevice::textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                                TextureLayout before, TextureLayout after, const TextureRange& range) {
-    if (auto checked = checkLayouts(before, after); !checked) {
-        return checked;
-    }
-    auto list = commandListFor(commandList);
-    if (!list) {
-        return std::unexpected(std::move(list.error()));
-    }
-    auto found = textureFor(texture);
-    if (!found) {
-        return std::unexpected(std::move(found.error()));
-    }
-    if (auto checked = checkTextureRange(range, (*found)->mipLevels(), (*found)->layers()); !checked) {
-        return checked;
-    }
-    VkImageMemoryBarrier2 barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    barrier.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
-    barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-    barrier.oldLayout = layoutFor(before, (*found)->aspects());
-    barrier.newLayout = layoutFor(after, (*found)->aspects());
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = (*found)->image();
-    // kRemaining is Vulkan's VK_REMAINING_MIP_LEVELS and _ARRAY_LAYERS.
-    static_assert(kRemaining == VK_REMAINING_MIP_LEVELS);
-    static_assert(kRemaining == VK_REMAINING_ARRAY_LAYERS);
-    barrier.subresourceRange = {.aspectMask = (*found)->aspects(),
-                                .baseMipLevel = range.mipLevel,
-                                .levelCount = range.mipCount,
-                                .baseArrayLayer = range.layer,
-                                .layerCount = range.layerCount};
-    // An image barrier orders only the image, so the memory barrier barrier()
-    // records goes with it.
-    VkMemoryBarrier2 memory{};
-    memory.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-    memory.srcStageMask = barrier.srcStageMask;
-    memory.srcAccessMask = barrier.srcAccessMask;
-    memory.dstStageMask = barrier.dstStageMask;
-    memory.dstAccessMask = barrier.dstAccessMask;
-    VkDependencyInfo dependency{};
-    dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dependency.memoryBarrierCount = 1;
-    dependency.pMemoryBarriers = &memory;
-    dependency.imageMemoryBarrierCount = 1;
-    dependency.pImageMemoryBarriers = &barrier;
-    table_.vkCmdPipelineBarrier2((*list)->buffer, &dependency);
     return {};
 }
 

@@ -1,9 +1,14 @@
 #pragma once
 
 #include "bfr/core/error.h"
+#include "bfr/rhi/barrier.h"
 #include "bfr/rhi/texture.h"
+#include "rhi/enum_check.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace bfr::rhi {
 
@@ -32,6 +37,45 @@ namespace bfr::rhi {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "a barrier moves {} layers from layer {}; the texture has {}", range.layerCount,
                              range.layer, layers);
+    }
+    return {};
+}
+
+/// The most barriers of each kind a backend translates into one native
+/// barrier call, in storage it holds on the stack: a desc with more is
+/// recorded in several calls, each its own dependency, so the size bounds the
+/// stack and refuses nothing. Not measured: it only needs to hold the few
+/// barriers a pass usually has in one call.
+inline constexpr std::size_t kBarrierChunk = 16;
+
+/// How many native calls kBarrierChunk storage records desc in.
+[[nodiscard]] inline std::size_t barrierChunks(const BarrierDesc& desc) {
+    const std::size_t most = std::max(desc.globals.size(), desc.textures.size());
+    return (most + kBarrierChunk - 1) / kBarrierChunk;
+}
+
+/// The barriers of all that chunk, counted from 0, holds: kBarrierChunk of
+/// them, fewer or none at the end.
+template <class Barrier>
+[[nodiscard]] std::span<const Barrier> barrierChunk(std::span<const Barrier> all, std::size_t chunk) {
+    const std::size_t first = std::min(chunk * kBarrierChunk, all.size());
+    return all.subspan(first, std::min(kBarrierChunk, all.size() - first));
+}
+
+/// Whether a stage or access flag is set: any value but BFR_FALSE, as C
+/// writes true.
+[[nodiscard]] constexpr bool set(bfr_bool flag) {
+    return flag != BFR_FALSE;
+}
+
+/// Fails with RhiInvalidCall when a texture barrier of desc has a layout BFR
+/// doesn't have. Every backend's barrier calls it before it looks anything
+/// up.
+[[nodiscard]] inline core::Result<void> checkBarrierLayouts(const BarrierDesc& desc) {
+    for (const TextureBarrier& barrier : desc.textures) {
+        if (auto checked = checkLayouts(barrier.layoutBefore, barrier.layoutAfter); !checked) {
+            return checked;
+        }
     }
     return {};
 }

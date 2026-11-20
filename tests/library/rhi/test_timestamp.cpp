@@ -123,7 +123,7 @@ TEST_CASE("Device writes a timestamp at each stage the caps list, in rendering a
             INFO("outside rendering, stage " << static_cast<int>(stage));
             CHECK(device.writeTimestamp(*list, *pool, index++, stage, TimestampGranularity::Relaxed).has_value());
         }
-        CHECK(device.textureBarrier(*list, *target, TextureLayout::Undefined, TextureLayout::ColorTarget, {})
+        CHECK(textureBarrier(device, *list, *target, TextureLayout::Undefined, TextureLayout::ColorTarget, {})
                   .has_value());
         RenderingDesc rendering{.colorAttachmentCount = 1,
                                 .colorAttachments = {},
@@ -244,7 +244,7 @@ TEST_CASE("Device refuses a timestamp stage or granularity BFR doesn't have", "[
                   .code == Result::ErrorInvalidArgument);
         CHECK(device.createTimestampPool({.queue = 1, .count = 1}).error().code == Result::ErrorInvalidArgument);
         device.destroyCommandList(*list);
-        CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+        CHECK(device.barrier(*list, {}).error().code == Result::ErrorInvalidHandle);
         const bfr_command_pool staleCommands = commands->get();
         *commands = {};
         CHECK(resetResult(device, staleCommands) == Result::ErrorInvalidHandle);
@@ -367,7 +367,7 @@ TEST_CASE("Device writes a timestamp at each stage the family of a queue without
             }
         }
         device.destroyCommandList(*list);
-        CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+        CHECK(device.barrier(*list, {}).error().code == Result::ErrorInvalidHandle);
         const bfr_command_pool staleCommands = commands->get();
         *commands = {};
         CHECK(resetResult(device, staleCommands) == Result::ErrorInvalidHandle);

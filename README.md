@@ -212,7 +212,7 @@ the GPU has finished the frame that used it.
 
 A list holds:
 
-- **Barriers**, stated explicitly and batched: per resource (with a
+- **Barriers**, stated explicitly and batched: per texture (with a
   subresource range) or global, each giving the stage and access before and
   after, plus the texture layout.
 - **Rendering scopes** with their attachments and load and store actions.

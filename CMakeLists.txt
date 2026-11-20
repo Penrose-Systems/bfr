@@ -143,7 +143,8 @@ if(BFR_BACKEND_VULKAN)
         src/backends/vulkan/vulkan_commands.cpp
         src/backends/vulkan/vulkan_surface.cpp
         src/backends/vulkan/vulkan_swapchain.cpp
-        src/backends/vulkan/vulkan_texture.cpp)
+        src/backends/vulkan/vulkan_texture.cpp
+        src/backends/vulkan/vulkan_barrier.cpp)
     target_link_libraries(bfr_objects PRIVATE volk::volk_headers Vulkan::UtilityHeaders
         GPUOpen::VulkanMemoryAllocator)
     # VK_KHR_portability_subset, which a portability driver such as MoltenVK

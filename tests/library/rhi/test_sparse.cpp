@@ -152,7 +152,7 @@ TEST_CASE("Device maps a sparse buffer's tile to memory, copies through it, and 
         REQUIRE(list.has_value());
         const std::array copy{BufferCopy{.srcOffset = 0, .dstOffset = 0, .size = tile}};
         CHECK(device.copyBuffer(*list, *upload, *sparse, copy).has_value());
-        CHECK(device.barrier(*list).has_value());
+        CHECK(globalBarrier(device, *list, kCopyWrites, kCopyReads).has_value());
         CHECK(device.copyBuffer(*list, *sparse, *readback, copy).has_value());
         run(device, *list, std::span{&*bound, 1});
 
@@ -303,9 +303,10 @@ TEST_CASE("Device gives a sparse texture's tiling, maps a tile and its tail, and
                                                 .width = width,
                                                 .height = height,
                                                 .depth = 1}};
-        CHECK(device.textureBarrier(*list, *texture, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
+        CHECK(
+            textureBarrier(device, *list, *texture, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
         CHECK(device.copyBufferToTexture(*list, *upload, *texture, copy).has_value());
-        CHECK(device.textureBarrier(*list, *texture, TextureLayout::CopyDst, TextureLayout::CopySrc, {}).has_value());
+        CHECK(textureBarrier(device, *list, *texture, TextureLayout::CopyDst, TextureLayout::CopySrc, {}).has_value());
         CHECK(device.copyTextureToBuffer(*list, *texture, *readback, copy).has_value());
         run(device, *list, std::span{&*bound, 1});
 

@@ -608,7 +608,10 @@ TEST_CASE("C++ API dispatches a compute pipeline through a buffer's slot", "[cpp
         const auto bytes = std::bit_cast<std::array<std::uint8_t, sizeof(std::uint32_t)>>(slots->storage);
         CHECK(device.pushConstants(*commands, bytes).has_value());
         CHECK(device.dispatch(*commands, 1, 1, 1).has_value());
-        CHECK(device.barrier(*commands).has_value());
+        const bfr::GlobalBarrier written{.before = {.stages = {.computeShader = true},
+                                                    .accesses = {.storageWrite = true}},
+                                         .after = {.stages = {.copy = true}, .accesses = {.copyRead = true}}};
+        CHECK(device.barrier(*commands, {.globals = std::span{&written, 1}}).has_value());
         const bfr::BufferCopy whole{.srcOffset = 0, .dstOffset = 0, .size = kBytes};
         CHECK(device.copyBuffer(*commands, *target, *readback, std::span{&whole, 1}).has_value());
         const auto submitted = device.submit({.queue = 0, .commandLists = std::span{&*commands, 1}});
@@ -648,10 +651,12 @@ TEST_CASE("C++ API renders to a texture it names by a borrowed pointer", "[cpp_a
         REQUIRE(pool.has_value());
         auto commands = pool->beginCommands();
         REQUIRE(commands.has_value());
-        REQUIRE(
-            device
-                .textureBarrier(*commands, *target, bfr::TextureLayout::Undefined, bfr::TextureLayout::ColorTarget, {})
-                .has_value());
+        const bfr::TextureBarrier toTarget{.texture = *target,
+                                           .after = {.stages = {.colorOutput = true},
+                                                     .accesses = {.colorTargetWrite = true}},
+                                           .layoutBefore = bfr::TextureLayout::Undefined,
+                                           .layoutAfter = bfr::TextureLayout::ColorTarget};
+        REQUIRE(device.barrier(*commands, {.textures = std::span{&toTarget, 1}}).has_value());
         bfr::RenderingDesc rendering{.colorAttachmentCount = 1};
         rendering.colorAttachments[0] = {.texture = *target, .loadOp = bfr::LoadOp::Clear, .clearColor = {0, 0, 0, 1}};
         const auto begun = device.beginRendering(*commands, bfr::Swapchain{}, rendering);

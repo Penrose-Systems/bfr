@@ -111,4 +111,8 @@ private:
                                                               std::span<const std::uint32_t> families,
                                                               const TextureSlotsHeld& slots, bool volumeColorTargets);
 
+/// The image layout layout is for a texture of aspects: a barrier moves it
+/// into this one, and copies, resolves and the tables name it.
+[[nodiscard]] VkImageLayout layoutFor(TextureLayout layout, VkImageAspectFlags aspects);
+
 } // namespace bfr::rhi::vulkan

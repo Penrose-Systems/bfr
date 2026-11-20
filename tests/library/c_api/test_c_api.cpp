@@ -1169,7 +1169,13 @@ TEST_CASE("C API dispatches a compute pipeline through a buffer's slot, directly
     else {
         CHECK(bfr_dispatch(device.device, list, 1, 1, 1) == BFR_RESULT_SUCCESS);
     }
-    CHECK(bfr_barrier(device.device, list) == BFR_RESULT_SUCCESS);
+    bfr_global_barrier written{};
+    written.before.stages.compute_shader = BFR_TRUE;
+    written.before.accesses.storage_write = BFR_TRUE;
+    written.after.stages.copy = BFR_TRUE;
+    written.after.accesses.copy_read = BFR_TRUE;
+    const bfr_barrier_desc barriers{.globals = &written, .global_count = 1, .textures = nullptr, .texture_count = 0};
+    CHECK(bfr_barrier(device.device, list, &barriers) == BFR_RESULT_SUCCESS);
     const bfr_buffer_copy whole{.src_offset = 0, .dst_offset = 0, .size = kBytes};
     CHECK(bfr_copy_buffer(device.device, list, target, readback, &whole, 1) == BFR_RESULT_SUCCESS);
     const bfr_submit_desc submit{.next = nullptr,
@@ -1231,8 +1237,15 @@ TEST_CASE("C API renders to a texture with the viewport and scissor set, and ref
     REQUIRE(bfr_create_command_pool(device.device, &poolDesc, &pool) == BFR_RESULT_SUCCESS);
     bfr_command_list list{};
     REQUIRE(bfr_begin_commands(device.device, pool, &list) == BFR_RESULT_SUCCESS);
-    REQUIRE(bfr_texture_barrier(device.device, list, target, BFR_TEXTURE_LAYOUT_UNDEFINED,
-                                BFR_TEXTURE_LAYOUT_COLOR_TARGET, &kWholeTexture) == BFR_RESULT_SUCCESS);
+    bfr_texture_barrier toTarget{};
+    toTarget.texture = target;
+    toTarget.after.stages.color_output = BFR_TRUE;
+    toTarget.after.accesses.color_target_write = BFR_TRUE;
+    toTarget.layout_before = BFR_TEXTURE_LAYOUT_UNDEFINED;
+    toTarget.layout_after = BFR_TEXTURE_LAYOUT_COLOR_TARGET;
+    toTarget.range = kWholeTexture;
+    const bfr_barrier_desc barriers{.globals = nullptr, .global_count = 0, .textures = &toTarget, .texture_count = 1};
+    REQUIRE(bfr_barrier(device.device, list, &barriers) == BFR_RESULT_SUCCESS);
 
     bfr_rendering_desc rendering{.next = nullptr,
                                  .color_attachment_count = 1,

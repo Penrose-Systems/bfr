@@ -1073,6 +1073,148 @@ struct TextureRange {
     std::uint32_t layerCount = BFR_REMAINING;
 };
 
+/// The work a barrier waits on, as its before scope, or holds back, as its after scope. Each maps
+/// to one stage of each backend, or to the one scope the backend has that covers it: on D3D12
+/// vertex_shader, task_shader and mesh_shader are all SYNC_VERTEX_SHADING, and early_fragment_tests
+/// and late_fragment_tests both SYNC_DEPTH_STENCIL; on Metal, whose MTLStages names no narrower
+/// stage, draw_indirect, index_input, early_fragment_tests, late_fragment_tests and color_output
+/// are MTLStageAll. None set waits on, or holds back, no work; on D3D12 that is SYNC_NONE, which
+/// also promises the resources the barrier names are not used before it, or after it, in the same
+/// submit. A stage of a feature the device was created without, or one the list's queue family does
+/// not run, fails with error_unsupported on Vulkan (VUID-VkMemoryBarrier2-srcStageMask-03934 and
+/// its kin, VUID-vkCmdPipelineBarrier2-srcStageMask-09673) and D3D12 ("Command Queue Sync
+/// Compatibility").
+struct Stages {
+    /// Every command.
+    bool all{};
+    /// Indirect draws, dispatches and traces reading their arguments.
+    bool drawIndirect{};
+    /// Draws reading the index buffer.
+    bool indexInput{};
+    bool vertexShader{};
+    bool taskShader{};
+    bool meshShader{};
+    bool fragmentShader{};
+    bool earlyFragmentTests{};
+    bool lateFragmentTests{};
+    /// Rendering reading and writing color attachments.
+    bool colorOutput{};
+    bool computeShader{};
+    /// Copies, query resolves among them.
+    bool copy{};
+    /// bfr_resolve_texture. Fails with error_unsupported on Metal, which resolves only as rendering
+    /// ends.
+    bool resolve{};
+    /// Fails with error_unsupported on Metal, whose MTLStages has no such stage.
+    bool rayTracingShader{};
+    bool accelerationStructureBuild{};
+    /// Copies, compactions, serializations and deserializations of acceleration structures: D3D12's
+    /// SYNC_COPY_RAYTRACING_ACCELERATION_STRUCTURE, and on Vulkan the acceleration structure build
+    /// stage, which takes them (accelstructures.adoc, vkCmdCopyAccelerationStructureKHR).
+    bool accelerationStructureCopy{};
+    /// bfr_write_acceleration_structure_properties: D3D12's
+    /// SYNC_EMIT_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO, and on Vulkan the acceleration
+    /// structure build stage, which takes it (accelstructures.adoc,
+    /// vkCmdWriteAccelerationStructuresPropertiesKHR).
+    bool accelerationStructureProperties{};
+};
+
+/// The memory accesses of a barrier's stages: before it, those whose writes it makes visible; after
+/// it, those that see them. Each needs one of its stages, or all, set in the same scope, as Vulkan
+/// (VUID-VkMemoryBarrier2-srcAccessMask-03900 and its kin) and D3D12 ("Access Bits Barrier Sync
+/// Compatibility") require; one without fails with error_invalid_argument there. On D3D12
+/// storage_read and storage_write are both ACCESS_UNORDERED_ACCESS, and color_target_read and
+/// color_target_write both ACCESS_RENDER_TARGET. Metal takes no access: each of its barriers makes
+/// every write visible to the device.
+struct Accesses {
+    /// Indirect arguments; with draw_indirect.
+    bool indirectRead{};
+    /// The index buffer; with index_input.
+    bool indexRead{};
+    /// Uniform buffers; with a shader stage.
+    bool uniformRead{};
+    /// The texture table; with a shader stage.
+    bool sampledRead{};
+    /// Storage buffers and textures; with a shader stage.
+    bool storageRead{};
+    /// Storage buffers and textures; with a shader stage.
+    bool storageWrite{};
+    /// With color_output.
+    bool colorTargetRead{};
+    /// With color_output.
+    bool colorTargetWrite{};
+    /// With early_fragment_tests or late_fragment_tests.
+    bool depthStencilRead{};
+    /// With early_fragment_tests or late_fragment_tests.
+    bool depthStencilWrite{};
+    /// With copy.
+    bool copyRead{};
+    /// With copy.
+    bool copyWrite{};
+    /// With resolve.
+    bool resolveRead{};
+    /// With resolve.
+    bool resolveWrite{};
+    /// A build's vertices, indices, transforms, instances and other inputs; with
+    /// acceleration_structure_build.
+    bool accelerationStructureInputRead{};
+    /// With acceleration_structure_build, acceleration_structure_copy or
+    /// acceleration_structure_properties, or a shader stage that queries rays; on Vulkan a shader
+    /// stage other than ray_tracing_shader takes it only where bfr_caps_features.ray_query (VUID-
+    /// VkMemoryBarrier2-srcAccessMask-06256), and on D3D12 no graphics shader stage does.
+    bool accelerationStructureRead{};
+    /// With acceleration_structure_build or acceleration_structure_copy.
+    bool accelerationStructureWrite{};
+    /// A trace's shader binding tables; with ray_tracing_shader.
+    bool shaderBindingTableRead{};
+};
+
+/// One side of a barrier.
+struct BarrierScope {
+    Stages stages{};
+    Accesses accesses{};
+};
+
+/// A barrier over all memory, buffers and textures alike, that moves no texture's layout.
+struct GlobalBarrier {
+    BarrierScope before{};
+    BarrierScope after{};
+};
+static_assert(sizeof(GlobalBarrier) == sizeof(bfr_global_barrier) && alignof(GlobalBarrier) == alignof(bfr_global_barrier) &&
+              std::is_standard_layout_v<GlobalBarrier> && std::is_trivially_copyable_v<GlobalBarrier>);
+static_assert(offsetof(GlobalBarrier, before) == offsetof(bfr_global_barrier, before));
+static_assert(offsetof(GlobalBarrier, after) == offsetof(bfr_global_barrier, after));
+
+/// A barrier over range's mip levels and layers of texture that moves them from layout_before to
+/// layout_after; the rest stay as they are. On D3D12 each side's accesses are ones its layout takes
+/// ("Layout Access Compatibility"; copy_src and copy_dst are LAYOUT_COMMON there, which takes
+/// sampled, copy reads and copy writes, and depth_stencil_read LAYOUT_DIRECT_QUEUE_GENERIC_READ,
+/// which takes sampled, copy, depth and stencil, and resolve reads), and a side whose layout is
+/// undefined, the other not, has none; either fails with error_invalid_argument. Moving from
+/// undefined discards on D3D12.
+struct TextureBarrier {
+    TextureRef texture{};
+    BarrierScope before{};
+    BarrierScope after{};
+    TextureLayout layoutBefore{};
+    TextureLayout layoutAfter{};
+    TextureRange range{};
+};
+static_assert(sizeof(TextureBarrier) == sizeof(bfr_texture_barrier) && alignof(TextureBarrier) == alignof(bfr_texture_barrier) &&
+              std::is_standard_layout_v<TextureBarrier> && std::is_trivially_copyable_v<TextureBarrier>);
+static_assert(offsetof(TextureBarrier, texture) == offsetof(bfr_texture_barrier, texture));
+static_assert(offsetof(TextureBarrier, before) == offsetof(bfr_texture_barrier, before));
+static_assert(offsetof(TextureBarrier, after) == offsetof(bfr_texture_barrier, after));
+static_assert(offsetof(TextureBarrier, layoutBefore) == offsetof(bfr_texture_barrier, layout_before));
+static_assert(offsetof(TextureBarrier, layoutAfter) == offsetof(bfr_texture_barrier, layout_after));
+static_assert(offsetof(TextureBarrier, range) == offsetof(bfr_texture_barrier, range));
+
+/// The barriers one bfr_barrier records.
+struct BarrierDesc {
+    std::span<const GlobalBarrier> globals{};
+    std::span<const TextureBarrier> textures{};
+};
+
 /// One region copied between a buffer and one layer and mip level of a single-sampled texture.
 /// bytes_per_row is a multiple of the format's block bytes and, when it is not 0, of
 /// bfr_caps_limits.copy_row_pitch_alignment; buffer_offset a multiple of the block bytes and, when
@@ -3250,6 +3392,59 @@ inline bfr_texture_range toC(const TextureRange& value) {
     };
 }
 
+inline bfr_stages toC(const Stages& value) {
+    return {
+        .all = static_cast<bfr_bool>(value.all),
+        .draw_indirect = static_cast<bfr_bool>(value.drawIndirect),
+        .index_input = static_cast<bfr_bool>(value.indexInput),
+        .vertex_shader = static_cast<bfr_bool>(value.vertexShader),
+        .task_shader = static_cast<bfr_bool>(value.taskShader),
+        .mesh_shader = static_cast<bfr_bool>(value.meshShader),
+        .fragment_shader = static_cast<bfr_bool>(value.fragmentShader),
+        .early_fragment_tests = static_cast<bfr_bool>(value.earlyFragmentTests),
+        .late_fragment_tests = static_cast<bfr_bool>(value.lateFragmentTests),
+        .color_output = static_cast<bfr_bool>(value.colorOutput),
+        .compute_shader = static_cast<bfr_bool>(value.computeShader),
+        .copy = static_cast<bfr_bool>(value.copy),
+        .resolve = static_cast<bfr_bool>(value.resolve),
+        .ray_tracing_shader = static_cast<bfr_bool>(value.rayTracingShader),
+        .acceleration_structure_build = static_cast<bfr_bool>(value.accelerationStructureBuild),
+        .acceleration_structure_copy = static_cast<bfr_bool>(value.accelerationStructureCopy),
+        .acceleration_structure_properties = static_cast<bfr_bool>(value.accelerationStructureProperties),
+    };
+}
+
+inline bfr_accesses toC(const Accesses& value) {
+    return {
+        .indirect_read = static_cast<bfr_bool>(value.indirectRead),
+        .index_read = static_cast<bfr_bool>(value.indexRead),
+        .uniform_read = static_cast<bfr_bool>(value.uniformRead),
+        .sampled_read = static_cast<bfr_bool>(value.sampledRead),
+        .storage_read = static_cast<bfr_bool>(value.storageRead),
+        .storage_write = static_cast<bfr_bool>(value.storageWrite),
+        .color_target_read = static_cast<bfr_bool>(value.colorTargetRead),
+        .color_target_write = static_cast<bfr_bool>(value.colorTargetWrite),
+        .depth_stencil_read = static_cast<bfr_bool>(value.depthStencilRead),
+        .depth_stencil_write = static_cast<bfr_bool>(value.depthStencilWrite),
+        .copy_read = static_cast<bfr_bool>(value.copyRead),
+        .copy_write = static_cast<bfr_bool>(value.copyWrite),
+        .resolve_read = static_cast<bfr_bool>(value.resolveRead),
+        .resolve_write = static_cast<bfr_bool>(value.resolveWrite),
+        .acceleration_structure_input_read = static_cast<bfr_bool>(value.accelerationStructureInputRead),
+        .acceleration_structure_read = static_cast<bfr_bool>(value.accelerationStructureRead),
+        .acceleration_structure_write = static_cast<bfr_bool>(value.accelerationStructureWrite),
+        .shader_binding_table_read = static_cast<bfr_bool>(value.shaderBindingTableRead),
+    };
+}
+
+inline bfr_barrier_scope toC(const BarrierScope& value) {
+    return {.stages = toC(value.stages), .accesses = toC(value.accesses)};
+}
+
+inline bfr_global_barrier toC(const GlobalBarrier& value) {
+    return {.before = toC(value.before), .after = toC(value.after)};
+}
+
 inline bfr_buffer_texture_copy toC(const BufferTextureCopy& value) {
     return {
         .buffer_offset = value.bufferOffset,
@@ -4431,13 +4626,19 @@ public:
     /// copied.
     [[nodiscard]] Expected<void> copyBuffer(CommandList commandList, const Buffer& src, const Buffer& dst, std::span<const BufferCopy> regions) const;
 
-    /// Records a barrier, outside rendering: commands recorded after it in the list start once
-    /// those before it have finished, and see what they wrote.
-    [[nodiscard]] Expected<void> barrier(CommandList commandList) const;
-
-    /// Records a barrier, as bfr_barrier does, that also moves range's mip levels and layers of
-    /// texture from layout before to layout after; the rest stay as they are. Outside rendering.
-    [[nodiscard]] Expected<void> textureBarrier(CommandList commandList, const Texture& texture, TextureLayout before, TextureLayout after, const TextureRange& range) const;
+    /// Records desc's barriers, outside rendering: the work of each one's before stages, recorded
+    /// ahead of it in the list, finishes, and the writes of its before accesses are made visible to
+    /// its after accesses, before the work of its after stages recorded after it starts. Every
+    /// barrier is checked before any is recorded; each backend records them in calls of a fixed
+    /// size it holds, each its own dependency, so any number are taken. Metal records one barrier
+    /// after the queue stages of each, on a pass of its own, with MTL4VisibilityOptionDevice, the
+    /// visibility Apple's Swift API defaults to (MTL4CommandEncoder
+    /// barrier(afterQueueStages:beforeStages:visibilityOptions:)). Fails with
+    /// error_invalid_argument for a layout BFR doesn't have, a texture range bfr_texture_range
+    /// refuses, or a stage and access the backend doesn't pair, error_unsupported for a stage the
+    /// device or the list's queue family doesn't have, and error_invalid_handle for a texture that
+    /// is gone.
+    [[nodiscard]] Expected<void> barrier(CommandList commandList, const BarrierDesc& desc) const;
 
     /// Records copies of regions from buffer to texture, which is in layout copy_dst, outside
     /// rendering. buffer has copy_src usage and texture copy_dst. What was copied is seen as
@@ -5540,6 +5741,26 @@ inline bfr_rendering_desc toC(const RenderingDesc& value, const bfr_chain* next)
     };
 }
 
+inline bfr_texture_barrier toC(const TextureBarrier& value) {
+    return {
+        .texture = value.texture.get(),
+        .before = toC(value.before),
+        .after = toC(value.after),
+        .layout_before = static_cast<bfr_texture_layout>(value.layoutBefore),
+        .layout_after = static_cast<bfr_texture_layout>(value.layoutAfter),
+        .range = toC(value.range),
+    };
+}
+
+inline bfr_barrier_desc toC(const BarrierDesc& value) {
+    return {
+        .globals = reinterpret_cast<const bfr_global_barrier*>(value.globals.data()),
+        .global_count = static_cast<uint32_t>(value.globals.size()),
+        .textures = reinterpret_cast<const bfr_texture_barrier*>(value.textures.data()),
+        .texture_count = static_cast<uint32_t>(value.textures.size()),
+    };
+}
+
 inline bfr_ray_tracing_shader toC(const RayTracingShader& value) {
     return {.stage = static_cast<bfr_ray_tracing_stage>(value.stage), .shader = value.shader.get()};
 }
@@ -6213,16 +6434,15 @@ inline Expected<void> Device::copyBuffer(CommandList commandList, const Buffer& 
     return {};
 }
 
-inline Expected<void> Device::barrier(CommandList commandList) const {
-    if (const bfr_result result = bfr_barrier(device_, commandList.get()); result < 0) {
-        return std::unexpected(detail::failure(result));
+inline Expected<void> Device::barrier(CommandList commandList, const BarrierDesc& desc) const {
+    if (!std::in_range<uint32_t>(desc.globals.size())) {
+        return std::unexpected(detail::tooMany("desc.globals holds more elements than a uint32_t counts"));
     }
-    return {};
-}
-
-inline Expected<void> Device::textureBarrier(CommandList commandList, const Texture& texture, TextureLayout before, TextureLayout after, const TextureRange& range) const {
-    const bfr_texture_range cRange = detail::toC(range);
-    if (const bfr_result result = bfr_texture_barrier(device_, commandList.get(), texture.get(), static_cast<bfr_texture_layout>(before), static_cast<bfr_texture_layout>(after), &cRange); result < 0) {
+    if (!std::in_range<uint32_t>(desc.textures.size())) {
+        return std::unexpected(detail::tooMany("desc.textures holds more elements than a uint32_t counts"));
+    }
+    const bfr_barrier_desc cDesc = detail::toC(desc);
+    if (const bfr_result result = bfr_barrier(device_, commandList.get(), &cDesc); result < 0) {
         return std::unexpected(detail::failure(result));
     }
     return {};

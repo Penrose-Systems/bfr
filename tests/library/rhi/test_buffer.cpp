@@ -164,7 +164,7 @@ TEST_CASE("Device copies bytes through device memory to readback, in one list or
             token = *last;
         }
         else {
-            CHECK(device.barrier(*first).has_value());
+            CHECK(globalBarrier(device, *first, kCopyWrites, kCopyReads).has_value());
             CHECK(device.copyBuffer(*first, middle, readback, swapped).has_value());
             const auto sent = device.submit({.queue = 0, .commandLists = std::span{&*first, 1}, .waits = {}});
             INFO(failureOf(sent));
@@ -211,7 +211,7 @@ TEST_CASE("Device fails a copy and a barrier with RhiInvalidHandle for a list or
         device.destroyCommandList(*list);
         CHECK(device.copyBuffer(*list, upload, upload, std::span{&region, 1}).error().code ==
               Result::ErrorInvalidHandle);
-        CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+        CHECK(device.barrier(*list, {}).error().code == Result::ErrorInvalidHandle);
         CHECK(slotsResult(device, destroyed(upload)) == Result::ErrorInvalidHandle);
         CHECK(resetResult(device, destroyed(*pool)) == Result::ErrorInvalidHandle);
     }

@@ -649,7 +649,6 @@ enum class Call : std::int32_t {
     Dispatch = BFR_CALL_DISPATCH,
     CopyBuffer = BFR_CALL_COPY_BUFFER,
     Barrier = BFR_CALL_BARRIER,
-    TextureBarrier = BFR_CALL_TEXTURE_BARRIER,
     CopyBufferToTexture = BFR_CALL_COPY_BUFFER_TO_TEXTURE,
     CopyTextureToBuffer = BFR_CALL_COPY_TEXTURE_TO_BUFFER,
     CopyTexture = BFR_CALL_COPY_TEXTURE,
@@ -778,7 +777,6 @@ enum class Call : std::int32_t {
     case Call::Dispatch: return "dispatch";
     case Call::CopyBuffer: return "copy_buffer";
     case Call::Barrier: return "barrier";
-    case Call::TextureBarrier: return "texture_barrier";
     case Call::CopyBufferToTexture: return "copy_buffer_to_texture";
     case Call::CopyTextureToBuffer: return "copy_texture_to_buffer";
     case Call::CopyTexture: return "copy_texture";
@@ -1151,9 +1149,9 @@ enum class TextureDimension : std::int32_t {
     return {};
 }
 
-/// How a texture's memory is arranged for what the GPU does with it next. bfr_texture_barrier moves
-/// a texture between layouts; BFR keeps no record of the one it is in. The lists of a queue whose
-/// family runs copies but neither graphics nor compute move a texture only between undefined,
+/// How a texture's memory is arranged for what the GPU does with it next. A bfr_texture_barrier
+/// moves a texture between layouts; BFR keeps no record of the one it is in. The lists of a queue
+/// whose family runs copies but neither graphics nor compute move a texture only between undefined,
 /// copy_src and copy_dst, and those of one whose family runs compute but not graphics never to or
 /// from color_target, depth_stencil_target, depth_stencil_read, resolve_src or resolve_dst, as
 /// D3D12's layouts for its copy and compute queues allow; so a texture crosses between queues in a

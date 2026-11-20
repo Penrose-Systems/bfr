@@ -171,7 +171,7 @@ TEST_CASE("Device resolves a multisampled texture into a swapchain's image and p
         REQUIRE(acquired.has_value());
         const auto commands = headless.pool.beginCommands();
         REQUIRE(commands.has_value());
-        CHECK(device.textureBarrier(*commands, *texture, TextureLayout::Undefined, TextureLayout::ColorTarget, {})
+        CHECK(textureBarrier(device, *commands, *texture, TextureLayout::Undefined, TextureLayout::ColorTarget, {})
                   .has_value());
         RenderingDesc resolving = kClear;
         resolving.colorAttachments[0].texture = *texture;

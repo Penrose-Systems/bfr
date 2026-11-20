@@ -555,6 +555,77 @@ inline Result bindResult(const Device& device, std::uint32_t queue, bfr_pipeline
     });
 }
 
+/// The work the tests do with a texture in layout and the accesses it makes:
+/// what a barrier into layout holds back, and what one out of it waits on.
+/// Undefined is none.
+inline BarrierScope scopeIn(TextureLayout layout) {
+    switch (layout) {
+        case TextureLayout::CopySrc:
+            return {.stages = {.copy = true}, .accesses = {.copyRead = true}};
+        case TextureLayout::CopyDst:
+            return {.stages = {.copy = true}, .accesses = {.copyWrite = true}};
+        case TextureLayout::Sampled:
+            return {.stages = {.fragmentShader = true, .computeShader = true}, .accesses = {.sampledRead = true}};
+        case TextureLayout::Storage:
+            return {.stages = {.computeShader = true}, .accesses = {.storageRead = true, .storageWrite = true}};
+        case TextureLayout::ColorTarget:
+            return {.stages = {.colorOutput = true}, .accesses = {.colorTargetRead = true, .colorTargetWrite = true}};
+        case TextureLayout::DepthStencilTarget:
+            return {.stages = {.earlyFragmentTests = true, .lateFragmentTests = true},
+                    .accesses = {.depthStencilRead = true, .depthStencilWrite = true}};
+        case TextureLayout::DepthStencilRead:
+            return {.stages = {.fragmentShader = true, .earlyFragmentTests = true, .lateFragmentTests = true},
+                    .accesses = {.sampledRead = true, .depthStencilRead = true}};
+        case TextureLayout::ResolveSrc:
+            return {.stages = {.resolve = true}, .accesses = {.resolveRead = true}};
+        case TextureLayout::ResolveDst:
+            return {.stages = {.resolve = true}, .accesses = {.resolveWrite = true}};
+        case TextureLayout::Undefined:
+        default:
+            return {};
+    }
+}
+
+/// A barrier moving range of texture from before to after, ordering the work
+/// scopeIn names for each.
+inline TextureBarrier layoutBarrier(TextureRef texture, TextureLayout before, TextureLayout after,
+                                    const TextureRange& range = {}) {
+    return {.texture = texture,
+            .before = scopeIn(before),
+            .after = scopeIn(after),
+            .layoutBefore = before,
+            .layoutAfter = after,
+            .range = range};
+}
+
+/// Records layoutBarrier's barrier in list.
+inline Expected<void> textureBarrier(const Device& device, CommandList list, TextureRef texture, TextureLayout before,
+                                     TextureLayout after, const TextureRange& range = {}) {
+    const TextureBarrier barrier = layoutBarrier(texture, before, after, range);
+    return device.barrier(list, {.textures = std::span{&barrier, 1}});
+}
+
+/// Records a global barrier in list ordering before's work and accesses before
+/// after's.
+inline Expected<void> globalBarrier(const Device& device, CommandList list, const BarrierScope& before,
+                                    const BarrierScope& after) {
+    const GlobalBarrier barrier{.before = before, .after = after};
+    return device.barrier(list, {.globals = std::span{&barrier, 1}});
+}
+
+/// Copies writing, before reads of what they wrote: by copies, or by shaders
+/// as storage.
+inline constexpr BarrierScope kCopyWrites{.stages = {.copy = true}, .accesses = {.copyWrite = true}};
+inline constexpr BarrierScope kCopyReads{.stages = {.copy = true}, .accesses = {.copyRead = true}};
+inline constexpr BarrierScope kComputeWrites{.stages = {.computeShader = true}, .accesses = {.storageWrite = true}};
+/// Acceleration structure builds, copies and compactions writing, before any
+/// work reading what they wrote: a later build, a trace, a ray query, a copy
+/// or a property write.
+inline constexpr BarrierScope kStructureWrites{.stages = {.accelerationStructureBuild = true,
+                                                          .accelerationStructureCopy = true},
+                                               .accesses = {.accelerationStructureWrite = true}};
+inline constexpr BarrierScope kStructureReads{.stages = {.all = true}, .accesses = {.accelerationStructureRead = true}};
+
 /// What bfr_reset_timestamps says of pool, resetting its first timestamp in a
 /// list recording on queue.
 inline Result resetTimestampsResult(const Device& device, std::uint32_t queue, bfr_timestamp_pool pool) {

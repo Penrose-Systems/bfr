@@ -68,9 +68,8 @@ TEST_CASE("Device gives each sampler its own slot, and refuses one past the tabl
     constexpr std::uint32_t kSlots = 2;
     std::vector<std::string> messages;
     {
-        const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc) {
-                                          desc.maxBindlessSamplers = kSlots;
-                                      }};
+        const FirstAdapterDevice made{recordingInto(backend, messages),
+                                      [](DeviceDesc& desc) { desc.maxBindlessSamplers = kSlots; }};
         const Device& device = made.device;
         Sampler first = created(device, SamplerDesc{});
         Sampler second = created(device, {.magFilter = Filter::Linear, .minFilter = Filter::Linear});
@@ -198,7 +197,8 @@ TEST_CASE("Device samples a texture through a sampler's slot: nearest and linear
         REQUIRE(pool.has_value());
         auto list = pool->beginCommands();
         REQUIRE(list.has_value());
-        CHECK(device.textureBarrier(*list, *texture, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
+        CHECK(
+            textureBarrier(device, *list, *texture, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
         const BufferTextureCopy region{.bufferOffset = 0,
                                        .bytesPerRow = bytesPerRow,
                                        .rowsPerImage = 1,
@@ -212,7 +212,7 @@ TEST_CASE("Device samples a texture through a sampler's slot: nearest and linear
                                        .height = 1,
                                        .depth = 1};
         CHECK(device.copyBufferToTexture(*list, upload, *texture, std::span{&region, 1}).has_value());
-        CHECK(device.textureBarrier(*list, *texture, TextureLayout::CopyDst, TextureLayout::Sampled, {}).has_value());
+        CHECK(textureBarrier(device, *list, *texture, TextureLayout::CopyDst, TextureLayout::Sampled, {}).has_value());
         CHECK(device.bindPipeline(*list, *pipeline).has_value());
         for (const SamplePush& push :
              {SamplePush{.textureSlot = textureSlots->sampled, .samplerSlot = *borderedSlot, .target = *borderedTarget},
@@ -221,7 +221,7 @@ TEST_CASE("Device samples a texture through a sampler's slot: nearest and linear
             CHECK(device.pushConstants(*list, bytes).has_value());
             CHECK(device.dispatch(*list, 1, 1, 1).has_value());
         }
-        CHECK(device.barrier(*list).has_value());
+        CHECK(globalBarrier(device, *list, kComputeWrites, kCopyReads).has_value());
         const BufferCopy first{.srcOffset = 0, .dstOffset = 0, .size = kBytes};
         const BufferCopy second{.srcOffset = 0, .dstOffset = kBytes, .size = kBytes};
         CHECK(device.copyBuffer(*list, borderedOut, readback, std::span{&first, 1}).has_value());

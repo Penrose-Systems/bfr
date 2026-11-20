@@ -229,12 +229,12 @@ TEST_CASE("Device copies texels from a buffer into a texture, to another texture
         REQUIRE(pool.has_value());
         const auto list = pool->beginCommands();
         REQUIRE(list.has_value());
-        CHECK(device.textureBarrier(*list, source, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
-        CHECK(device.textureBarrier(*list, target, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
+        CHECK(textureBarrier(device, *list, source, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
+        CHECK(textureBarrier(device, *list, target, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
         CHECK(device.copyBufferToTexture(*list, upload, source, std::span{&in, 1}).has_value());
-        CHECK(device.textureBarrier(*list, source, TextureLayout::CopyDst, TextureLayout::CopySrc, {}).has_value());
+        CHECK(textureBarrier(device, *list, source, TextureLayout::CopyDst, TextureLayout::CopySrc, {}).has_value());
         CHECK(device.copyTexture(*list, source, target, std::span{&across, 1}).has_value());
-        CHECK(device.textureBarrier(*list, target, TextureLayout::CopyDst, TextureLayout::CopySrc, {}).has_value());
+        CHECK(textureBarrier(device, *list, target, TextureLayout::CopyDst, TextureLayout::CopySrc, {}).has_value());
         CHECK(device.copyTextureToBuffer(*list, target, readback, std::span{&out, 1}).has_value());
         const auto token = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
         INFO(failureOf(token));
@@ -340,9 +340,9 @@ TEST_CASE("Device copies the depth and the stencil of a texture, each whole, fro
         REQUIRE(pool.has_value());
         const auto list = pool->beginCommands();
         REQUIRE(list.has_value());
-        CHECK(device.textureBarrier(*list, texture, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
+        CHECK(textureBarrier(device, *list, texture, TextureLayout::Undefined, TextureLayout::CopyDst, {}).has_value());
         CHECK(device.copyBufferToTexture(*list, upload, texture, regions).has_value());
-        CHECK(device.textureBarrier(*list, texture, TextureLayout::CopyDst, TextureLayout::CopySrc, {}).has_value());
+        CHECK(textureBarrier(device, *list, texture, TextureLayout::CopyDst, TextureLayout::CopySrc, {}).has_value());
         CHECK(device.copyTextureToBuffer(*list, texture, readback, regions).has_value());
         const auto token = device.submit({.queue = 0, .commandLists = std::span{&*list, 1}, .waits = {}});
         INFO(failureOf(token));
@@ -418,8 +418,15 @@ TEST_CASE("Device fails texture calls with RhiInvalidHandle for a texture or lis
         const bfr_buffer_texture_copy region{};
         const bfr_texture_copy between{};
 
-        CHECK(resultOf(bfr_texture_barrier(device.get(), list->get(), gone, BFR_TEXTURE_LAYOUT_UNDEFINED,
-                                           BFR_TEXTURE_LAYOUT_COPY_DST, &range)) == Result::ErrorInvalidHandle);
+        bfr_texture_barrier moved{};
+        moved.texture = gone;
+        moved.after.stages.copy = BFR_TRUE;
+        moved.after.accesses.copy_write = BFR_TRUE;
+        moved.layout_before = BFR_TEXTURE_LAYOUT_UNDEFINED;
+        moved.layout_after = BFR_TEXTURE_LAYOUT_COPY_DST;
+        moved.range = range;
+        const bfr_barrier_desc barriers{.globals = nullptr, .global_count = 0, .textures = &moved, .texture_count = 1};
+        CHECK(resultOf(bfr_barrier(device.get(), list->get(), &barriers)) == Result::ErrorInvalidHandle);
         CHECK(resultOf(bfr_copy_buffer_to_texture(device.get(), list->get(), buffer.get(), gone, &region, 1)) ==
               Result::ErrorInvalidHandle);
         CHECK(resultOf(bfr_copy_texture_to_buffer(device.get(), list->get(), gone, buffer.get(), &region, 1)) ==
@@ -427,9 +434,9 @@ TEST_CASE("Device fails texture calls with RhiInvalidHandle for a texture or lis
         CHECK(resultOf(bfr_copy_texture(device.get(), list->get(), texture.get(), gone, &between, 1)) ==
               Result::ErrorInvalidHandle);
         device.destroyCommandList(*list);
-        CHECK(device.barrier(*list).error().code == Result::ErrorInvalidHandle);
+        CHECK(device.barrier(*list, {}).error().code == Result::ErrorInvalidHandle);
         CHECK(
-            device.textureBarrier(*list, texture, TextureLayout::Undefined, TextureLayout::CopyDst, {}).error().code ==
+            textureBarrier(device, *list, texture, TextureLayout::Undefined, TextureLayout::CopyDst, {}).error().code ==
             Result::ErrorInvalidHandle);
         CHECK(resetResult(device, destroyed(*pool)) == Result::ErrorInvalidHandle);
         CHECK(slotsResult(device, destroyed(buffer)) == Result::ErrorInvalidHandle);
@@ -464,12 +471,11 @@ TEST_CASE("Device refuses a texture barrier's range past the texture, or of no l
                                             TextureRange{.layerCount = 0});
         INFO(range.mipLevel << ' ' << range.mipCount << ' ' << range.layer << ' ' << range.layerCount);
 
-        CHECK(device.textureBarrier(*list, texture, TextureLayout::Undefined, TextureLayout::CopyDst, range)
+        CHECK(textureBarrier(device, *list, texture, TextureLayout::Undefined, TextureLayout::CopyDst, range)
                   .error()
                   .code == Result::ErrorInvalidArgument);
-        CHECK(device
-                  .textureBarrier(*list, texture, TextureLayout::Undefined, TextureLayout::CopyDst,
-                                  {.mipLevel = kMips - 1, .mipCount = 1, .layer = kLayers - 1, .layerCount = 1})
+        CHECK(textureBarrier(device, *list, texture, TextureLayout::Undefined, TextureLayout::CopyDst,
+                             {.mipLevel = kMips - 1, .mipCount = 1, .layer = kLayers - 1, .layerCount = 1})
                   .has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
@@ -600,7 +606,7 @@ TEST_CASE("Device refuses a read-only depth-stencil attachment that would clear 
         REQUIRE(pool.has_value());
         const auto list = pool->beginCommands();
         REQUIRE(list.has_value());
-        CHECK(device.textureBarrier(*list, depth, TextureLayout::Undefined, TextureLayout::DepthStencilRead, {})
+        CHECK(textureBarrier(device, *list, depth, TextureLayout::Undefined, TextureLayout::DepthStencilRead, {})
                   .has_value());
         const auto readOnly = [&depth](LoadOp load, StoreOp store) {
             RenderingDesc rendering{};
@@ -682,7 +688,7 @@ TEST_CASE("Device refuses an attachment drawing to layers past the texture's, or
         const auto list = pool->beginCommands();
         REQUIRE(list.has_value());
         CHECK(
-            device.textureBarrier(*list, color, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
+            textureBarrier(device, *list, color, TextureLayout::Undefined, TextureLayout::ColorTarget, {}).has_value());
         const auto drawing = [&color](std::uint32_t layer, std::uint32_t layerCount) {
             RenderingDesc rendering{};
             rendering.colorAttachmentCount = 1;
@@ -729,7 +735,7 @@ TEST_CASE("Vulkan and Metal refuse an attachment holding fewer layers than the r
         const auto list = pool->beginCommands();
         REQUIRE(list.has_value());
         for (const Texture* texture : {&first, &second}) {
-            CHECK(device.textureBarrier(*list, *texture, TextureLayout::Undefined, TextureLayout::ColorTarget, {})
+            CHECK(textureBarrier(device, *list, *texture, TextureLayout::Undefined, TextureLayout::ColorTarget, {})
                       .has_value());
         }
         // Attachment 0 sets the rendering's count; attachment 1's own range

@@ -3,6 +3,7 @@
 #include "bfr/core/error.h"
 #include "bfr/core/log.h"
 #include "bfr/core/window.h"
+#include "bfr/rhi/barrier.h"
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/pipeline.h"
@@ -13,6 +14,7 @@
 #include "metal/metal_pipeline.h"
 #include "metal/metal_swapchain.h"
 #include "metal/metal_util.h"
+#include "rhi/barrier_check.h"
 #include "rhi/clear_color.h"
 #include "rhi/command_check.h"
 #include "rhi/device_limits.h"
@@ -796,13 +798,105 @@ core::Result<void> MetalDevice::endRendering(CommandListHandle commandList) {
     return {};
 }
 
-// Metal 4 tracks no hazards. A consumer barrier blocks every stage of its own
-// pass and all later passes on the queue until every stage of the earlier
-// passes is done, so a pass of its own leaves nothing pending.
-core::Result<void> MetalDevice::barrier(CommandListHandle commandList) {
+namespace {
+
+struct StageBit {
+    bfr_bool Stages::* stage;
+    MTL::Stages native;
+};
+
+// Each BFR stage's Metal stage. MTLStages names no stage narrower than all
+// for indirect argument reads, index reads, depth and stencil tests or color
+// output, so those are MTLStageAll, the one that covers them. BFR's copies run
+// on a compute encoder, whose stages are its blits, dispatches and
+// acceleration structure work (MTLStages); every acceleration structure
+// command is MTLStageAccelerationStructure, "all acceleration structure
+// operations". MTLStages has no ray tracing stage, and Metal resolves only as
+// a render pass ends, so those two have none.
+constexpr std::array kStageBits{
+    StageBit{.stage = &Stages::all, .native = MTL::StageAll},
+    StageBit{.stage = &Stages::drawIndirect, .native = MTL::StageAll},
+    StageBit{.stage = &Stages::indexInput, .native = MTL::StageAll},
+    StageBit{.stage = &Stages::vertexShader, .native = MTL::StageVertex},
+    StageBit{.stage = &Stages::taskShader, .native = MTL::StageObject},
+    StageBit{.stage = &Stages::meshShader, .native = MTL::StageMesh},
+    StageBit{.stage = &Stages::fragmentShader, .native = MTL::StageFragment},
+    StageBit{.stage = &Stages::earlyFragmentTests, .native = MTL::StageAll},
+    StageBit{.stage = &Stages::lateFragmentTests, .native = MTL::StageAll},
+    StageBit{.stage = &Stages::colorOutput, .native = MTL::StageAll},
+    StageBit{.stage = &Stages::computeShader, .native = MTL::StageDispatch},
+    StageBit{.stage = &Stages::copy, .native = MTL::StageBlit},
+    StageBit{.stage = &Stages::accelerationStructureBuild, .native = MTL::StageAccelerationStructure},
+    StageBit{.stage = &Stages::accelerationStructureCopy, .native = MTL::StageAccelerationStructure},
+    StageBit{.stage = &Stages::accelerationStructureProperties, .native = MTL::StageAccelerationStructure},
+};
+
+MTL::Stages stagesFor(const Stages& stages) {
+    NS::UInteger native = 0;
+    for (const auto& [stage, bit] : kStageBits) {
+        if (set(stages.*stage)) {
+            native |= bit;
+        }
+    }
+    return native;
+}
+
+// Fails with RhiUnsupported for a stage Metal has none for.
+core::Result<void> checkStages(const Stages& stages) {
+    if (set(stages.rayTracingShader)) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "Metal has no ray tracing stage to barrier on (MTLStages)");
+    }
+    if (set(stages.resolve)) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "Metal has no resolve outside rendering to barrier on");
+    }
+    return {};
+}
+
+} // namespace
+
+// Metal 4 tracks no hazards and takes no accesses or layouts. Each barrier is
+// one consumer barrier, its after stages blocked in the pass, and all later
+// passes on the queue, until its before stages of the earlier passes are done
+// (MTL4CommandEncoder barrierAfterQueueStages); one per barrier, as Apple
+// allows several on an encoder, so no barrier waits on another's stages. They
+// are recorded on a compute pass of their own, as every BFR Metal command
+// opens its own encoder. MTL4VisibilityOptionDevice flushes caches to the
+// device's coherence point, the visibility Apple's Swift API defaults to
+// (barrier(afterQueueStages:beforeStages:visibilityOptions:), visibilityOptions
+// = [.device]). Every barrier is checked, its texture looked up, before any is
+// recorded.
+core::Result<void> MetalDevice::barrier(CommandListHandle commandList, const BarrierDesc& desc) {
+    if (auto checked = checkBarrierLayouts(desc); !checked) {
+        return checked;
+    }
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
+    }
+    for (const GlobalBarrier& global : desc.globals) {
+        for (const BarrierScope* scope : {&global.before, &global.after}) {
+            if (auto checked = checkStages(scope->stages); !checked) {
+                return checked;
+            }
+        }
+    }
+    for (const TextureBarrier& moved : desc.textures) {
+        for (const BarrierScope* scope : {&moved.before, &moved.after}) {
+            if (auto checked = checkStages(scope->stages); !checked) {
+                return checked;
+            }
+        }
+        auto found = textureFor(moved.texture);
+        if (!found) {
+            return std::unexpected(std::move(found.error()));
+        }
+        if (auto checked = checkTextureRange(moved.range, (*found)->mipLevels, (*found)->layers); !checked) {
+            return checked;
+        }
+    }
+    if (desc.globals.empty() && desc.textures.empty()) {
+        return {};
     }
     // The pool drains the autoreleased encoder reference.
     const AutoreleasePool pool;
@@ -810,7 +904,16 @@ core::Result<void> MetalDevice::barrier(CommandListHandle commandList) {
     if (encoder == nullptr) {
         return core::failure(core::ErrorCode::RhiDeviceFailed, "Metal gave no compute command encoder");
     }
-    encoder->barrierAfterQueueStages(MTL::StageAll, MTL::StageAll, MTL4::VisibilityOptionDevice);
+    const auto record = [encoder](const BarrierScope& before, const BarrierScope& after) {
+        encoder->barrierAfterQueueStages(stagesFor(before.stages), stagesFor(after.stages),
+                                         MTL4::VisibilityOptionDevice);
+    };
+    for (const GlobalBarrier& global : desc.globals) {
+        record(global.before, global.after);
+    }
+    for (const TextureBarrier& moved : desc.textures) {
+        record(moved.before, moved.after);
+    }
     encoder->endEncoding();
     return {};
 }

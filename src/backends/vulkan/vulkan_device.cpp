@@ -846,16 +846,6 @@ core::Result<void> VulkanDevice::endRendering(CommandListHandle commandList) {
     return {};
 }
 
-core::Result<void> VulkanDevice::barrier(CommandListHandle commandList) {
-    auto list = commandListFor(commandList);
-    if (!list) {
-        return std::unexpected(std::move(list.error()));
-    }
-    recordMemoryBarrier(table_, (*list)->buffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                        VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
-    return {};
-}
-
 core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
     if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));

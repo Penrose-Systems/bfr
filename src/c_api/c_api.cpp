@@ -2367,29 +2367,86 @@ bfr_result bfr_copy_buffer(bfr_device* device, bfr_command_list command_list, bf
     });
 }
 
-bfr_result bfr_barrier(bfr_device* device, bfr_command_list command_list) {
-    return guarded([&] {
-        if (device == nullptr) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device must not be null");
-        }
-        const auto recorded = device->device->barrier(fromC(command_list));
-        return recorded ? BFR_RESULT_SUCCESS : fail(recorded.error());
-    });
-}
+// bfr_barrier reads the caller's barriers as the rhi types, in place, so a
+// barrier copies and allocates nothing; the rhi flags are bfr_bools too.
+static_assert(
+    sizeof(bfr_stages) == sizeof(bfr::rhi::Stages) && offsetof(bfr_stages, all) == offsetof(bfr::rhi::Stages, all) &&
+    offsetof(bfr_stages, draw_indirect) == offsetof(bfr::rhi::Stages, drawIndirect) &&
+    offsetof(bfr_stages, index_input) == offsetof(bfr::rhi::Stages, indexInput) &&
+    offsetof(bfr_stages, vertex_shader) == offsetof(bfr::rhi::Stages, vertexShader) &&
+    offsetof(bfr_stages, task_shader) == offsetof(bfr::rhi::Stages, taskShader) &&
+    offsetof(bfr_stages, mesh_shader) == offsetof(bfr::rhi::Stages, meshShader) &&
+    offsetof(bfr_stages, fragment_shader) == offsetof(bfr::rhi::Stages, fragmentShader) &&
+    offsetof(bfr_stages, early_fragment_tests) == offsetof(bfr::rhi::Stages, earlyFragmentTests) &&
+    offsetof(bfr_stages, late_fragment_tests) == offsetof(bfr::rhi::Stages, lateFragmentTests) &&
+    offsetof(bfr_stages, color_output) == offsetof(bfr::rhi::Stages, colorOutput) &&
+    offsetof(bfr_stages, compute_shader) == offsetof(bfr::rhi::Stages, computeShader) &&
+    offsetof(bfr_stages, copy) == offsetof(bfr::rhi::Stages, copy) &&
+    offsetof(bfr_stages, resolve) == offsetof(bfr::rhi::Stages, resolve) &&
+    offsetof(bfr_stages, ray_tracing_shader) == offsetof(bfr::rhi::Stages, rayTracingShader) &&
+    offsetof(bfr_stages, acceleration_structure_build) == offsetof(bfr::rhi::Stages, accelerationStructureBuild) &&
+    offsetof(bfr_stages, acceleration_structure_copy) == offsetof(bfr::rhi::Stages, accelerationStructureCopy) &&
+    offsetof(bfr_stages, acceleration_structure_properties) ==
+        offsetof(bfr::rhi::Stages, accelerationStructureProperties));
+static_assert(
+    sizeof(bfr_accesses) == sizeof(bfr::rhi::Accesses) &&
+    offsetof(bfr_accesses, indirect_read) == offsetof(bfr::rhi::Accesses, indirectRead) &&
+    offsetof(bfr_accesses, index_read) == offsetof(bfr::rhi::Accesses, indexRead) &&
+    offsetof(bfr_accesses, uniform_read) == offsetof(bfr::rhi::Accesses, uniformRead) &&
+    offsetof(bfr_accesses, sampled_read) == offsetof(bfr::rhi::Accesses, sampledRead) &&
+    offsetof(bfr_accesses, storage_read) == offsetof(bfr::rhi::Accesses, storageRead) &&
+    offsetof(bfr_accesses, storage_write) == offsetof(bfr::rhi::Accesses, storageWrite) &&
+    offsetof(bfr_accesses, color_target_read) == offsetof(bfr::rhi::Accesses, colorTargetRead) &&
+    offsetof(bfr_accesses, color_target_write) == offsetof(bfr::rhi::Accesses, colorTargetWrite) &&
+    offsetof(bfr_accesses, depth_stencil_read) == offsetof(bfr::rhi::Accesses, depthStencilRead) &&
+    offsetof(bfr_accesses, depth_stencil_write) == offsetof(bfr::rhi::Accesses, depthStencilWrite) &&
+    offsetof(bfr_accesses, copy_read) == offsetof(bfr::rhi::Accesses, copyRead) &&
+    offsetof(bfr_accesses, copy_write) == offsetof(bfr::rhi::Accesses, copyWrite) &&
+    offsetof(bfr_accesses, resolve_read) == offsetof(bfr::rhi::Accesses, resolveRead) &&
+    offsetof(bfr_accesses, resolve_write) == offsetof(bfr::rhi::Accesses, resolveWrite) &&
+    offsetof(bfr_accesses, acceleration_structure_input_read) ==
+        offsetof(bfr::rhi::Accesses, accelerationStructureInputRead) &&
+    offsetof(bfr_accesses, acceleration_structure_read) == offsetof(bfr::rhi::Accesses, accelerationStructureRead) &&
+    offsetof(bfr_accesses, acceleration_structure_write) == offsetof(bfr::rhi::Accesses, accelerationStructureWrite) &&
+    offsetof(bfr_accesses, shader_binding_table_read) == offsetof(bfr::rhi::Accesses, shaderBindingTableRead));
+static_assert(sizeof(bfr_barrier_scope) == sizeof(bfr::rhi::BarrierScope) &&
+              offsetof(bfr_barrier_scope, stages) == offsetof(bfr::rhi::BarrierScope, stages) &&
+              offsetof(bfr_barrier_scope, accesses) == offsetof(bfr::rhi::BarrierScope, accesses));
+static_assert(sizeof(bfr_texture_range) == sizeof(bfr::rhi::TextureRange) &&
+              offsetof(bfr_texture_range, mip_level) == offsetof(bfr::rhi::TextureRange, mipLevel) &&
+              offsetof(bfr_texture_range, mip_count) == offsetof(bfr::rhi::TextureRange, mipCount) &&
+              offsetof(bfr_texture_range, layer) == offsetof(bfr::rhi::TextureRange, layer) &&
+              offsetof(bfr_texture_range, layer_count) == offsetof(bfr::rhi::TextureRange, layerCount));
+static_assert(sizeof(bfr_global_barrier) == sizeof(bfr::rhi::GlobalBarrier) &&
+              alignof(bfr_global_barrier) == alignof(bfr::rhi::GlobalBarrier) &&
+              std::is_standard_layout_v<bfr::rhi::GlobalBarrier> &&
+              std::is_trivially_copyable_v<bfr::rhi::GlobalBarrier> &&
+              offsetof(bfr_global_barrier, before) == offsetof(bfr::rhi::GlobalBarrier, before) &&
+              offsetof(bfr_global_barrier, after) == offsetof(bfr::rhi::GlobalBarrier, after));
+static_assert(sizeof(bfr_texture_barrier) == sizeof(bfr::rhi::TextureBarrier) &&
+              alignof(bfr_texture_barrier) == alignof(bfr::rhi::TextureBarrier) &&
+              std::is_standard_layout_v<bfr::rhi::TextureBarrier> &&
+              std::is_trivially_copyable_v<bfr::rhi::TextureBarrier> &&
+              offsetof(bfr_texture_barrier, texture) == offsetof(bfr::rhi::TextureBarrier, texture) &&
+              offsetof(bfr_texture_barrier, before) == offsetof(bfr::rhi::TextureBarrier, before) &&
+              offsetof(bfr_texture_barrier, after) == offsetof(bfr::rhi::TextureBarrier, after) &&
+              offsetof(bfr_texture_barrier, layout_before) == offsetof(bfr::rhi::TextureBarrier, layoutBefore) &&
+              offsetof(bfr_texture_barrier, layout_after) == offsetof(bfr::rhi::TextureBarrier, layoutAfter) &&
+              offsetof(bfr_texture_barrier, range) == offsetof(bfr::rhi::TextureBarrier, range));
 
-bfr_result bfr_texture_barrier(bfr_device* device, bfr_command_list command_list, bfr_texture texture,
-                               bfr_texture_layout before, bfr_texture_layout after, const bfr_texture_range* range) {
+bfr_result bfr_barrier(bfr_device* device, bfr_command_list command_list, const bfr_barrier_desc* desc) {
     return guarded([&] {
-        if (device == nullptr || range == nullptr) {
-            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and range must not be null");
+        if (device == nullptr || desc == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and desc must not be null");
         }
-        const auto recorded = device->device->textureBarrier(fromC(command_list), fromC(texture),
-                                                             static_cast<bfr::TextureLayout>(before),
-                                                             static_cast<bfr::TextureLayout>(after),
-                                                             {.mipLevel = range->mip_level,
-                                                              .mipCount = range->mip_count,
-                                                              .layer = range->layer,
-                                                              .layerCount = range->layer_count});
+        if ((desc->global_count != 0 && desc->globals == nullptr) ||
+            (desc->texture_count != 0 && desc->textures == nullptr)) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "globals or textures is null with a count");
+        }
+        const bfr::rhi::BarrierDesc barriers{
+            .globals = {reinterpret_cast<const bfr::rhi::GlobalBarrier*>(desc->globals), desc->global_count},
+            .textures = {reinterpret_cast<const bfr::rhi::TextureBarrier*>(desc->textures), desc->texture_count}};
+        const auto recorded = device->device->barrier(fromC(command_list), barriers);
         return recorded ? BFR_RESULT_SUCCESS : fail(recorded.error());
     });
 }

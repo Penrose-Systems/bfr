@@ -244,10 +244,7 @@ public:
                                                            std::uint32_t stride) override;
     [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
                                                 std::span<const BufferCopy> regions) override;
-    [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
-    [[nodiscard]] core::Result<void> textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                                    TextureLayout before, TextureLayout after,
-                                                    const TextureRange& range) override;
+    [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList, const BarrierDesc& desc) override;
     [[nodiscard]] core::Result<void> copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,
                                                          TextureHandle texture,
                                                          std::span<const BufferTextureCopy> regions) override;
@@ -427,8 +424,9 @@ private:
                                                                 const D3D12SparseMemory* memory);
     [[nodiscard]] core::Result<ID3D12Resource*> addBufferTiles(D3D12TileMappings& tiles, const TileMappingDesc& desc,
                                                                const D3D12SparseMemory* memory);
-    // The barrier barrier() records, ordering every resource on the list's queue.
-    [[nodiscard]] core::Result<D3D12_GLOBAL_BARRIER> fullBarrierFor(const D3D12CommandList& list);
+    // The type of the lists of list's queue. Fails with RhiInvalidHandle when
+    // its pool is gone.
+    [[nodiscard]] core::Result<D3D12_COMMAND_LIST_TYPE> listTypeOf(const D3D12CommandList& list);
     // Records ExecuteIndirect of kind's signature at stride, a dispatch's
     // taking none, reading buffer from offset, and the count countBuffer
     // holds at countOffset when one is given. Fails with RhiUnsupported for a

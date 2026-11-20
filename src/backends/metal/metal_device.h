@@ -218,10 +218,7 @@ public:
                                                            std::uint32_t stride) override;
     [[nodiscard]] core::Result<void> copyBuffer(CommandListHandle commandList, BufferHandle src, BufferHandle dst,
                                                 std::span<const BufferCopy> regions) override;
-    [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList) override;
-    [[nodiscard]] core::Result<void> textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                                    TextureLayout before, TextureLayout after,
-                                                    const TextureRange& range) override;
+    [[nodiscard]] core::Result<void> barrier(CommandListHandle commandList, const BarrierDesc& desc) override;
     [[nodiscard]] core::Result<void> copyBufferToTexture(CommandListHandle commandList, BufferHandle buffer,
                                                          TextureHandle texture,
                                                          std::span<const BufferTextureCopy> regions) override;

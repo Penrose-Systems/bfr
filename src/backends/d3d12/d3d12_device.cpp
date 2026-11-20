@@ -1084,26 +1084,6 @@ core::Result<void> D3D12Device::endRendering(CommandListHandle commandList) {
 
 namespace {
 
-// Every write a list of type may make, which a barrier waits on. The spec
-// warns on D3D12_BARRIER_ACCESS_COMMON before a barrier and allows each queue
-// type only its own accesses ("Command Queue Access Compatibility").
-// Raytracing writes are left out: BFR records none, and whether a device
-// without raytracing takes the bit is not documented.
-D3D12_BARRIER_ACCESS writesOf(D3D12_COMMAND_LIST_TYPE type) {
-    using std::to_underlying;
-    auto writes = to_underlying(D3D12_BARRIER_ACCESS_COPY_DEST);
-    if (type != D3D12_COMMAND_LIST_TYPE_COPY) {
-        writes |= to_underlying(D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
-    }
-    if (type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
-        writes |= to_underlying(D3D12_BARRIER_ACCESS_RENDER_TARGET) |
-                  to_underlying(D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE) |
-                  to_underlying(D3D12_BARRIER_ACCESS_STREAM_OUTPUT) | to_underlying(D3D12_BARRIER_ACCESS_RESOLVE_DEST);
-    }
-    // A flag enum holds any OR of its flags, which the analyzer does not know.
-    return static_cast<D3D12_BARRIER_ACCESS>(writes); // NOLINT(clang-analyzer-optin.core.EnumCastOutOfRange)
-}
-
 // Texture layouts as enhanced barriers take them. Copies use COMMON, the one
 // layout every queue type takes them in, so a texture moves between queues
 // without a change of layout.
@@ -1136,101 +1116,354 @@ D3D12_BARRIER_LAYOUT layoutFor(TextureLayout layout) {
     }
 }
 
-D3D12_BARRIER_ACCESS accessFor(TextureLayout layout) {
-    switch (layout) {
-        case TextureLayout::CopySrc:
-            return D3D12_BARRIER_ACCESS_COPY_SOURCE;
-        case TextureLayout::CopyDst:
-            return D3D12_BARRIER_ACCESS_COPY_DEST;
-        case TextureLayout::Sampled:
-            return D3D12_BARRIER_ACCESS_SHADER_RESOURCE;
-        case TextureLayout::Storage:
-            return D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
-        case TextureLayout::ColorTarget:
-            return D3D12_BARRIER_ACCESS_RENDER_TARGET;
-        case TextureLayout::DepthStencilTarget:
-            return D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE;
-        // Shaders may sample a read-only attachment while it is tested.
-        case TextureLayout::DepthStencilRead:
-            return D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ | D3D12_BARRIER_ACCESS_SHADER_RESOURCE;
-        case TextureLayout::ResolveSrc:
-            return D3D12_BARRIER_ACCESS_RESOLVE_SOURCE;
-        case TextureLayout::ResolveDst:
-            return D3D12_BARRIER_ACCESS_RESOLVE_DEST;
-        case TextureLayout::Undefined:
-        default:
-            return D3D12_BARRIER_ACCESS_NO_ACCESS;
+using SyncBits = std::underlying_type_t<D3D12_BARRIER_SYNC>;
+using AccessBits = std::underlying_type_t<D3D12_BARRIER_ACCESS>;
+
+// A flag enum holds any OR of its flags, which the analyzer does not know.
+D3D12_BARRIER_SYNC syncOf(SyncBits bits) {
+    return static_cast<D3D12_BARRIER_SYNC>(bits); // NOLINT(clang-analyzer-optin.core.EnumCastOutOfRange)
+}
+
+D3D12_BARRIER_ACCESS accessOf(AccessBits bits) {
+    return static_cast<D3D12_BARRIER_ACCESS>(bits); // NOLINT(clang-analyzer-optin.core.EnumCastOutOfRange)
+}
+
+struct SyncBit {
+    bfr_bool Stages::* stage;
+    D3D12_BARRIER_SYNC native;
+};
+
+// Each BFR stage's D3D12 sync. The vertex, task and mesh shaders are all
+// SYNC_VERTEX_SHADING, which covers "vertex, domain, hull, tessellation,
+// geometry, amplification and mesh shading", and both fragment tests
+// SYNC_DEPTH_STENCIL, which covers "depth/stencil read/write operations"
+// (Enhanced Barriers spec, D3D12_BARRIER_SYNC_VERTEX_SHADING,
+// D3D12_BARRIER_SYNC_DEPTH_STENCIL).
+constexpr std::array kSyncBits{
+    SyncBit{.stage = &Stages::all, .native = D3D12_BARRIER_SYNC_ALL},
+    SyncBit{.stage = &Stages::drawIndirect, .native = D3D12_BARRIER_SYNC_EXECUTE_INDIRECT},
+    SyncBit{.stage = &Stages::indexInput, .native = D3D12_BARRIER_SYNC_INDEX_INPUT},
+    SyncBit{.stage = &Stages::vertexShader, .native = D3D12_BARRIER_SYNC_VERTEX_SHADING},
+    SyncBit{.stage = &Stages::taskShader, .native = D3D12_BARRIER_SYNC_VERTEX_SHADING},
+    SyncBit{.stage = &Stages::meshShader, .native = D3D12_BARRIER_SYNC_VERTEX_SHADING},
+    SyncBit{.stage = &Stages::fragmentShader, .native = D3D12_BARRIER_SYNC_PIXEL_SHADING},
+    SyncBit{.stage = &Stages::earlyFragmentTests, .native = D3D12_BARRIER_SYNC_DEPTH_STENCIL},
+    SyncBit{.stage = &Stages::lateFragmentTests, .native = D3D12_BARRIER_SYNC_DEPTH_STENCIL},
+    SyncBit{.stage = &Stages::colorOutput, .native = D3D12_BARRIER_SYNC_RENDER_TARGET},
+    SyncBit{.stage = &Stages::computeShader, .native = D3D12_BARRIER_SYNC_COMPUTE_SHADING},
+    SyncBit{.stage = &Stages::copy, .native = D3D12_BARRIER_SYNC_COPY},
+    SyncBit{.stage = &Stages::resolve, .native = D3D12_BARRIER_SYNC_RESOLVE},
+    SyncBit{.stage = &Stages::rayTracingShader, .native = D3D12_BARRIER_SYNC_RAYTRACING},
+    SyncBit{.stage = &Stages::accelerationStructureBuild,
+            .native = D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE},
+    SyncBit{.stage = &Stages::accelerationStructureCopy,
+            .native = D3D12_BARRIER_SYNC_COPY_RAYTRACING_ACCELERATION_STRUCTURE},
+    SyncBit{.stage = &Stages::accelerationStructureProperties,
+            .native = D3D12_BARRIER_SYNC_EMIT_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO},
+};
+
+struct AccessBit {
+    bfr_bool Accesses::* access;
+    D3D12_BARRIER_ACCESS native;
+};
+
+// Each BFR access's D3D12 access. Storage reads and writes are both
+// UNORDERED_ACCESS and color target reads and writes both RENDER_TARGET, the
+// one access D3D12 has for each. A build's inputs and a trace's shader tables
+// are SHADER_RESOURCE: they are in NON_PIXEL_SHADER_RESOURCE (Raytracing spec,
+// D3D12_RAYTRACING_GEOMETRY_TRIANGLES_DESC; change log, "Removed
+// D3D12_RESOURCE_STATE_SHADER_TABLE in favor of simply reusing
+// D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE"), whose access that is
+// (Enhanced Barriers spec, "Equivalent D3D12_BARRIER_ACCESS bit for each
+// D3D12_RESOURCE_STATES bit").
+constexpr std::array kAccessBits{
+    AccessBit{.access = &Accesses::indirectRead, .native = D3D12_BARRIER_ACCESS_INDIRECT_ARGUMENT},
+    AccessBit{.access = &Accesses::indexRead, .native = D3D12_BARRIER_ACCESS_INDEX_BUFFER},
+    AccessBit{.access = &Accesses::uniformRead, .native = D3D12_BARRIER_ACCESS_CONSTANT_BUFFER},
+    AccessBit{.access = &Accesses::sampledRead, .native = D3D12_BARRIER_ACCESS_SHADER_RESOURCE},
+    AccessBit{.access = &Accesses::storageRead, .native = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS},
+    AccessBit{.access = &Accesses::storageWrite, .native = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS},
+    AccessBit{.access = &Accesses::colorTargetRead, .native = D3D12_BARRIER_ACCESS_RENDER_TARGET},
+    AccessBit{.access = &Accesses::colorTargetWrite, .native = D3D12_BARRIER_ACCESS_RENDER_TARGET},
+    AccessBit{.access = &Accesses::depthStencilRead, .native = D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ},
+    AccessBit{.access = &Accesses::depthStencilWrite, .native = D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE},
+    AccessBit{.access = &Accesses::copyRead, .native = D3D12_BARRIER_ACCESS_COPY_SOURCE},
+    AccessBit{.access = &Accesses::copyWrite, .native = D3D12_BARRIER_ACCESS_COPY_DEST},
+    AccessBit{.access = &Accesses::resolveRead, .native = D3D12_BARRIER_ACCESS_RESOLVE_SOURCE},
+    AccessBit{.access = &Accesses::resolveWrite, .native = D3D12_BARRIER_ACCESS_RESOLVE_DEST},
+    AccessBit{.access = &Accesses::accelerationStructureInputRead, .native = D3D12_BARRIER_ACCESS_SHADER_RESOURCE},
+    AccessBit{.access = &Accesses::accelerationStructureRead,
+              .native = D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_READ},
+    AccessBit{.access = &Accesses::accelerationStructureWrite,
+              .native = D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_WRITE},
+    AccessBit{.access = &Accesses::shaderBindingTableRead, .native = D3D12_BARRIER_ACCESS_SHADER_RESOURCE},
+};
+
+// The sync of stages; none set is SYNC_NONE.
+SyncBits syncBitsFor(const Stages& stages) {
+    SyncBits bits = D3D12_BARRIER_SYNC_NONE;
+    for (const auto& [stage, native] : kSyncBits) {
+        if (set(stages.*stage)) {
+            bits |= std::to_underlying(native);
+        }
     }
+    return bits;
+}
+
+// The access bits of accesses, 0 for none; accessFor gives the barrier's
+// value, NO_ACCESS for none, since 0 is ACCESS_COMMON.
+AccessBits accessBitsFor(const Accesses& accesses) {
+    AccessBits bits = 0;
+    for (const auto& [access, native] : kAccessBits) {
+        if (set(accesses.*access)) {
+            bits |= std::to_underlying(native);
+        }
+    }
+    return bits;
+}
+
+D3D12_BARRIER_ACCESS accessFor(AccessBits bits) {
+    return bits == 0 ? D3D12_BARRIER_ACCESS_NO_ACCESS : accessOf(bits);
+}
+
+constexpr SyncBits kShadingSyncs = D3D12_BARRIER_SYNC_ALL | D3D12_BARRIER_SYNC_VERTEX_SHADING |
+                                   D3D12_BARRIER_SYNC_PIXEL_SHADING | D3D12_BARRIER_SYNC_COMPUTE_SHADING |
+                                   D3D12_BARRIER_SYNC_DRAW | D3D12_BARRIER_SYNC_ALL_SHADING;
+constexpr SyncBits kStructureSyncs = D3D12_BARRIER_SYNC_ALL | D3D12_BARRIER_SYNC_COMPUTE_SHADING |
+                                     D3D12_BARRIER_SYNC_RAYTRACING | D3D12_BARRIER_SYNC_ALL_SHADING |
+                                     D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE |
+                                     D3D12_BARRIER_SYNC_COPY_RAYTRACING_ACCELERATION_STRUCTURE;
+
+struct AccessSyncs {
+    D3D12_BARRIER_ACCESS access;
+    SyncBits syncs;
+};
+
+// The syncs of which each access BFR records needs at least one in the same
+// barrier side (Enhanced Barriers spec, "Access Bits Barrier Sync
+// Compatibility"). NO_ACCESS takes any, SYNC_NONE among them.
+constexpr std::array kAccessSyncs{
+    AccessSyncs{.access = D3D12_BARRIER_ACCESS_CONSTANT_BUFFER, .syncs = kShadingSyncs},
+    AccessSyncs{.access = D3D12_BARRIER_ACCESS_INDEX_BUFFER,
+                .syncs = D3D12_BARRIER_SYNC_ALL | D3D12_BARRIER_SYNC_INDEX_INPUT | D3D12_BARRIER_SYNC_DRAW},
+    AccessSyncs{.access = D3D12_BARRIER_ACCESS_RENDER_TARGET,
+                .syncs = D3D12_BARRIER_SYNC_ALL | D3D12_BARRIER_SYNC_DRAW | D3D12_BARRIER_SYNC_RENDER_TARGET},
+    AccessSyncs{.access = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+                .syncs = kShadingSyncs | D3D12_BARRIER_SYNC_CLEAR_UNORDERED_ACCESS_VIEW |
+                         D3D12_BARRIER_SYNC_EMIT_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO |
+                         D3D12_BARRIER_SYNC_RAYTRACING},
+    AccessSyncs{.access = D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE,
+                .syncs = D3D12_BARRIER_SYNC_ALL | D3D12_BARRIER_SYNC_DRAW | D3D12_BARRIER_SYNC_DEPTH_STENCIL},
+    AccessSyncs{.access = D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ,
+                .syncs = D3D12_BARRIER_SYNC_ALL | D3D12_BARRIER_SYNC_DRAW | D3D12_BARRIER_SYNC_DEPTH_STENCIL},
+    AccessSyncs{.access = D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
+                .syncs = kShadingSyncs | D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE |
+                         D3D12_BARRIER_SYNC_RAYTRACING},
+    AccessSyncs{.access = D3D12_BARRIER_ACCESS_INDIRECT_ARGUMENT,
+                .syncs = D3D12_BARRIER_SYNC_ALL | D3D12_BARRIER_SYNC_EXECUTE_INDIRECT},
+    AccessSyncs{.access = D3D12_BARRIER_ACCESS_COPY_DEST, .syncs = D3D12_BARRIER_SYNC_ALL | D3D12_BARRIER_SYNC_COPY},
+    AccessSyncs{.access = D3D12_BARRIER_ACCESS_COPY_SOURCE, .syncs = D3D12_BARRIER_SYNC_ALL | D3D12_BARRIER_SYNC_COPY},
+    AccessSyncs{.access = D3D12_BARRIER_ACCESS_RESOLVE_DEST,
+                .syncs = D3D12_BARRIER_SYNC_ALL | D3D12_BARRIER_SYNC_RESOLVE},
+    AccessSyncs{.access = D3D12_BARRIER_ACCESS_RESOLVE_SOURCE,
+                .syncs = D3D12_BARRIER_SYNC_ALL | D3D12_BARRIER_SYNC_RESOLVE},
+    AccessSyncs{.access = D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_READ,
+                .syncs = kStructureSyncs | D3D12_BARRIER_SYNC_EMIT_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO},
+    AccessSyncs{.access = D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_WRITE, .syncs = kStructureSyncs},
+};
+
+// The syncs and accesses a list of each type takes (Enhanced Barriers spec,
+// "Command Queue Sync Compatibility", "Command Queue Access Compatibility"),
+// of those BFR records; a direct list takes every one.
+constexpr SyncBits kComputeListSyncs = D3D12_BARRIER_SYNC_ALL | D3D12_BARRIER_SYNC_COMPUTE_SHADING |
+                                       D3D12_BARRIER_SYNC_RAYTRACING | D3D12_BARRIER_SYNC_COPY |
+                                       D3D12_BARRIER_SYNC_EXECUTE_INDIRECT |
+                                       D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE |
+                                       D3D12_BARRIER_SYNC_COPY_RAYTRACING_ACCELERATION_STRUCTURE |
+                                       D3D12_BARRIER_SYNC_EMIT_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO;
+constexpr SyncBits kCopyListSyncs = D3D12_BARRIER_SYNC_ALL | D3D12_BARRIER_SYNC_COPY;
+constexpr AccessBits kComputeListAccesses = D3D12_BARRIER_ACCESS_CONSTANT_BUFFER |
+                                            D3D12_BARRIER_ACCESS_UNORDERED_ACCESS |
+                                            D3D12_BARRIER_ACCESS_SHADER_RESOURCE |
+                                            D3D12_BARRIER_ACCESS_INDIRECT_ARGUMENT | D3D12_BARRIER_ACCESS_COPY_DEST |
+                                            D3D12_BARRIER_ACCESS_COPY_SOURCE |
+                                            D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_READ |
+                                            D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_WRITE;
+constexpr AccessBits kCopyListAccesses = D3D12_BARRIER_ACCESS_COPY_DEST | D3D12_BARRIER_ACCESS_COPY_SOURCE;
+
+// Fails with RhiUnsupported when a list of type takes a sync or access of the
+// side, and RhiInvalidCall when an access has none of the syncs it needs.
+core::Result<void> checkBarrierScope(SyncBits syncs, AccessBits accesses, D3D12_COMMAND_LIST_TYPE type) {
+    if (type != D3D12_COMMAND_LIST_TYPE_DIRECT) {
+        const bool copy = type == D3D12_COMMAND_LIST_TYPE_COPY;
+        const SyncBits listSyncs = copy ? kCopyListSyncs : kComputeListSyncs;
+        const AccessBits listAccesses = copy ? kCopyListAccesses : kComputeListAccesses;
+        if ((syncs & ~listSyncs) != 0 || (accesses & ~listAccesses) != 0) {
+            return core::failure(core::ErrorCode::RhiUnsupported,
+                                 "a barrier's stages or accesses are not ones the list's queue type takes "
+                                 "(Enhanced Barriers spec, \"Command Queue Sync Compatibility\", \"Command Queue "
+                                 "Access Compatibility\")");
+        }
+    }
+    for (const AccessSyncs& pairing : kAccessSyncs) {
+        if ((accesses & std::to_underlying(pairing.access)) != 0 && (syncs & pairing.syncs) == 0) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 "a barrier's access has none of the stages it pairs with (Enhanced Barriers spec, "
+                                 "\"Access Bits Barrier Sync Compatibility\")");
+        }
+    }
+    return {};
+}
+
+// The accesses each layout BFR records takes (Enhanced Barriers spec, "Layout
+// Access Compatibility"); UNDEFINED takes none but where both sides are.
+AccessBits layoutAccesses(D3D12_BARRIER_LAYOUT layout) {
+    switch (layout) {
+        case D3D12_BARRIER_LAYOUT_COMMON:
+            return D3D12_BARRIER_ACCESS_SHADER_RESOURCE | D3D12_BARRIER_ACCESS_COPY_DEST |
+                   D3D12_BARRIER_ACCESS_COPY_SOURCE;
+        case D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_GENERIC_READ:
+            return D3D12_BARRIER_ACCESS_SHADER_RESOURCE | D3D12_BARRIER_ACCESS_COPY_SOURCE |
+                   D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ | D3D12_BARRIER_ACCESS_SHADING_RATE_SOURCE |
+                   D3D12_BARRIER_ACCESS_RESOLVE_SOURCE;
+        case D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE:
+            return D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ | D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE;
+        case D3D12_BARRIER_LAYOUT_RENDER_TARGET:
+            return D3D12_BARRIER_ACCESS_RENDER_TARGET;
+        case D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS:
+            return D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
+        case D3D12_BARRIER_LAYOUT_SHADER_RESOURCE:
+            return D3D12_BARRIER_ACCESS_SHADER_RESOURCE;
+        case D3D12_BARRIER_LAYOUT_RESOLVE_SOURCE:
+            return D3D12_BARRIER_ACCESS_RESOLVE_SOURCE;
+        case D3D12_BARRIER_LAYOUT_RESOLVE_DEST:
+            return D3D12_BARRIER_ACCESS_RESOLVE_DEST;
+        case D3D12_BARRIER_LAYOUT_UNDEFINED:
+        default:
+            return 0;
+    }
+}
+
+// Fails with RhiInvalidCall when a side of barrier has an access its layout
+// doesn't take, or any where its layout is UNDEFINED and the other side's not:
+// that side "must set the corresponding AccessBefore or AccessAfter value to
+// D3D12_BARRIER_ACCESS_NO_ACCESS" (Enhanced Barriers spec,
+// D3D12_BARRIER_LAYOUT_UNDEFINED).
+core::Result<void> checkLayoutAccesses(const TextureBarrier& barrier) {
+    const bool bothUndefined = barrier.layoutBefore == TextureLayout::Undefined &&
+                               barrier.layoutAfter == TextureLayout::Undefined;
+    if (bothUndefined) {
+        return {};
+    }
+    for (const auto& [layout, scope] :
+         {std::pair{barrier.layoutBefore, &barrier.before}, std::pair{barrier.layoutAfter, &barrier.after}}) {
+        if ((accessBitsFor(scope->accesses) & ~layoutAccesses(layoutFor(layout))) != 0) {
+            return core::failure(core::ErrorCode::RhiInvalidCall,
+                                 "a texture barrier's access is not one its layout {} takes on D3D12 (Enhanced "
+                                 "Barriers spec, \"Layout Access Compatibility\")",
+                                 name(layout));
+        }
+    }
+    return {};
 }
 
 } // namespace
 
-core::Result<D3D12_GLOBAL_BARRIER> D3D12Device::fullBarrierFor(const D3D12CommandList& list) {
+core::Result<D3D12_COMMAND_LIST_TYPE> D3D12Device::listTypeOf(const D3D12CommandList& list) {
     const D3D12CommandPool* pool = commandPools_.find(list.pool);
     if (pool == nullptr) {
         return core::failure(core::ErrorCode::RhiInvalidHandle, "the list's pool is gone");
     }
-    return D3D12_GLOBAL_BARRIER{.SyncBefore = D3D12_BARRIER_SYNC_ALL,
-                                .SyncAfter = D3D12_BARRIER_SYNC_ALL,
-                                .AccessBefore = writesOf(queues_[pool->queue]->listType),
-                                .AccessAfter = D3D12_BARRIER_ACCESS_COMMON};
+    return queues_[pool->queue]->listType;
 }
 
-core::Result<void> D3D12Device::barrier(CommandListHandle commandList) {
-    auto list = commandListFor(commandList);
-    if (!list) {
-        return std::unexpected(std::move(list.error()));
-    }
-    const auto global = fullBarrierFor(**list);
-    if (!global) {
-        return std::unexpected(global.error());
-    }
-    const D3D12_BARRIER_GROUP group{.Type = D3D12_BARRIER_TYPE_GLOBAL, .NumBarriers = 1, .pGlobalBarriers = &*global};
-    (*list)->list->Barrier(1, &group);
-    return {};
-}
-
-core::Result<void> D3D12Device::textureBarrier(CommandListHandle commandList, TextureHandle texture,
-                                               TextureLayout before, TextureLayout after, const TextureRange& range) {
-    if (auto checked = checkLayouts(before, after); !checked) {
+// Every barrier is checked, its texture looked up, before any is recorded,
+// then they are recorded kBarrierChunk of each kind to a Barrier call, a
+// group of each kind it has. A side with no stages is SYNC_NONE and no
+// accesses NO_ACCESS. Moving a texture from UNDEFINED discards it, which a
+// placed render target or depth texture needs before its first use.
+core::Result<void> D3D12Device::barrier(CommandListHandle commandList, const BarrierDesc& desc) {
+    if (auto checked = checkBarrierLayouts(desc); !checked) {
         return checked;
     }
     auto list = commandListFor(commandList);
     if (!list) {
         return std::unexpected(std::move(list.error()));
     }
-    auto found = textureFor(texture);
-    if (!found) {
-        return std::unexpected(std::move(found.error()));
+    const auto type = listTypeOf(**list);
+    if (!type) {
+        return std::unexpected(type.error());
     }
-    if (auto checked = checkTextureRange(range, (*found)->mipLevels, (*found)->layers); !checked) {
-        return checked;
+    const auto checkScope = [&](const BarrierScope& scope) {
+        return checkBarrierScope(syncBitsFor(scope.stages), accessBitsFor(scope.accesses), *type);
+    };
+    for (const GlobalBarrier& global : desc.globals) {
+        for (const BarrierScope* scope : {&global.before, &global.after}) {
+            if (auto checked = checkScope(*scope); !checked) {
+                return checked;
+            }
+        }
     }
-    const auto global = fullBarrierFor(**list);
-    if (!global) {
-        return std::unexpected(global.error());
+    for (const TextureBarrier& moved : desc.textures) {
+        for (const BarrierScope* scope : {&moved.before, &moved.after}) {
+            if (auto checked = checkScope(*scope); !checked) {
+                return checked;
+            }
+        }
+        if (auto checked = checkLayoutAccesses(moved); !checked) {
+            return checked;
+        }
+        auto found = textureFor(moved.texture);
+        if (!found) {
+            return std::unexpected(std::move(found.error()));
+        }
+        if (auto checked = checkTextureRange(moved.range, (*found)->mipLevels, (*found)->layers); !checked) {
+            return checked;
+        }
     }
-    // A texture barrier orders only the texture, so the full one goes with it.
-    // It moves range in every plane; kRemaining is the count left from the
-    // first one named. Moving from UNDEFINED discards, which a
-    // placed render target or depth texture needs before its first use.
-    // From an undefined layout nothing was accessed, which D3D12 pairs with
-    // no sync before.
-    const D3D12_TEXTURE_BARRIER moved{.SyncBefore = before == TextureLayout::Undefined ? D3D12_BARRIER_SYNC_NONE
-                                                                                       : D3D12_BARRIER_SYNC_ALL,
-                                      .SyncAfter = D3D12_BARRIER_SYNC_ALL,
-                                      .AccessBefore = accessFor(before),
-                                      .AccessAfter = accessFor(after),
-                                      .LayoutBefore = layoutFor(before),
-                                      .LayoutAfter = layoutFor(after),
-                                      .pResource = (*found)->resource.Get(),
-                                      .Subresources = rangeOf(**found, range),
-                                      .Flags = before == TextureLayout::Undefined ? D3D12_TEXTURE_BARRIER_FLAG_DISCARD
-                                                                                  : D3D12_TEXTURE_BARRIER_FLAG_NONE};
-    const std::array groups{
-        D3D12_BARRIER_GROUP{.Type = D3D12_BARRIER_TYPE_GLOBAL, .NumBarriers = 1, .pGlobalBarriers = &*global},
-        D3D12_BARRIER_GROUP{.Type = D3D12_BARRIER_TYPE_TEXTURE, .NumBarriers = 1, .pTextureBarriers = &moved}};
-    (*list)->list->Barrier(static_cast<UINT32>(groups.size()), groups.data());
+    std::array<D3D12_GLOBAL_BARRIER, kBarrierChunk> globals{};
+    std::array<D3D12_TEXTURE_BARRIER, kBarrierChunk> textures{};
+    for (std::size_t chunk = 0; chunk < barrierChunks(desc); ++chunk) {
+        const std::span chunkGlobals = barrierChunk(desc.globals, chunk);
+        const std::span chunkTextures = barrierChunk(desc.textures, chunk);
+        for (std::size_t i = 0; i < chunkGlobals.size(); ++i) {
+            const GlobalBarrier& global = chunkGlobals[i];
+            globals.at(i) = {.SyncBefore = syncOf(syncBitsFor(global.before.stages)),
+                             .SyncAfter = syncOf(syncBitsFor(global.after.stages)),
+                             .AccessBefore = accessFor(accessBitsFor(global.before.accesses)),
+                             .AccessAfter = accessFor(accessBitsFor(global.after.accesses))};
+        }
+        for (std::size_t i = 0; i < chunkTextures.size(); ++i) {
+            const TextureBarrier& moved = chunkTextures[i];
+            // Looked up above, in this same call.
+            const D3D12Texture& texture = **textureFor(moved.texture);
+            const bool discard = moved.layoutBefore == TextureLayout::Undefined;
+            textures.at(i) = {.SyncBefore = syncOf(syncBitsFor(moved.before.stages)),
+                              .SyncAfter = syncOf(syncBitsFor(moved.after.stages)),
+                              .AccessBefore = accessFor(accessBitsFor(moved.before.accesses)),
+                              .AccessAfter = accessFor(accessBitsFor(moved.after.accesses)),
+                              .LayoutBefore = layoutFor(moved.layoutBefore),
+                              .LayoutAfter = layoutFor(moved.layoutAfter),
+                              .pResource = texture.resource.Get(),
+                              .Subresources = rangeOf(texture, moved.range),
+                              .Flags = discard ? D3D12_TEXTURE_BARRIER_FLAG_DISCARD : D3D12_TEXTURE_BARRIER_FLAG_NONE};
+        }
+        // A group of global barriers and one of texture barriers.
+        constexpr std::size_t kGroupKinds = 2;
+        std::array<D3D12_BARRIER_GROUP, kGroupKinds> groups{};
+        UINT32 groupCount = 0;
+        if (!chunkGlobals.empty()) {
+            groups.at(groupCount++) = {.Type = D3D12_BARRIER_TYPE_GLOBAL,
+                                       .NumBarriers = static_cast<UINT32>(chunkGlobals.size()),
+                                       .pGlobalBarriers = globals.data()};
+        }
+        if (!chunkTextures.empty()) {
+            groups.at(groupCount++) = {.Type = D3D12_BARRIER_TYPE_TEXTURE,
+                                       .NumBarriers = static_cast<UINT32>(chunkTextures.size()),
+                                       .pTextureBarriers = textures.data()};
+        }
+        (*list)->list->Barrier(groupCount, groups.data());
+    }
     return {};
 }
 
