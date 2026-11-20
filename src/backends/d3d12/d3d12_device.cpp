@@ -955,6 +955,9 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
+        if (auto checked = checkReadOnlyDepth(depthStencil, (*texture)->desc.format); !checked) {
+            return checked;
+        }
         depth = *texture;
         depthView = listSlot.depthTarget;
         if (auto written = writeDepthTarget(*device_.Get(), *depth, depthStencil.mipLevel, depthStencil.layer,
@@ -1029,7 +1032,7 @@ core::Result<void> D3D12Device::beginRendering(CommandListHandle commandList, Sw
         if (block.stencilBytes != 0 && depthStencil.stencilLoadOp == LoadOp::Clear) {
             flags |= D3D12_CLEAR_FLAG_STENCIL;
         }
-        // checkRenderingDesc lets a read-only attachment only load, so the
+        // checkReadOnlyDepth lets a read-only attachment only load, so the
         // view cleared through is writable.
         if (flags != D3D12_CLEAR_FLAGS{}) {
             recording->ClearDepthStencilView(depthView, flags, depthStencil.clearDepth,

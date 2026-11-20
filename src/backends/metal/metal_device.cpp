@@ -667,6 +667,9 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
             !checked) {
             return checked;
         }
+        if (auto checked = checkReadOnlyDepth(depthStencil, (*texture)->format); !checked) {
+            return checked;
+        }
         depth = *texture;
         if (!depthStencil.resolveTexture.isNull()) {
             if (auto checked = checkDepthResolve(depthStencil, depth->format, resolve_); !checked) {
@@ -727,7 +730,7 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
     stencilAttachment->setTexture(nullptr);
     if (depth != nullptr) {
         // Each aspect the format has gets its attachment, with its own ops. A
-        // read-only attachment loads and stores, which checkRenderingDesc
+        // read-only attachment loads and stores, which checkReadOnlyDepth
         // holds it to, so Metal needs nothing more. Only depth resolves:
         // Caps::resolve has no stencil mode, and its one depth mode is sample
         // 0.

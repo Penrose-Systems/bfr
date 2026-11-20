@@ -564,8 +564,9 @@ struct DepthStencilAttachment {
     /// When stencil_load_op is clear. The low 8 bits count.
     std::uint32_t clearStencil{};
     /// The rendering tests depth and stencil but never writes them, and shaders may sample the
-    /// texture meanwhile; every op is load and store, else bfr_begin_rendering fails with
-    /// error_invalid_argument. The pipelines drawn with write neither depth nor stencil.
+    /// texture meanwhile; each aspect the format has has load op load and store op store, else
+    /// bfr_begin_rendering fails with error_invalid_argument. The pipelines drawn with write
+    /// neither depth nor stencil.
     bool readOnly{};
     /// A single-sample texture of texture's format and size, with depth_stencil usage, in layout
     /// depth_stencil_target, that the samples are resolved into as rendering ends, by depth_resolve

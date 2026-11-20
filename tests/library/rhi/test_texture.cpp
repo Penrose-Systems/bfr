@@ -543,7 +543,8 @@ TEST_CASE("Device refuses a buffer copy of an aspect the texture's format lacks"
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Device refuses a read-only depth-stencil attachment that would clear or discard it", "[rhi][agnostic]") {
+TEST_CASE("Device refuses a read-only depth-stencil attachment that would clear or discard an aspect it has",
+          "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
@@ -580,6 +581,12 @@ TEST_CASE("Device refuses a read-only depth-stencil attachment that would clear 
             CHECK(device.beginRendering(*list, {}, readOnly(load, store)).error().code == Result::ErrorInvalidArgument);
         }
         CHECK(device.beginRendering(*list, {}, readOnly(LoadOp::Load, StoreOp::Store)).has_value());
+        CHECK(device.endRendering(*list).has_value());
+        // D32Float has no stencil, so its stencil ops are ignored.
+        RenderingDesc stencilOps = readOnly(LoadOp::Load, StoreOp::Store);
+        stencilOps.depthStencil.stencilLoadOp = LoadOp::Clear;
+        stencilOps.depthStencil.stencilStoreOp = StoreOp::DontCare;
+        CHECK(device.beginRendering(*list, {}, stencilOps).has_value());
         CHECK(device.endRendering(*list).has_value());
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());

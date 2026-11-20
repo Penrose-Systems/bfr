@@ -18,9 +18,8 @@ namespace bfr::rhi {
 
 /// Fails with RhiInvalidCall when desc asks for a rendering no backend can
 /// begin: a load or store op or resolve mode BFR doesn't have, more color
-/// attachments than there are, none at all, a color attachment naming no
-/// texture, a resolve texture named with no texture, a read-only
-/// depth-stencil attachment with an op other than Load or Store, or, with a
+/// attachments than RenderingDesc holds, none at all, a color attachment
+/// naming no texture, a resolve texture named with no texture, or, with a
 /// swapchain, no color attachment or attachment 0 naming a resolve texture
 /// when the swapchain's image is its resolve target. Attachment 0 names no
 /// texture when the swapchain's image is it. Each backend's beginRendering
@@ -30,8 +29,9 @@ namespace bfr::rhi {
         return checked;
     }
     if (desc.colorAttachmentCount > kMaxColorTargets) {
-        return core::failure(core::ErrorCode::RhiInvalidCall, "{} color attachments is more than the {} there are",
-                             desc.colorAttachmentCount, kMaxColorTargets);
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "{} color attachments is more than the {} RenderingDesc holds", desc.colorAttachmentCount,
+                             kMaxColorTargets);
     }
     // The render area is the attachments' size; rendering with none needs a
     // size in RenderingDesc, which it does not have yet.
@@ -57,17 +57,35 @@ namespace bfr::rhi {
         }
     }
     const DepthStencilAttachment& depth = desc.depthStencil;
-    // Clearing or discarding would write the texture the rendering promises
-    // not to write: D3D12 would clear its writable view, and Vulkan would
-    // clear a read-only layout.
-    if (depth.readOnly && (depth.depthLoadOp != LoadOp::Load || depth.stencilLoadOp != LoadOp::Load ||
-                           depth.depthStoreOp != StoreOp::Store || depth.stencilStoreOp != StoreOp::Store)) {
-        return core::failure(core::ErrorCode::RhiInvalidCall,
-                             "a read-only depth-stencil attachment loads and stores; it was given another op");
-    }
     if (!depth.resolveTexture.isNull() && depth.texture.isNull()) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "the depth-stencil resolve texture has no texture to resolve");
+    }
+    return {};
+}
+
+/// Fails with RhiInvalidCall when a read-only attachment of format has a load
+/// op other than Load or a store op other than Store for an aspect the format
+/// has; every backend
+/// ignores the ops of an aspect it lacks. Clearing or discarding would write
+/// the texture the rendering promises not to write: D3D12 would clear its
+/// writable view, and Vulkan would clear a read-only layout. Each backend's
+/// beginRendering calls it once it knows the texture's format.
+[[nodiscard]] inline core::Result<void> checkReadOnlyDepth(const DepthStencilAttachment& attachment, Format format) {
+    if (!attachment.readOnly) {
+        return {};
+    }
+    const FormatBlock& block = blockOf(format);
+    const auto keeps = [](LoadOp load, StoreOp store) {
+        return load == LoadOp::Load && store == StoreOp::Store;
+    };
+    if (block.depthBytes != 0 && !keeps(attachment.depthLoadOp, attachment.depthStoreOp)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "a read-only depth-stencil attachment loads and stores depth; it was given another op");
+    }
+    if (block.stencilBytes != 0 && !keeps(attachment.stencilLoadOp, attachment.stencilStoreOp)) {
+        return core::failure(core::ErrorCode::RhiInvalidCall,
+                             "a read-only depth-stencil attachment loads and stores stencil; it was given another op");
     }
     return {};
 }

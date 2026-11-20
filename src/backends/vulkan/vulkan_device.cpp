@@ -746,6 +746,9 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
+        if (auto checked = checkReadOnlyDepth(depthStencil, (*texture)->format()); !checked) {
+            return checked;
+        }
         // Each aspect the format has gets its slot, with its own ops. A
         // read-only attachment keeps what it holds without writing it.
         auto view = attachmentViewOf(**texture, depthStencil.mipLevel, depthStencil.layer, depthStencil.layerCount);
