@@ -167,7 +167,8 @@ core::Result<void> VulkanDevice::setTopology(CommandListHandle commandList, Topo
     }
     if (!features_.dynamicTopology) {
         return core::failure(core::ErrorCode::RhiUnsupported,
-                             "the device sets no topology: it has neither Vulkan 1.3 nor extendedDynamicState");
+                             "the device sets no topology: below Vulkan 1.3 it was created without dynamic_topology "
+                             "(Features::dynamicTopology)");
     }
     table_.vkCmdSetPrimitiveTopology((*list)->buffer, topologyFor(topology));
     return {};

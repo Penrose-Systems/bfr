@@ -993,11 +993,11 @@ namespace {
 // those it enables; offered is the adapter's features, and listed what it
 // lists.
 Caps capsFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const VkExtensionProperties> listed,
-              DeviceFeatures& features, const DeviceFeatures& offered,
-              std::span<const VkExtensionProperties> extensions, bool debugUtils) {
+              DeviceFeatures& features, DeviceFeatures& offered, std::span<const VkExtensionProperties> extensions,
+              bool debugUtils) {
     const std::uint32_t version = features.version;
     const PropertyQuery properties(vk, adapter, version, listed);
-    const auto had = requestableIn(features, listed, extensions);
+    const auto had = requestableIn(features, offered, listed, extensions);
     Sparse sparse;
     Features reported = featuresFrom(had, offered, properties, sparse);
     addSparseProperties(properties, sparse);
@@ -1040,9 +1040,10 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t v
 }
 
 Caps readDeviceCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const VkExtensionProperties> listed,
-                    const DeviceFeatures& supported, DeviceFeatures& enabled,
+                    DeviceFeatures& supported, DeviceFeatures& enabled,
                     std::span<const VkExtensionProperties> extensions, const FeatureRequest& request, bool debugUtils) {
-    return requestedOnly(capsFrom(vk, adapter, listed, enabled, supported, extensions, debugUtils), request);
+    return requestedOnly(capsFrom(vk, adapter, listed, enabled, supported, extensions, debugUtils), request,
+                         factsIn(enabled, listed));
 }
 
 Formats13 formats13Of(std::uint32_t version, std::span<const VkExtensionProperties> extensions) {

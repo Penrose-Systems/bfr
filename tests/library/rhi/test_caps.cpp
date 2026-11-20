@@ -358,10 +358,27 @@ TEST_CASE("Device refuses a call of a feature it was not created with, though th
             constexpr std::uint32_t kAnisotropy = 4;
             CHECK(resultOf(device.createSampler({.maxAnisotropy = kAnisotropy})) == Result::ErrorUnsupported);
         }
+        // Where the backend's version has it with nothing to enable (Vulkan
+        // 1.3's), the device has it unasked, and the call follows its caps.
+        const auto has = device.deviceCaps();
+        INFO(failureOf(has));
+        REQUIRE(has.has_value());
         if (adapter.features.dynamicTopology) {
             CHECK(inList(device, 0, [](const Device& on, CommandList list) {
                       return bfr_set_topology(on.get(), list.get(), BFR_TOPOLOGY_TRIANGLE_STRIP);
-                  }) == Result::ErrorUnsupported);
+                  }) == (has->features.dynamicTopology ? Result::Success : Result::ErrorUnsupported));
+        }
+        if (adapter.features.formatBgra4Unorm) {
+            constexpr std::uint32_t kSide = 4;
+            CHECK(resultOf(device.createTexture({.format = Format::Bgra4Unorm,
+                                                 .width = kSide,
+                                                 .height = kSide,
+                                                 .depth = 1,
+                                                 .layers = 1,
+                                                 .mipLevels = 1,
+                                                 .samples = 1,
+                                                 .usage = {.sampled = true}})) ==
+                  (has->features.formatBgra4Unorm ? Result::Success : Result::ErrorUnsupported));
         }
         if (adapter.features.imageCubeArray) {
             constexpr std::uint32_t kSide = 4;

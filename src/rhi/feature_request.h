@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <format>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -564,13 +565,16 @@ inline constexpr std::array kRequestableFeatures{
     return {};
 }
 
-/// caps, an adapter's, as a device created with request has them where the
-/// backend enables nothing: each requestable feature true only where asked
-/// for, what follows one false with it (as Vulkan's caps derive them), and no
-/// host clock without timestampCalibration. D3D12's and Metal's device caps.
-[[nodiscard]] inline Caps requestedOnly(Caps caps, const FeatureRequest& request) {
-    for (const RequestableFeature& feature : kRequestableFeatures) {
-        const bool asked = request.*feature.requested;
+/// caps as a device created with request has them: each requestable feature
+/// true only where asked for, unless facts, in kRequestableFeatures' order,
+/// says the device has it asked for or not; what follows one false with it
+/// (as Vulkan's caps derive them); and no host clock without
+/// timestampCalibration. D3D12's and Metal's device caps, of the adapter's,
+/// with no facts; Vulkan's, of what the device enabled, with its version's.
+[[nodiscard]] inline Caps requestedOnly(Caps caps, const FeatureRequest& request, std::span<const bool> facts = {}) {
+    for (std::size_t index = 0; index < kRequestableFeatures.size(); ++index) {
+        const RequestableFeature& feature = kRequestableFeatures.at(index);
+        const bool asked = (request.*feature.requested) || (index < facts.size() && facts[index]);
         if (feature.feature != nullptr) {
             caps.features.*feature.feature = asked && caps.features.*feature.feature;
         }

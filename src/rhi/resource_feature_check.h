@@ -5,6 +5,8 @@
 #include "bfr/rhi/caps.h"
 #include "bfr/rhi/texture.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 
 namespace bfr::rhi {
@@ -50,8 +52,19 @@ namespace bfr::rhi {
     }
 }
 
-/// Fails with RhiUnsupported for a texture the device's features lack: a
-/// cube texture of more than one cube, whose views are cube arrays
+/// The ASTC HDR formats, which Features::compressionAstcHdr gates.
+inline constexpr std::array kAstcHdrFormats{
+    Format::Astc4x4Float,   Format::Astc5x4Float,   Format::Astc5x5Float,  Format::Astc6x5Float,
+    Format::Astc6x6Float,   Format::Astc8x5Float,   Format::Astc8x6Float,  Format::Astc8x8Float,
+    Format::Astc10x5Float,  Format::Astc10x6Float,  Format::Astc10x8Float, Format::Astc10x10Float,
+    Format::Astc12x10Float, Format::Astc12x12Float,
+};
+
+/// Fails with RhiUnsupported for a texture the device's features lack: one
+/// of format Bgra4Unorm (Features::formatBgra4Unorm) or an ASTC HDR format
+/// (Features::compressionAstcHdr), whose VkFormat values below Vulkan 1.3
+/// are an extension's, valid only with it enabled
+/// (VUID-VkImageCreateInfo-format-parameter); a cube texture of more than one cube, whose views are cube arrays
 /// (Features::imageCubeArray, VUID-VkImageViewCreateInfo-viewType-01004); or
 /// a sparse texture where Sparse lacks binding, its dimension (textures2D for
 /// a 2D or cube texture, textures3D for 3D, none for 1D), its sample count,
@@ -60,6 +73,14 @@ namespace bfr::rhi {
 /// backend's createTexture calls it after checkEnums.
 [[nodiscard]] inline core::Result<void> checkTextureFeatures(const TextureDesc& desc, const Features& features,
                                                              const Sparse& sparse) {
+    if (desc.format == Format::Bgra4Unorm && !features.formatBgra4Unorm) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device has no bgra4_unorm textures (Features::formatBgra4Unorm)");
+    }
+    if (std::ranges::contains(kAstcHdrFormats, desc.format) && !features.compressionAstcHdr) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device has no ASTC HDR textures (Features::compressionAstcHdr)");
+    }
     if (desc.dimension == TextureDimension::Cube && desc.layers > kCubeFaces && !features.imageCubeArray) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "the device has no cube arrays, and {} layers are more than one cube "

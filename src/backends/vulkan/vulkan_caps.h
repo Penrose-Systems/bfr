@@ -141,7 +141,7 @@ void enableRequirements(DeviceFeatures& features);
 /// enables, with each FeatureRequest feature true only where request asks for
 /// it (requestedOnly).
 [[nodiscard]] Caps readDeviceCaps(const InstanceTable& vk, VkPhysicalDevice adapter,
-                                  std::span<const VkExtensionProperties> listed, const DeviceFeatures& supported,
+                                  std::span<const VkExtensionProperties> listed, DeviceFeatures& supported,
                                   DeviceFeatures& enabled, std::span<const VkExtensionProperties> extensions,
                                   const FeatureRequest& request, bool debugUtils);
 

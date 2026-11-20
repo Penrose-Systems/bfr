@@ -421,7 +421,7 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     const std::uint32_t version = versions_[adapter];
     // Only what BFR needs and what wanted asks for, so the device's caps are
     // what it enabled.
-    const DeviceFeatures supported(vk_, physicalDevice, version, available);
+    DeviceFeatures supported(vk_, physicalDevice, version, available);
     EnabledFeatures enabled(supported, available, wanted.features, wanted);
     Caps caps = readDeviceCaps(vk_, physicalDevice, available, supported, enabled.chain, enabled.extensions,
                                wanted.features, listed.caps.features.debugLabels);

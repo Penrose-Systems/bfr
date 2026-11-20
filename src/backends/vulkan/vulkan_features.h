@@ -14,11 +14,14 @@
 namespace bfr::rhi::vulkan {
 
 /// What a requestable feature is on Vulkan, on one chain: the extensions it
-/// takes and the members it turns on, either none where the chain's version
-/// has it with nothing to enable; or none at all, available false, where
-/// BFR has no form of it at that version.
+/// takes and the members it turns on; or, fact true, none to turn on, where
+/// the chain's version has it with nothing to enable, and the members, if
+/// any, say whether the adapter has it, so a device has it asked for or not;
+/// or none at all, available false, where BFR has no form of it at that
+/// version.
 struct VulkanForm {
     bool available = true;
+    bool fact = false;
     std::array<const char*, 2> extensions{};
     std::array<VkBool32*, 2> members{};
 };
@@ -30,12 +33,19 @@ using VulkanFormOf = VulkanForm (*)(DeviceFeatures& chain, std::span<const VkExt
 
 /// Whether chain, with extensions, has each requestable feature, in
 /// kRequestableFeatures' order: its form available, its extensions in
-/// extensions, its members on, and its prerequisites had too. Queried
-/// with the extensions the adapter lists, what the adapter offers; enabled,
-/// with the device's, what the device has.
+/// extensions, its members on, and its prerequisites had too; a fact's
+/// members are read from offered, the adapter's features. Queried with the
+/// adapter's features and the extensions it lists, what the adapter offers;
+/// enabled, with the device's, what the device has.
 [[nodiscard]] std::array<bool, kRequestableFeatures.size()> requestableIn(
-    DeviceFeatures& chain, std::span<const VkExtensionProperties> listed,
+    DeviceFeatures& chain, DeviceFeatures& offered, std::span<const VkExtensionProperties> listed,
     std::span<const VkExtensionProperties> extensions);
+
+/// Which requestable features are facts (VulkanForm::fact) at chain's
+/// version, in kRequestableFeatures' order: a device has them as the
+/// adapter does, asked for or not (requestedOnly).
+[[nodiscard]] std::array<bool, kRequestableFeatures.size()> factsIn(DeviceFeatures& chain,
+                                                                    std::span<const VkExtensionProperties> listed);
 
 /// What a device enables for request, made with desc, on an adapter that has
 /// supported and lists listed: BFR's own needs (kRequired12, dynamic

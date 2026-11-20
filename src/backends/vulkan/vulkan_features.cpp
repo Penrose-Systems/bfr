@@ -62,12 +62,12 @@ VulkanForm extension(const char* name, DeviceFeatures& chain) {
 
 // A member of a portability driver's struct (VK_KHR_portability_subset, which
 // the device enables where listed): core everywhere else, with nothing to
-// enable. VVL tests the enabled member (sl_image.cpp:371, cc_descriptor.cpp:5475,
-// cc_pipeline_graphics.cpp:212).
+// enable, so a fact. VVL tests the enabled member (sl_image.cpp:371,
+// cc_descriptor.cpp:5475, cc_pipeline_graphics.cpp:212).
 template <VkBool32 VkPhysicalDevicePortabilitySubsetFeaturesKHR::* Member>
 VulkanForm portability(DeviceFeatures& chain, Listed listed) {
     if (!lists(listed, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME)) {
-        return {};
+        return {.fact = true};
     }
     return {.members = {&(chain.portability.*Member)}};
 }
@@ -462,21 +462,23 @@ constexpr std::array kVulkanFeatures{
                   .form = portability<&VkPhysicalDevicePortabilitySubsetFeaturesKHR::samplerMipLodBias>},
     // Cube views of more than 6 layers (VUID-VkImageViewCreateInfo-viewType-01004).
     VulkanFeature{.requested = &FeatureRequest::imageCubeArray, .form = core10<&Core::imageCubeArray>},
+    // From 1.3 a fact: the formats are core (VkFormat), and nothing gates
+    // their use on the feature being enabled; the format properties do.
     VulkanFeature{
         .requested = &FeatureRequest::compressionAstcHdr,
         .form = [](D& chain, Listed /*listed*/) -> VulkanForm {
             if (at13(chain)) {
-                return {.members = {&chain.vulkan13.textureCompressionASTC_HDR}};
+                return {.fact = true, .members = {&chain.vulkan13.textureCompressionASTC_HDR}};
             }
             return extension<&D::astcHdr,
                              &VkPhysicalDeviceTextureCompressionASTCHDRFeaturesEXT::textureCompressionASTC_HDR>(
                 VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME, chain);
         }},
-    // Core from 1.3 with no feature (VkFormat's A4R4G4B4 entry).
+    // Core from 1.3 with no feature (VkFormat's A4R4G4B4 entry), so a fact.
     VulkanFeature{.requested = &FeatureRequest::formatBgra4Unorm,
                   .form = [](D& chain, Listed /*listed*/) -> VulkanForm {
                       if (at13(chain)) {
-                          return {};
+                          return {.fact = true};
                       }
                       return extension<&D::formats4444, &VkPhysicalDevice4444FormatsFeaturesEXT::formatA4R4G4B4>(
                           VK_EXT_4444_FORMATS_EXTENSION_NAME, chain);
@@ -498,12 +500,12 @@ constexpr std::array kVulkanFeatures{
                               &VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT::primitiveTopologyListRestart>(
                               VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME, chain);
                       }},
-    // vkCmdSetPrimitiveTopology: core from 1.3, else the extendedDynamicState
-    // feature (VUID-VkGraphicsPipelineCreateInfo-pDynamicStates-03378).
+    // vkCmdSetPrimitiveTopology: core from 1.3, so a fact, else the
+    // extendedDynamicState feature (VUID-VkGraphicsPipelineCreateInfo-pDynamicStates-03378).
     VulkanFeature{.requested = &FeatureRequest::dynamicTopology,
                   .form = [](D& chain, Listed /*listed*/) -> VulkanForm {
                       if (at13(chain)) {
-                          return {};
+                          return {.fact = true};
                       }
                       return extension<&D::extendedDynamicState,
                                        &VkPhysicalDeviceExtendedDynamicStateFeaturesEXT::extendedDynamicState>(
@@ -623,11 +625,11 @@ constexpr std::array kVulkanFeatures{
                   .form = core14<&Core14::shaderSubgroupRotateClustered>},
     VulkanFeature{.requested = &FeatureRequest::floatControls2, .form = core14<&Core14::shaderFloatControls2>},
     VulkanFeature{.requested = &FeatureRequest::expectAssume, .form = core14<&Core14::shaderExpectAssume>},
-    // Core from 1.3; an extension with no features struct below it.
+    // Core from 1.3, so a fact; an extension with no features struct below it.
     VulkanFeature{.requested = &FeatureRequest::nonSemanticInfo,
                   .form = [](D& chain, Listed /*listed*/) -> VulkanForm {
                       if (at13(chain)) {
-                          return {};
+                          return {.fact = true};
                       }
                       return {.extensions = {VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME}};
                   }},
@@ -709,12 +711,14 @@ std::vector<VkExtensionProperties> listingOf(std::span<const char* const> names)
 
 } // namespace
 
-std::array<bool, kRequestableFeatures.size()> requestableIn(DeviceFeatures& chain,
+std::array<bool, kRequestableFeatures.size()> requestableIn(DeviceFeatures& chain, DeviceFeatures& offered,
                                                             std::span<const VkExtensionProperties> listed,
                                                             std::span<const VkExtensionProperties> extensions) {
     std::array<bool, kRequestableFeatures.size()> had{};
     for (std::size_t index = 0; index < kVulkanFeatures.size(); ++index) {
-        had.at(index) = has(kVulkanFeatures.at(index).form(chain, listed), extensions);
+        const VulkanFormOf form = kVulkanFeatures.at(index).form;
+        const VulkanForm onChain = form(chain, listed);
+        had.at(index) = onChain.fact ? has(form(offered, listed), listed) : has(onChain, extensions);
     }
     // A feature without a prerequisite is not had; each pass settles one more
     // level of prerequisites, until none changes.
@@ -731,6 +735,15 @@ std::array<bool, kRequestableFeatures.size()> requestableIn(DeviceFeatures& chai
         }
     }
     return had;
+}
+
+std::array<bool, kRequestableFeatures.size()> factsIn(DeviceFeatures& chain,
+                                                      std::span<const VkExtensionProperties> listed) {
+    std::array<bool, kRequestableFeatures.size()> facts{};
+    for (std::size_t index = 0; index < kVulkanFeatures.size(); ++index) {
+        facts.at(index) = kVulkanFeatures.at(index).form(chain, listed).fact;
+    }
+    return facts;
 }
 
 EnabledFeatures::EnabledFeatures(const DeviceFeatures& supported, std::span<const VkExtensionProperties> listed,
@@ -766,7 +779,11 @@ EnabledFeatures::EnabledFeatures(const DeviceFeatures& supported, std::span<cons
         if (!(request.*feature.requested)) {
             continue;
         }
-        for (VkBool32* member : feature.form(chain, listed).members) {
+        const VulkanForm form = feature.form(chain, listed);
+        if (form.fact) {
+            continue;
+        }
+        for (VkBool32* member : form.members) {
             if (member != nullptr) {
                 *member = VK_TRUE;
             }

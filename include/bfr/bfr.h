@@ -4044,7 +4044,10 @@ BFR_API bfr_result bfr_find_queue_family(
 
 // Writes what the device has: the adapter's caps, as bfr_get_caps gives them, with each member of
 // bfr_features true only where the device was created with it, and the limits, timestamp stages and
-// host clocks that follow those features as the device has them.
+// host clocks that follow those features as the device has them. A feature the backend has with
+// nothing to enable is the device's asked for or not, as the adapter has it: on Vulkan 1.3 and
+// later dynamic_topology, non_semantic_info, format_bgra4_unorm and compression_astc_hdr, and,
+// where the driver is no portability one, volume_color_targets, sampler_lod_bias and triangle_fans.
 BFR_API bfr_result bfr_get_device_caps(bfr_device* device, bfr_caps* caps);
 
 // Writes how much memory the device's process may use and uses now. Fails with unsupported when the
