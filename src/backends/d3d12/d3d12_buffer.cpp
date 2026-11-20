@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <expected>
 #include <format>
+#include <mutex>
 #include <span>
 #include <utility>
 
@@ -156,6 +157,10 @@ void D3D12Device::collectRetired() {
 }
 
 core::Result<void> D3D12Device::runGarbageCollection() {
+    for (const auto& queue : queues_) {
+        const std::scoped_lock lock{queue->lock};
+        collectPools(*queue);
+    }
     collectRetired();
     return {};
 }

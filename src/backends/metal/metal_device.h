@@ -106,7 +106,6 @@ struct MetalQueue {
     core::FixedVector<const MTL4::CommandBuffer*> buffers;
     core::FixedVector<MetalSwapchain*> chains;
     core::FixedVector<MetalRetiredPool> retired;
-    std::atomic<std::uint32_t> retiredCount{0};
     core::FixedVector<MTL4::UpdateSparseTextureMappingOperation> textureMappings;
     core::FixedVector<MTL4::UpdateSparseBufferMappingOperation> bufferMappings;
     std::mutex lock;
@@ -368,8 +367,7 @@ private:
     [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
     [[nodiscard]] core::Result<void> checkToken(Token token) const;
     // Releases the retired pools the GPU is done with and frees their slots.
-    // Runs on the frame path: it releases API objects and moves indices,
-    // nothing more.
+    // runGarbageCollection calls it for each queue, under the queue's lock.
     void collectPools(MetalQueue& queue);
     // Releases the objects in a chain of list slots and gives the chain back.
     void releaseSlots(std::uint32_t first);

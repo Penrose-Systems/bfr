@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <expected>
 #include <format>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <utility>
@@ -360,6 +361,12 @@ core::Result<void> VulkanDevice::collectRetired() {
 }
 
 core::Result<void> VulkanDevice::runGarbageCollection() {
+    for (const auto& queue : queues_) {
+        const std::scoped_lock lock{queue->lock};
+        if (auto collected = collectPools(*queue); !collected) {
+            return collected;
+        }
+    }
     return collectRetired();
 }
 

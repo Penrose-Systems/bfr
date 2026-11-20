@@ -281,9 +281,10 @@ whose previous work is still running.
 
 ## Lifetime
 
-- `destroy(handle)` makes the handle invalid at once, but the memory is
-  freed only after every queue passes the work submitted before the call.
-  You never track that yourself.
+- `destroy(handle)` makes the handle invalid at once. Its memory, slots
+  and room are freed by `runGarbageCollection`, called once per frame as
+  in NVRHI, after every queue passes the work submitted before the destroy.
+  You never track that yourself. Command pools are freed the same way.
 - Destroying something an unsubmitted command list still uses is an error;
   a usage check reports it.
 - Destroying a view frees its bindless slot under the same rule, and updates

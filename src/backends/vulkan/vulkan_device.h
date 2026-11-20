@@ -125,7 +125,6 @@ struct VulkanQueue {
     // The largest value a submit waits for on each queue, by queue index.
     std::vector<std::uint64_t> waitValues;
     core::FixedVector<VulkanRetiredPool> retired;
-    std::atomic<std::uint32_t> retiredCount{0};
     // A tile mapping's binds and waits, made as a submit's arrays are, at the
     // device's maximums of regions and queues.
     core::FixedVector<VkSparseImageMemoryBind> imageBinds;
@@ -383,8 +382,9 @@ private:
     [[nodiscard]] core::Result<void> checkQueue(std::uint32_t queue) const;
     [[nodiscard]] core::Result<void> checkToken(Token token) const;
     // Destroys the retired pools the GPU is done with and frees their slots.
-    // Runs on the frame path: it calls the API and moves indices, nothing more.
-    void collectPools(VulkanQueue& queue);
+    // runGarbageCollection calls it for each queue, under the queue's lock.
+    // Fails with RhiDeviceFailed when the queue cannot say what it passed.
+    [[nodiscard]] core::Result<void> collectPools(VulkanQueue& queue);
     // Ends a list that was submitted or discarded; its slot waits for the
     // pool's reset.
     void end(CommandListHandle commandList);

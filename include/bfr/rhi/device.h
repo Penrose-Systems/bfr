@@ -83,7 +83,8 @@ public:
     /// is acquired.
     [[nodiscard]] virtual core::Result<SwapchainStatus> present(SwapchainHandle swapchain) = 0;
 
-    /// A command pool as desc says, with its lists made. Fails with
+    /// A command pool as desc says, with its lists made. A destroyed pool and
+    /// its lists count until runGarbageCollection frees them. Fails with
     /// RhiInvalidCall for a queue the device does not have, RhiLimitReached at
     /// the device's maximum of pools or when fewer than desc.listCount of its
     /// lists are free, and RhiDeviceFailed when the API refuses.
@@ -96,9 +97,10 @@ public:
     /// destroyed.
     [[nodiscard]] virtual core::Result<void> resetCommandPool(CommandPoolHandle commandPool) = 0;
 
-    /// Destroys the pool and every list it made once the GPU has finished
-    /// with them; the handles are invalid at once. A null handle does
-    /// nothing. Fails with RhiInvalidHandle when the pool is already destroyed.
+    /// Destroys the pool and every list it made: the handles are invalid at
+    /// once, and runGarbageCollection frees them after the GPU has finished
+    /// with them. A null handle does nothing. Fails with RhiInvalidHandle when
+    /// the pool is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroyCommandPool(CommandPoolHandle commandPool) = 0;
 
     /// Starts recording the pool's next list. Fails with RhiInvalidHandle when
@@ -348,11 +350,11 @@ public:
     /// Whether the GPU has passed token, without blocking. Fails as wait does.
     [[nodiscard]] virtual core::Result<bool> poll(Token token) = 0;
 
-    /// Frees the objects destroy calls retired whose submits the GPU has
-    /// passed, and gives their slots back to the tables. Nothing else does
-    /// until the device goes. Not for the frame path: it frees memory. Fails
-    /// with RhiDeviceFailed when the backend cannot say what the GPU has
-    /// passed.
+    /// Frees the objects and command pools destroy calls retired whose submits
+    /// the GPU has passed, and gives their slots and room back. Nothing else
+    /// does until the device goes. Not for the frame path: it frees memory.
+    /// Fails on Vulkan with RhiDeviceFailed when the backend cannot say what
+    /// the GPU has passed; on D3D12 and Metal it cannot fail.
     [[nodiscard]] virtual core::Result<void> runGarbageCollection() = 0;
 
     /// Discards a command list that was not submitted; the pool hands it out
@@ -360,14 +362,13 @@ public:
     /// gone.
     [[nodiscard]] virtual core::Result<void> destroyCommandList(CommandListHandle commandList) = 0;
 
-    /// A buffer as desc says, with a slot in the storage buffer table when
-    /// its usage is storage. Cold: it frees buffers the GPU is done with, so
-    /// it is not for the frame path. Fails with RhiInvalidCall for memory BFR
-    /// doesn't have, RhiUnsupported for a sparse buffer the device's Sparse
-    /// lacks (checkSparseBuffer), RhiOutOfMemory when the API says the memory ran
-    /// out, RhiLimitReached at the device's maximum of buffers or of storage
-    /// or uniform buffer slots, and RhiDeviceFailed when the API refuses the desc or
-    /// gives no buffer.
+    /// A buffer as desc says, with a slot in the storage buffer table when its
+    /// usage is storage. Cold: not for the frame path. Fails with
+    /// RhiInvalidCall for memory BFR doesn't have, RhiUnsupported for a sparse
+    /// buffer the device's Sparse lacks (checkSparseBuffer), RhiOutOfMemory
+    /// when the API says the memory ran out, RhiLimitReached at the device's
+    /// maximum of buffers or of storage or uniform buffer slots, and
+    /// RhiDeviceFailed when the API refuses the desc or gives no buffer.
     [[nodiscard]] virtual core::Result<BufferHandle> createBuffer(const BufferDesc& desc) = 0;
 
     /// The buffer's indices in the storage and uniform buffer tables, held
@@ -382,47 +383,45 @@ public:
     /// is destroyed.
     [[nodiscard]] virtual core::Result<std::span<std::byte>> mapBuffer(BufferHandle buffer) = 0;
 
-    /// Destroys the buffer once the GPU has passed every submit made before
-    /// the call; the handle is invalid at once. Cold: it records the point
-    /// the buffer waits for and frees what the GPU is done with, so it is not
-    /// for the frame path. A null handle does nothing. Fails with
+    /// Destroys the buffer: the handle is invalid at once, and
+    /// runGarbageCollection frees it after the GPU has passed every submit made
+    /// before the call. Cold: it records the point the buffer waits for, so it
+    /// is not for the frame path. A null handle does nothing. Fails with
     /// RhiInvalidHandle when the buffer is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroyBuffer(BufferHandle buffer) = 0;
 
     /// A texture as desc says, in device memory, with a slot in each bindless
-    /// table its usage names. Cold: it frees textures the GPU is done with.
-    /// Fails with RhiUnsupported for a cube array or sparse texture the
-    /// device lacks (checkTextureFeatures), RhiOutOfMemory when the API says memory ran out,
-    /// RhiLimitReached at the device's maximum of textures or of a table's
-    /// slots, and RhiDeviceFailed when the API refuses the desc or gives no
-    /// texture.
+    /// table its usage names. Cold. Fails with RhiUnsupported for a cube array
+    /// or sparse texture the device lacks (checkTextureFeatures),
+    /// RhiOutOfMemory when the API says memory ran out, RhiLimitReached at the
+    /// device's maximum of textures or of a table's slots, and RhiDeviceFailed
+    /// when the API refuses the desc or gives no texture.
     [[nodiscard]] virtual core::Result<TextureHandle> createTexture(const TextureDesc& desc) = 0;
 
     /// Where the texture is in the bindless tables. Fails with
     /// RhiInvalidHandle when it is destroyed.
     [[nodiscard]] virtual core::Result<TextureSlots> textureSlots(TextureHandle texture) = 0;
 
-    /// Destroys the texture once the GPU has passed every submit made before
-    /// the call; the handle is invalid at once. Cold, as destroyBuffer is. A
-    /// null handle does nothing. Fails with RhiInvalidHandle when the texture
-    /// is already destroyed.
+    /// Destroys the texture: the handle is invalid at once, and
+    /// runGarbageCollection frees it after the GPU has passed every submit made
+    /// before the call. Cold, as destroyBuffer is. A null handle does nothing.
+    /// Fails with RhiInvalidHandle when the texture is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroyTexture(TextureHandle texture) = 0;
 
-    /// A sampler as desc says, with a slot in the sampler table. Cold: it
-    /// frees samplers the GPU is done with. Fails with RhiUnsupported when
-    /// the backend has no setting for a member, RhiLimitReached when the
-    /// sampler table is full, and RhiDeviceFailed when the API refuses the
-    /// desc.
+    /// A sampler as desc says, with a slot in the sampler table. Cold. Fails
+    /// with RhiUnsupported when the backend has no setting for a member,
+    /// RhiLimitReached when the sampler table is full, and RhiDeviceFailed when
+    /// the API refuses the desc.
     [[nodiscard]] virtual core::Result<SamplerHandle> createSampler(const SamplerDesc& desc) = 0;
 
     /// The sampler's index in the sampler table, held from creation to
     /// destruction. Fails with RhiInvalidHandle when it is destroyed.
     [[nodiscard]] virtual core::Result<std::uint32_t> samplerSlot(SamplerHandle sampler) = 0;
 
-    /// Destroys the sampler once the GPU has passed every submit made before
-    /// the call; the handle is invalid at once. Cold, as destroyBuffer is. A
-    /// null handle does nothing. Fails with RhiInvalidHandle when the sampler
-    /// is already destroyed.
+    /// Destroys the sampler: the handle is invalid at once, and
+    /// runGarbageCollection frees it after the GPU has passed every submit made
+    /// before the call. Cold, as destroyBuffer is. A null handle does nothing.
+    /// Fails with RhiInvalidHandle when the sampler is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroySampler(SamplerHandle sampler) = 0;
 
     /// A pipeline cache that starts with desc.data. Cold. Data from another
@@ -451,10 +450,10 @@ public:
     [[nodiscard]] virtual core::Result<void> destroyPipelineCache(PipelineCacheHandle cache) = 0;
 
     /// A compute pipeline as desc says, made before returning, or loaded from
-    /// desc.cache. Cold: it compiles, and frees pipelines the GPU is done
-    /// with. Fails with RhiInvalidHandle when desc.cache is gone,
-    /// RhiLimitReached at the device's maximum, and RhiDeviceFailed when the
-    /// API refuses the code, the desc or the cache, with what it said.
+    /// desc.cache. Cold: it compiles. Fails with RhiInvalidHandle when
+    /// desc.cache is gone, RhiLimitReached at the device's maximum, and
+    /// RhiDeviceFailed when the API refuses the code, the desc or the cache,
+    /// with what it said.
     [[nodiscard]] virtual core::Result<PipelineHandle> createComputePipeline(const ComputePipelineDesc& desc) = 0;
 
     /// A graphics pipeline as desc says, made before returning, or loaded
@@ -468,10 +467,10 @@ public:
     /// the desc or the cache, with what it said.
     [[nodiscard]] virtual core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) = 0;
 
-    /// Destroys the pipeline once the GPU has passed every submit made before
-    /// the call; the handle is invalid at once. Cold, as destroyBuffer is. A
-    /// null handle does nothing. Fails with RhiInvalidHandle when the pipeline
-    /// is already destroyed.
+    /// Destroys the pipeline: the handle is invalid at once, and
+    /// runGarbageCollection frees it after the GPU has passed every submit made
+    /// before the call. Cold, as destroyBuffer is. A null handle does nothing.
+    /// Fails with RhiInvalidHandle when the pipeline is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroyPipeline(PipelineHandle pipeline) = 0;
 
     /// How much of each heap the process may use and uses now. Fails with
@@ -490,9 +489,10 @@ public:
     /// when the API refuses.
     [[nodiscard]] virtual core::Result<TimestampPoolHandle> createTimestampPool(const TimestampPoolDesc& desc) = 0;
 
-    /// Destroys the pool once the GPU has passed every submit made before the
-    /// call; the handle is invalid at once. Cold. A null handle does nothing.
-    /// Fails with RhiInvalidHandle when the pool is already destroyed.
+    /// Destroys the pool: the handle is invalid at once, and
+    /// runGarbageCollection frees it after the GPU has passed every submit made
+    /// before the call. Cold. A null handle does nothing. Fails with
+    /// RhiInvalidHandle when the pool is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroyTimestampPool(TimestampPoolHandle pool) = 0;
 
     /// Records a reset of count timestamps from first, which a backend that
@@ -528,9 +528,10 @@ public:
     /// RhiDeviceFailed when the API refuses.
     [[nodiscard]] virtual core::Result<QueryPoolHandle> createQueryPool(const QueryPoolDesc& desc) = 0;
 
-    /// Destroys the pool once the GPU has passed every submit made before the
-    /// call; the handle is invalid at once. Cold. A null handle does nothing.
-    /// Fails with RhiInvalidHandle when the pool is already destroyed.
+    /// Destroys the pool: the handle is invalid at once, and
+    /// runGarbageCollection frees it after the GPU has passed every submit made
+    /// before the call. Cold. A null handle does nothing. Fails with
+    /// RhiInvalidHandle when the pool is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroyQueryPool(QueryPoolHandle pool) = 0;
 
     /// Where the pool's results land in the buffer resolveQueries writes, as
@@ -624,10 +625,11 @@ public:
     /// and RhiDeviceFailed when it refuses.
     [[nodiscard]] virtual core::Result<SparseMemoryHandle> createSparseMemory(const SparseMemoryDesc& desc) = 0;
 
-    /// Destroys the memory once the GPU has passed every submit and mapping
-    /// made before the call; the handle is invalid at once. Tiles still mapped
-    /// to it read as unmapped ones do after. Cold. A null handle does nothing.
-    /// Fails with RhiInvalidHandle when it is already destroyed.
+    /// Destroys the memory: the handle is invalid at once, and
+    /// runGarbageCollection frees it after the GPU has passed every submit and
+    /// mapping made before the call. Tiles still mapped to it read as unmapped
+    /// ones do after. Cold. A null handle does nothing. Fails with
+    /// RhiInvalidHandle when it is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroySparseMemory(SparseMemoryHandle memory) = 0;
 
     /// How aspect of a sparse texture is cut into tiles. Fails with
@@ -674,23 +676,21 @@ public:
     [[nodiscard]] virtual core::Result<AccelerationStructureSizes> accelerationStructureSizes(
         const AccelerationStructureInputs& inputs) = 0;
 
-    /// An empty structure of desc.size bytes, which a build fills. Cold: it
-    /// frees structures the GPU is done with. Fails with RhiUnsupported where
-    /// Features::accelerationStructure is false, RhiInvalidCall for an enum
-    /// value BFR doesn't have, RhiUnsupported for
+    /// An empty structure of desc.size bytes, which a build fills. Cold. Fails
+    /// with RhiUnsupported where Features::accelerationStructure is false,
+    /// RhiInvalidCall for an enum value BFR doesn't have, RhiUnsupported for
     /// motionKeyframes where Features::rayTracingMotion is false, for an
     /// opacity micromap where Features::opacityMicromap is, or for a
     /// partitioned top structure where Features::partitionedTop is,
-    /// RhiInvalidCall for motionKeyframes other than the backend takes
-    /// (Vulkan, two) or on an opacity micromap or partitioned top structure
-    /// where the backend's has none (Vulkan), or captureReplay on an opacity
-    /// micromap where the backend gives it no reference (Vulkan),
-    /// RhiLimitReached at the device's maximum or, for a top or partitioned
-    /// top structure on a device with slots in its table, when they are all
-    /// held, RhiOutOfMemory when the API says memory ran out, and
-    /// RhiDeviceFailed when it refuses; a replay at a reference the backend
-    /// cannot give fails with RhiOutOfMemory or RhiDeviceFailed, as its API
-    /// says.
+    /// RhiInvalidCall for motionKeyframes other than the backend takes (Vulkan,
+    /// two) or on an opacity micromap or partitioned top structure where the
+    /// backend's has none (Vulkan), or captureReplay on an opacity micromap
+    /// where the backend gives it no reference (Vulkan), RhiLimitReached at the
+    /// device's maximum or, for a top or partitioned top structure on a device
+    /// with slots in its table, when they are all held, RhiOutOfMemory when the
+    /// API says memory ran out, and RhiDeviceFailed when it refuses; a replay
+    /// at a reference the backend cannot give fails with RhiOutOfMemory or
+    /// RhiDeviceFailed, as its API says.
     [[nodiscard]] virtual core::Result<AccelerationStructureHandle> createAccelerationStructure(
         const AccelerationStructureDesc& desc) = 0;
 
@@ -716,11 +716,12 @@ public:
     [[nodiscard]] virtual core::Result<AccelerationStructureCapture> captureAccelerationStructure(
         AccelerationStructureHandle structure) = 0;
 
-    /// Destroys the structure once the GPU has passed every submit made
-    /// before the call; the handle is invalid at once. A top structure reads
-    /// the bottom ones built into it while rays are traced against it. Cold,
-    /// as destroyBuffer is. A null handle does nothing. Fails with
-    /// RhiInvalidHandle when it is already destroyed.
+    /// Destroys the structure: the handle is invalid at once, and
+    /// runGarbageCollection frees it after the GPU has passed every submit made
+    /// before the call. A top structure reads the bottom ones built into it
+    /// while rays are traced against it. Cold, as destroyBuffer is. A null
+    /// handle does nothing. Fails with RhiInvalidHandle when it is already
+    /// destroyed.
     [[nodiscard]] virtual core::Result<void> destroyAccelerationStructure(AccelerationStructureHandle structure) = 0;
 
     /// Writes instances to out as the records a top structure is built from,
@@ -819,9 +820,10 @@ public:
     [[nodiscard]] virtual core::Result<AccelerationStructurePropertyPoolHandle> createAccelerationStructurePropertyPool(
         const AccelerationStructurePropertyPoolDesc& desc) = 0;
 
-    /// Destroys the pool once the GPU has passed every submit made before the
-    /// call; the handle is invalid at once. Cold. A null handle does nothing.
-    /// Fails with RhiInvalidHandle when it is already destroyed.
+    /// Destroys the pool: the handle is invalid at once, and
+    /// runGarbageCollection frees it after the GPU has passed every submit made
+    /// before the call. Cold. A null handle does nothing. Fails with
+    /// RhiInvalidHandle when it is already destroyed.
     [[nodiscard]] virtual core::Result<void> destroyAccelerationStructurePropertyPool(
         AccelerationStructurePropertyPoolHandle pool) = 0;
 

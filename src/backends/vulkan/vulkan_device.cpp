@@ -359,13 +359,13 @@ core::Result<void> VulkanDevice::checkToken(Token token) const {
     return {};
 }
 
-void VulkanDevice::collectPools(VulkanQueue& queue) {
+core::Result<void> VulkanDevice::collectPools(VulkanQueue& queue) {
     if (queue.retired.empty()) {
-        return;
+        return {};
     }
     const auto completed = completedValue(queue);
     if (!completed) {
-        return;
+        return std::unexpected(completed.error());
     }
     queue.retired.eraseIf([this, completed](const VulkanRetiredPool& retired) {
         if (retired.value > *completed) {
@@ -377,7 +377,7 @@ void VulkanDevice::collectPools(VulkanQueue& queue) {
         poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
         return true;
     });
-    queue.retiredCount.store(static_cast<std::uint32_t>(queue.retired.size()), std::memory_order_release);
+    return {};
 }
 
 core::Result<void> VulkanDevice::waitIdle() {
@@ -507,14 +507,6 @@ core::Result<CommandPoolHandle> VulkanDevice::createCommandPool(const CommandPoo
     if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Cold, so pools the GPU is done with are freed first, making their slots
-    // and room count.
-    for (const auto& queue : queues_) {
-        if (queue->retiredCount.load(std::memory_order_acquire) != 0) {
-            const std::scoped_lock lock{queue->lock};
-            collectPools(*queue);
-        }
-    }
     if (poolsHeld_.fetch_add(1, std::memory_order_relaxed) >= desc_.maxCommandPools) {
         poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
@@ -607,8 +599,6 @@ core::Result<void> VulkanDevice::destroyCommandPool(CommandPoolHandle commandPoo
         const std::scoped_lock lock{queue.lock};
         // poolsHeld_ counts this pool until it is collected, so there is room.
         std::ignore = queue.retired.push({.pool = gone.pool, .first = gone.first, .value = gone.lastSubmit});
-        queue.retiredCount.store(static_cast<std::uint32_t>(queue.retired.size()), std::memory_order_release);
-        collectPools(queue);
     }
     return {};
 }
@@ -995,7 +985,6 @@ core::Result<Token> VulkanDevice::submit(const SubmitDesc& desc) {
     for (VulkanSwapchain* chain : queue.chains) {
         chain->setSubmitted();
     }
-    collectPools(queue);
     return Token{.queue = desc.queue, .value = value};
 }
 
@@ -1015,10 +1004,6 @@ core::Result<void> VulkanDevice::wait(Token token, std::uint64_t timeoutNs) {
     else if (result != VK_SUCCESS) {
         return failure(core::ErrorCode::RhiDeviceFailed, {.call = "vkWaitSemaphores", .result = result});
     }
-    if (queue.retiredCount.load(std::memory_order_acquire) != 0) {
-        const std::scoped_lock lock{queue.lock};
-        collectPools(queue);
-    }
     return {};
 }
 
@@ -1030,10 +1015,6 @@ core::Result<bool> VulkanDevice::poll(Token token) {
     const auto completed = completedValue(queue);
     if (!completed) {
         return std::unexpected(completed.error());
-    }
-    if (queue.retiredCount.load(std::memory_order_acquire) != 0) {
-        const std::scoped_lock lock{queue.lock};
-        collectPools(queue);
     }
     return *completed >= token.value;
 }

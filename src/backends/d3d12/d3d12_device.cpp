@@ -522,7 +522,6 @@ void D3D12Device::collectPools(D3D12Queue& queue) {
         poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
         return true;
     });
-    queue.retiredCount.store(static_cast<std::uint32_t>(queue.retired.size()), std::memory_order_release);
 }
 
 void D3D12Device::releaseSlots(std::uint32_t first) {
@@ -667,14 +666,6 @@ core::Result<CommandPoolHandle> D3D12Device::createCommandPool(const CommandPool
     if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Cold, so pools the GPU is done with are freed first, making their slots
-    // and room count.
-    for (const auto& queue : queues_) {
-        if (queue->retiredCount.load(std::memory_order_acquire) != 0) {
-            const std::scoped_lock lock{queue->lock};
-            collectPools(*queue);
-        }
-    }
     if (poolsHeld_.fetch_add(1, std::memory_order_relaxed) >= desc_.maxCommandPools) {
         poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
@@ -771,8 +762,6 @@ core::Result<void> D3D12Device::destroyCommandPool(CommandPoolHandle commandPool
         const std::scoped_lock lock{queue.lock};
         // poolsHeld_ counts this pool until it is collected, so there is room.
         std::ignore = queue.retired.push({.first = gone.first, .value = gone.lastSubmit});
-        queue.retiredCount.store(static_cast<std::uint32_t>(queue.retired.size()), std::memory_order_release);
-        collectPools(queue);
     }
     return {};
 }
@@ -1327,7 +1316,6 @@ core::Result<Token> D3D12Device::submit(const SubmitDesc& desc) {
     for (D3D12Swapchain* chain : queue.chains) {
         chain->setSubmitted({.queue = desc.queue, .value = value});
     }
-    collectPools(queue);
     return Token{.queue = desc.queue, .value = value};
 }
 
@@ -1339,10 +1327,6 @@ core::Result<void> D3D12Device::wait(Token token, std::uint64_t timeoutNs) {
     if (auto waited = waitFor(queue, token.value, timeoutNs); !waited) {
         return waited;
     }
-    if (queue.retiredCount.load(std::memory_order_acquire) != 0) {
-        const std::scoped_lock lock{queue.lock};
-        collectPools(queue);
-    }
     return {};
 }
 
@@ -1352,10 +1336,6 @@ core::Result<bool> D3D12Device::poll(Token token) {
     }
     D3D12Queue& queue = *queues_[token.queue];
     const std::uint64_t completed = queue.fence->GetCompletedValue();
-    if (queue.retiredCount.load(std::memory_order_acquire) != 0) {
-        const std::scoped_lock lock{queue.lock};
-        collectPools(queue);
-    }
     return completed >= token.value;
 }
 

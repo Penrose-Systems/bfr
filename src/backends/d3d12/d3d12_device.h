@@ -104,7 +104,6 @@ struct D3D12Queue {
     core::FixedVector<ID3D12CommandList*> lists;
     core::FixedVector<D3D12Swapchain*> chains;
     core::FixedVector<D3D12RetiredPool> retired;
-    std::atomic<std::uint32_t> retiredCount{0};
     D3D12TileMappings textureTiles;
     D3D12TileMappings bufferTiles;
     std::mutex lock;
@@ -399,8 +398,7 @@ private:
     [[nodiscard]] core::Result<void> waitOn(D3D12Queue& queue, std::span<const Token> waits);
     [[nodiscard]] core::Result<void> signal(D3D12Queue& queue, std::uint64_t value);
     // Releases the retired pools the GPU is done with and frees their slots.
-    // Runs on the frame path: it releases API objects and moves indices,
-    // nothing more.
+    // runGarbageCollection calls it for each queue, under the queue's lock.
     void collectPools(D3D12Queue& queue);
     // Releases the objects in a chain of list slots and gives the chain back.
     void releaseSlots(std::uint32_t first);

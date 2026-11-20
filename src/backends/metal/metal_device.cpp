@@ -267,7 +267,6 @@ void MetalDevice::collectPools(MetalQueue& queue) {
         poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
         return true;
     });
-    queue.retiredCount.store(static_cast<std::uint32_t>(queue.retired.size()), std::memory_order_release);
 }
 
 void MetalDevice::releaseSlots(std::uint32_t first) {
@@ -418,14 +417,6 @@ core::Result<CommandPoolHandle> MetalDevice::createCommandPool(const CommandPool
     if (auto checked = checkQueue(desc.queue); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    // Cold, so pools the GPU is done with are freed first, making their slots
-    // and room count.
-    for (const auto& queue : queues_) {
-        if (queue->retiredCount.load(std::memory_order_acquire) != 0) {
-            const std::scoped_lock lock{queue->lock};
-            collectPools(*queue);
-        }
-    }
     if (poolsHeld_.fetch_add(1, std::memory_order_relaxed) >= desc_.maxCommandPools) {
         poolsHeld_.fetch_sub(1, std::memory_order_relaxed);
         return core::failure(core::ErrorCode::RhiLimitReached, "the device holds at most {} command pools",
@@ -549,8 +540,6 @@ core::Result<void> MetalDevice::destroyCommandPool(CommandPoolHandle commandPool
         const std::scoped_lock lock{queue.lock};
         // poolsHeld_ counts this pool until it is collected, so there is room.
         std::ignore = queue.retired.push({.first = gone.first, .value = gone.lastSubmit});
-        queue.retiredCount.store(static_cast<std::uint32_t>(queue.retired.size()), std::memory_order_release);
-        collectPools(queue);
     }
     return {};
 }
@@ -890,7 +879,6 @@ core::Result<Token> MetalDevice::submit(const SubmitDesc& desc) {
     for (MetalSwapchain* chain : queue.chains) {
         chain->setSubmitted();
     }
-    collectPools(queue);
     return Token{.queue = desc.queue, .value = value};
 }
 
@@ -902,10 +890,6 @@ core::Result<void> MetalDevice::wait(Token token, std::uint64_t timeoutNs) {
     if (!queue.event->waitUntilSignaledValue(token.value, millisecondsRoundedUp(timeoutNs))) {
         return core::failure(core::ErrorCode::RhiTimeout, "the GPU had not passed the token in time");
     }
-    if (queue.retiredCount.load(std::memory_order_acquire) != 0) {
-        const std::scoped_lock lock{queue.lock};
-        collectPools(queue);
-    }
     return {};
 }
 
@@ -915,10 +899,6 @@ core::Result<bool> MetalDevice::poll(Token token) {
     }
     MetalQueue& queue = *queues_[token.queue];
     const std::uint64_t completed = queue.event->signaledValue();
-    if (queue.retiredCount.load(std::memory_order_acquire) != 0) {
-        const std::scoped_lock lock{queue.lock};
-        collectPools(queue);
-    }
     return completed >= token.value;
 }
 

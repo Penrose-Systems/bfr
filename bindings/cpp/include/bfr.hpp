@@ -4473,47 +4473,46 @@ public:
     /// Writes whether the GPU has passed token, without blocking.
     [[nodiscard]] Expected<bool> poll(const Token& token) const;
 
-    /// Frees the objects destroy calls retired whose submits the GPU has passed, and gives their
-    /// slots back to the tables. Nothing else does: a retired object holds its memory and slots
-    /// until this is called or the device goes, as NVRHI's runGarbageCollection. Not for the frame
-    /// path: it frees memory. Fails with error_device_failed when the backend cannot say what the
-    /// GPU has passed.
+    /// Frees the objects and command pools destroy calls retired whose submits the GPU has passed,
+    /// and gives their slots and room back. Nothing else does: a retired object or pool holds its
+    /// memory, slots and room until this is called or the device goes, as NVRHI's
+    /// runGarbageCollection. Not for the frame path: it frees memory. Fails on Vulkan with
+    /// error_device_failed when the backend cannot say what the GPU has passed; on D3D12 and Metal
+    /// it cannot fail.
     [[nodiscard]] Expected<void> runGarbageCollection() const;
 
     /// Discards a command list that was not submitted; the pool hands it out again after its next
     /// reset. A handle that is already submitted or destroyed does nothing.
     void destroyCommandList(CommandList commandList) const;
 
-    /// Creates a buffer, as desc says. Not for the frame path: it frees buffers the GPU is done
-    /// with. Fails with error_invalid_argument for memory BFR doesn't have, error_out_of_memory
-    /// when the backend says the memory ran out, error_unsupported for a sparse or sparse_aliased
-    /// buffer the device's bfr_caps_sparse (bfr_get_device_caps) lacks, error_limit_reached at the
-    /// device's maximum of buffers, and error_device_failed when the backend refuses the desc or
-    /// gives no buffer.
+    /// Creates a buffer, as desc says. Not for the frame path. Fails with error_invalid_argument
+    /// for memory BFR doesn't have, error_out_of_memory when the backend says the memory ran out,
+    /// error_unsupported for a sparse or sparse_aliased buffer the device's bfr_caps_sparse
+    /// (bfr_get_device_caps) lacks, error_limit_reached at the device's maximum of buffers, and
+    /// error_device_failed when the backend refuses the desc or gives no buffer.
     [[nodiscard]] Expected<Buffer> createBuffer(const BufferDesc& desc) const;
 
-    /// Creates a texture, as desc says. Not for the frame path: it frees textures the GPU is done
-    /// with. Fails with error_unsupported for a cube texture of more than 6 layers where the
-    /// device's (bfr_get_device_caps) image_cube_array is false, and for a sparse texture its
-    /// bfr_caps_sparse lacks: binding, textures_2d (2D and cube) or textures_3d, none for 1D,
-    /// samples_n for n samples, and aliased for sparse_aliased; error_out_of_memory when the
-    /// backend says memory ran out, error_limit_reached at the device's maximum of textures, and
-    /// error_device_failed when the backend refuses the desc or gives no texture.
+    /// Creates a texture, as desc says. Not for the frame path. Fails with error_unsupported for a
+    /// cube texture of more than 6 layers where the device's (bfr_get_device_caps) image_cube_array
+    /// is false, and for a sparse texture its bfr_caps_sparse lacks: binding, textures_2d (2D and
+    /// cube) or textures_3d, none for 1D, samples_n for n samples, and aliased for sparse_aliased;
+    /// error_out_of_memory when the backend says memory ran out, error_limit_reached at the
+    /// device's maximum of textures, and error_device_failed when the backend refuses the desc or
+    /// gives no texture.
     [[nodiscard]] Expected<Texture> createTexture(const TextureDesc& desc) const;
 
-    /// Creates a sampler, as desc says, with a slot in the sampler table. Not for the frame path:
-    /// it frees samplers the GPU is done with. Fails with error_invalid_argument for a value BFR
-    /// does not have, error_unsupported when the backend has no setting for a member,
-    /// error_limit_reached when the sampler table is full, and error_device_failed when the backend
-    /// refuses the desc. Every other member reaches the backend as it is; the caps say what the
-    /// adapter has.
+    /// Creates a sampler, as desc says, with a slot in the sampler table. Not for the frame path.
+    /// Fails with error_invalid_argument for a value BFR does not have, error_unsupported when the
+    /// backend has no setting for a member, error_limit_reached when the sampler table is full, and
+    /// error_device_failed when the backend refuses the desc. Every other member reaches the
+    /// backend as it is; the caps say what the adapter has.
     [[nodiscard]] Expected<Sampler> createSampler(const SamplerDesc& desc) const;
 
     /// Creates a compute pipeline, as desc says, before returning. Not for the frame path: it
-    /// compiles, and frees pipelines the GPU is done with. A desc.cache is looked in first, and the
-    /// pipeline added on a miss. Fails with error_invalid_handle when desc.cache is gone,
-    /// error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
-    /// backend refuses the code, the desc or the cache; the message carries what it said.
+    /// compiles. A desc.cache is looked in first, and the pipeline added on a miss. Fails with
+    /// error_invalid_handle when desc.cache is gone, error_limit_reached at the device's maximum of
+    /// pipelines, and error_device_failed when the backend refuses the code, the desc or the cache;
+    /// the message carries what it said.
     [[nodiscard]] Expected<Pipeline> createComputePipeline(const ComputePipelineDesc& desc) const;
 
     /// Creates a graphics pipeline, as desc says, before returning. Not for the frame path, as
@@ -4657,19 +4656,18 @@ public:
     [[nodiscard]] Expected<AccelerationStructureSizes> accelerationStructureSizes(const AccelerationStructureInputs& inputs) const;
 
     /// Creates an empty acceleration structure of desc's size bytes, which a build fills. Not for
-    /// the frame path: it frees structures the GPU is done with. Fails with error_unsupported where
-    /// bfr_caps_features.acceleration_structure is false, error_invalid_argument for an enum value
-    /// BFR doesn't have, error_unsupported for motion_keyframes where
-    /// bfr_caps_features.ray_tracing_motion is false, for an opacity micromap where
-    /// bfr_caps_features.opacity_micromap is, or for a partitioned top structure where
-    /// bfr_caps_features.partitioned_top is, error_invalid_argument for motion_keyframes other than
-    /// the backend takes (Vulkan, two) or on an opacity micromap or partitioned top structure where
-    /// the backend's has none (Vulkan), or capture_replay on an opacity micromap where the backend
-    /// gives it no reference (Vulkan), error_limit_reached at the device's maximum or, for a top or
-    /// partitioned top structure on a device with slots in its table, when they are all held,
-    /// error_out_of_memory when the backend says memory ran out, and error_device_failed when it
-    /// refuses; a replay at a reference the backend cannot give fails with error_out_of_memory or
-    /// error_device_failed, as its API says.
+    /// the frame path. Fails with error_unsupported where bfr_caps_features.acceleration_structure
+    /// is false, error_invalid_argument for an enum value BFR doesn't have, error_unsupported for
+    /// motion_keyframes where bfr_caps_features.ray_tracing_motion is false, for an opacity
+    /// micromap where bfr_caps_features.opacity_micromap is, or for a partitioned top structure
+    /// where bfr_caps_features.partitioned_top is, error_invalid_argument for motion_keyframes
+    /// other than the backend takes (Vulkan, two) or on an opacity micromap or partitioned top
+    /// structure where the backend's has none (Vulkan), or capture_replay on an opacity micromap
+    /// where the backend gives it no reference (Vulkan), error_limit_reached at the device's
+    /// maximum or, for a top or partitioned top structure on a device with slots in its table, when
+    /// they are all held, error_out_of_memory when the backend says memory ran out, and
+    /// error_device_failed when it refuses; a replay at a reference the backend cannot give fails
+    /// with error_out_of_memory or error_device_failed, as its API says.
     [[nodiscard]] Expected<AccelerationStructure> createAccelerationStructure(const AccelerationStructureDesc& desc) const;
 
     /// Writes instances to data as the records a top acceleration structure with motion is built
@@ -4902,9 +4900,9 @@ class CommandPool {
 public:
     /// Owns nothing, as a moved-from CommandPool does.
     CommandPool() = default;
-    /// Destroys a command pool and every list it made, once the GPU has finished with them; the
-    /// handles are invalid at once. A handle that is already destroyed does nothing. Not while
-    /// another thread is using the pool.
+    /// Destroys a command pool and every list it made; the handles are invalid at once, and
+    /// bfr_run_garbage_collection frees them after the GPU has finished with them. A handle that is
+    /// already destroyed does nothing. Not while another thread is using the pool.
     ~CommandPool() { bfr_destroy_command_pool(device_, commandPool_); }
     CommandPool(const CommandPool&) = delete;
     CommandPool& operator=(const CommandPool&) = delete;
@@ -4969,9 +4967,9 @@ class Buffer {
 public:
     /// Owns nothing, as a moved-from Buffer does.
     Buffer() = default;
-    /// Destroys a buffer once the GPU has finished with it; the handle is invalid at once. Not for
-    /// the frame path: it records the point the buffer waits for and frees what the GPU is done
-    /// with. A handle that is already destroyed does nothing.
+    /// Destroys a buffer; the handle is invalid at once, and bfr_run_garbage_collection frees it
+    /// after the GPU has finished with it. Not for the frame path: it records the point the buffer
+    /// waits for. A handle that is already destroyed does nothing.
     ~Buffer() { bfr_destroy_buffer(device_, buffer_); }
     Buffer(const Buffer&) = delete;
     Buffer& operator=(const Buffer&) = delete;
@@ -5024,9 +5022,9 @@ class Texture {
 public:
     /// Owns nothing, as a moved-from Texture does.
     Texture() = default;
-    /// Destroys a texture once the GPU has finished with it; the handle is invalid at once. Not for
-    /// the frame path: it records the point the texture waits for and frees what the GPU is done
-    /// with. A handle that is already destroyed does nothing.
+    /// Destroys a texture; the handle is invalid at once, and bfr_run_garbage_collection frees it
+    /// after the GPU has finished with it. Not for the frame path: it records the point the texture
+    /// waits for. A handle that is already destroyed does nothing.
     ~Texture() { bfr_destroy_texture(device_, texture_); }
     Texture(const Texture&) = delete;
     Texture& operator=(const Texture&) = delete;
@@ -5092,9 +5090,9 @@ class Pipeline {
 public:
     /// Owns nothing, as a moved-from Pipeline does.
     Pipeline() = default;
-    /// Destroys a pipeline once the GPU has finished with it; the handle is invalid at once. Not
-    /// for the frame path: it records the point the pipeline waits for and frees what the GPU is
-    /// done with. A handle that is already destroyed does nothing.
+    /// Destroys a pipeline; the handle is invalid at once, and bfr_run_garbage_collection frees it
+    /// after the GPU has finished with it. Not for the frame path: it records the point the
+    /// pipeline waits for. A handle that is already destroyed does nothing.
     ~Pipeline() { bfr_destroy_pipeline(device_, pipeline_); }
     Pipeline(const Pipeline&) = delete;
     Pipeline& operator=(const Pipeline&) = delete;
@@ -5149,9 +5147,9 @@ class Sampler {
 public:
     /// Owns nothing, as a moved-from Sampler does.
     Sampler() = default;
-    /// Destroys a sampler once the GPU has finished with it; the handle is invalid at once. Not for
-    /// the frame path: it records the point the sampler waits for and frees what the GPU is done
-    /// with. A handle that is already destroyed does nothing.
+    /// Destroys a sampler; the handle is invalid at once, and bfr_run_garbage_collection frees it
+    /// after the GPU has finished with it. Not for the frame path: it records the point the sampler
+    /// waits for. A handle that is already destroyed does nothing.
     ~Sampler() { bfr_destroy_sampler(device_, sampler_); }
     Sampler(const Sampler&) = delete;
     Sampler& operator=(const Sampler&) = delete;
@@ -5189,8 +5187,9 @@ class TimestampPool {
 public:
     /// Owns nothing, as a moved-from TimestampPool does.
     TimestampPool() = default;
-    /// Destroys a timestamp pool once the GPU has finished with it; the handle is invalid at once.
-    /// Not for the frame path. A handle that is already destroyed does nothing.
+    /// Destroys a timestamp pool; the handle is invalid at once, and bfr_run_garbage_collection
+    /// frees it after the GPU has finished with it. Not for the frame path. A handle that is
+    /// already destroyed does nothing.
     ~TimestampPool() { bfr_destroy_timestamp_pool(device_, timestampPool_); }
     TimestampPool(const TimestampPool&) = delete;
     TimestampPool& operator=(const TimestampPool&) = delete;
@@ -5224,8 +5223,9 @@ class QueryPool {
 public:
     /// Owns nothing, as a moved-from QueryPool does.
     QueryPool() = default;
-    /// Destroys a query pool once the GPU has finished with it; the handle is invalid at once. Not
-    /// for the frame path. A handle that is already destroyed does nothing.
+    /// Destroys a query pool; the handle is invalid at once, and bfr_run_garbage_collection frees
+    /// it after the GPU has finished with it. Not for the frame path. A handle that is already
+    /// destroyed does nothing.
     ~QueryPool() { bfr_destroy_query_pool(device_, queryPool_); }
     QueryPool(const QueryPool&) = delete;
     QueryPool& operator=(const QueryPool&) = delete;
@@ -5263,9 +5263,10 @@ class SparseMemory {
 public:
     /// Owns nothing, as a moved-from SparseMemory does.
     SparseMemory() = default;
-    /// Destroys sparse memory once the GPU has passed every submit and mapping made before the
-    /// call; the handle is invalid at once. Tiles still mapped to it read as unmapped ones do
-    /// after. Not for the frame path. A handle that is already destroyed does nothing.
+    /// Destroys sparse memory; the handle is invalid at once, and bfr_run_garbage_collection frees
+    /// it after the GPU has passed every submit and mapping made before the call. Tiles still
+    /// mapped to it read as unmapped ones do after. Not for the frame path. A handle that is
+    /// already destroyed does nothing.
     ~SparseMemory() { bfr_destroy_sparse_memory(device_, sparseMemory_); }
     SparseMemory(const SparseMemory&) = delete;
     SparseMemory& operator=(const SparseMemory&) = delete;
@@ -5301,10 +5302,10 @@ class AccelerationStructure {
 public:
     /// Owns nothing, as a moved-from AccelerationStructure does.
     AccelerationStructure() = default;
-    /// Destroys an acceleration structure once the GPU has passed every submit made before the
-    /// call; the handle is invalid at once. A top structure reads the bottom ones built into it
-    /// while rays are traced against it. Not for the frame path. A handle that is already destroyed
-    /// does nothing.
+    /// Destroys an acceleration structure; the handle is invalid at once, and
+    /// bfr_run_garbage_collection frees it after the GPU has passed every submit made before the
+    /// call. A top structure reads the bottom ones built into it while rays are traced against it.
+    /// Not for the frame path. A handle that is already destroyed does nothing.
     ~AccelerationStructure() { bfr_destroy_acceleration_structure(device_, accelerationStructure_); }
     AccelerationStructure(const AccelerationStructure&) = delete;
     AccelerationStructure& operator=(const AccelerationStructure&) = delete;
@@ -5393,9 +5394,9 @@ class AccelerationStructurePropertyPool {
 public:
     /// Owns nothing, as a moved-from AccelerationStructurePropertyPool does.
     AccelerationStructurePropertyPool() = default;
-    /// Destroys a property pool once the GPU has passed every submit made before the call; the
-    /// handle is invalid at once. Not for the frame path. A handle that is already destroyed does
-    /// nothing.
+    /// Destroys a property pool; the handle is invalid at once, and bfr_run_garbage_collection
+    /// frees it after the GPU has passed every submit made before the call. Not for the frame path.
+    /// A handle that is already destroyed does nothing.
     ~AccelerationStructurePropertyPool() { bfr_destroy_acceleration_structure_property_pool(device_, accelerationStructurePropertyPool_); }
     AccelerationStructurePropertyPool(const AccelerationStructurePropertyPool&) = delete;
     AccelerationStructurePropertyPool& operator=(const AccelerationStructurePropertyPool&) = delete;

@@ -444,7 +444,8 @@ TEST_CASE("Device runs a queue of a family without graphics beside graphics when
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Device frees a pool destroyed while the GPU runs its lists once the GPU is done", "[rhi][agnostic]") {
+TEST_CASE("Device frees a pool destroyed while the GPU runs its lists at the garbage collection after the GPU is done",
+          "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
@@ -467,11 +468,15 @@ TEST_CASE("Device frees a pool destroyed while the GPU runs its lists once the G
         REQUIRE(token.has_value());
 
         // Destroyed before the GPU is known to be done, the pool is gone from
-        // the caller at once, and its room is back once the GPU has passed it.
+        // the caller at once, and its room is back at the first garbage
+        // collection after the GPU has passed it.
         const CommandPoolRef destroyedPool = *pool;
         *pool = {};
         CHECK(resetResult(device, destroyedPool.get()) == Result::ErrorInvalidHandle);
         REQUIRE(device.wait(*token, kTestWait).has_value());
+        CHECK(device.createCommandPool({.queue = 0, .listCount = kPoolLists}).error().code ==
+              Result::ErrorLimitReached);
+        REQUIRE(device.runGarbageCollection().has_value());
         auto next = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
         INFO(failureOf(next));
         REQUIRE(next.has_value());
@@ -484,11 +489,12 @@ TEST_CASE("Device frees a pool destroyed while the GPU runs its lists once the G
 
 TEST_CASE("Device serves pools made, submitted, waited on and destroyed from several threads at once",
           "[rhi][agnostic]") {
-    // Each thread holds one pool at a time, live or awaiting the GPU, so a
-    // device of one pool per thread never runs out. Catch2 is not called off
-    // the test thread: each thread records what failed, checked after joining.
+    // A destroyed pool holds its room until garbage is collected, so the
+    // device holds a pool for each round of each thread. Catch2 is not called
+    // off the test thread: each thread records what failed, checked after
+    // joining.
     constexpr std::uint32_t kThreads = 4;
-    constexpr int kRounds = 8;
+    constexpr std::uint32_t kRounds = 8;
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
@@ -496,8 +502,8 @@ TEST_CASE("Device serves pools made, submitted, waited on and destroyed from sev
         REQUIRE(created.has_value());
         const Instance& rhi = *created;
         auto opened = rhi.createDevice(testDeviceWith(rhi, headlessAdapter(rhi), kHeadless, [](DeviceDesc& desc) {
-            desc.maxCommandLists = kThreads * kPoolLists;
-            desc.maxCommandPools = kThreads;
+            desc.maxCommandLists = kThreads * kRounds * kPoolLists;
+            desc.maxCommandPools = kThreads * kRounds;
         }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
@@ -509,7 +515,7 @@ TEST_CASE("Device serves pools made, submitted, waited on and destroyed from sev
             threads.reserve(kThreads);
             for (std::string& failure : failures) {
                 threads.emplace_back([&device, &failure] {
-                    for (int round = 0; round < kRounds && failure.empty(); ++round) {
+                    for (std::uint32_t round = 0; round < kRounds && failure.empty(); ++round) {
                         auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
                         if (!pool) {
                             failure = "createCommandPool: " + pool.error().message.text();
@@ -545,9 +551,10 @@ TEST_CASE("Device serves pools made, submitted, waited on and destroyed from sev
             CHECK(failure.empty());
         }
 
-        // Every pool's room is back once the threads are done.
+        // Every pool's room is back once garbage is collected.
+        REQUIRE(device.runGarbageCollection().has_value());
         std::vector<CommandPool> pools;
-        for (std::uint32_t index = 0; index < kThreads; ++index) {
+        for (std::uint32_t index = 0; index < kThreads * kRounds; ++index) {
             auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
             INFO(failureOf(pool));
             REQUIRE(pool.has_value());
@@ -839,10 +846,13 @@ TEST_CASE("Device holds the lists, pools and swapchains it was opened for, and n
         device.destroyCommandList(*again);
         REQUIRE(submitOne(device, *again).error().code == Result::ErrorInvalidHandle);
 
-        // A destroyed pool's lists and room come back for the next pool.
+        // A destroyed pool's lists and room come back for the next pool once
+        // garbage is collected.
         const CommandPoolRef destroyedPool = *pool;
         *pool = {};
         REQUIRE(resetResult(device, destroyedPool.get()) == Result::ErrorInvalidHandle);
+        CHECK(device.createCommandPool({.queue = 0, .listCount = kLists}).error().code == Result::ErrorLimitReached);
+        REQUIRE(device.runGarbageCollection().has_value());
         auto next = device.createCommandPool({.queue = 0, .listCount = kLists});
         INFO(failureOf(next));
         REQUIRE(next.has_value());

@@ -138,6 +138,10 @@ void MetalDevice::collectRetired() {
 }
 
 core::Result<void> MetalDevice::runGarbageCollection() {
+    for (const auto& queue : queues_) {
+        const std::scoped_lock lock{queue->lock};
+        collectPools(*queue);
+    }
     collectRetired();
     return {};
 }
