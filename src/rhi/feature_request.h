@@ -37,13 +37,15 @@ struct RequestableFeature {
 // VUID-VkDeviceCreateInfo-None-04896, -04897 and -04898; a resident or
 // aliased resource is a sparse-bound one, VUID-VkBufferCreateInfo-flags-00918
 // and -00915, VUID-VkImageCreateInfo-flags-00987 and -00969), those its
-// extensions depend on (vk.xml: ray queries, pipelines, micromaps and
-// partitioned and cluster structures on acceleration structures; motion,
-// reordering and libraries on ray tracing pipelines), and those BFR's caps
-// already composed: builds read their inputs by device address
-// (VUID-vkGetBufferDeviceAddress-bufferDeviceAddress-03324), indirect traces
-// and replayed identifiers are of ray tracing pipelines, and
-// ray_query_graphics is ray_query's Vulkan feature. A request without them is
+// extensions depend on (the depends= of their <extension> in
+// /usr/share/vulkan/registry/vk.xml: ray queries 22865, ray tracing pipelines
+// 22814, micromaps 26482, and partitioned 29143 and cluster 29092 structures
+// on acceleration structures; motion 25591 and reordering 29328 on ray
+// tracing pipelines), and those BFR's caps already composed: builds read
+// their inputs by device address
+// (VUID-vkGetBufferDeviceAddress-bufferDeviceAddress-03324), indirect traces,
+// replayed identifiers and pipeline libraries are of ray tracing pipelines,
+// and ray_query_graphics is ray_query's Vulkan feature. A request without them is
 // refused on every backend, so it means the same on each.
 inline constexpr std::array kRequestableFeatures{
     RequestableFeature{.name = "swapchain", .requested = &FeatureRequest::swapchain, .feature = &Features::swapchain},

@@ -150,7 +150,7 @@ constexpr std::array kVulkanFeatures{
                     VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, chain);
             }},
     // VK_KHR_acceleration_structure needs VK_KHR_deferred_host_operations
-    // (vkdocs xml/vk.xml:24210).
+    // (vk.xml:22715).
     VulkanFeature{.requested = &FeatureRequest::accelerationStructure,
                   .form = [](D& chain, Listed /*listed*/) -> VulkanForm {
                       return {.extensions = {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
@@ -166,7 +166,7 @@ constexpr std::array kVulkanFeatures{
                                  &VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR::rayTracingPositionFetch>(
                     VK_KHR_RAY_TRACING_POSITION_FETCH_EXTENSION_NAME, chain);
             }},
-    // Ray tracing maintenance1's query types (queries.adoc:472, 476).
+    // The query types VK_KHR_ray_tracing_maintenance1 adds (vk.xml:26360-26361).
     VulkanFeature{.requested = &FeatureRequest::accelerationStructureCurrentSize,
                   .form =
                       [](D& chain, Listed /*listed*/) {
@@ -195,7 +195,7 @@ constexpr std::array kVulkanFeatures{
                       return {.extensions = {VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME}};
                   }},
     // VK_EXT_pipeline_library_group_handles needs VK_KHR_pipeline_library
-    // and VK_KHR_ray_tracing_pipeline (vkdocs xml/vk.xml:29884).
+    // and VK_KHR_ray_tracing_pipeline (vk.xml:28156).
     VulkanFeature{
         .requested = &FeatureRequest::pipelineLibraryIdentifiers,
         .form =
@@ -230,7 +230,7 @@ constexpr std::array kVulkanFeatures{
                     VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, chain);
             }},
     // VK_EXT_opacity_micromap needs acceleration structures and
-    // synchronization2 (vkdocs xml/vk.xml:28172), which BFR always enables.
+    // synchronization2 (vk.xml:26482), which BFR always enables.
     VulkanFeature{.requested = &FeatureRequest::opacityMicromap,
                   .form =
                       [](D& chain, Listed /*listed*/) {
@@ -238,7 +238,7 @@ constexpr std::array kVulkanFeatures{
                               VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME, chain);
                       }},
     // VK_NV_ray_tracing_motion_blur needs ray tracing pipelines
-    // (vkdocs xml/vk.xml:27270).
+    // (vk.xml:25591).
     VulkanFeature{
         .requested = &FeatureRequest::rayTracingMotion,
         .form =
@@ -255,7 +255,7 @@ constexpr std::array kVulkanFeatures{
                       }},
     // VK_NV_partitioned_acceleration_structure and
     // VK_NV_cluster_acceleration_structure need acceleration structures
-    // (vcpkg vk.xml:30757, 30794).
+    // (vk.xml:29143, 29092).
     VulkanFeature{
         .requested = &FeatureRequest::partitionedTop,
         .form =

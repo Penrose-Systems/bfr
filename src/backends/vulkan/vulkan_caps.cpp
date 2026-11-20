@@ -762,7 +762,7 @@ DeviceFeatures::DeviceFeatures(std::uint32_t version, std::span<const VkExtensio
     linkIf(VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh);
     // Ray queries and pipelines, and their maintenance, need acceleration
     // structures; motion blur and library group handles need ray tracing
-    // pipelines (vkdocs xml/vk.xml:27270, 29884).
+    // pipelines (vk.xml:25591, 28156).
     if (lists(extensions, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)) {
         link(tail, accelerationStructure);
         linkIf(VK_KHR_RAY_QUERY_EXTENSION_NAME, rayQuery);
