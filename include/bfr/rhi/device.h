@@ -641,8 +641,8 @@ public:
     /// have, a region that maps with no memory, an enum value BFR doesn't
     /// have, or more than maxTileMappings regions of either kind,
     /// RhiUnsupported for a region the backend has no form for, as each
-    /// backend says,
-    /// RhiInvalidHandle for a resource or memory that is gone, and
+    /// backend says, or one in a Metal texture's mip tail, which BFR doesn't
+    /// map yet, RhiInvalidHandle for a resource or memory that is gone, and
     /// RhiDeviceFailed when the API refuses.
     [[nodiscard]] virtual core::Result<Token> updateTileMappings(const TileMappingDesc& desc) = 0;
 

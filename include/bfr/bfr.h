@@ -1883,9 +1883,10 @@ typedef struct bfr_buffer_slots {
 // index shaders use. A table the texture's usage does not set has no slot for it, and reads
 // BFR_NO_SLOT.
 typedef struct bfr_texture_slots {
-    // Its index in the texture table; only with sampled usage. A depth-stencil texture's slot reads
-    // its depth on every backend (Vulkan's view of the depth aspect, D3D12's plane 0, Metal's
-    // depth); shaders read no stencil through it.
+    // Its index in the texture table; only with sampled usage. A texture with depth and stencil
+    // reads its depth through its slot on every backend (Vulkan's view of the depth aspect, D3D12's
+    // plane 0, Metal's depth); shaders read no stencil through it. A stencil-only texture's slot
+    // reads its stencil (s8_uint, which D3D12 has no format for).
     uint32_t sampled;
     // Its index in the storage texture table; only with storage usage. On Vulkan and D3D12 shaders
     // reach its mip level 0 through it: Vulkan offsets a storage access by the view's base level,
@@ -4458,7 +4459,8 @@ BFR_API bfr_result bfr_get_sparse_format(
 // work that uses them waits on it. Calls on one queue must not overlap, bfr_submit included. Fails
 // with error_invalid_argument for a queue the device does not have, a region that maps with no
 // memory, or more than max_tile_mappings regions of either kind, error_unsupported for a region the
-// backend has no form for, and error_device_failed when the backend refuses.
+// backend has no form for, or one in a Metal texture's mip tail, which BFR doesn't map yet, and
+// error_device_failed when the backend refuses.
 // token: May be null.
 BFR_API bfr_result bfr_update_tile_mappings(
     bfr_device* device,

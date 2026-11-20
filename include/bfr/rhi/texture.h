@@ -61,8 +61,9 @@ struct BufferSlots {
 /// bfr_pipeline, from creation to destruction: the index shaders use. A table
 /// the texture's usage does not set has no slot for it, and reads kNoSlot.
 struct TextureSlots {
-    /// Its index in the texture table; only with sampled usage. A
-    /// depth-stencil texture's slot reads its depth; no stencil.
+    /// Its index in the texture table; only with sampled usage. A texture
+    /// with depth and stencil reads its depth through it, no stencil; a
+    /// stencil-only one reads its stencil.
     std::uint32_t sampled = kNoSlot;
     /// Its index in the storage texture table; only with storage usage. On
     /// Vulkan and D3D12 shaders reach its mip level 0 through it.
