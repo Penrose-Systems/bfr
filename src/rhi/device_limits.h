@@ -97,27 +97,28 @@ namespace bfr::rhi {
 }
 
 /// Fails with RhiLimitReached when desc asks for acceleration structure,
-/// uniform buffer or partitioned top structure slots on an adapter with no
-/// such table, as caps
-/// say: the backend has nothing to pass them to. Each backend's createDevice
-/// calls it.
+/// uniform buffer or partitioned top structure slots where caps, those of the
+/// device desc makes, have no such table: the adapter has none, or desc does
+/// not ask for the feature it needs, so the backend has nothing to pass them
+/// to. Each backend's createDevice calls it.
 [[nodiscard]] inline core::Result<void> checkTables(const DeviceDesc& desc, const Caps& caps) {
     if (desc.maxBindlessAccelerationStructures != 0 && caps.bindless.maxAccelerationStructures == 0) {
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             "the adapter holds no acceleration structure table (BindlessLimits::"
-                             "maxAccelerationStructures is 0); {} slots were asked for",
+                             "the device holds no acceleration structure table: it lacks acceleration_structure "
+                             "or the adapter its table (BindlessLimits::maxAccelerationStructures is 0); {} slots "
+                             "were asked for",
                              desc.maxBindlessAccelerationStructures);
     }
     if (desc.maxBindlessUniformBuffers != 0 && caps.bindless.maxUniformBuffers == 0) {
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             "the adapter holds no uniform buffer table (BindlessLimits::maxUniformBuffers is 0); {} "
-                             "slots were asked for",
+                             "the device holds no uniform buffer table: the adapter has none "
+                             "(BindlessLimits::maxUniformBuffers is 0); {} slots were asked for",
                              desc.maxBindlessUniformBuffers);
     }
     if (desc.maxBindlessPartitionedTops != 0 && !caps.features.partitionedTop) {
         return core::failure(core::ErrorCode::RhiLimitReached,
-                             "the adapter holds no partitioned top structure table (Features::partitionedTop is "
-                             "false); {} slots were asked for",
+                             "the device holds no partitioned top structure table: it lacks partitioned_top "
+                             "(Features::partitionedTop is false); {} slots were asked for",
                              desc.maxBindlessPartitionedTops);
     }
     return {};

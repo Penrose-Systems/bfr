@@ -8,6 +8,7 @@
 #include <volk.h>
 
 #include <array>
+#include <cstddef>
 #include <span>
 #include <vector>
 
@@ -20,10 +21,13 @@ namespace bfr::rhi::vulkan {
 /// or none at all, available false, where BFR has no form of it at that
 /// version.
 struct VulkanForm {
+    /// The most extensions, and the most members, one form names.
+    static constexpr std::size_t kMaxNames = 2;
+
     bool available = true;
     bool fact = false;
-    std::array<const char*, 2> extensions{};
-    std::array<VkBool32*, 2> members{};
+    std::array<const char*, kMaxNames> extensions{};
+    std::array<VkBool32*, kMaxNames> members{};
 };
 
 /// Each requestable feature's Vulkan form on chain, in kRequestableFeatures'

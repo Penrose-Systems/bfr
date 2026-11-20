@@ -1731,6 +1731,11 @@ bfr_result bfr_get_adapters(bfr_instance* instance, uint32_t* count, bfr_adapter
 
 namespace {
 
+// One bfr_bool for each FeatureRequest bool, so a member added to bfr.yaml's
+// features without one, or the other way round, fails to build here;
+// feature_request.h ties FeatureRequest to kRequestableFeatures.
+static_assert(sizeof(bfr_features) / sizeof(bfr_bool) == sizeof(bfr::rhi::FeatureRequest) / sizeof(bool));
+
 bfr::rhi::FeatureRequest fromC(const bfr_features& features) {
     return {
         .swapchain = features.swapchain != 0,

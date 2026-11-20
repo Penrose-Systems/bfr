@@ -14,6 +14,9 @@
 
 namespace bfr::rhi {
 
+/// The most prerequisites one requestable feature has.
+inline constexpr std::size_t kMaxPrerequisites = 2;
+
 /// A feature a device may be created with: its name in bfr.yaml, its
 /// FeatureRequest member, and where an adapter's caps offer it: its Features
 /// member, else its Sparse member, else, with neither, any host clock
@@ -24,7 +27,7 @@ struct RequestableFeature {
     bool FeatureRequest::* requested = nullptr;
     bool Features::* feature = nullptr;
     bool Sparse::* sparse = nullptr;
-    std::array<bool FeatureRequest::*, 2> prerequisites{};
+    std::array<bool FeatureRequest::*, kMaxPrerequisites> prerequisites{};
     bool noCall = false;
 };
 
@@ -503,6 +506,9 @@ inline constexpr std::array kRequestableFeatures{
                        .requested = &FeatureRequest::sparseShaderResidency,
                        .sparse = &Sparse::shaderResidency},
 };
+
+static_assert(sizeof(FeatureRequest) == kRequestableFeatures.size() * sizeof(bool),
+              "one kRequestableFeatures row for each FeatureRequest member");
 
 /// The index in kRequestableFeatures of the feature requested names.
 [[nodiscard]] constexpr std::size_t requestableIndex(bool FeatureRequest::* requested) {
