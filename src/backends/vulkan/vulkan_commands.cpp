@@ -48,7 +48,11 @@ core::Result<void> checkIndirect(const VulkanBuffer& buffer, std::uint64_t offse
                              "indirect stride {} is not a multiple of 4 of at least the {} bytes of arguments", stride,
                              argumentBytes);
     }
-    if (draws >= 1 && (std::uint64_t{stride} * (draws - 1)) + offset + argumentBytes > buffer.size()) {
+    // The span can't overflow: a 32-bit stride times a 32-bit count leaves
+    // room for the arguments. The offset is compared by subtraction, as it
+    // can be any 64-bit value.
+    const std::uint64_t span = draws >= 1 ? (std::uint64_t{stride} * (draws - 1)) + argumentBytes : 0;
+    if (draws >= 1 && (span > buffer.size() || offset > buffer.size() - span)) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "{} indirect draws of stride {} from offset {} run past the buffer's {} bytes", draws,
                              stride, offset, buffer.size());
@@ -61,7 +65,8 @@ core::Result<void> checkIndirect(const VulkanBuffer& buffer, std::uint64_t offse
 // -04129, and their kin).
 core::Result<void> checkDrawCountAt(const VulkanBuffer& count, std::uint64_t countOffset) {
     constexpr std::uint64_t kAlignment = 4;
-    if (countOffset % kAlignment != 0 || countOffset + sizeof(std::uint32_t) > count.size()) {
+    if (countOffset % kAlignment != 0 || countOffset > count.size() ||
+        count.size() - countOffset < sizeof(std::uint32_t)) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
                              "a draw count at offset {} is not 4-aligned within the count buffer's {} bytes",
                              countOffset, count.size());

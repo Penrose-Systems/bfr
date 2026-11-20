@@ -2583,7 +2583,7 @@ TEST_CASE("Device counts the primitives and invocations of a mesh draw, where it
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
 
-TEST_CASE("Vulkan refuses indirect arguments it doesn't take: offset, stride, or draws past the buffer",
+TEST_CASE("Vulkan refuses indirect arguments it doesn't take: offset, stride, or draws or a count past the buffer",
           "[rhi][agnostic]") {
     const TestBackend backend = GENERATE(eachBackend());
     if (backend.backend != Backend::Vulkan) {
@@ -2607,6 +2607,12 @@ TEST_CASE("Vulkan refuses indirect arguments it doesn't take: offset, stride, or
         CHECK(device.drawIndirect(*list, arguments, 0, kTwoDraws, kShortStride).error().code ==
               Result::ErrorInvalidArgument);
         CHECK(device.drawIndirect(*list, arguments, kDrawBytes, kTwoDraws, kDrawBytes).error().code ==
+              Result::ErrorInvalidArgument);
+        // 4-aligned offsets so large that adding the arguments' bytes wraps.
+        constexpr std::uint64_t kWrappingOffset = ~std::uint64_t{3};
+        CHECK(device.drawIndirect(*list, arguments, kWrappingOffset, 1, 0).error().code ==
+              Result::ErrorInvalidArgument);
+        CHECK(device.drawIndirectCount(*list, arguments, 0, arguments, kWrappingOffset, 1, kDrawBytes).error().code ==
               Result::ErrorInvalidArgument);
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
