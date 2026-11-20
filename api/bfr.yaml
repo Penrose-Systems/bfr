@@ -1704,7 +1704,7 @@ structs:
           bfr_caps_features.sampler_custom_border_color.
       - {name: border_integer, type: bool, doc: "The texture holds integers: border_color_integer applies instead; bfr_caps_features.sampler_integer_border_color."}
       - {name: border_color_integer, type: u32, fixed: 4, doc: "Red, green, blue and alpha bits; a signed format reads them as int32."}
-      - {name: unnormalized_coordinates, type: bool, doc: "Coordinates in texels, not 0 to 1; bfr_caps_features.sampler_unnormalized_coordinates. Vulkan takes such a sampler only with equal min and mag filters, a nearest mip filter, LODs of 0, U and V clamped to the edge or border, no anisotropy and no compare, and refuses others with error_invalid_argument."}
+      - {name: unnormalized_coordinates, type: bool, doc: "Coordinates in texels, not 0 to 1; bfr_caps_features.sampler_unnormalized_coordinates. Vulkan takes such a sampler only with equal min and mag filters, a nearest mip filter, LODs of 0, U and V clamped to the edge or border, no anisotropy and no compare, and refuses others with error_invalid_argument. On Vulkan it samples only textures of one mip level and one layer: a texture's slot views all its levels and layers, and Vulkan leaves sampling more through such a sampler invalid."}
       - {name: lod_average, type: bool, doc: The LOD averaged across a quad; bfr_caps_features.sampler_lod_average.}
 
   shader_code:

@@ -1987,7 +1987,9 @@ typedef struct bfr_sampler_desc {
     // Coordinates in texels, not 0 to 1; bfr_caps_features.sampler_unnormalized_coordinates. Vulkan
     // takes such a sampler only with equal min and mag filters, a nearest mip filter, LODs of 0, U
     // and V clamped to the edge or border, no anisotropy and no compare, and refuses others with
-    // error_invalid_argument.
+    // error_invalid_argument. On Vulkan it samples only textures of one mip level and one layer: a
+    // texture's slot views all its levels and layers, and Vulkan leaves sampling more through such
+    // a sampler invalid.
     bfr_bool unnormalized_coordinates;
     // The LOD averaged across a quad; bfr_caps_features.sampler_lod_average.
     bfr_bool lod_average;
