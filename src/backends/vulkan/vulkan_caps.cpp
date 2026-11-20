@@ -258,7 +258,8 @@ ComputeLimits computeFrom(const PropertyQuery& properties) {
     const VkPhysicalDeviceLimits& core = properties.core.properties.limits;
     return {
         .maxWorkgroupCount = std::to_array(core.maxComputeWorkGroupCount),
-        .maxWorkgroupSize = std::to_array(core.maxComputeWorkGroupSize),
+        .maxWorkgroupSize = {core.maxComputeWorkGroupSize[0], core.maxComputeWorkGroupSize[1],
+                             core.maxComputeWorkGroupSize[2]},
         .maxWorkgroupInvocations = core.maxComputeWorkGroupInvocations,
         .maxSharedMemory = core.maxComputeSharedMemorySize,
         .subgroupSize = properties.vulkan11.subgroupSize,

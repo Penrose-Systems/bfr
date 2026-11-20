@@ -8,6 +8,7 @@
 #include "bfr.hpp"
 
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -439,7 +440,10 @@ std::string text(float value) {
 std::string text(const std::array<std::uint32_t, 2>& value) {
     return std::format("{} {}", value[0], value[1]);
 }
-std::string text(const std::array<std::uint32_t, 3>& value) {
+// A size or count in x, y and z, of 32 or 64 bits; byte arrays print as hex below.
+template <std::unsigned_integral Value>
+    requires(sizeof(Value) > 1)
+std::string text(const std::array<Value, 3>& value) {
     return std::format("{} {} {}", value[0], value[1], value[2]);
 }
 std::string text(const std::string& value) {

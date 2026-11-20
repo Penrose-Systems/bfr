@@ -107,6 +107,12 @@ Limits limitsOf(const D3D12_FEATURE_DATA_D3D12_OPTIONS6& options6) {
 // three resource tables are regions of one heap (createD3D12BindlessLayout),
 // so each may take the whole heap, but together they take no more than it.
 // BFR makes no uniform buffer table, so maxUniformBuffers stays 0.
+// The samplers the shader-visible sampler heap holds: the device's own size
+// where it reports one, else D3D12's fixed one.
+std::uint32_t samplerHeapSizeOf(const SamplerFeatures& sampler) {
+    return sampler.maxSamplerHeapSize != 0 ? sampler.maxSamplerHeapSize : D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE;
+}
+
 BindlessLimits bindlessOf(const SamplerFeatures& sampler) {
     BindlessLimits bindless;
     const std::uint32_t views = sampler.maxViewHeapSize != 0 ? sampler.maxViewHeapSize
@@ -114,8 +120,7 @@ BindlessLimits bindlessOf(const SamplerFeatures& sampler) {
     bindless.maxTextures = views;
     bindless.maxStorageTextures = views;
     bindless.maxStorageBuffers = views;
-    bindless.maxSamplers = sampler.maxSamplerHeapSize != 0 ? sampler.maxSamplerHeapSize
-                                                           : D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE;
+    bindless.maxSamplers = samplerHeapSizeOf(sampler);
     bindless.maxPerStage = views;
     return bindless;
 }
@@ -510,10 +515,10 @@ Caps readCaps(const DXGI_ADAPTER_DESC1& desc, ID3D12Device* device) {
     caps.bindless = bindlessOf(sampler);
     // D3D12 states no limit on samplers with a custom border colour, so any
     // sampler the table holds may have one.
-    caps.limits.maxCustomBorderColorSamplers = caps.bindless.maxSamplers;
+    caps.limits.maxCustomBorderColorSamplers = samplerHeapSizeOf(sampler);
     // A sampler is a descriptor in the sampler table's heap, so the heap holds
     // every sampler the device has.
-    caps.limits.maxSamplerObjects = caps.bindless.maxSamplers;
+    caps.limits.maxSamplerObjects = samplerHeapSizeOf(sampler);
     caps.compute = computeOf(device);
     caps.features = featuresOf(device, sampler);
     caps.memory = memoryOf(desc, device);

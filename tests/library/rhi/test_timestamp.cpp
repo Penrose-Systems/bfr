@@ -57,7 +57,7 @@ std::vector<TimestampStage> listed(const TimestampStages& stages) {
 }
 
 // The ticks a buffer holds, entryBytes apart.
-std::vector<std::uint64_t> ticksIn(std::span<const std::byte> bytes, std::uint32_t entryBytes, std::size_t count) {
+std::vector<std::uint64_t> ticksIn(std::span<const std::byte> bytes, std::uint64_t entryBytes, std::size_t count) {
     std::vector<std::uint64_t> ticks(count);
     for (std::size_t index = 0; index < count; ++index) {
         std::memcpy(&ticks[index], bytes.subspan(index * entryBytes).data(), sizeof(std::uint64_t));

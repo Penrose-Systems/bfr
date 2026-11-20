@@ -2877,7 +2877,7 @@ structs:
       - {name: max_storage_textures, type: u32}
       - {name: max_storage_buffers, type: u32}
       - {name: max_uniform_buffers, type: u32}
-      - {name: max_samplers, type: u32}
+      - {name: max_samplers, type: u64}
       - {name: max_per_stage, type: u32, doc: All of them together that one shader stage can reach.}
       - {name: max_acceleration_structures, type: u32, doc: Top acceleration structures; 0 where the device has no such table.}
 
@@ -2885,9 +2885,9 @@ structs:
     doc: The adapter's compute limits.
     members:
       - {name: max_workgroup_count, type: u32, fixed: 3, doc: "Most workgroups one dispatch makes in x, y and z."}
-      - {name: max_workgroup_size, type: u32, fixed: 3, doc: "Largest workgroup in x, y and z."}
+      - {name: max_workgroup_size, type: u64, fixed: 3, doc: "Largest workgroup in x, y and z."}
       - {name: max_workgroup_invocations, type: u32, doc: Most invocations in one workgroup.}
-      - {name: max_shared_memory, type: u32, doc: Most bytes of workgroup shared memory.}
+      - {name: max_shared_memory, type: u64, doc: Most bytes of workgroup shared memory.}
       - {name: subgroup_size, type: u32, doc: "Invocations in a subgroup (a wave or warp) by default. D3D12 has no default; it reports its minimum."}
       - {name: min_subgroup_size, type: u32}
       - {name: max_subgroup_size, type: u32}
@@ -3240,7 +3240,7 @@ structs:
           that runs graphics. Which families' queues write timestamps, and the stages they take
           outside rendering, are in bfr_queue_family.
       - {name: granularity, type: bool, doc: The backend takes a bfr_timestamp_granularity; where false the value is unused.}
-      - {name: entry_bytes, type: u32, doc: What one timestamp takes in a buffer bfr_resolve_timestamps writes.}
+      - {name: entry_bytes, type: u64, doc: What one timestamp takes in a buffer bfr_resolve_timestamps writes.}
       - {name: host_clocks, type: host_clocks, doc: The clocks bfr_calibrate_timestamps reads.}
 
   caps_sparse:

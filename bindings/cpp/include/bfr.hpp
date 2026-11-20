@@ -2161,7 +2161,7 @@ struct CapsBindless {
     std::uint32_t maxStorageTextures{};
     std::uint32_t maxStorageBuffers{};
     std::uint32_t maxUniformBuffers{};
-    std::uint32_t maxSamplers{};
+    std::uint64_t maxSamplers{};
     /// All of them together that one shader stage can reach.
     std::uint32_t maxPerStage{};
     /// Top acceleration structures; 0 where the device has no such table.
@@ -2173,11 +2173,11 @@ struct CapsCompute {
     /// Most workgroups one dispatch makes in x, y and z.
     std::array<std::uint32_t, 3> maxWorkgroupCount{};
     /// Largest workgroup in x, y and z.
-    std::array<std::uint32_t, 3> maxWorkgroupSize{};
+    std::array<std::uint64_t, 3> maxWorkgroupSize{};
     /// Most invocations in one workgroup.
     std::uint32_t maxWorkgroupInvocations{};
     /// Most bytes of workgroup shared memory.
-    std::uint32_t maxSharedMemory{};
+    std::uint64_t maxSharedMemory{};
     /// Invocations in a subgroup (a wave or warp) by default. D3D12 has no default; it reports its
     /// minimum.
     std::uint32_t subgroupSize{};
@@ -2694,7 +2694,7 @@ struct CapsTimestamps {
     /// The backend takes a bfr_timestamp_granularity; where false the value is unused.
     bool granularity{};
     /// What one timestamp takes in a buffer bfr_resolve_timestamps writes.
-    std::uint32_t entryBytes{};
+    std::uint64_t entryBytes{};
     /// The clocks bfr_calibrate_timestamps reads.
     HostClocks hostClocks{};
 };

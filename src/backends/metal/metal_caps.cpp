@@ -14,7 +14,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -24,10 +23,6 @@ namespace bfr::rhi::metal {
 namespace {
 
 constexpr std::uint32_t kMetal4 = 4;
-
-std::uint32_t clampTo32(std::uint64_t value) {
-    return static_cast<std::uint32_t>(std::min<std::uint64_t>(value, std::numeric_limits<std::uint32_t>::max()));
-}
 
 // Metal defines no most sample count, so every power of two up to 64 is
 // asked, as Godot asks (drivers/metal/metal_device_properties.cpp).
@@ -72,8 +67,8 @@ Limits limitsOf(MTL::Device* device) {
 ComputeLimits computeOf(MTL::Device* device) {
     ComputeLimits compute;
     const MTL::Size threads = device->maxThreadsPerThreadgroup();
-    compute.maxWorkgroupSize = {clampTo32(threads.width), clampTo32(threads.height), clampTo32(threads.depth)};
-    compute.maxSharedMemory = clampTo32(device->maxThreadgroupMemoryLength());
+    compute.maxWorkgroupSize = {threads.width, threads.height, threads.depth};
+    compute.maxSharedMemory = device->maxThreadgroupMemoryLength();
     return compute;
 }
 
@@ -88,7 +83,7 @@ BindlessLimits bindlessOf(MTL::Device* device) {
     bindless.maxTextures = kArgumentBufferResources;
     bindless.maxStorageTextures = kArgumentBufferResources;
     bindless.maxStorageBuffers = kArgumentBufferResources;
-    bindless.maxSamplers = clampTo32(device->maxArgumentBufferSamplerCount());
+    bindless.maxSamplers = device->maxArgumentBufferSamplerCount();
     bindless.maxPerStage = kArgumentBufferResources;
     return bindless;
 }
@@ -316,7 +311,7 @@ Timestamps timestampsOf(MTL::Device* device, bool timestamps) {
     }
     return {.insideRendering = {.vertex = true, .fragment = true},
             .granularity = true,
-            .entryBytes = clampTo32(device->sizeOfCounterHeapEntry(MTL4::CounterHeapTypeTimestamp)),
+            .entryBytes = device->sizeOfCounterHeapEntry(MTL4::CounterHeapTypeTimestamp),
             .hostClocks = {}};
 }
 

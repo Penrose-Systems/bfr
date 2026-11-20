@@ -82,7 +82,7 @@ struct BindlessLimits {
     std::uint32_t maxStorageTextures = 0;
     std::uint32_t maxStorageBuffers = 0;
     std::uint32_t maxUniformBuffers = 0;
-    std::uint32_t maxSamplers = 0;
+    std::uint64_t maxSamplers = 0;
     std::uint32_t maxPerStage = 0;
     std::uint32_t maxAccelerationStructures = 0;
 };
@@ -92,9 +92,9 @@ inline constexpr std::size_t kWorkgroupDimensions = 3;
 
 struct ComputeLimits {
     std::array<std::uint32_t, kWorkgroupDimensions> maxWorkgroupCount{};
-    std::array<std::uint32_t, kWorkgroupDimensions> maxWorkgroupSize{};
+    std::array<std::uint64_t, kWorkgroupDimensions> maxWorkgroupSize{};
     std::uint32_t maxWorkgroupInvocations = 0;
-    std::uint32_t maxSharedMemory = 0;
+    std::uint64_t maxSharedMemory = 0;
     std::uint32_t subgroupSize = 0;
     std::uint32_t minSubgroupSize = 0;
     std::uint32_t maxSubgroupSize = 0;
@@ -640,7 +640,7 @@ struct QueueFamily {
 struct Timestamps {
     TimestampStages insideRendering;
     bool granularity = false;
-    std::uint32_t entryBytes = 0;
+    std::uint64_t entryBytes = 0;
     HostClocks hostClocks;
 };
 
