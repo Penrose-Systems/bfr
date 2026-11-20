@@ -1080,10 +1080,10 @@ struct TextureRange {
 /// stage, draw_indirect, index_input, early_fragment_tests, late_fragment_tests and color_output
 /// are MTLStageAll. None set waits on, or holds back, no work; on D3D12 that is SYNC_NONE, which
 /// also promises the resources the barrier names are not used before it, or after it, in the same
-/// submit. A stage of a feature the device was created without, or one the list's queue family does
-/// not run, fails with error_unsupported on Vulkan (VUID-VkMemoryBarrier2-srcStageMask-03934 and
-/// its kin, VUID-vkCmdPipelineBarrier2-srcStageMask-09673) and D3D12 ("Command Queue Sync
-/// Compatibility").
+/// submit. A stage the list's queue family does not run fails with error_unsupported on Vulkan
+/// (VUID-vkCmdPipelineBarrier2-srcStageMask-09673) and D3D12 ("Command Queue Sync Compatibility"),
+/// as does, on Vulkan only, a stage of a feature the device was created without (VUID-
+/// VkMemoryBarrier2-srcStageMask-03934 and its kin).
 struct Stages {
     /// Every command.
     bool all{};
@@ -4635,9 +4635,9 @@ public:
     /// visibility Apple's Swift API defaults to (MTL4CommandEncoder
     /// barrier(afterQueueStages:beforeStages:visibilityOptions:)). Fails with
     /// error_invalid_argument for a layout BFR doesn't have, a texture range bfr_texture_range
-    /// refuses, or a stage and access the backend doesn't pair, error_unsupported for a stage the
-    /// device or the list's queue family doesn't have, and error_invalid_handle for a texture that
-    /// is gone.
+    /// refuses, or a stage and access the backend doesn't pair, error_unsupported for a stage or
+    /// access the list's queue family doesn't take, as bfr_stages says, or, on Vulkan, one of a
+    /// feature the device lacks, and error_invalid_handle for a texture that is gone.
     [[nodiscard]] Expected<void> barrier(CommandList commandList, const BarrierDesc& desc) const;
 
     /// Records copies of regions from buffer to texture, which is in layout copy_dst, outside

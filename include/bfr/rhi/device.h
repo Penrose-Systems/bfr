@@ -297,8 +297,9 @@ public:
     /// dependency, so any number are taken with no allocation.
     /// Fails with RhiInvalidCall for a layout BFR doesn't have, a range past
     /// the texture, or a stage and access the backend doesn't pair,
-    /// RhiUnsupported for a stage the device or the list's queue family
-    /// doesn't have, and RhiInvalidHandle when the list or a texture is gone.
+    /// RhiUnsupported for a stage or access the list's queue family doesn't
+    /// take, or, on Vulkan, one of a feature the device lacks, and
+    /// RhiInvalidHandle when the list or a texture is gone.
     [[nodiscard]] virtual core::Result<void> barrier(CommandListHandle commandList, const BarrierDesc& desc) = 0;
 
     /// Records copies of regions from buffer to texture, which is in layout

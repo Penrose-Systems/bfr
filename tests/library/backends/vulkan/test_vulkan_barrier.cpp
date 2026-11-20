@@ -146,7 +146,13 @@ TEST_CASE("Vulkan device records more barriers than a chunk holds, and records n
         INFO(failureOf(recorded));
         CHECK(recorded.has_value());
         // Past the texture: the whole desc is refused before a chunk is
-        // recorded, so the list still holds only the barriers above.
+        // recorded. Each barrier before the last names CopySrc, a layout its
+        // layer is not in, which validation would report at submit had any
+        // been recorded.
+        for (TextureBarrier& layer : layers) {
+            layer.before = scopeIn(TextureLayout::CopySrc);
+            layer.layoutBefore = TextureLayout::CopySrc;
+        }
         layers.back().range = {.layer = kChunkedLayers, .layerCount = 1};
         CHECK(resultOf(device.barrier(*list, {.globals = globals, .textures = layers})) ==
               Result::ErrorInvalidArgument);
