@@ -3831,12 +3831,15 @@ functions:
     doc: >-
       Records draw_count draws as bfr_draw does, each with the
       bfr_draw_indirect_args buffer holds from offset, stride bytes apart.
-      buffer has indirect usage; work that wrote the arguments is ordered
-      before by a bfr_barrier. Fails with error_unsupported for draw_count
-      above 1 where the device's (bfr_get_device_caps) multi_draw_indirect is
-      false, as it always is on Metal, whose indirect draw has no count, and,
-      on D3D12, a stride not in the device's indirect_strides; and as bfr_draw
-      does.
+      buffer has indirect usage; work that wrote the arguments is ordered before
+      by a bfr_barrier. Fails with error_unsupported for draw_count above 1
+      where the device's (bfr_get_device_caps) multi_draw_indirect is false, as
+      it always is on Metal, whose indirect draw has no count, and, on D3D12, a
+      stride not in the device's indirect_strides; with error_invalid_argument,
+      on Vulkan, for an offset or, past one draw, a stride that is not a
+      multiple of 4, a stride smaller than the arguments, draws running past the
+      buffer, or draw_count above bfr_caps_limits.max_draw_indirect_count, and
+      on D3D12 for a stride smaller than the arguments; and as bfr_draw does.
     returns: result
     params:
       - {name: device, type: device}

@@ -35,13 +35,20 @@ namespace {
 // (-drawCount-00476, -00528, -07088; -stride-03110, -03142, -07096); and
 // draws that run past the buffer (-drawCount-00487, -00488, -00539, -00540,
 // -07089, -07090; -maxDrawCount-03111, -03143, -07097;
-// VUID-vkCmdDispatchIndirect-offset-00407). draws is drawCount, or a count
-// draw's maxDrawCount.
+// VUID-vkCmdDispatchIndirect-offset-00407); and, for a draw that isn't
+// counted, more draws than maxDrawIndirectCount (-drawCount-02719; a count
+// draw's limit is on the count the GPU reads, -countBuffer-02717). draws is
+// drawCount, or a count draw's maxDrawCount.
 core::Result<void> checkIndirect(const VulkanBuffer& buffer, std::uint64_t offset, std::uint32_t draws,
-                                 std::uint32_t stride, std::uint64_t argumentBytes, bool counted) {
+                                 std::uint32_t stride, std::uint64_t argumentBytes, bool counted,
+                                 std::uint32_t maxDrawIndirectCount) {
     constexpr std::uint64_t kAlignment = 4;
     if (offset % kAlignment != 0) {
         return core::failure(core::ErrorCode::RhiInvalidCall, "indirect offset {} is not a multiple of 4", offset);
+    }
+    if (!counted && draws > maxDrawIndirectCount) {
+        return core::failure(core::ErrorCode::RhiInvalidCall, "{} indirect draws is more than the device's {}", draws,
+                             maxDrawIndirectCount);
     }
     if ((counted || draws > 1) && (stride % kAlignment != 0 || stride < argumentBytes)) {
         return core::failure(core::ErrorCode::RhiInvalidCall,
@@ -257,7 +264,8 @@ core::Result<void> VulkanDevice::drawIndirect(CommandListHandle commandList, Buf
     if (auto checked = checkDrawCount(drawCount, features_.multiDrawIndirect); !checked) {
         return checked;
     }
-    if (auto checked = checkIndirect(**found, offset, drawCount, stride, sizeof(VkDrawIndirectCommand), false);
+    if (auto checked = checkIndirect(**found, offset, drawCount, stride, sizeof(VkDrawIndirectCommand), false,
+                                     caps_.limits.maxDrawIndirectCount);
         !checked) {
         return checked;
     }
@@ -279,7 +287,8 @@ core::Result<void> VulkanDevice::drawIndexedIndirect(CommandListHandle commandLi
     if (auto checked = checkDrawCount(drawCount, features_.multiDrawIndirect); !checked) {
         return checked;
     }
-    if (auto checked = checkIndirect(**found, offset, drawCount, stride, sizeof(VkDrawIndexedIndirectCommand), false);
+    if (auto checked = checkIndirect(**found, offset, drawCount, stride, sizeof(VkDrawIndexedIndirectCommand), false,
+                                     caps_.limits.maxDrawIndirectCount);
         !checked) {
         return checked;
     }
@@ -306,7 +315,8 @@ core::Result<void> VulkanDevice::drawIndirectCount(CommandListHandle commandList
     if (auto checked = checkCountDraws(features_.drawIndirectCount); !checked) {
         return checked;
     }
-    if (auto checked = checkIndirect(**found, offset, maxDrawCount, stride, sizeof(VkDrawIndirectCommand), true);
+    if (auto checked = checkIndirect(**found, offset, maxDrawCount, stride, sizeof(VkDrawIndirectCommand), true,
+                                     caps_.limits.maxDrawIndirectCount);
         !checked) {
         return checked;
     }
@@ -337,7 +347,8 @@ core::Result<void> VulkanDevice::drawIndexedIndirectCount(CommandListHandle comm
     if (auto checked = checkCountDraws(features_.drawIndirectCount); !checked) {
         return checked;
     }
-    if (auto checked = checkIndirect(**found, offset, maxDrawCount, stride, sizeof(VkDrawIndexedIndirectCommand), true);
+    if (auto checked = checkIndirect(**found, offset, maxDrawCount, stride, sizeof(VkDrawIndexedIndirectCommand), true,
+                                     caps_.limits.maxDrawIndirectCount);
         !checked) {
         return checked;
     }
@@ -359,7 +370,9 @@ core::Result<void> VulkanDevice::dispatchIndirect(CommandListHandle commandList,
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
-    if (auto checked = checkIndirect(**found, offset, 1, 0, sizeof(VkDispatchIndirectCommand), false); !checked) {
+    if (auto checked = checkIndirect(**found, offset, 1, 0, sizeof(VkDispatchIndirectCommand), false,
+                                     caps_.limits.maxDrawIndirectCount);
+        !checked) {
         return checked;
     }
     table_.vkCmdDispatchIndirect((*list)->buffer, (*found)->buffer(), offset);
@@ -396,7 +409,7 @@ core::Result<void> VulkanDevice::drawMeshIndirect(CommandListHandle commandList,
         return checked;
     }
     if (auto checked = checkIndirect(**found, offset, drawCount, stride, sizeof(VkDrawMeshTasksIndirectCommandEXT),
-                                     false);
+                                     false, caps_.limits.maxDrawIndirectCount);
         !checked) {
         return checked;
     }
@@ -427,7 +440,7 @@ core::Result<void> VulkanDevice::drawMeshIndirectCount(CommandListHandle command
         return checked;
     }
     if (auto checked = checkIndirect(**found, offset, maxDrawCount, stride, sizeof(VkDrawMeshTasksIndirectCommandEXT),
-                                     true);
+                                     true, caps_.limits.maxDrawIndirectCount);
         !checked) {
         return checked;
     }

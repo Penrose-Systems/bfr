@@ -216,9 +216,13 @@ public:
     /// buffer holds from offset, stride bytes apart. buffer has indirect
     /// usage; work that wrote the arguments is ordered before by a barrier.
     /// Fails with RhiUnsupported for drawCount above 1 where the device's
-    /// Features::multiDrawIndirect is false (checkDrawCount), and, on D3D12, a stride not in
-    /// DeviceDesc::indirectStrides; and as draw does, or with RhiInvalidHandle
-    /// when the buffer is gone.
+    /// Features::multiDrawIndirect is false (checkDrawCount), and, on D3D12,
+    /// a stride not in DeviceDesc::indirectStrides; with RhiInvalidCall, on
+    /// Vulkan, for an offset or, past one draw, a stride that is not a
+    /// multiple of 4, a stride smaller than the arguments, draws running past
+    /// the buffer, or drawCount above Limits::maxDrawIndirectCount, and on
+    /// D3D12 for a stride smaller than the arguments; and as draw does, or
+    /// with RhiInvalidHandle when the buffer is gone.
     [[nodiscard]] virtual core::Result<void> drawIndirect(CommandListHandle commandList, BufferHandle buffer,
                                                           std::uint64_t offset, std::uint32_t drawCount,
                                                           std::uint32_t stride) = 0;
