@@ -42,7 +42,9 @@ inline constexpr std::uint32_t kVulkanMotionInstanceStride = 160;
 /// version, and below that the struct of each extension in extensions,
 /// linked only where its extension is there, since chaining one a device
 /// lacks is invalid. Below 1.3, the extensions 1.3 made core stand in for its
-/// struct, and below 1.4 global priority's does. Queried, it says what an
+/// struct, and below 1.4 those of global priority and of the shader features
+/// 1.4 made core do (VUID-VkDeviceCreateInfo-pNext-10360 forbids them beside
+/// it). Queried, it says what an
 /// adapter has (extensions being those it lists); filled from a request
 /// (EnabledFeatures), what a device enables. core heads the chain a query's
 /// or a create info's pNext takes; the chain points into itself, so it stays
@@ -87,6 +89,10 @@ struct DeviceFeatures {
     /// vulkan14 holds its feature, and this is not chained
     /// (VUID-VkDeviceCreateInfo-pNext-10360).
     VkPhysicalDeviceGlobalPriorityQueryFeaturesKHR globalPriority{};
+    /// Below 1.4, the shader features 1.4 made core, each of its extension.
+    VkPhysicalDeviceShaderSubgroupRotateFeaturesKHR subgroupRotate{};
+    VkPhysicalDeviceShaderFloatControls2FeaturesKHR floatControls2{};
+    VkPhysicalDeviceShaderExpectAssumeFeaturesKHR expectAssume{};
     /// A device with no queues needs its maintenance9.
     VkPhysicalDeviceMaintenance9FeaturesKHR maintenance9{};
     /// Primitive restart on list topologies.

@@ -44,20 +44,20 @@ VulkanForm core12(DeviceFeatures& chain, Listed /*listed*/) {
     return {.members = {&(chain.vulkan12.*Member)}};
 }
 
-// Below 1.4 BFR enables none of the extensions 1.4 made these of, so there it
-// has no form of them.
-template <VkBool32 VkPhysicalDeviceVulkan14Features::* Member>
-VulkanForm core14(DeviceFeatures& chain, Listed /*listed*/) {
-    if (chain.version < VK_API_VERSION_1_4) {
-        return {.available = false};
-    }
-    return {.members = {&(chain.vulkan14.*Member)}};
-}
-
 // A feature of an extension's struct.
 template <auto Struct, auto Member>
 VulkanForm extension(const char* name, DeviceFeatures& chain) {
     return {.extensions = {name}, .members = {&(chain.*Struct.*Member)}};
+}
+
+// A shader feature 1.4 made core: its member of vulkan14, or below 1.4 of
+// the struct of the extension it was promoted from.
+template <VkBool32 VkPhysicalDeviceVulkan14Features::* Member, auto Struct, auto ExtensionMember>
+VulkanForm core14(const char* name, DeviceFeatures& chain) {
+    if (chain.version >= VK_API_VERSION_1_4) {
+        return {.members = {&(chain.vulkan14.*Member)}};
+    }
+    return extension<Struct, ExtensionMember>(name, chain);
 }
 
 // A member of a portability driver's struct (VK_KHR_portability_subset, which
@@ -620,11 +620,34 @@ constexpr std::array kVulkanFeatures{
                       return extension<&D::maintenance4, &VkPhysicalDeviceMaintenance4FeaturesKHR::maintenance4>(
                           VK_KHR_MAINTENANCE_4_EXTENSION_NAME, chain);
                   }},
-    VulkanFeature{.requested = &FeatureRequest::subgroupRotate, .form = core14<&Core14::shaderSubgroupRotate>},
+    VulkanFeature{.requested = &FeatureRequest::subgroupRotate,
+                  .form =
+                      [](D& chain, Listed /*listed*/) {
+                          return core14<&Core14::shaderSubgroupRotate, &D::subgroupRotate,
+                                        &VkPhysicalDeviceShaderSubgroupRotateFeaturesKHR::shaderSubgroupRotate>(
+                              VK_KHR_SHADER_SUBGROUP_ROTATE_EXTENSION_NAME, chain);
+                      }},
     VulkanFeature{.requested = &FeatureRequest::subgroupRotateClustered,
-                  .form = core14<&Core14::shaderSubgroupRotateClustered>},
-    VulkanFeature{.requested = &FeatureRequest::floatControls2, .form = core14<&Core14::shaderFloatControls2>},
-    VulkanFeature{.requested = &FeatureRequest::expectAssume, .form = core14<&Core14::shaderExpectAssume>},
+                  .form =
+                      [](D& chain, Listed /*listed*/) {
+                          return core14<&Core14::shaderSubgroupRotateClustered, &D::subgroupRotate,
+                                        &VkPhysicalDeviceShaderSubgroupRotateFeaturesKHR::shaderSubgroupRotateClustered>(
+                              VK_KHR_SHADER_SUBGROUP_ROTATE_EXTENSION_NAME, chain);
+                      }},
+    VulkanFeature{.requested = &FeatureRequest::floatControls2,
+                  .form =
+                      [](D& chain, Listed /*listed*/) {
+                          return core14<&Core14::shaderFloatControls2, &D::floatControls2,
+                                        &VkPhysicalDeviceShaderFloatControls2FeaturesKHR::shaderFloatControls2>(
+                              VK_KHR_SHADER_FLOAT_CONTROLS_2_EXTENSION_NAME, chain);
+                      }},
+    VulkanFeature{.requested = &FeatureRequest::expectAssume,
+                  .form =
+                      [](D& chain, Listed /*listed*/) {
+                          return core14<&Core14::shaderExpectAssume, &D::expectAssume,
+                                        &VkPhysicalDeviceShaderExpectAssumeFeaturesKHR::shaderExpectAssume>(
+                              VK_KHR_SHADER_EXPECT_ASSUME_EXTENSION_NAME, chain);
+                      }},
     // Core from 1.3, so a fact; an extension with no features struct below it.
     VulkanFeature{.requested = &FeatureRequest::nonSemanticInfo,
                   .form = [](D& chain, Listed /*listed*/) -> VulkanForm {

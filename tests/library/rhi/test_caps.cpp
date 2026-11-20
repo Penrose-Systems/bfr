@@ -314,12 +314,18 @@ TEST_CASE("Device has the features it was created with and no others, and the li
         const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc, const Caps& caps) {
                                           desc.features.samplerAnisotropy = caps.features.samplerAnisotropy;
                                           desc.features.dynamicTopology = caps.features.dynamicTopology;
+                                          desc.features.subgroupRotate = caps.features.subgroupRotate;
+                                          desc.features.floatControls2 = caps.features.floatControls2;
+                                          desc.features.expectAssume = caps.features.expectAssume;
                                       }};
         const Caps adapter = capsOf(made.instance, kFirstAdapter);
         const auto device = made.device.deviceCaps();
         INFO(failureOf(device));
         REQUIRE(device.has_value());
         CHECK(device->features.samplerAnisotropy == adapter.features.samplerAnisotropy);
+        CHECK(device->features.subgroupRotate == adapter.features.subgroupRotate);
+        CHECK(device->features.floatControls2 == adapter.features.floatControls2);
+        CHECK(device->features.expectAssume == adapter.features.expectAssume);
         CHECK(device->features.samplerAnisotropyNearestMip ==
               (adapter.features.samplerAnisotropy && adapter.features.samplerAnisotropyNearestMip));
         CHECK(device->features.dynamicTopology == adapter.features.dynamicTopology);
