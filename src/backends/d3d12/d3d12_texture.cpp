@@ -772,7 +772,7 @@ core::Result<SparseFormat> D3D12Device::sparseFormat(const SparseFormatDesc& des
                              D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES, desc.tileBytes);
     }
     // What D3D12 tiles: the aspect textureTiling gives, of a 2D or cube
-    // texture, or a 3D one where the tier has them (sparseOf). It tiles no 1D
+    // texture, or a 3D one where the device has them (its caps' Sparse). It tiles no 1D
     // texture: Sparse has no such cap, and Diligent refuses one and takes a
     // cube as 2D (RenderDeviceBase.cpp, CheckSparseTextureFormatSupport).
     const FormatBlock& block = blockOf(desc.format);
@@ -780,8 +780,8 @@ core::Result<SparseFormat> D3D12Device::sparseFormat(const SparseFormatDesc& des
                             ? block.bytes != 0
                             : desc.aspect == TextureAspect::Depth && block.depthBytes != 0;
     const bool dimension = desc.dimension == TextureDimension::D3
-                               ? sparse_.textures3D
-                               : desc.dimension != TextureDimension::D1 && sparse_.textures2D;
+                               ? caps_.sparse.textures3D
+                               : desc.dimension != TextureDimension::D1 && caps_.sparse.textures2D;
     // A depth texture is asked of as its depth format, as formatCapsFor asks.
     const DxgiFormats formats = dxgiFormatsFor(desc.format);
     const DXGI_FORMAT dxgi = formats.depth != DXGI_FORMAT_UNKNOWN ? formats.depth : formats.texture;

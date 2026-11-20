@@ -566,8 +566,8 @@ inline constexpr std::array kRequestableFeatures{
 
 /// caps, an adapter's, as a device created with request has them where the
 /// backend enables nothing: each requestable feature true only where asked
-/// for, and no host clock without timestampCalibration. D3D12's and Metal's
-/// device caps.
+/// for, what follows one false with it (as Vulkan's caps derive them), and no
+/// host clock without timestampCalibration. D3D12's and Metal's device caps.
 [[nodiscard]] inline Caps requestedOnly(Caps caps, const FeatureRequest& request) {
     for (const RequestableFeature& feature : kRequestableFeatures) {
         const bool asked = request.*feature.requested;
@@ -581,6 +581,13 @@ inline constexpr std::array kRequestableFeatures{
             caps.timestamps.hostClocks = {};
         }
     }
+    Features& features = caps.features;
+    features.samplerAnisotropyNearestMip = features.samplerAnisotropyNearestMip && features.samplerAnisotropy;
+    features.samplerAnisotropyNearestFilter = features.samplerAnisotropyNearestFilter && features.samplerAnisotropy;
+    features.accelerationStructureSerialization = features.accelerationStructureSerialization &&
+                                                  features.accelerationStructure;
+    caps.sparse.mixedResources = caps.sparse.mixedResources && caps.sparse.binding;
+    caps.sparse.layerTails = caps.sparse.layerTails && caps.sparse.binding;
     return caps;
 }
 

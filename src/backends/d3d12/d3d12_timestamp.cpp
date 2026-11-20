@@ -143,6 +143,9 @@ core::Result<CalibratedTimestamps> D3D12Device::calibrateTimestamps(std::uint32_
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "D3D12's GetClockCalibration reads only QueryPerformanceCounter");
     }
+    if (!caps_.timestamps.hostClocks.performanceCounter) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "the device was created without timestamp_calibration");
+    }
     UINT64 gpu = 0;
     UINT64 host = 0;
     if (const HRESULT result = queues_[queue]->queue->GetClockCalibration(&gpu, &host); FAILED(result)) {

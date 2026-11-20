@@ -451,8 +451,6 @@ private:
     Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter_;
     std::size_t heapCount_;
     DeviceDesc desc_;
-    // The adapter's sparse caps, which mapping and heaps follow.
-    Sparse sparse_;
     // The features createGraphicsPipeline checks a desc against, and how
     // depth-stencil attachments resolve.
     // What the device has, which caps gives; features_ and resolve_ are its.

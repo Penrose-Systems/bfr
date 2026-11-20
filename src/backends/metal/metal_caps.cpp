@@ -171,6 +171,9 @@ Features featuresOf(MTL::Device* device) {
     features.atomicInt64Texture = has64BitAtomics(device);
     // A render pass attachment's depthPlane names a 3D texture's slice.
     features.volumeColorTargets = true;
+    // MTL::TextureTypeCubeArray (metal_texture.cpp typeFor), from Apple3 as
+    // Godot gates it (metal_device_properties.cpp:147).
+    features.imageCubeArray = device->supportsFamily(MTL::GPUFamilyApple3);
     // MTL::RenderCommandEncoder::setDepthBias takes a clamp
     // (MTLRenderCommandEncoder.hpp:199), with no caps bit.
     features.depthBiasClamp = true;

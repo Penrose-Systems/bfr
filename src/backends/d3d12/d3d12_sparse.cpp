@@ -71,7 +71,7 @@ core::Result<SparseMemoryHandle> D3D12Device::createSparseMemory(const SparseMem
         if (!buffer) {
             return std::unexpected(std::move(buffer.error()));
         }
-        if (!desc.texture.isNull() && !sparse_.mixedResources) {
+        if (!desc.texture.isNull() && !caps_.sparse.mixedResources) {
             return core::failure(core::ErrorCode::RhiUnsupported,
                                  "on ResourceHeapTier 1 a heap holds buffers or textures, not both");
         }
@@ -90,7 +90,7 @@ core::Result<SparseMemoryHandle> D3D12Device::createSparseMemory(const SparseMem
                        .VisibleNodeMask = 0},
         .Alignment = multisampled ? D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT
                                   : D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
-        .Flags = sparse_.mixedResources ? D3D12_HEAP_FLAG_NONE : kind,
+        .Flags = caps_.sparse.mixedResources ? D3D12_HEAP_FLAG_NONE : kind,
     };
     D3D12SparseMemory made{.heap = {}, .flags = heapDesc.Flags};
     if (const HRESULT result = device_->CreateHeap(&heapDesc, IID_PPV_ARGS(&made.heap)); FAILED(result)) {
@@ -135,7 +135,7 @@ core::Result<Token> D3D12Device::updateTileMappings(const TileMappingDesc& desc)
     }
     // A queue of every family maps tiles where the device has tiled resources
     // (queueFamiliesOf).
-    if (!sparse_.binding) {
+    if (!caps_.sparse.binding) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "the device has no tiled resources, so queue {} maps none", desc.queue);
     }

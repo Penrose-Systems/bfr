@@ -273,7 +273,6 @@ core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rh
     // A runtime without it answers E_NOINTERFACE and leaves device11_ null.
     static_cast<void>(made->device_.As(&made->device11_));
     static_cast<void>(made->device_.As(&made->device1_));
-    made->sparse_ = sparseOf(made->device_.Get());
     made->caps_ = caps;
     made->features_ = caps.features;
     made->resolve_ = caps.resolve;

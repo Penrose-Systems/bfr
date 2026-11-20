@@ -268,6 +268,10 @@ Features featuresOf(ID3D12Device* device, const SamplerFeatures& sampler) {
     // BFR presents through a DXGI swapchain (d3d12_swapchain.cpp), which
     // takes any device's direct queue, with no caps bit.
     features.swapchain = true;
+    // DXGI_FORMAT_B4G4R4A4_UNORM is optional: it is the device's where
+    // CheckFeatureSupport says it makes textures of it (formatCapsFor).
+    const auto bgra4 = formatCapsFor(device, Format::Bgra4Unorm);
+    features.formatBgra4Unorm = bgra4.has_value() && bgra4->copySrc;
     // d3d12.h has no caps bit for a storage texture indexed by a value that
     // varies within a wave, so storageTextureNonUniformIndexing stays false.
     addMinimumFeatures(features);
