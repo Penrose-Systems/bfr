@@ -666,3 +666,47 @@ TEST_CASE("Device refuses an attachment drawing to layers past the texture's, or
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
+
+TEST_CASE("Vulkan and Metal refuse an attachment holding fewer layers than the rendering draws", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    if (backend.backend == Backend::D3d12) {
+        SKIP("D3D12's views name each attachment's own layers");
+    }
+    std::vector<std::string> messages;
+    {
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        const TextureDesc desc{.dimension = TextureDimension::D2,
+                               .format = Format::Rgba8Unorm,
+                               .width = kWidth,
+                               .height = kHeight,
+                               .depth = 1,
+                               .layers = kLayers,
+                               .mipLevels = 1,
+                               .samples = 1,
+                               .usage = {.colorAttachment = true}};
+        Texture first = created(device, desc);
+        Texture second = created(device, desc);
+        auto pool = device.createCommandPool({.queue = 0, .listCount = kPoolLists});
+        REQUIRE(pool.has_value());
+        const auto list = pool->beginCommands();
+        REQUIRE(list.has_value());
+        for (const Texture* texture : {&first, &second}) {
+            CHECK(device.textureBarrier(*list, *texture, TextureLayout::Undefined, TextureLayout::ColorTarget, {})
+                      .has_value());
+        }
+        // Attachment 0 sets the rendering's count; attachment 1's own range
+        // fits its texture, but from its layer the texture has 1 layer left.
+        const auto drawing = [&](std::uint32_t secondLayer) {
+            RenderingDesc rendering{};
+            rendering.colorAttachmentCount = 2;
+            rendering.colorAttachments.at(0) = {.texture = first, .layerCount = kLayers};
+            rendering.colorAttachments.at(1) = {.texture = second, .layer = secondLayer};
+            return rendering;
+        };
+        CHECK(device.beginRendering(*list, {}, drawing(kLayers - 1)).error().code == Result::ErrorInvalidArgument);
+        CHECK(device.beginRendering(*list, {}, drawing(0)).has_value());
+        CHECK(device.endRendering(*list).has_value());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}

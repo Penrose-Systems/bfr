@@ -95,9 +95,10 @@ VkExtent2D mipExtent(VkExtent2D extent, std::uint32_t mipLevel) {
 // with RhiUnsupported for a 3D texture made with none, which Vulkan draws to
 // only through 2D views of an image made for them (Features::
 // volumeColorTargets, and not sparse), and RhiInvalidCall past its levels or
-// layers: there is no such view.
+// layers, by its own layerCount or the rendering's renderingLayers: there is
+// no such view.
 core::Result<VkImageView> attachmentViewOf(const VulkanTexture& texture, std::uint32_t mipLevel, std::uint32_t layer,
-                                           std::uint32_t layerCount) {
+                                           std::uint32_t layerCount, std::uint32_t renderingLayers) {
     if (texture.size().depth > 1 && !texture.hasAttachmentViews()) {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "Vulkan draws to a 3D texture only through 2D views of its slices, which this one has "
@@ -108,8 +109,10 @@ core::Result<VkImageView> attachmentViewOf(const VulkanTexture& texture, std::ui
         return core::failure(core::ErrorCode::RhiInvalidCall, "the texture has no level {} or no layer {}", mipLevel,
                              layer);
     }
-    if (auto checked = checkAttachmentLayers(layer, layerCount, texture.attachmentLayers(mipLevel)); !checked) {
-        return std::unexpected(std::move(checked.error()));
+    for (const std::uint32_t count : {layerCount, renderingLayers}) {
+        if (auto checked = checkAttachmentLayers(layer, count, texture.attachmentLayers(mipLevel)); !checked) {
+            return std::unexpected(std::move(checked.error()));
+        }
     }
     return view;
 }
@@ -675,9 +678,7 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
     VkRenderingAttachmentInfo stencil{};
     VkExtent2D extent{};
     std::optional<AcquiredImage> image;
-    // Vulkan and Metal draw one count of layers, as NVRHI takes it: the
-    // depth-stencil attachment's, else color attachment 0's (misc.cpp:166-184).
-    std::uint32_t layerCount = desc.colorAttachmentCount != 0 ? desc.colorAttachments.at(0).layerCount : 0;
+    const std::uint32_t layerCount = renderingLayerCount(desc);
     for (std::uint32_t i = 0; i < desc.colorAttachmentCount; ++i) {
         const ColorAttachment& attachment = desc.colorAttachments.at(i);
         VkRenderingAttachmentInfo& color = colors.at(i);
@@ -703,6 +704,10 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
             if (!acquired) {
                 return std::unexpected(acquired.error());
             }
+            // The swapchain's images have one layer (vulkan_swapchain.cpp).
+            if (auto checked = checkAttachmentLayers(0, layerCount, 1); !checked) {
+                return checked;
+            }
             image = *acquired;
             extent = image->extent;
             if (attachment.texture.isNull()) {
@@ -715,7 +720,8 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
-        auto view = attachmentViewOf(**texture, attachment.mipLevel, attachment.layer, attachment.layerCount);
+        auto view = attachmentViewOf(**texture, attachment.mipLevel, attachment.layer, attachment.layerCount,
+                                     layerCount);
         if (!view) {
             return std::unexpected(std::move(view.error()));
         }
@@ -726,7 +732,7 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
             if (!target) {
                 return std::unexpected(std::move(target.error()));
             }
-            auto targetView = attachmentViewOf(**target, 0, 0, 1);
+            auto targetView = attachmentViewOf(**target, 0, 0, 1, layerCount);
             if (!targetView) {
                 return std::unexpected(std::move(targetView.error()));
             }
@@ -751,7 +757,8 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
         }
         // Each aspect the format has gets its slot, with its own ops. A
         // read-only attachment keeps what it holds without writing it.
-        auto view = attachmentViewOf(**texture, depthStencil.mipLevel, depthStencil.layer, depthStencil.layerCount);
+        auto view = attachmentViewOf(**texture, depthStencil.mipLevel, depthStencil.layer, depthStencil.layerCount,
+                                     layerCount);
         if (!view) {
             return std::unexpected(std::move(view.error()));
         }
@@ -770,7 +777,7 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
             if (!target) {
                 return std::unexpected(std::move(target.error()));
             }
-            auto targetView = attachmentViewOf(**target, 0, 0, 1);
+            auto targetView = attachmentViewOf(**target, 0, 0, 1, layerCount);
             if (!targetView) {
                 return std::unexpected(std::move(targetView.error()));
             }
@@ -783,7 +790,6 @@ core::Result<void> VulkanDevice::beginRendering(CommandListHandle commandList, S
             stencil.resolveMode = resolveModeFor(depthStencil.stencilResolve);
         }
         extent = mipExtent((*texture)->extent(), depthStencil.mipLevel);
-        layerCount = depthStencil.layerCount;
     }
     if (image.has_value()) {
         // Rendered to earlier in this list, the swapchain is already in its chain.

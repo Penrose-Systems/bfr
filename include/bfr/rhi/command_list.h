@@ -234,8 +234,10 @@ struct ColorAttachment {
     /// a cube's faces are its layers, and a 3D texture's depth slices are,
     /// where Features::volumeColorTargets. Vulkan and Metal draw one count of
     /// layers in a rendering: the depth-stencil attachment's where there is
-    /// one, else color attachment 0's. On Vulkan each level and layer of a
-    /// texture with an attachment usage is a view made with it.
+    /// one, else color attachment 0's. There, beginRendering fails with
+    /// RhiInvalidCall when an attachment, resolve texture or swapchain image
+    /// has fewer layers than that from its first. On Vulkan each level and
+    /// layer of a texture with an attachment usage is a view made with it.
     std::uint32_t mipLevel = 0;
     std::uint32_t layer = 0;
     std::uint32_t layerCount = 1;

@@ -615,6 +615,7 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
     // A swapchain's image is never a signed integer format.
     std::array<Format, kMaxColorTargets> formats{};
     MetalSwapchain* chain = nullptr;
+    const std::uint32_t layers = renderingLayerCount(desc);
     for (std::uint32_t i = 0; i < desc.colorAttachmentCount; ++i) {
         const ColorAttachment& attachment = desc.colorAttachments.at(i);
         if (i == 0 && !swapchain.isNull()) {
@@ -626,6 +627,10 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
             CA::MetalDrawable* drawable = chain->drawable();
             if (drawable == nullptr) {
                 return core::failure(core::ErrorCode::RhiInvalidCall, "no image is acquired");
+            }
+            // A drawable's texture is one 2D image.
+            if (auto checked = checkAttachmentLayers(0, layers, 1); !checked) {
+                return checked;
             }
             // The swapchain's image is attachment 0, or what a texture there
             // resolves into.
@@ -639,10 +644,12 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
-        if (auto checked = checkAttachmentLayers(attachment.layer, attachment.layerCount,
-                                                 attachmentLayers(**texture, attachment.mipLevel));
-            !checked) {
-            return checked;
+        for (const std::uint32_t count : {attachment.layerCount, layers}) {
+            if (auto checked = checkAttachmentLayers(attachment.layer, count,
+                                                     attachmentLayers(**texture, attachment.mipLevel));
+                !checked) {
+                return checked;
+            }
         }
         colors.at(i) = (*texture)->texture.get();
         formats.at(i) = (*texture)->format;
@@ -650,6 +657,9 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
             auto target = textureFor(attachment.resolveTexture);
             if (!target) {
                 return std::unexpected(std::move(target.error()));
+            }
+            if (auto checked = checkAttachmentLayers(0, layers, attachmentLayers(**target, 0)); !checked) {
+                return checked;
             }
             resolves.at(i) = (*target)->texture.get();
         }
@@ -662,10 +672,12 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
         if (!texture) {
             return std::unexpected(std::move(texture.error()));
         }
-        if (auto checked = checkAttachmentLayers(depthStencil.layer, depthStencil.layerCount,
-                                                 attachmentLayers(**texture, depthStencil.mipLevel));
-            !checked) {
-            return checked;
+        for (const std::uint32_t count : {depthStencil.layerCount, layers}) {
+            if (auto checked = checkAttachmentLayers(depthStencil.layer, count,
+                                                     attachmentLayers(**texture, depthStencil.mipLevel));
+                !checked) {
+                return checked;
+            }
         }
         if (auto checked = checkReadOnlyDepth(depthStencil, (*texture)->format); !checked) {
             return checked;
@@ -678,6 +690,9 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
             auto target = textureFor(depthStencil.resolveTexture);
             if (!target) {
                 return std::unexpected(std::move(target.error()));
+            }
+            if (auto checked = checkAttachmentLayers(0, layers, attachmentLayers(**target, 0)); !checked) {
+                return checked;
             }
             depthResolve = (*target)->texture.get();
         }
@@ -758,17 +773,9 @@ core::Result<void> MetalDevice::beginRendering(CommandListHandle commandList, Sw
             stencilAttachment->setClearStencil(depthStencil.clearStencil);
         }
     }
-    // One count of layers is drawn: the depth-stencil attachment's, else color
-    // attachment 0's, as NVRHI takes it (misc.cpp:166-184). Like Godot, a pass
-    // of one layer is not layered (metal3_objects.cpp:1294-1296); the
-    // descriptor is reused, so that is set too.
-    std::uint32_t layers = 0;
-    if (depth != nullptr) {
-        layers = depthStencil.layerCount;
-    }
-    else if (desc.colorAttachmentCount != 0) {
-        layers = desc.colorAttachments.at(0).layerCount;
-    }
+    // Like Godot, a pass of one layer is not layered
+    // (metal3_objects.cpp:1294-1296); the descriptor is reused, so that is set
+    // too.
     pass->setRenderTargetArrayLength(layers > 1 ? layers : 0);
     MTL4::RenderCommandEncoder* encoder = (*list)->buffer->renderCommandEncoder(pass);
     if (encoder == nullptr) {

@@ -232,7 +232,12 @@ struct RecordState {
 /// layers, or a 3D texture's depth slices at its mip level. Each backend's
 /// beginRendering calls it for each attachment it looks up: past them,
 /// Vulkan's rendering is invalid (VUID-VkRenderingInfo-viewMask-06069, -10859,
-/// -10860), and D3D12's and Metal's views have no such layers.
+/// -10860), and D3D12's and Metal's views have no such layers. Vulkan and
+/// Metal also call it with renderingLayerCount for every attachment, resolve
+/// target and swapchain image, as every view they draw to holds the
+/// rendering's layers (-10859, -10860; Metal's renderTargetArrayLength is
+/// "the number of active layers that all attachments need to have for
+/// layered rendering").
 [[nodiscard]] inline core::Result<void> checkAttachmentLayers(std::uint32_t layer, std::uint32_t layerCount,
                                                               std::uint32_t available) {
     if (layerCount == 0 || std::uint64_t{layer} + layerCount > available) {
@@ -241,6 +246,16 @@ struct RecordState {
                              layer, available);
     }
     return {};
+}
+
+/// The one count of layers Vulkan's and Metal's renderings draw, as NVRHI
+/// takes it (misc.cpp:166-184): the depth-stencil attachment's where there is
+/// one, else color attachment 0's.
+[[nodiscard]] inline std::uint32_t renderingLayerCount(const RenderingDesc& desc) {
+    if (!desc.depthStencil.texture.isNull()) {
+        return desc.depthStencil.layerCount;
+    }
+    return desc.colorAttachmentCount != 0 ? desc.colorAttachments.at(0).layerCount : 0;
 }
 
 /// Fails with RhiUnsupported when a queue of family writes no timestamp at

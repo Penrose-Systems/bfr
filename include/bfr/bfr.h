@@ -1520,8 +1520,10 @@ typedef struct bfr_color_attachment {
     // where bfr_caps_features.volume_color_targets.
     uint32_t layer;
     // The layers drawn to from layer. Vulkan and Metal draw one count of layers in a rendering: the
-    // depth-stencil attachment's where there is one, else color attachment 0's. On Vulkan each
-    // level and layer of a texture with an attachment usage is a view made with it.
+    // depth-stencil attachment's where there is one, else color attachment 0's. There,
+    // bfr_begin_rendering fails with error_invalid_argument when an attachment, resolve texture or
+    // swapchain image has fewer layers than that from its first. On Vulkan each level and layer of
+    // a texture with an attachment usage is a view made with it.
     uint32_t layer_count;
     // What it holds at the start; 0 is load.
     bfr_load_op load_op;
