@@ -3,6 +3,7 @@
 // every format. Each case runs on every backend the build has.
 
 #include "bfr.hpp"
+#include "bfr/bfr.h"
 #include "bfr_test_support.h"
 
 #include <catch2/catch_message.hpp>
@@ -10,6 +11,7 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
 #include <array>
@@ -260,6 +262,102 @@ TEST_CASE("Device reports its memory budget heap by heap", "[rhi][caps][agnostic
         REQUIRE(device.has_value());
 
         CHECK_THAT(budgetProblems(*device, memory), Catch::Matchers::IsEmpty());
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device refuses a feature asked for without one it needs, naming both, and one BFR has no call for",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        auto created = createInstance(recordingInto(backend, messages), kValidation);
+        INFO(failureOf(created));
+        REQUIRE(created.has_value());
+        const Instance instance = std::move(*created);
+
+        const auto unmet = instance.createDevice(
+            testDeviceWith(instance, kFirstAdapter, kNoWindow, [](DeviceDesc& desc) {
+                desc.features.rayQuery = true;
+                desc.features.rayQueryGraphics = true;
+            }));
+        REQUIRE_FALSE(unmet.has_value());
+        CHECK(unmet.error().code == Result::ErrorInvalidArgument);
+        CHECK_THAT(unmet.error().message.text(),
+                   Catch::Matchers::ContainsSubstring("ray_query needs acceleration_structure") &&
+                       !Catch::Matchers::ContainsSubstring("ray_query_graphics needs"));
+
+        const auto noCall = instance.createDevice(
+            testDeviceWith(instance, kFirstAdapter, kNoWindow,
+                           [](DeviceDesc& desc) { desc.features.meshShadingRate = true; }));
+        REQUIRE_FALSE(noCall.has_value());
+        CHECK(noCall.error().code == Result::ErrorUnsupported);
+        CHECK_THAT(noCall.error().message.text(), Catch::Matchers::ContainsSubstring("BFR has no call for: "
+                                                                                     "mesh_shading_rate"));
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device has the features it was created with and no others, and the limits that follow them",
+          "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc, const Caps& caps) {
+                                          desc.features.samplerAnisotropy = caps.features.samplerAnisotropy;
+                                          desc.features.dynamicTopology = caps.features.dynamicTopology;
+                                      }};
+        const Caps adapter = capsOf(made.instance, kFirstAdapter);
+        const auto device = made.device.deviceCaps();
+        INFO(failureOf(device));
+        REQUIRE(device.has_value());
+        CHECK(device->features.samplerAnisotropy == adapter.features.samplerAnisotropy);
+        CHECK(device->features.samplerAnisotropyNearestMip ==
+              (adapter.features.samplerAnisotropy && adapter.features.samplerAnisotropyNearestMip));
+        CHECK(device->features.dynamicTopology == adapter.features.dynamicTopology);
+        // Asked for nothing else, it has none of the rest.
+        CHECK_THAT(failing({{!device->features.swapchain, "swapchain"},
+                            {!device->features.geometryShader, "geometryShader"},
+                            {!device->features.meshShader, "meshShader"},
+                            {!device->features.accelerationStructure, "accelerationStructure"},
+                            {!device->features.bufferAddress, "bufferAddress"},
+                            {!device->features.rayQuery, "rayQuery"},
+                            {!device->features.multiview, "multiview"},
+                            {!device->features.imageCubeArray, "imageCubeArray"},
+                            {!device->features.robustBufferAccess, "robustBufferAccess"},
+                            {!device->sparse.binding, "sparse.binding"},
+                            {!device->timestamps.hostClocks.monotonic, "hostClocks.monotonic"},
+                            {device->mesh.maxMeshOutputVertices == 0, "mesh.maxMeshOutputVertices"},
+                            {device->rayTracing.maxGeometries == 0, "rayTracing.maxGeometries"},
+                            {device->bindless.maxAccelerationStructures == 0, "bindless.maxAccelerationStructures"}}),
+                   Catch::Matchers::IsEmpty());
+        // What no request turns on stays as the adapter says.
+        CHECK(device->features.sampleMask == adapter.features.sampleMask);
+        CHECK(device->features.compressionBc == adapter.features.compressionBc);
+        CHECK(device->limits.maxTexture2d == adapter.limits.maxTexture2d);
+    }
+    CHECK_THAT(messages, Catch::Matchers::IsEmpty());
+}
+
+TEST_CASE("Device refuses a call of a feature it was not created with, though the adapter has it", "[rhi][agnostic]") {
+    const TestBackend backend = GENERATE(eachBackend());
+    std::vector<std::string> messages;
+    {
+        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const Device& device = made.device;
+        const Caps adapter = capsOf(made.instance, kFirstAdapter);
+        if (!adapter.features.samplerAnisotropy && !adapter.features.dynamicTopology) {
+            SKIP("the adapter has neither anisotropy nor dynamic topology");
+        }
+        if (adapter.features.samplerAnisotropy) {
+            constexpr std::uint32_t kAnisotropy = 4;
+            CHECK(resultOf(device.createSampler({.maxAnisotropy = kAnisotropy})) == Result::ErrorUnsupported);
+        }
+        if (adapter.features.dynamicTopology) {
+            CHECK(inList(device, 0, [](const Device& on, CommandList list) {
+                      return bfr_set_topology(on.get(), list.get(), BFR_TOPOLOGY_TRIANGLE_STRIP);
+                  }) == Result::ErrorUnsupported);
+        }
     }
     CHECK_THAT(messages, Catch::Matchers::IsEmpty());
 }
