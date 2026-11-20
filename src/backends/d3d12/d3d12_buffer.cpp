@@ -13,6 +13,7 @@
 #include "rhi/buffer_check.h"
 #include "rhi/enum_check.h"
 #include "rhi/name_check.h"
+#include "rhi/resource_feature_check.h"
 
 #include <d3d12.h>
 #include <D3D12MemAlloc.h>
@@ -161,6 +162,9 @@ core::Result<void> D3D12Device::runGarbageCollection() {
 
 core::Result<BufferHandle> D3D12Device::createBuffer(const BufferDesc& desc) {
     if (auto checked = checkBufferDesc(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkSparseBuffer(desc, caps_.sparse); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkObjectName(features_, desc.name); !checked) {

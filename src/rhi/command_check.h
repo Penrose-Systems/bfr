@@ -179,8 +179,9 @@ struct RecordState {
 }
 
 /// Fails with RhiUnsupported for more than one indirect draw in a call where
-/// the device's Features::multiDrawIndirect is false. Metal's indirect draws
-/// call it first, since Metal's indirect draw has no count.
+/// the device's Features::multiDrawIndirect is false
+/// (VUID-vkCmdDrawIndirect-drawCount-02718 and its kin). Each backend's
+/// indirect draws call it.
 [[nodiscard]] inline core::Result<void> checkDrawCount(std::uint32_t drawCount, bool multiDrawIndirect) {
     if (drawCount > 1 && !multiDrawIndirect) {
         return core::failure(core::ErrorCode::RhiUnsupported,
@@ -191,7 +192,8 @@ struct RecordState {
 }
 
 /// Fails with RhiUnsupported where the device's Features::drawIndirectCount
-/// is false. Metal's count draws return it, since Metal has none.
+/// is false (VUID-vkCmdDrawIndirectCount-None-04445 and its kin). Each
+/// backend's count draws call it; Metal's return it, since Metal has none.
 [[nodiscard]] inline core::Result<void> checkCountDraws(bool drawIndirectCount) {
     if (!drawIndirectCount) {
         return core::failure(core::ErrorCode::RhiUnsupported,

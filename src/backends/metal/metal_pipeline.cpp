@@ -454,6 +454,9 @@ core::Result<PipelineHandle> MetalDevice::createGraphicsPipeline(const GraphicsP
     if (auto checked = checkTopology(desc.topology, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
+    if (auto checked = checkPipelineFeatures(desc, features_); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
     if (auto checked = checkMeshStages(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }

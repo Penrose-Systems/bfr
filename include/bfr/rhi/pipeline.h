@@ -137,6 +137,8 @@ struct BlendState {
     BlendFactor dstAlpha = BlendFactor::Zero;
     BlendOp alphaOp = BlendOp::Add;
     std::uint32_t writeMask = 0;
+
+    constexpr bool operator==(const BlendState&) const = default;
 };
 
 /// One color target a graphics pipeline renders to.

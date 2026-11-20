@@ -6,8 +6,11 @@
 #include "bfr/rhi/pipeline.h"
 #include "rhi/enum_check.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 
 namespace bfr::rhi {
 
@@ -58,9 +61,8 @@ namespace bfr::rhi {
 
 /// Fails with RhiUnsupported when desc asks for multisampling the device's
 /// features lack: alphaToOne, sample shading, or a sampleMask leaving one of
-/// the pipeline's samples out. D3D12's and Metal's createGraphicsPipeline
-/// call it after checkGraphicsPipelineDesc, for the forms they lack; Vulkan
-/// passes them through.
+/// the pipeline's samples out. Each backend's createGraphicsPipeline calls it
+/// after checkGraphicsPipelineDesc.
 [[nodiscard]] inline core::Result<void> checkMultisample(const GraphicsPipelineDesc& desc, const Features& features) {
     if (desc.alphaToOne && !features.alphaToOne) {
         return core::failure(core::ErrorCode::RhiUnsupported, "the device has no alpha to one (Features::alphaToOne)");
@@ -74,6 +76,51 @@ namespace bfr::rhi {
         return core::failure(core::ErrorCode::RhiUnsupported,
                              "the device writes every sample; sampleMask {:#x} leaves some out (Features::sampleMask)",
                              desc.sampleMask);
+    }
+    return {};
+}
+
+/// Whether topology is a list, which restarts only with Features::listRestart.
+[[nodiscard]] constexpr bool isList(Topology topology) {
+    return topology == Topology::TriangleList || topology == Topology::LineList || topology == Topology::PointList;
+}
+
+/// Fails with RhiUnsupported when desc asks for a fixed-function setting the
+/// device's features lack: depth clamping, wireframe fill, a depth bias
+/// clamped, color targets that blend differently (Features::independentBlend),
+/// or primitive restart on a list. Vulkan's rules (VUID-VkPipelineRasterizationStateCreateInfo-depthClampEnable-00782,
+/// -polygonMode-01507, VUID-VkGraphicsPipelineCreateInfo-pDynamicStates-00754,
+/// VUID-VkPipelineColorBlendStateCreateInfo-pAttachments-00605,
+/// VUID-VkPipelineInputAssemblyStateCreateInfo-topology-06252) hold on every
+/// backend, as their features do. Each backend's createGraphicsPipeline calls
+/// it after checkGraphicsPipelineDesc; a mesh pipeline assembles no input, so
+/// it restarts nothing.
+[[nodiscard]] inline core::Result<void> checkPipelineFeatures(const GraphicsPipelineDesc& desc,
+                                                              const Features& features) {
+    if (desc.raster.depthClamp && !features.depthClamp) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "the device clamps no depth (Features::depthClamp)");
+    }
+    if (desc.raster.fill == FillMode::Wireframe && !features.wireframe) {
+        return core::failure(core::ErrorCode::RhiUnsupported, "the device fills no wireframe (Features::wireframe)");
+    }
+    const bool biased = desc.raster.depthBias != 0 || desc.raster.depthBiasSlope != 0;
+    if (biased && desc.raster.depthBiasClamp != 0 && !features.depthBiasClamp) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device clamps no depth bias; depthBiasClamp is {} (Features::depthBiasClamp)",
+                             desc.raster.depthBiasClamp);
+    }
+    const auto targets = std::span{desc.colorTargets}.first(
+        std::min<std::size_t>(desc.colorTargetCount, kMaxColorTargets));
+    if (!features.independentBlend && std::ranges::any_of(targets, [&targets](const ColorTarget& target) {
+            return target.blend != targets.front().blend;
+        })) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device blends every color target alike (Features::independentBlend)");
+    }
+    if (desc.mesh.code.empty() && desc.primitiveRestart != PrimitiveRestart::Off && isList(desc.topology) &&
+        !features.listRestart) {
+        return core::failure(core::ErrorCode::RhiUnsupported,
+                             "the device restarts only strips and fans, not lists (Features::listRestart)");
     }
     return {};
 }

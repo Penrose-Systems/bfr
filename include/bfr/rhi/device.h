@@ -213,8 +213,8 @@ public:
     /// Records drawCount draws as draw does, each with the DrawIndirectArgs
     /// buffer holds from offset, stride bytes apart. buffer has indirect
     /// usage; work that wrote the arguments is ordered before by a barrier.
-    /// Fails with RhiUnsupported for drawCount above 1 on Metal, whose
-    /// indirect draw has no count, and, on D3D12, a stride not in
+    /// Fails with RhiUnsupported for drawCount above 1 where the device's
+    /// Features::multiDrawIndirect is false (checkDrawCount), and, on D3D12, a stride not in
     /// DeviceDesc::indirectStrides; and as draw does, or with RhiInvalidHandle
     /// when the buffer is gone.
     [[nodiscard]] virtual core::Result<void> drawIndirect(CommandListHandle commandList, BufferHandle buffer,
@@ -230,8 +230,9 @@ public:
 
     /// Records drawIndirect's draws, as many as the 32-bit count countBuffer
     /// holds at countOffset when the GPU runs it, at most maxDrawCount.
-    /// countBuffer has indirect usage. Fails with RhiUnsupported on Metal,
-    /// which has none, and as drawIndirect does.
+    /// countBuffer has indirect usage. Fails with RhiUnsupported where the
+    /// device's Features::drawIndirectCount is false (checkCountDraws), as on
+    /// Metal, which has none, and as drawIndirect does.
     [[nodiscard]] virtual core::Result<void> drawIndirectCount(CommandListHandle commandList, BufferHandle buffer,
                                                                std::uint64_t offset, BufferHandle countBuffer,
                                                                std::uint64_t countOffset, std::uint32_t maxDrawCount,
@@ -362,7 +363,8 @@ public:
     /// A buffer as desc says, with a slot in the storage buffer table when
     /// its usage is storage. Cold: it frees buffers the GPU is done with, so
     /// it is not for the frame path. Fails with RhiInvalidCall for memory BFR
-    /// doesn't have, RhiOutOfMemory when the API says the memory ran
+    /// doesn't have, RhiUnsupported for a sparse buffer the device's Sparse
+    /// lacks (checkSparseBuffer), RhiOutOfMemory when the API says the memory ran
     /// out, RhiLimitReached at the device's maximum of buffers or of storage
     /// or uniform buffer slots, and RhiDeviceFailed when the API refuses the desc or
     /// gives no buffer.
@@ -389,7 +391,8 @@ public:
 
     /// A texture as desc says, in device memory, with a slot in each bindless
     /// table its usage names. Cold: it frees textures the GPU is done with.
-    /// Fails with RhiOutOfMemory when the API says memory ran out,
+    /// Fails with RhiUnsupported for a cube array or sparse texture the
+    /// device lacks (checkTextureFeatures), RhiOutOfMemory when the API says memory ran out,
     /// RhiLimitReached at the device's maximum of textures or of a table's
     /// slots, and RhiDeviceFailed when the API refuses the desc or gives no
     /// texture.
@@ -459,9 +462,8 @@ public:
     /// Undefined is an unused one. Fails with RhiInvalidCall for a desc with
     /// an enum value or format BFR doesn't have, or more than kMaxColorTargets
     /// targets, RhiUnsupported for a topology the backend has no form for
-    /// (Metal's fan), and, on D3D12 and Metal, for an alphaToOne,
-    /// minSampleShading or sampleMask whose feature the device lacks,
-    /// RhiInvalidHandle when desc.cache is gone, RhiLimitReached at the
+    /// (Metal's fan), and for a setting whose feature the device lacks
+    /// (checkMultisample, checkPipelineFeatures), RhiInvalidHandle when desc.cache is gone, RhiLimitReached at the
     /// device's maximum, and RhiDeviceFailed when the API refuses the code,
     /// the desc or the cache, with what it said.
     [[nodiscard]] virtual core::Result<PipelineHandle> createGraphicsPipeline(const GraphicsPipelineDesc& desc) = 0;
@@ -521,7 +523,8 @@ public:
 
     /// A pool of desc.count queries of desc.type. Cold. Fails with
     /// RhiInvalidCall for a type BFR doesn't have, RhiUnsupported where
-    /// Features::queries is false, RhiLimitReached at maxQueryPools, and
+    /// Features::queries is false or the device lacks the type's statistics
+    /// (checkQueryPoolFeatures), RhiLimitReached at maxQueryPools, and
     /// RhiDeviceFailed when the API refuses.
     [[nodiscard]] virtual core::Result<QueryPoolHandle> createQueryPool(const QueryPoolDesc& desc) = 0;
 
@@ -546,8 +549,9 @@ public:
     /// endQuery on the same list. precise asks an Occlusion query for an exact
     /// count, where Features::occlusionQueryPrecise. An Occlusion query is
     /// begun inside rendering, into the pool its RenderingDesc's
-    /// occlusionQueries names. Fails with RhiInvalidHandle for a list or pool
-    /// that is gone.
+    /// occlusionQueries names. Fails with RhiUnsupported for precise where
+    /// Features::occlusionQueryPrecise is false, and RhiInvalidHandle for a
+    /// list or pool that is gone.
     [[nodiscard]] virtual core::Result<void> beginQuery(CommandListHandle commandList, QueryPoolHandle pool,
                                                         std::uint32_t index, bool precise) = 0;
 

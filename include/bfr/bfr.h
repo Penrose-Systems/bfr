@@ -4260,9 +4260,9 @@ BFR_API bfr_result bfr_dispatch(
 
 // Records draw_count draws as bfr_draw does, each with the bfr_draw_indirect_args buffer holds from
 // offset, stride bytes apart. buffer has indirect usage; work that wrote the arguments is ordered
-// before by a bfr_barrier. Fails with error_unsupported for draw_count above 1 on Metal, whose
-// indirect draw has no count, and, on D3D12, a stride not in the device's indirect_strides; and as
-// bfr_draw does.
+// before by a bfr_barrier. Fails with error_unsupported for draw_count above 1 where the device's
+// (bfr_get_device_caps) multi_draw_indirect is false, as it always is on Metal, whose indirect draw
+// has no count, and, on D3D12, a stride not in the device's indirect_strides; and as bfr_draw does.
 // offset: Bytes into the buffer.
 // stride: Bytes between two draws' arguments.
 BFR_API bfr_result bfr_draw_indirect(
@@ -4287,7 +4287,8 @@ BFR_API bfr_result bfr_draw_indexed_indirect(
 
 // Records bfr_draw_indirect's draws, as many as the 32-bit count count_buffer holds at count_offset
 // when the GPU runs it, at most max_draw_count. count_buffer has indirect usage. Fails with
-// error_unsupported on Metal, which has none, and as bfr_draw_indirect does.
+// error_unsupported where the device's draw_indirect_count is false, as it always is on Metal,
+// which has none, and as bfr_draw_indirect does.
 // offset: Bytes into the buffer.
 // count_offset: Bytes into count_buffer.
 // stride: Bytes between two draws' arguments.
@@ -4470,8 +4471,9 @@ BFR_API void bfr_destroy_command_list(bfr_device* device, bfr_command_list comma
 
 // Creates a buffer, as desc says. Not for the frame path: it frees buffers the GPU is done with.
 // Fails with error_invalid_argument for memory BFR doesn't have, error_out_of_memory when the
-// backend says the memory ran out, error_limit_reached at the device's maximum of buffers, and
-// error_device_failed when the backend refuses the desc or gives no buffer.
+// backend says the memory ran out, error_unsupported for a sparse or sparse_aliased buffer the
+// device's bfr_caps_sparse (bfr_get_device_caps) lacks, error_limit_reached at the device's maximum
+// of buffers, and error_device_failed when the backend refuses the desc or gives no buffer.
 BFR_API bfr_result bfr_create_buffer(
     bfr_device* device,
     const bfr_buffer_desc* desc,
@@ -4496,9 +4498,12 @@ BFR_API bfr_result bfr_get_buffer_slots(
 BFR_API void bfr_destroy_buffer(bfr_device* device, bfr_buffer buffer);
 
 // Creates a texture, as desc says. Not for the frame path: it frees textures the GPU is done with.
-// Fails with error_out_of_memory when the backend says memory ran out, error_limit_reached at the
-// device's maximum of textures, and error_device_failed when the backend refuses the desc or gives
-// no texture.
+// Fails with error_unsupported for a cube texture of more than 6 layers where the device's
+// (bfr_get_device_caps) image_cube_array is false, and for a sparse texture its bfr_caps_sparse
+// lacks: binding, textures_2d (2D and cube) or textures_3d, none for 1D, samples_n for n samples,
+// and aliased for sparse_aliased; error_out_of_memory when the backend says memory ran out,
+// error_limit_reached at the device's maximum of textures, and error_device_failed when the backend
+// refuses the desc or gives no texture.
 BFR_API bfr_result bfr_create_texture(
     bfr_device* device,
     const bfr_texture_desc* desc,
@@ -4547,11 +4552,13 @@ BFR_API bfr_result bfr_create_compute_pipeline(
 // Creates a graphics pipeline, as desc says, before returning. Not for the frame path, as
 // bfr_create_compute_pipeline is not. A desc.cache is used as there. A target of format undefined
 // is an unused one. Fails with error_invalid_argument for a desc with more than max_color_targets
-// targets, error_unsupported for a topology the backend has no form for (Metal's fan) and, on D3D12
-// and Metal, for an alpha_to_one, min_sample_shading or sample_mask whose feature the device lacks,
-// error_invalid_handle when desc.cache is gone, error_limit_reached at the device's maximum of
-// pipelines, and error_device_failed when the backend refuses the code, the desc or the cache; the
-// message carries what it said.
+// targets, error_unsupported for a topology the backend has no form for (Metal's fan) and for a
+// setting whose feature the device (bfr_get_device_caps) lacks: alpha_to_one, min_sample_shading
+// (sample_rate_shading), a sample_mask leaving samples out, depth_clamp, wireframe fill, a
+// depth_bias_clamp with depth bias, color targets that blend differently (independent_blend), and
+// primitive_restart on a list topology (list_restart); error_invalid_handle when desc.cache is
+// gone, error_limit_reached at the device's maximum of pipelines, and error_device_failed when the
+// backend refuses the code, the desc or the cache; the message carries what it said.
 BFR_API bfr_result bfr_create_graphics_pipeline(
     bfr_device* device,
     const bfr_graphics_pipeline_desc* desc,
@@ -4653,7 +4660,9 @@ BFR_API bfr_result bfr_calibrate_timestamps(
 
 // Creates a pool of desc's count queries of desc's type. Not for the frame path. Fails with
 // error_invalid_argument for a type BFR does not have, error_unsupported where
-// bfr_caps_features.queries is false, error_limit_reached at the device's max_query_pools, and
+// bfr_caps_features.queries is false or, of the device (bfr_get_device_caps), pipeline_statistics
+// for a pipeline_statistics pool, or mesh_statistics for a mesh_primitives_generated pool or one
+// counting task or mesh invocations, error_limit_reached at the device's max_query_pools, and
 // error_device_failed when the backend refuses.
 BFR_API bfr_result bfr_create_query_pool(
     bfr_device* device,
@@ -4680,9 +4689,10 @@ BFR_API bfr_result bfr_reset_queries(
     uint32_t count);
 
 // Records the start of counting into the pool's query index, ended by bfr_end_query on the same
-// list. precise asks an occlusion query for an exact count, where
-// bfr_caps_features.occlusion_query_precise. An occlusion query is begun inside rendering, into the
-// pool the rendering's bfr_rendering_desc.occlusion_queries names.
+// list. precise asks an occlusion query for an exact count, where the device's
+// (bfr_get_device_caps) occlusion_query_precise; elsewhere it fails with error_unsupported. An
+// occlusion query is begun inside rendering, into the pool the rendering's
+// bfr_rendering_desc.occlusion_queries names.
 BFR_API bfr_result bfr_begin_query(
     bfr_device* device,
     bfr_command_list command_list,

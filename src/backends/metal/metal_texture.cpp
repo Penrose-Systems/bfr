@@ -16,6 +16,7 @@
 #include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
 #include "rhi/name_check.h"
+#include "rhi/resource_feature_check.h"
 
 #include <Foundation/NSTypes.hpp>
 #include <Metal/MTL4CommandBuffer.hpp>
@@ -194,6 +195,9 @@ core::Result<MetalTexture*> MetalDevice::textureFor(TextureHandle texture) {
 
 core::Result<TextureHandle> MetalDevice::createTexture(const TextureDesc& desc) {
     if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkTextureFeatures(desc, features_, caps_.sparse); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkObjectName(features_, desc.name); !checked) {

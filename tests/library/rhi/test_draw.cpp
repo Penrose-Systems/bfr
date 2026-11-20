@@ -2614,7 +2614,10 @@ TEST_CASE("Vulkan refuses indirect arguments it doesn't take: offset, stride, or
     }
     std::vector<std::string> messages;
     {
-        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc, const Caps& caps) {
+                                          desc.features.multiDrawIndirect = caps.features.multiDrawIndirect;
+                                          desc.features.drawIndirectCount = caps.features.drawIndirectCount;
+                                      }};
         const Device& device = made.device;
         constexpr std::uint64_t kDrawBytes = 16;
         constexpr std::uint32_t kTwoDraws = 2;

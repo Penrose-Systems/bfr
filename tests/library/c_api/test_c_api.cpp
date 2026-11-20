@@ -161,7 +161,8 @@ struct Instance {
 
 // A device on the first adapter that presents headless, destroyed at scope end.
 struct HeadlessDevice {
-    explicit HeadlessDevice(bfr_instance* instance) {
+    /// With swapchains and what wanted asks for.
+    explicit HeadlessDevice(bfr_instance* instance, const bfr_features& wanted = {}) {
         std::uint32_t count = 0;
         REQUIRE(bfr_get_adapters(instance, &count, nullptr) == BFR_RESULT_SUCCESS);
         const bfr_swapchain_query headless{.next = nullptr, .window = kHeadless};
@@ -171,7 +172,7 @@ struct HeadlessDevice {
                 BFR_RESULT_ERROR_PRESENT_UNSUPPORTED) {
                 continue;
             }
-            bfr_features features{};
+            bfr_features features = wanted;
             features.swapchain = BFR_TRUE;
             const bfr_queue_desc queue = queueOn(instance, adapter, &kHeadless);
             const bfr_device_desc desc{.next = nullptr,
@@ -782,7 +783,12 @@ TEST_CASE("C API passes sparse calls through, and refuses what is not sparse or 
     const bfr_backend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     const Instance instance{backend, messages};
-    const HeadlessDevice device{instance.instance};
+    bfr_caps caps{};
+    REQUIRE(bfr_get_caps(instance.instance, 0, &caps) == BFR_RESULT_SUCCESS);
+    bfr_features sparseFeatures{};
+    sparseFeatures.sparse_binding = caps.sparse.binding;
+    sparseFeatures.sparse_buffers = caps.sparse.buffers;
+    const HeadlessDevice device{instance.instance, sparseFeatures};
     bfr_buffer_desc desc{.next = nullptr,
                          .size = kSize,
                          .memory = BFR_BUFFER_MEMORY_DEVICE,
@@ -824,8 +830,6 @@ TEST_CASE("C API passes sparse calls through, and refuses what is not sparse or 
     CHECK(bfr_update_tile_mappings(device.device, &nullRegions, nullptr) == BFR_RESULT_ERROR_INVALID_ARGUMENT);
     bfr_destroy_buffer(device.device, plain);
 
-    bfr_caps caps{};
-    REQUIRE(bfr_get_caps(instance.instance, 0, &caps) == BFR_RESULT_SUCCESS);
     if (caps.sparse.buffers == BFR_FALSE) {
         SKIP("the adapter makes no sparse buffers");
     }

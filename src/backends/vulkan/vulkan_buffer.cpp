@@ -11,6 +11,7 @@
 #include "rhi/enum_check.h"
 #include "rhi/name_check.h"
 #include "rhi/ray_tracing_check.h"
+#include "rhi/resource_feature_check.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_result.h"
@@ -364,6 +365,9 @@ core::Result<void> VulkanDevice::runGarbageCollection() {
 
 core::Result<BufferHandle> VulkanDevice::createBuffer(const BufferDesc& desc) {
     if (auto checked = checkBufferDesc(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkSparseBuffer(desc, caps_.sparse); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkObjectName(features_, desc.name); !checked) {

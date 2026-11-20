@@ -259,6 +259,11 @@ core::Result<void> D3D12Device::executeIndirect(CommandListHandle commandList, I
     }
     ID3D12CommandSignature* signature = dispatchSignature_.Get();
     if (kind != IndirectKind::Dispatch) {
+        auto counted = countBuffer ? checkCountDraws(features_.drawIndirectCount)
+                                   : checkDrawCount(maxCommandCount, features_.multiDrawIndirect);
+        if (!counted) {
+            return counted;
+        }
         // A short array the caller sized; the stride comes with each call.
         const auto signatures = std::ranges::find(drawSignatures_, stride, &D3D12DrawSignatures::stride);
         if (signatures == drawSignatures_.end()) {

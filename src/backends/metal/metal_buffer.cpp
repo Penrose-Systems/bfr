@@ -13,6 +13,7 @@
 #include "rhi/buffer_check.h"
 #include "rhi/enum_check.h"
 #include "rhi/name_check.h"
+#include "rhi/resource_feature_check.h"
 
 #include <Metal/Metal.hpp>
 #include <Metal/MTL4CommandQueue.hpp>
@@ -143,6 +144,9 @@ core::Result<void> MetalDevice::runGarbageCollection() {
 
 core::Result<BufferHandle> MetalDevice::createBuffer(const BufferDesc& desc) {
     if (auto checked = checkBufferDesc(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkSparseBuffer(desc, caps_.sparse); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkObjectName(features_, desc.name); !checked) {

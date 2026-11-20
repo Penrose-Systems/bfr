@@ -6,6 +6,7 @@
 #include "bfr/rhi/query.h"
 #include "rhi/enum_check.h"
 #include "rhi/name_check.h"
+#include "rhi/query_check.h"
 #include "vulkan/vulkan_device.h"
 #include "vulkan/vulkan_result.h"
 
@@ -106,13 +107,16 @@ VulkanQueryPool::~VulkanQueryPool() {
     }
 }
 
-// The device's query calls, beside the pools they make. Each passes its
-// values to the one Vulkan call that does what it says; Vulkan's validation
-// reports misuse (VUID-VkQueryPoolCreateInfo-queryType-00791, -meshShaderQueries-07068,
-// VUID-vkCmdBeginQuery-queryType-00800, VUID-vkCmdResetQueryPool-renderpass).
+// The device's query calls, beside the pools they make. Each refuses what
+// the device's features lack (query_check.h), then passes its values to the
+// one Vulkan call that does what it says; Vulkan's validation reports other
+// misuse (VUID-vkCmdResetQueryPool-renderpass).
 
 core::Result<QueryPoolHandle> VulkanDevice::createQueryPool(const QueryPoolDesc& desc) {
     if (auto checked = checkKnown(desc.type, "query type"); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkQueryPoolFeatures(desc, features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkObjectName(features_, desc.name); !checked) {
@@ -198,6 +202,9 @@ core::Result<void> VulkanDevice::beginQuery(CommandListHandle commandList, Query
     auto found = queryPoolFor(pool);
     if (!found) {
         return std::unexpected(std::move(found.error()));
+    }
+    if (auto checked = checkPreciseQuery(precise, features_); !checked) {
+        return checked;
     }
     table_.vkCmdBeginQuery((*list)->buffer, (*found)->pool(), index,
                            precise ? VkQueryControlFlags{VK_QUERY_CONTROL_PRECISE_BIT} : 0U);

@@ -354,9 +354,6 @@ TEST_CASE("Device refuses a call of a feature it was not created with, though th
         const FirstAdapterDevice made{recordingInto(backend, messages)};
         const Device& device = made.device;
         const Caps adapter = capsOf(made.instance, kFirstAdapter);
-        if (!adapter.features.samplerAnisotropy && !adapter.features.dynamicTopology) {
-            SKIP("the adapter has neither anisotropy nor dynamic topology");
-        }
         if (adapter.features.samplerAnisotropy) {
             constexpr std::uint32_t kAnisotropy = 4;
             CHECK(resultOf(device.createSampler({.maxAnisotropy = kAnisotropy})) == Result::ErrorUnsupported);
@@ -364,6 +361,54 @@ TEST_CASE("Device refuses a call of a feature it was not created with, though th
         if (adapter.features.dynamicTopology) {
             CHECK(inList(device, 0, [](const Device& on, CommandList list) {
                       return bfr_set_topology(on.get(), list.get(), BFR_TOPOLOGY_TRIANGLE_STRIP);
+                  }) == Result::ErrorUnsupported);
+        }
+        if (adapter.features.imageCubeArray) {
+            constexpr std::uint32_t kSide = 4;
+            constexpr std::uint32_t kTwoCubes = 12;
+            CHECK(resultOf(device.createTexture({.dimension = TextureDimension::Cube,
+                                                 .format = Format::Rgba8Unorm,
+                                                 .width = kSide,
+                                                 .height = kSide,
+                                                 .depth = 1,
+                                                 .layers = kTwoCubes,
+                                                 .mipLevels = 1,
+                                                 .samples = 1,
+                                                 .usage = {.sampled = true}})) == Result::ErrorUnsupported);
+        }
+        if (adapter.sparse.buffers) {
+            constexpr std::uint64_t kSparseBytes = std::uint64_t{1} << 20U;
+            const std::uint32_t tile = adapter.sparse.tileByteCount != 0 ? adapter.sparse.tileBytes.front() : 0;
+            CHECK(resultOf(device.createBuffer(
+                      {.size = kSparseBytes, .usage = {.copyDst = true}, .sparse = true, .tileBytes = tile})) ==
+                  Result::ErrorUnsupported);
+        }
+        if (adapter.features.pipelineStatistics) {
+            CHECK(
+                resultOf(device.createQueryPool(
+                    {.type = QueryType::PipelineStatistics, .count = 1, .statistics = {.vertexInvocations = true}})) ==
+                Result::ErrorUnsupported);
+        }
+        if (adapter.features.occlusionQueryPrecise) {
+            auto pool = device.createQueryPool({.type = QueryType::Occlusion, .count = 1});
+            INFO(failureOf(pool));
+            REQUIRE(pool.has_value());
+            CHECK(inList(device, 0, [&pool](const Device& on, CommandList list) {
+                      return on.beginQuery(list, *pool, 0, true);
+                  }) == Result::ErrorUnsupported);
+        }
+        constexpr std::uint64_t kDrawBytes = 16;
+        constexpr std::uint32_t kTwoDraws = 2;
+        const Buffer arguments = created(device,
+                                         BufferDesc{.size = kDrawBytes * kTwoDraws, .usage = {.indirect = true}});
+        if (adapter.features.multiDrawIndirect) {
+            CHECK(inList(device, 0, [&arguments](const Device& on, CommandList list) {
+                      return on.drawIndirect(list, arguments, 0, kTwoDraws, kDrawBytes);
+                  }) == Result::ErrorUnsupported);
+        }
+        if (adapter.features.drawIndirectCount) {
+            CHECK(inList(device, 0, [&arguments](const Device& on, CommandList list) {
+                      return on.drawIndirectCount(list, arguments, 0, arguments, kDrawBytes, 1, kDrawBytes);
                   }) == Result::ErrorUnsupported);
         }
     }

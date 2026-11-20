@@ -12,6 +12,7 @@
 #include "rhi/enum_check.h"
 #include "rhi/format_blocks.h"
 #include "rhi/name_check.h"
+#include "rhi/resource_feature_check.h"
 #include "rhi/tile_extent.h"
 #include "vulkan/instance_table.h"
 #include "vulkan/vma.h"
@@ -434,6 +435,9 @@ core::Result<void> VulkanDevice::nameTexture(const VulkanTexture& texture, std::
 
 core::Result<TextureHandle> VulkanDevice::createTexture(const TextureDesc& desc) {
     if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkTextureFeatures(desc, features_, caps_.sparse); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkObjectName(features_, desc.name); !checked) {

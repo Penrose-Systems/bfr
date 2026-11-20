@@ -253,6 +253,9 @@ core::Result<void> VulkanDevice::drawIndirect(CommandListHandle commandList, Buf
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
+    if (auto checked = checkDrawCount(drawCount, features_.multiDrawIndirect); !checked) {
+        return checked;
+    }
     if (auto checked = checkIndirect(**found, offset, drawCount, stride, sizeof(VkDrawIndirectCommand), false);
         !checked) {
         return checked;
@@ -271,6 +274,9 @@ core::Result<void> VulkanDevice::drawIndexedIndirect(CommandListHandle commandLi
     auto found = bufferFor(buffer);
     if (!found) {
         return std::unexpected(std::move(found.error()));
+    }
+    if (auto checked = checkDrawCount(drawCount, features_.multiDrawIndirect); !checked) {
+        return checked;
     }
     if (auto checked = checkIndirect(**found, offset, drawCount, stride, sizeof(VkDrawIndexedIndirectCommand), false);
         !checked) {
@@ -295,6 +301,9 @@ core::Result<void> VulkanDevice::drawIndirectCount(CommandListHandle commandList
     auto count = bufferFor(countBuffer);
     if (!count) {
         return std::unexpected(std::move(count.error()));
+    }
+    if (auto checked = checkCountDraws(features_.drawIndirectCount); !checked) {
+        return checked;
     }
     if (auto checked = checkIndirect(**found, offset, maxDrawCount, stride, sizeof(VkDrawIndirectCommand), true);
         !checked) {
@@ -323,6 +332,9 @@ core::Result<void> VulkanDevice::drawIndexedIndirectCount(CommandListHandle comm
     auto count = bufferFor(countBuffer);
     if (!count) {
         return std::unexpected(std::move(count.error()));
+    }
+    if (auto checked = checkCountDraws(features_.drawIndirectCount); !checked) {
+        return checked;
     }
     if (auto checked = checkIndirect(**found, offset, maxDrawCount, stride, sizeof(VkDrawIndexedIndirectCommand), true);
         !checked) {
@@ -379,6 +391,9 @@ core::Result<void> VulkanDevice::drawMeshIndirect(CommandListHandle commandList,
     if (!found) {
         return std::unexpected(std::move(found.error()));
     }
+    if (auto checked = checkDrawCount(drawCount, features_.multiDrawIndirect); !checked) {
+        return checked;
+    }
     if (auto checked = checkIndirect(**found, offset, drawCount, stride, sizeof(VkDrawMeshTasksIndirectCommandEXT),
                                      false);
         !checked) {
@@ -406,6 +421,9 @@ core::Result<void> VulkanDevice::drawMeshIndirectCount(CommandListHandle command
     auto count = bufferFor(countBuffer);
     if (!count) {
         return std::unexpected(std::move(count.error()));
+    }
+    if (auto checked = checkCountDraws(features_.drawIndirectCount); !checked) {
+        return checked;
     }
     if (auto checked = checkIndirect(**found, offset, maxDrawCount, stride, sizeof(VkDrawMeshTasksIndirectCommandEXT),
                                      true);
