@@ -3795,8 +3795,9 @@ public:
     /// for the draws and dispatches after it. size is at most the caps' max_push_constants_size,
     /// which the layout BFR makes holds, else fails with error_invalid_argument. On Vulkan and
     /// D3D12, which take only whole 4-byte values, size is a multiple of 4, and on Vulkan more than
-    /// 0, else fails the same way. On Metal, which copies the bytes into the pool's ring, fails
-    /// with error_limit_reached past the pool's push_constant_updates.
+    /// 0, else fails the same way. On D3D12 fails the same way for a list of a copy queue, which
+    /// has no push constants. On Metal, which copies the bytes into the pool's ring, fails with
+    /// error_limit_reached past the pool's push_constant_updates.
     [[nodiscard]] Expected<void> pushConstants(CommandList commandList, std::span<const std::uint8_t> data) const;
 
     /// Makes buffer, which has index usage, the one bfr_draw_indexed reads indices of type from,

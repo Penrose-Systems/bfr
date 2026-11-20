@@ -167,11 +167,14 @@ public:
     [[nodiscard]] virtual core::Result<void> setTopology(CommandListHandle commandList, Topology topology) = 0;
 
     /// Sets the first data.size() bytes of the push constants every shader
-    /// reads, for the draws and dispatches after it; data.size() is at most
-    /// the caps' limits.maxPushConstantsSize, which the layout BFR makes
-    /// holds. Fails, on Metal, which copies the bytes into the pool's ring,
-    /// with RhiInvalidCall past that size and RhiLimitReached past the pool's
-    /// pushConstantUpdates; and with RhiInvalidHandle when the list is gone.
+    /// reads, for the draws and dispatches after it. Fails with
+    /// RhiInvalidCall past the caps' limits.maxPushConstantsSize, which the
+    /// layout BFR makes holds; on Vulkan and D3D12, which take only whole
+    /// 4-byte values, for a size not a multiple of 4, and on Vulkan for 0
+    /// bytes; and on D3D12 for a list of a copy queue, which has no push
+    /// constants. Fails on Metal, which copies the bytes into the pool's ring,
+    /// with RhiLimitReached past the pool's pushConstantUpdates, and with
+    /// RhiInvalidHandle when the list is gone.
     [[nodiscard]] virtual core::Result<void> pushConstants(CommandListHandle commandList,
                                                            std::span<const std::byte> data) = 0;
 

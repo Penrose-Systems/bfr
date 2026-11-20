@@ -292,8 +292,9 @@ core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rh
         // A kind's signature only where the stride holds its arguments, so a
         // packed stride of the smaller draw arguments makes no indexed one
         // (NVRHI makes each at its own size, d3d12-device.cpp:299-307);
-        // Vulkan takes no smaller stride either. That D3D12 refuses one is
-        // not stated in d3d12.h.
+        // Vulkan takes no smaller stride either, nor does D3D12: its stride
+        // is "large enough to hold all data" (DirectX-Specs, IndirectDrawing,
+        // runtime validation).
         const std::uint32_t stride = desc.indirectStrides[i];
         D3D12DrawSignatures& signatures = made->drawSignatures_[i];
         signatures.stride = stride;
