@@ -144,17 +144,14 @@ struct MetalCommandList {
 
 class MetalDevice final : public Device {
 public:
-    /// A device on device, which rhi listed with features and resolve, with
-    /// the queues asked for. Fails with RhiDeviceFailed
-    /// when Metal gives no queue, event, compiler or bindless tables.
+    /// A device on device, which rhi listed, that has caps, with the queues
+    /// asked for. Fails with RhiDeviceFailed when Metal gives no queue,
+    /// event, compiler or bindless tables.
     [[nodiscard]] static core::Result<std::unique_ptr<MetalDevice>> create(MetalInstance& rhi, Ref<MTL::Device> device,
-                                                                           const Features& features,
-                                                                           const ResolveCaps& resolve,
-                                                                           const DeviceDesc& desc);
+                                                                           const Caps& caps, const DeviceDesc& desc);
 
     /// For create.
-    MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Features& features, const ResolveCaps& resolve,
-                const DeviceDesc& desc);
+    MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Caps& caps, const DeviceDesc& desc);
     ~MetalDevice() override;
     MetalDevice(const MetalDevice&) = delete;
     MetalDevice& operator=(const MetalDevice&) = delete;
@@ -262,6 +259,7 @@ public:
                                                                      std::span<std::byte> data) override;
     [[nodiscard]] core::Result<void> destroyPipelineCache(PipelineCacheHandle cache) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
+    [[nodiscard]] const Caps& caps() const override;
     [[nodiscard]] core::Result<TimestampPoolHandle> createTimestampPool(const TimestampPoolDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyTimestampPool(TimestampPoolHandle pool) override;
     [[nodiscard]] core::Result<void> resetTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
@@ -404,8 +402,10 @@ private:
 
     MetalInstance* instance_;
     Ref<MTL::Device> device_;
-    // What createGraphicsPipeline checks a desc against, and how
-    // depth-stencil attachments resolve.
+    // What the device has, which caps gives; features_, which
+    // createGraphicsPipeline checks a desc against, and resolve_, how
+    // depth-stencil attachments resolve, are its.
+    Caps caps_;
     Features features_;
     ResolveCaps resolve_;
     DeviceDesc desc_;

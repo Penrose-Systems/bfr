@@ -173,8 +173,7 @@ public:
     /// descriptor heap or command signature.
     [[nodiscard]] static core::Result<std::unique_ptr<D3D12Device>> create(
         D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device, Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter,
-        const Features& features, const ResolveCaps& resolve, std::size_t heapCount, std::uint32_t viewHeapSize,
-        const DeviceDesc& desc);
+        const Caps& caps, std::size_t heapCount, std::uint32_t viewHeapSize, const DeviceDesc& desc);
 
     /// For create, with the number of queues create opens.
     D3D12Device(D3D12Instance& rhi, Microsoft::WRL::ComPtr<ID3D12Device> device,
@@ -286,6 +285,7 @@ public:
                                                                      std::span<std::byte> data) override;
     [[nodiscard]] core::Result<void> destroyPipelineCache(PipelineCacheHandle cache) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
+    [[nodiscard]] const Caps& caps() const override;
     [[nodiscard]] core::Result<TimestampPoolHandle> createTimestampPool(const TimestampPoolDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyTimestampPool(TimestampPoolHandle pool) override;
     [[nodiscard]] core::Result<void> resetTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
@@ -455,6 +455,8 @@ private:
     Sparse sparse_;
     // The features createGraphicsPipeline checks a desc against, and how
     // depth-stencil attachments resolve.
+    // What the device has, which caps gives; features_ and resolve_ are its.
+    Caps caps_;
     Features features_;
     ResolveCaps resolve_;
     // Made with the device, one for each indirect stride, so no draw makes one.

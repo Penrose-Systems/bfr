@@ -38,7 +38,8 @@ constexpr std::uint32_t kRgba8Bytes = 4;
 constexpr std::uint8_t kPattern = 0x5A;
 
 // An Instance and a device on its first adapter, presenting nowhere, with
-// room for sparse memories and mappings.
+// the sparse features the tests use where the adapter has them, and room for
+// sparse memories and mappings.
 struct SparseDevice {
     explicit SparseDevice(const InstanceDesc& desc) {
         auto created = createInstance(desc, kValidation);
@@ -48,7 +49,11 @@ struct SparseDevice {
         adapterCaps = capsOf(instance, kFirstAdapter);
         queueFamily = testQueueFamily(instance, kFirstAdapter);
         auto made = instance.createDevice(
-            testDeviceWith(instance, kFirstAdapter, kNoWindow, [](DeviceDesc& deviceDesc) {
+            testDeviceWith(instance, kFirstAdapter, kNoWindow, [this](DeviceDesc& deviceDesc) {
+                deviceDesc.features.sparseBinding = adapterCaps.sparse.binding;
+                deviceDesc.features.sparseBuffers = adapterCaps.sparse.buffers;
+                deviceDesc.features.sparseTextures2d = adapterCaps.sparse.textures2d;
+                deviceDesc.features.bufferAddress = adapterCaps.features.bufferAddress;
                 deviceDesc.maxSparseMemories = kSparseMemories;
                 deviceDesc.maxTileMappings = kTileMappings;
             }));

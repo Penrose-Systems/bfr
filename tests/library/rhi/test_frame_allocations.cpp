@@ -224,8 +224,11 @@ TEST_CASE("Device allocates nothing building acceleration structures frame after
         if (!caps.features.accelerationStructure) {
             SKIP("the adapter has no acceleration structures");
         }
-        auto made = instance.createDevice(
-            testDeviceWith(instance, kFirstAdapter, kNoWindow, [](DeviceDesc& desc) { desc.maxBuildGeometries = 1; }));
+        auto made = instance.createDevice(testDeviceWith(instance, kFirstAdapter, kNoWindow, [](DeviceDesc& desc) {
+            desc.features.accelerationStructure = true;
+            desc.features.bufferAddress = true;
+            desc.maxBuildGeometries = 1;
+        }));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         const Device& device = *made;

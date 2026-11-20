@@ -65,6 +65,7 @@ bfr::DeviceDesc testDevice(const bfr::Instance& instance, std::uint32_t adapter)
     REQUIRE(*family < kFamilies);
     return {.adapter = adapter,
             .queues = std::span{kQueues}.subspan(*family, 1),
+            .features = {.swapchain = true},
             .maxCommandLists = kDeviceLists,
             .maxCommandPools = kDevicePools,
             .maxSwapchains = kDeviceSwapchains,

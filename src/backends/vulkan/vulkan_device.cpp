@@ -13,6 +13,7 @@
 #include "rhi/command_check.h"
 #include "rhi/device_limits.h"
 #include "rhi/enum_check.h"
+#include "rhi/feature_request.h"
 #include "vulkan/vma.h"
 #include "vulkan/vulkan_buffer.h"
 #include "vulkan/vulkan_caps.h"
@@ -189,7 +190,7 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
                                                                  VkDevice device, const DeviceDesc& desc,
                                                                  const VulkanDeviceSetup& setup) {
     auto made = std::make_unique<VulkanDevice>(rhi, adapter, device, desc, setup);
-    if (auto opened = made->openQueues(desc, setup.queueFamilies); !opened) {
+    if (auto opened = made->openQueues(desc, made->queueFamilies_); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
     // VMA takes Vulkan 1.0 to 1.4 (vk_mem_alloc.h:1142); a later device
@@ -208,8 +209,8 @@ core::Result<std::unique_ptr<VulkanDevice>> VulkanDevice::create(VulkanInstance&
         }
         made->replayAllocator_ = *replaying;
     }
-    auto layout = VulkanBindlessLayout::create(made->table_, device, desc, setup.pushConstantsSize,
-                                               setup.accelerationStructureTable, setup.features.partitionedTop,
+    auto layout = VulkanBindlessLayout::create(made->table_, device, desc, made->pushConstantsSize_,
+                                               setup.accelerationStructureTable, made->features_.partitionedTop,
                                                setup.uniformBufferTable);
     if (!layout) {
         return std::unexpected(std::move(layout.error()));
@@ -224,26 +225,26 @@ VulkanDevice::VulkanDevice(VulkanInstance& rhi, VkPhysicalDevice adapter, VkDevi
       adapter_(adapter),
       device_(device),
       hasBudget_(setup.hasBudget),
-      hasSwapchain_(setup.hasSwapchain),
-      pushConstantsSize_(setup.pushConstantsSize),
-      queueFamilies_(setup.queueFamilies),
+      caps_(setup.caps),
+      pushConstantsSize_(caps_.limits.maxPushConstantsSize),
+      queueFamilies_(caps_.queueFamilies),
       timestampPeriod_(setup.timestampPeriod),
-      timestamps_(setup.timestamps),
-      features_(setup.features),
-      resolve_(setup.resolve),
-      rayTracing_(setup.rayTracing),
+      timestamps_(caps_.timestamps),
+      features_(caps_.features),
+      resolve_(caps_.resolve),
+      rayTracing_(caps_.rayTracing),
       addressing_{.addresses = setup.deviceAddresses,
-                  .scratch = std::max<VkDeviceSize>({setup.rayTracing.scratchAlignment,
-                                                     setup.features.partitionedTop ? kPartitionedAlignment : 0,
-                                                     setup.rayTracing.clusterScratchAlignment}),
-                  .input = setup.features.opacityMicromap         ? kMicromapInputAlignment
-                           : setup.features.accelerationStructure ? kInputAlignment
-                                                                  : 0,
-                  .table = setup.rayTracing.tableAlignment,
-                  .data = setup.features.accelerationStructure ? kSerializedAlignment : 0,
-                  .storage = std::max({setup.rayTracing.clusterAlignment, setup.rayTracing.clusterTemplateAlignment,
-                                       setup.rayTracing.clusterBottomAlignment}),
-                  .micromapInputs = setup.features.opacityMicromap},
+                  .scratch = std::max<VkDeviceSize>({rayTracing_.scratchAlignment,
+                                                     features_.partitionedTop ? kPartitionedAlignment : 0,
+                                                     rayTracing_.clusterScratchAlignment}),
+                  .input = features_.opacityMicromap         ? kMicromapInputAlignment
+                           : features_.accelerationStructure ? kInputAlignment
+                                                             : 0,
+                  .table = rayTracing_.tableAlignment,
+                  .data = features_.accelerationStructure ? kSerializedAlignment : 0,
+                  .storage = std::max({rayTracing_.clusterAlignment, rayTracing_.clusterTemplateAlignment,
+                                       rayTracing_.clusterBottomAlignment}),
+                  .micromapInputs = features_.opacityMicromap},
       formats13_(setup.formats13),
       desc_(heldPart(desc)),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
@@ -421,9 +422,8 @@ core::Result<SwapchainHandle> VulkanDevice::createSwapchain(const core::window::
         return std::unexpected(std::move(checked.error()));
     }
     // Without VK_KHR_swapchain there is no vkCreateSwapchainKHR to call.
-    if (!hasSwapchain_) {
-        return core::failure(core::ErrorCode::RhiPresentUnsupported,
-                             "the device has no VK_KHR_swapchain, so it can't present");
+    if (auto checked = checkSwapchainFeature(features_); !checked) {
+        return std::unexpected(std::move(checked.error()));
     }
     auto surface = instance_->surfaceFor(window);
     if (!surface) {
@@ -1069,6 +1069,10 @@ core::Result<MemoryBudget> VulkanDevice::budget() const {
         return core::failure(core::ErrorCode::RhiUnsupported, "the driver lacks VK_EXT_memory_budget");
     }
     return readBudget(instance_->instanceTable(), adapter_);
+}
+
+const Caps& VulkanDevice::caps() const {
+    return caps_;
 }
 
 void VulkanDevice::warnLeftovers() const {

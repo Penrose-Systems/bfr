@@ -24,6 +24,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -142,11 +143,13 @@ inline QueueFamily testQueueFamily(const Instance& instance, std::uint32_t adapt
     return queueFamiliesOf(instance, adapter).at(testFamily(instance, adapter, kNoWindow));
 }
 
-/// kTestDevice on adapter, with one queue of testFamily's.
+/// kTestDevice on adapter, with one queue of testFamily's, and swapchains
+/// unless window is kNoWindow.
 inline DeviceDesc testDeviceOn(const Instance& instance, std::uint32_t adapter, const Window& window) {
     DeviceDesc desc = kTestDevice;
     desc.adapter = adapter;
     desc.queues = testQueues(testFamily(instance, adapter, window));
+    desc.features.swapchain = window.window != nullptr || window.display != nullptr || window.system != WindowSystem{};
     return desc;
 }
 
@@ -297,8 +300,9 @@ struct HeadlessDevice {
 };
 
 /// An Instance as desc says, with validation on, and the tests' device on the
-/// first adapter, presenting nowhere, with change made to its desc. The device
-/// goes before its Instance.
+/// first adapter, presenting nowhere, with change made to its desc; a change
+/// that takes the adapter's caps too, to ask for the features the test uses
+/// that the adapter has, is given them. The device goes before its Instance.
 struct FirstAdapterDevice {
     explicit FirstAdapterDevice(const InstanceDesc& desc)
         : FirstAdapterDevice(desc, [](DeviceDesc& /*unchanged*/) {}) {}
@@ -309,7 +313,17 @@ struct FirstAdapterDevice {
         INFO(failureOf(created));
         REQUIRE(created.has_value());
         instance = std::move(*created);
-        auto made = instance.createDevice(testDeviceWith(instance, kFirstAdapter, kNoWindow, change));
+        auto made = instance.createDevice(testDeviceWith(instance, kFirstAdapter, kNoWindow, [&](DeviceDesc& wanted) {
+            if constexpr (std::is_invocable_v<Change, DeviceDesc&, const Caps&>) {
+                const auto caps = instance.caps(kFirstAdapter);
+                INFO(failureOf(caps));
+                REQUIRE(caps.has_value());
+                change(wanted, *caps);
+            }
+            else {
+                change(wanted);
+            }
+        }));
         INFO(failureOf(made));
         REQUIRE(made.has_value());
         device = std::move(*made);
@@ -325,6 +339,34 @@ inline Caps capsOf(const Instance& instance, std::uint32_t adapter) {
     INFO(failureOf(caps));
     REQUIRE(caps.has_value());
     return std::move(*caps);
+}
+
+/// The ray tracing features, buffer addresses with them, each where caps
+/// offer it: what a device for the ray tracing tests asks for.
+inline Features rayTracingFeaturesOf(const Caps& caps) {
+    const CapsFeatures& offered = caps.features;
+    return {.rayQuery = offered.rayQuery,
+            .rayQueryGraphics = offered.rayQueryGraphics,
+            .rayTracingPipeline = offered.rayTracingPipeline,
+            .traceRaysIndirect = offered.traceRaysIndirect,
+            .rayPrimitiveCulling = offered.rayPrimitiveCulling,
+            .accelerationStructure = offered.accelerationStructure,
+            .bufferAddress = offered.bufferAddress,
+            .rayPositionFetch = offered.rayPositionFetch,
+            .accelerationStructureCurrentSize = offered.accelerationStructureCurrentSize,
+            .serializedBottomCount = offered.serializedBottomCount,
+            .rayInvocationReorder = offered.rayInvocationReorder,
+            .rayTracingPipelineLibrary = offered.rayTracingPipelineLibrary,
+            .pipelineLibraryIdentifiers = offered.pipelineLibraryIdentifiers,
+            .rayTracingCaptureReplay = offered.rayTracingCaptureReplay,
+            .rayTracingCaptureReplayMixed = offered.rayTracingCaptureReplayMixed,
+            .accelerationStructureIndirectBuild = offered.accelerationStructureIndirectBuild,
+            .opacityMicromap = offered.opacityMicromap,
+            .rayTracingMotion = offered.rayTracingMotion,
+            .rayTracingMotionIndirect = offered.rayTracingMotionIndirect,
+            .partitionedTop = offered.partitionedTop,
+            .clusterAccelerationStructure = offered.clusterAccelerationStructure,
+            .accelerationStructureCaptureReplay = offered.accelerationStructureCaptureReplay};
 }
 
 /// The first adapter of instance whose caps wanted takes, if any.

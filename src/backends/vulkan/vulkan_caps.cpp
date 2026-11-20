@@ -5,7 +5,9 @@
 #include "bfr/rhi/command_list.h"
 #include "bfr/rhi/format.h"
 #include "bfr/rhi/pipeline.h"
+#include "rhi/feature_request.h"
 #include "vulkan/instance_table.h"
+#include "vulkan/vulkan_features.h"
 #include "vulkan/vulkan_list.h"
 #include "vulkan/vulkan_pipeline.h"
 #include "vulkan/vulkan_result.h"
@@ -157,19 +159,6 @@ bool on(VkBool32 value) {
     return value == VK_TRUE;
 }
 
-// Builds read their inputs and scratch by device address
-// (VUID-vkGetBufferDeviceAddress-bufferDeviceAddress-03324).
-bool hasAccelerationStructures(const DeviceFeatures& features) {
-    return on(features.accelerationStructure.accelerationStructure) && on(features.vulkan12.bufferDeviceAddress);
-}
-
-// A custom border colour needs both features: BFR's sampler desc gives no
-// format to go with it (VUID-VkSamplerCustomBorderColorCreateInfoEXT-format-04014).
-bool customBorderColors(const DeviceFeatures& features) {
-    return on(features.customBorderColor.customBorderColors) &&
-           on(features.customBorderColor.customBorderColorWithoutFormat);
-}
-
 AdapterInfo infoFrom(const PropertyQuery& properties) {
     const VkPhysicalDeviceProperties& core = properties.core.properties;
     return {
@@ -189,7 +178,7 @@ AdapterInfo infoFrom(const PropertyQuery& properties) {
     };
 }
 
-Limits limitsFrom(const PropertyQuery& properties, const DeviceFeatures& features) {
+Limits limitsFrom(const PropertyQuery& properties, const Features& features) {
     const VkPhysicalDeviceLimits& core = properties.core.properties.limits;
     return {
         .maxTexture1d = core.maxImageDimension1D,
@@ -226,7 +215,7 @@ Limits limitsFrom(const PropertyQuery& properties, const DeviceFeatures& feature
         .maxCullDistances = core.maxCullDistances,
         .maxSamplerAnisotropy = core.maxSamplerAnisotropy,
         .maxSamplerLodBias = core.maxSamplerLodBias,
-        .maxCustomBorderColorSamplers = customBorderColors(features)
+        .maxCustomBorderColorSamplers = features.samplerCustomBorderColor
                                             ? properties.customBorderColor.maxCustomBorderColorSamplers
                                             : 0,
         // Set by readCaps, from the features it reports.
@@ -242,11 +231,11 @@ Limits limitsFrom(const PropertyQuery& properties, const DeviceFeatures& feature
     };
 }
 
-BindlessLimits bindlessFrom(const PropertyQuery& properties, const DeviceFeatures& features) {
+BindlessLimits bindlessFrom(const PropertyQuery& properties, const DeviceFeatures& features, const Features& reported) {
     const VkPhysicalDeviceVulkan12Properties& vulkan12 = properties.vulkan12;
     // The table updates after bind, as the others do, which needs its feature
     // (VUID-VkDescriptorSetLayoutBindingFlagsCreateInfo-descriptorBindingAccelerationStructureUpdateAfterBind-03570).
-    const bool structures = hasAccelerationStructures(features) &&
+    const bool structures = reported.accelerationStructure &&
                             on(features.accelerationStructure.descriptorBindingAccelerationStructureUpdateAfterBind);
     return {
         .maxTextures = vulkan12.maxDescriptorSetUpdateAfterBindSampledImages,
@@ -278,180 +267,71 @@ ComputeLimits computeFrom(const PropertyQuery& properties) {
     };
 }
 
-Features featuresFrom(const DeviceFeatures& features, const PropertyQuery& properties,
-                      std::span<const VkExtensionProperties> extensions) {
-    const VkPhysicalDeviceFeatures& core = features.core.features;
-    return {
-        // Vulkan's ray queries run in every stage.
-        .rayQuery = hasAccelerationStructures(features) && on(features.rayQuery.rayQuery),
-        .rayQueryGraphics = hasAccelerationStructures(features) && on(features.rayQuery.rayQuery),
-        .rayTracingPipeline = hasAccelerationStructures(features) && on(features.rayTracingPipeline.rayTracingPipeline),
-        // BFR's indirect trace is vkCmdTraceRaysIndirect2KHR.
-        .traceRaysIndirect = hasAccelerationStructures(features) &&
-                             on(features.rayTracingPipeline.rayTracingPipeline) &&
-                             on(features.rayTracingMaintenance1.rayTracingPipelineTraceRaysIndirect2),
-        .rayPrimitiveCulling = hasAccelerationStructures(features) &&
-                               on(features.rayTracingPipeline.rayTraversalPrimitiveCulling),
-        .accelerationStructure = hasAccelerationStructures(features),
-        .bufferAddress = on(features.vulkan12.bufferDeviceAddress),
-        .rayPositionFetch = hasAccelerationStructures(features) &&
-                            on(features.rayTracingPositionFetch.rayTracingPositionFetch),
-        // Core to VK_KHR_acceleration_structure (vkCmdCopyAccelerationStructureToMemoryKHR).
-        .accelerationStructureSerialization = hasAccelerationStructures(features),
-        // Ray tracing maintenance1's query types (queries.adoc:472, 476).
-        .accelerationStructureCurrentSize = hasAccelerationStructures(features) &&
-                                            on(features.rayTracingMaintenance1.rayTracingMaintenance1),
-        .serializedBottomCount = hasAccelerationStructures(features) &&
-                                 on(features.rayTracingMaintenance1.rayTracingMaintenance1),
-        .rayInvocationReorder = hasAccelerationStructures(features) &&
-                                on(features.rayTracingPipeline.rayTracingPipeline) &&
-                                on(features.invocationReorder.rayTracingInvocationReorder),
-        .rayTracingPipelineLibrary = hasAccelerationStructures(features) &&
-                                     on(features.rayTracingPipeline.rayTracingPipeline) && features.pipelineLibrary,
-        .pipelineLibraryIdentifiers = hasAccelerationStructures(features) &&
-                                      on(features.rayTracingPipeline.rayTracingPipeline) && features.pipelineLibrary &&
-                                      on(features.libraryGroupHandles.pipelineLibraryGroupHandles),
-        .rayTracingCaptureReplay = hasAccelerationStructures(features) &&
-                                   on(features.rayTracingPipeline.rayTracingPipeline) &&
-                                   on(features.rayTracingPipeline.rayTracingPipelineShaderGroupHandleCaptureReplay),
-        .rayTracingCaptureReplayMixed =
-            hasAccelerationStructures(features) && on(features.rayTracingPipeline.rayTracingPipeline) &&
-            on(features.rayTracingPipeline.rayTracingPipelineShaderGroupHandleCaptureReplay) &&
-            on(features.rayTracingPipeline.rayTracingPipelineShaderGroupHandleCaptureReplayMixed),
-        .accelerationStructureIndirectBuild = hasAccelerationStructures(features) &&
-                                              on(features.accelerationStructure.accelerationStructureIndirectBuild),
-        .opacityMicromap = hasAccelerationStructures(features) && on(features.opacityMicromap.micromap),
-        .rayTracingMotion = hasAccelerationStructures(features) && on(features.rayTracingPipeline.rayTracingPipeline) &&
-                            on(features.motionBlur.rayTracingMotionBlur),
-        .rayTracingMotionIndirect = hasAccelerationStructures(features) &&
-                                    on(features.rayTracingPipeline.rayTracingPipeline) &&
-                                    on(features.motionBlur.rayTracingMotionBlur) &&
-                                    on(features.motionBlur.rayTracingMotionBlurPipelineTraceRaysIndirect),
-        .partitionedTop = hasAccelerationStructures(features) &&
-                          on(features.partitioned.partitionedAccelerationStructure),
-        .clusterAccelerationStructure = hasAccelerationStructures(features) &&
-                                        on(features.clusters.clusterAccelerationStructure),
-        // A replayed structure's buffer and memory are replayed too
-        // (VUID-VkAccelerationStructureCreateInfoKHR-deviceAddress-09490,
-        // VUID-VkBufferCreateInfo-flags-03338).
-        .accelerationStructureCaptureReplay = hasAccelerationStructures(features) &&
-                                              on(features.accelerationStructure.accelerationStructureCaptureReplay) &&
-                                              on(features.vulkan12.bufferDeviceAddressCaptureReplay),
-        .meshShader = on(features.mesh.meshShader),
-        .taskShader = on(features.mesh.taskShader),
-        // BFR has no call for shading rates or conservative raster yet (roadmap step
-        // 14), so the device enables none of their extensions.
-        .shadingRate = false,
-        .shadingRateTexture = false,
-        .shaderFloat16 = on(features.vulkan12.shaderFloat16),
-        .shaderFloat64 = on(core.shaderFloat64),
-        .shaderInt8 = on(features.vulkan12.shaderInt8),
-        .shaderInt16 = on(core.shaderInt16),
-        .shaderInt64 = on(core.shaderInt64),
-        .atomicInt64 = on(features.vulkan12.shaderBufferInt64Atomics),
-        .atomicInt64Texture = on(features.imageAtomicInt64.shaderImageInt64Atomics),
-        .atomicFloat32Add = on(features.atomicFloat.shaderBufferFloat32AtomicAdd),
-        .barycentrics = on(features.barycentric.fragmentShaderBarycentric),
-        .conservativeRaster = false,
-        .geometryShader = on(core.geometryShader),
-        .tessellation = on(core.tessellationShader),
-        .multiview = on(features.vulkan11.multiview),
-        .sampleRateShading = on(core.sampleRateShading),
-        .dualSourceBlend = on(core.dualSrcBlend),
-        .independentBlend = on(core.independentBlend),
-        .logicOp = on(core.logicOp),
-        .depthClamp = on(core.depthClamp),
-        .depthBounds = on(core.depthBounds),
-        .wireframe = on(core.fillModeNonSolid),
-        .wideLines = on(core.wideLines),
-        .samplerAnisotropy = on(core.samplerAnisotropy),
-        .samplerMinmax = on(features.vulkan12.samplerFilterMinmax),
-        .samplerMirrorClampToEdge = on(features.vulkan12.samplerMirrorClampToEdge),
-        // The spec forbids neither with anisotropy, though its Texel
-        // Anisotropic Filtering section warns that vendors read nearest
-        // filters differently. Integer border presets and unnormalized
-        // coordinates are core 1.0, with no feature.
-        .samplerAnisotropyNearestMip = on(core.samplerAnisotropy),
-        .samplerAnisotropyNearestFilter = on(core.samplerAnisotropy),
-        .samplerCustomBorderColor = customBorderColors(features),
-        .samplerIntegerBorderColor = true,
-        .samplerUnnormalizedCoordinates = true,
-        // Through 2D views of a 3D image, which a portability driver says
-        // whether it makes (VUID-VkImageCreateInfo-imageView2DOn3DImage-04459).
-        .volumeColorTargets = !lists(extensions, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME) ||
-                              on(features.portability.imageView2DOn3DImage),
-        // Core, but a portability driver says whether it has it
-        // (VUID-VkSamplerCreateInfo-samplerMipLodBias-04467).
-        .samplerLodBias = !lists(extensions, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME) ||
-                          on(features.portability.samplerMipLodBias),
-        .compressionBc = on(core.textureCompressionBC),
-        .compressionEtc2 = on(core.textureCompressionETC2),
-        .compressionAstc = on(core.textureCompressionASTC_LDR),
-        .compressionAstcHdr = features.hasAstcHdr(),
-        .multiDrawIndirect = on(core.multiDrawIndirect),
-        .drawIndirectCount = on(features.vulkan12.drawIndirectCount),
-        .drawIndirectFirstInstance = on(core.drawIndirectFirstInstance),
-        // Core, but a portability driver says whether it has them
-        // (VUID-VkPipelineInputAssemblyStateCreateInfo-triangleFans-04452).
-        .triangleFans = !lists(extensions, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME) ||
-                        on(features.portability.triangleFans),
-        // VUID-VkPipelineInputAssemblyStateCreateInfo-topology-06252.
-        .listRestart = on(features.listRestart.primitiveTopologyListRestart),
-        .dynamicTopology = features.hasDynamicTopology(),
-        .meshMultiview = on(features.mesh.multiviewMeshShader),
-        .meshStatistics = on(features.mesh.meshShaderQueries),
-        .alphaToOne = on(core.alphaToOne),
-        // pSampleMask is core 1.0, with no feature.
-        .sampleMask = true,
-        // VkPipelineCache is core 1.0, with no feature.
-        .pipelineCache = true,
-        .storageReadWithoutFormat = on(core.shaderStorageImageReadWithoutFormat),
-        .storageWriteWithoutFormat = on(core.shaderStorageImageWriteWithoutFormat),
-        .storageTextureNonUniformIndexing = on(features.vulkan12.shaderStorageImageArrayNonUniformIndexing),
-        .uniformBufferNonUniformIndexing = on(features.vulkan12.shaderUniformBufferArrayNonUniformIndexing),
-        .timestampsOnAllQueues = on(properties.core.properties.limits.timestampComputeAndGraphics),
-        // VK_QUERY_TYPE_OCCLUSION is core 1.0, with no feature
-        // (VUID-vkCmdBeginQuery-queryType-00803 asks only a graphics queue).
-        .queries = true,
-        .pipelineStatistics = on(core.pipelineStatisticsQuery),
-        .occlusionQueryPrecise = on(core.occlusionQueryPrecise),
-    };
+// The requestable features had (requestableIn) as Features and Sparse
+// members, and the rest of Features: those that follow one, and the facts
+// offered, the adapter's features, and properties say.
+Features featuresFrom(std::span<const bool> had, const DeviceFeatures& offered, const PropertyQuery& properties,
+                      Sparse& sparse) {
+    Features features;
+    for (std::size_t index = 0; index < kRequestableFeatures.size(); ++index) {
+        const RequestableFeature& feature = kRequestableFeatures.at(index);
+        if (feature.feature != nullptr) {
+            features.*feature.feature = had[index];
+        }
+        else if (feature.sparse != nullptr) {
+            sparse.*feature.sparse = had[index];
+        }
+    }
+    // BFR's tables update after bind, which robust buffer access allows only
+    // with robustBufferAccessUpdateAfterBind (VUID-VkDeviceCreateInfo-robustBufferAccess-10247).
+    features.robustBufferAccess = features.robustBufferAccess &&
+                                  on(properties.vulkan12.robustBufferAccessUpdateAfterBind);
+    // Core to VK_KHR_acceleration_structure (vkCmdCopyAccelerationStructureToMemoryKHR).
+    features.accelerationStructureSerialization = features.accelerationStructure;
+    // The spec forbids neither with anisotropy, though its Texel Anisotropic
+    // Filtering section warns that vendors read nearest filters differently.
+    features.samplerAnisotropyNearestMip = features.samplerAnisotropy;
+    features.samplerAnisotropyNearestFilter = features.samplerAnisotropy;
+    // Integer border presets and unnormalized coordinates are core 1.0, with
+    // no feature.
+    features.samplerIntegerBorderColor = true;
+    features.samplerUnnormalizedCoordinates = true;
+    // Formats the format properties govern when the feature is off (the
+    // spec's VkPhysicalDeviceFeatures), so nothing enables them.
+    const VkPhysicalDeviceFeatures& core = offered.core.features;
+    features.compressionBc = on(core.textureCompressionBC);
+    features.compressionEtc2 = on(core.textureCompressionETC2);
+    features.compressionAstc = on(core.textureCompressionASTC_LDR);
+    // pSampleMask and VkPipelineCache are core 1.0, with no feature.
+    features.sampleMask = true;
+    features.pipelineCache = true;
+    features.timestampsOnAllQueues = on(properties.core.properties.limits.timestampComputeAndGraphics);
+    // VK_QUERY_TYPE_OCCLUSION is core 1.0, with no feature
+    // (VUID-vkCmdBeginQuery-queryType-00803 asks only a graphics queue).
+    features.queries = true;
+    // BFR has no call for shading rates or conservative raster yet (roadmap
+    // step 14), so they stay false.
+    return features;
 }
 
-// The sparse features and properties Vulkan reports. Vulkan has no heap
-// kinds: a resource maps to any VkDeviceMemory of a type in its
-// memoryTypeBits, so textures and buffers share one where binding is on. Each
-// layer's tail sits at imageMipTailOffset plus the layer's imageMipTailStride
-// (VkSparseImageMemoryRequirements), unless the format reports one tail for
-// all. Vulkan sets the tile sizes itself, so tileBytes is empty.
-Sparse sparseFrom(const DeviceFeatures& features, const PropertyQuery& properties) {
-    const VkPhysicalDeviceFeatures& core = features.core.features;
+// The sparse properties Vulkan reports beside the features featuresFrom
+// sets. Vulkan has no heap kinds: a resource maps to any VkDeviceMemory of a
+// type in its memoryTypeBits, so textures and buffers share one where binding
+// is on. Each layer's tail sits at imageMipTailOffset plus the layer's
+// imageMipTailStride (VkSparseImageMemoryRequirements), unless the format
+// reports one tail for all. Vulkan sets the tile sizes itself, so tileBytes is
+// empty.
+void addSparseProperties(const PropertyQuery& properties, Sparse& sparse) {
     const VkPhysicalDeviceProperties& device = properties.core.properties;
-    const VkPhysicalDeviceSparseProperties& sparse = device.sparseProperties;
-    const bool binding = on(core.sparseBinding);
-    return {
-        .binding = binding,
-        .buffers = on(core.sparseResidencyBuffer),
-        .textures2D = on(core.sparseResidencyImage2D),
-        .textures3D = on(core.sparseResidencyImage3D),
-        .samples2 = on(core.sparseResidency2Samples),
-        .samples4 = on(core.sparseResidency4Samples),
-        .samples8 = on(core.sparseResidency8Samples),
-        .samples16 = on(core.sparseResidency16Samples),
-        .aliased = on(core.sparseResidencyAliased),
-        .standard2DShape = on(sparse.residencyStandard2DBlockShape),
-        .standard2DMultisampleShape = on(sparse.residencyStandard2DMultisampleBlockShape),
-        .standard3DShape = on(sparse.residencyStandard3DBlockShape),
-        .alignedMipSize = on(sparse.residencyAlignedMipSize),
-        .nonResidentStrict = on(sparse.residencyNonResidentStrict),
-        .shaderResidency = on(core.shaderResourceResidency),
-        .mixedResources = binding,
-        .layerTails = binding,
-        .addressSpaceBytes = device.limits.sparseAddressSpaceSize,
-        .addressBitsPerResource = 0,
-        .addressBitsPerProcess = 0,
-        .tileBytes = {},
-    };
+    const VkPhysicalDeviceSparseProperties& vulkan = device.sparseProperties;
+    sparse.standard2DShape = on(vulkan.residencyStandard2DBlockShape);
+    sparse.standard2DMultisampleShape = on(vulkan.residencyStandard2DMultisampleBlockShape);
+    sparse.standard3DShape = on(vulkan.residencyStandard3DBlockShape);
+    sparse.alignedMipSize = on(vulkan.residencyAlignedMipSize);
+    sparse.nonResidentStrict = on(vulkan.residencyNonResidentStrict);
+    sparse.mixedResources = sparse.binding;
+    sparse.layerTails = sparse.binding;
+    sparse.addressSpaceBytes = device.limits.sparseAddressSpaceSize;
 }
 
 Memory memoryFrom(const InstanceTable& vk, VkPhysicalDevice adapter, VkPhysicalDeviceType type) {
@@ -797,8 +677,7 @@ bool has(VkFormatFeatureFlags2 features, VkFormatFeatureFlags2 feature) {
 
 } // namespace
 
-DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
-                               std::span<const VkExtensionProperties> extensions)
+DeviceFeatures::DeviceFeatures(std::uint32_t version, std::span<const VkExtensionProperties> extensions)
     : version(version) {
     core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     vulkan11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
@@ -811,19 +690,12 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     astcHdr.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXTURE_COMPRESSION_ASTC_HDR_FEATURES_EXT;
     formats4444.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_4444_FORMATS_FEATURES_EXT;
     maintenance4.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES_KHR;
-    subgroupSizeControl.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
     integerDotProduct.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES_KHR;
     terminateInvocation.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_TERMINATE_INVOCATION_FEATURES_KHR;
     zeroInitializeWorkgroupMemory.sType =
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ZERO_INITIALIZE_WORKGROUP_MEMORY_FEATURES_KHR;
-    extendedDynamicState2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_2_FEATURES_EXT;
     imageRobustness.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_ROBUSTNESS_FEATURES_EXT;
-    inlineUniformBlock.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_FEATURES_EXT;
-    pipelineCreationCacheControl.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_CREATION_CACHE_CONTROL_FEATURES_EXT;
-    privateData.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_FEATURES_EXT;
     demoteToHelperInvocation.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DEMOTE_TO_HELPER_INVOCATION_FEATURES_EXT;
-    texelBufferAlignment.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXEL_BUFFER_ALIGNMENT_FEATURES_EXT;
-    ycbcr2Plane444Formats.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_YCBCR_2_PLANE_444_FORMATS_FEATURES_EXT;
     atomicFloat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
     imageAtomicInt64.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_IMAGE_ATOMIC_INT64_FEATURES_EXT;
     barycentric.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR;
@@ -848,100 +720,67 @@ DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter
     void** tail = &core.pNext;
     link(tail, vulkan11);
     link(tail, vulkan12);
-    // Chaining an extension's struct the adapter lacks is invalid.
-    const auto linkIfListed = [this, &tail, extensions](const char* extension, auto& next) {
+    // Chaining an extension's struct the device lacks is invalid.
+    const auto linkIf = [&tail, extensions](const char* extension, auto& next) {
         if (lists(extensions, extension)) {
             link(tail, next);
-            enabledExtensions.push_back(extension);
         }
     };
-    const auto enableIfListed = [this, extensions](const char* extension) {
-        if (lists(extensions, extension)) {
-            enabledExtensions.push_back(extension);
-        }
-    };
-    // Below 1.3, every extension 1.3 made core that the adapter lists, so a
-    // device has at 1.2 what it would have at 1.3.
     if (hasCore13(version)) {
         link(tail, vulkan13);
     }
     else {
-        enableIfListed(VK_KHR_COPY_COMMANDS_2_EXTENSION_NAME);
-        enableIfListed(VK_KHR_FORMAT_FEATURE_FLAGS_2_EXTENSION_NAME);
-        enableIfListed(VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME);
-        enableIfListed(VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME);
-        enableIfListed(VK_EXT_TOOLING_INFO_EXTENSION_NAME);
-        linkIfListed(VK_KHR_SHADER_INTEGER_DOT_PRODUCT_EXTENSION_NAME, integerDotProduct);
-        linkIfListed(VK_KHR_SHADER_TERMINATE_INVOCATION_EXTENSION_NAME, terminateInvocation);
-        linkIfListed(VK_KHR_ZERO_INITIALIZE_WORKGROUP_MEMORY_EXTENSION_NAME, zeroInitializeWorkgroupMemory);
-        linkIfListed(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME, extendedDynamicState2);
-        linkIfListed(VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME, imageRobustness);
-        linkIfListed(VK_EXT_INLINE_UNIFORM_BLOCK_EXTENSION_NAME, inlineUniformBlock);
-        linkIfListed(VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME, pipelineCreationCacheControl);
-        linkIfListed(VK_EXT_PRIVATE_DATA_EXTENSION_NAME, privateData);
-        linkIfListed(VK_EXT_SHADER_DEMOTE_TO_HELPER_INVOCATION_EXTENSION_NAME, demoteToHelperInvocation);
-        linkIfListed(VK_EXT_TEXEL_BUFFER_ALIGNMENT_EXTENSION_NAME, texelBufferAlignment);
-        linkIfListed(VK_EXT_YCBCR_2PLANE_444_FORMATS_EXTENSION_NAME, ycbcr2Plane444Formats);
-        linkIfListed(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, dynamicRendering);
-        linkIfListed(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME, synchronization2);
-        linkIfListed(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME, extendedDynamicState);
-        linkIfListed(VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME, astcHdr);
-        linkIfListed(VK_EXT_4444_FORMATS_EXTENSION_NAME, formats4444);
-        linkIfListed(VK_KHR_MAINTENANCE_4_EXTENSION_NAME, maintenance4);
-        linkIfListed(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME, subgroupSizeControl);
+        linkIf(VK_KHR_SHADER_INTEGER_DOT_PRODUCT_EXTENSION_NAME, integerDotProduct);
+        linkIf(VK_KHR_SHADER_TERMINATE_INVOCATION_EXTENSION_NAME, terminateInvocation);
+        linkIf(VK_KHR_ZERO_INITIALIZE_WORKGROUP_MEMORY_EXTENSION_NAME, zeroInitializeWorkgroupMemory);
+        linkIf(VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME, imageRobustness);
+        linkIf(VK_EXT_SHADER_DEMOTE_TO_HELPER_INVOCATION_EXTENSION_NAME, demoteToHelperInvocation);
+        linkIf(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, dynamicRendering);
+        linkIf(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME, synchronization2);
+        linkIf(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME, extendedDynamicState);
+        linkIf(VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME, astcHdr);
+        linkIf(VK_EXT_4444_FORMATS_EXTENSION_NAME, formats4444);
+        linkIf(VK_KHR_MAINTENANCE_4_EXTENSION_NAME, maintenance4);
     }
     if (version >= VK_API_VERSION_1_4) {
         link(tail, vulkan14);
-        if (lists(extensions, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME)) {
-            enabledExtensions.push_back(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME);
-        }
     }
     else {
-        linkIfListed(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME, globalPriority);
+        linkIf(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME, globalPriority);
     }
-    linkIfListed(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME, portability);
-    linkIfListed(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME, atomicFloat);
-    linkIfListed(VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME, imageAtomicInt64);
-    linkIfListed(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME, barycentric);
-    linkIfListed(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, customBorderColor);
-    linkIfListed(VK_KHR_MAINTENANCE_9_EXTENSION_NAME, maintenance9);
-    linkIfListed(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME, listRestart);
-    linkIfListed(VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh);
-    // VK_KHR_acceleration_structure needs VK_KHR_deferred_host_operations
-    // (vkdocs xml/vk.xml:24210); ray queries and pipelines, and their
-    // maintenance, need acceleration structures.
+    linkIf(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME, portability);
+    linkIf(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME, atomicFloat);
+    linkIf(VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME, imageAtomicInt64);
+    linkIf(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME, barycentric);
+    linkIf(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, customBorderColor);
+    linkIf(VK_KHR_MAINTENANCE_9_EXTENSION_NAME, maintenance9);
+    linkIf(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME, listRestart);
+    linkIf(VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh);
+    // Ray queries and pipelines, and their maintenance, need acceleration
+    // structures; motion blur and library group handles need ray tracing
+    // pipelines (vkdocs xml/vk.xml:27270, 29884).
     if (lists(extensions, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)) {
-        enableIfListed(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
-        linkIfListed(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, accelerationStructure);
-        linkIfListed(VK_KHR_RAY_QUERY_EXTENSION_NAME, rayQuery);
-        linkIfListed(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, rayTracingPipeline);
-        linkIfListed(VK_KHR_RAY_TRACING_MAINTENANCE_1_EXTENSION_NAME, rayTracingMaintenance1);
-        linkIfListed(VK_KHR_RAY_TRACING_POSITION_FETCH_EXTENSION_NAME, rayTracingPositionFetch);
-        linkIfListed(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME, invocationReorder);
-        // VK_EXT_opacity_micromap needs acceleration structures and
-        // synchronization2 (vkdocs xml/vk.xml:28172), which BFR's minimum has.
-        linkIfListed(VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME, opacityMicromap);
-        // VK_NV_ray_tracing_motion_blur needs ray tracing pipelines
-        // (vkdocs xml/vk.xml:27270).
+        link(tail, accelerationStructure);
+        linkIf(VK_KHR_RAY_QUERY_EXTENSION_NAME, rayQuery);
+        linkIf(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, rayTracingPipeline);
+        linkIf(VK_KHR_RAY_TRACING_MAINTENANCE_1_EXTENSION_NAME, rayTracingMaintenance1);
+        linkIf(VK_KHR_RAY_TRACING_POSITION_FETCH_EXTENSION_NAME, rayTracingPositionFetch);
+        linkIf(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME, invocationReorder);
+        linkIf(VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME, opacityMicromap);
+        linkIf(VK_NV_PARTITIONED_ACCELERATION_STRUCTURE_EXTENSION_NAME, partitioned);
+        linkIf(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME, clusters);
         if (lists(extensions, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
-            linkIfListed(VK_NV_RAY_TRACING_MOTION_BLUR_EXTENSION_NAME, motionBlur);
-        }
-        // VK_NV_partitioned_acceleration_structure needs acceleration
-        // structures (vcpkg vk.xml:30757).
-        linkIfListed(VK_NV_PARTITIONED_ACCELERATION_STRUCTURE_EXTENSION_NAME, partitioned);
-        // VK_NV_cluster_acceleration_structure needs acceleration structures
-        // (vcpkg vk.xml:30794).
-        linkIfListed(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME, clusters);
-        // VK_EXT_pipeline_library_group_handles needs VK_KHR_pipeline_library
-        // and VK_KHR_ray_tracing_pipeline (vkdocs xml/vk.xml:29884).
-        if (lists(extensions, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME)) {
-            pipelineLibrary = true;
-            enabledExtensions.push_back(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
-            if (lists(extensions, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
-                linkIfListed(VK_EXT_PIPELINE_LIBRARY_GROUP_HANDLES_EXTENSION_NAME, libraryGroupHandles);
+            linkIf(VK_NV_RAY_TRACING_MOTION_BLUR_EXTENSION_NAME, motionBlur);
+            if (lists(extensions, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME)) {
+                linkIf(VK_EXT_PIPELINE_LIBRARY_GROUP_HANDLES_EXTENSION_NAME, libraryGroupHandles);
             }
         }
     }
+}
+
+DeviceFeatures::DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
+                               std::span<const VkExtensionProperties> extensions)
+    : DeviceFeatures(version, extensions) {
     vk.vkGetPhysicalDeviceFeatures2(adapter, &core);
 }
 
@@ -951,14 +790,6 @@ bool DeviceFeatures::hasDynamicRendering() const {
 
 bool DeviceFeatures::hasSynchronization2() const {
     return on(hasCore13(version) ? vulkan13.synchronization2 : synchronization2.synchronization2);
-}
-
-bool DeviceFeatures::hasDynamicTopology() const {
-    return hasCore13(version) || on(extendedDynamicState.extendedDynamicState);
-}
-
-bool DeviceFeatures::hasAstcHdr() const {
-    return on(hasCore13(version) ? vulkan13.textureCompressionASTC_HDR : astcHdr.textureCompressionASTC_HDR);
 }
 
 bool hasQueueLevels(std::uint32_t version, std::span<const VkExtensionProperties> extensions) {
@@ -979,6 +810,20 @@ std::vector<std::string> missingRequirements(const DeviceFeatures& features) {
         missing.emplace_back("synchronization2");
     }
     return missing;
+}
+
+void enableRequirements(DeviceFeatures& features) {
+    for (const Requirement& feature : kRequired12) {
+        features.vulkan12.*feature.member = VK_TRUE;
+    }
+    if (hasCore13(features.version)) {
+        features.vulkan13.dynamicRendering = VK_TRUE;
+        features.vulkan13.synchronization2 = VK_TRUE;
+    }
+    else {
+        features.dynamicRendering.dynamicRendering = VK_TRUE;
+        features.synchronization2.synchronization2 = VK_TRUE;
+    }
 }
 
 // The limits of what reported says the device has: none while a feature
@@ -1141,11 +986,21 @@ ResolveCaps resolveFrom(const PropertyQuery& properties) {
             .independentNone = on(vulkan12.independentResolveNone)};
 }
 
-Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
+namespace {
+
+// What a device or an adapter has, from the features in features with the
+// extensions in extensions: the adapter's, those it lists, or a device's,
+// those it enables; offered is the adapter's features, and listed what it
+// lists.
+Caps capsFrom(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const VkExtensionProperties> listed,
+              DeviceFeatures& features, const DeviceFeatures& offered,
               std::span<const VkExtensionProperties> extensions, bool debugUtils) {
-    const DeviceFeatures features(vk, adapter, version, extensions);
-    const PropertyQuery properties(vk, adapter, version, extensions);
-    Features reported = featuresFrom(features, properties, extensions);
+    const std::uint32_t version = features.version;
+    const PropertyQuery properties(vk, adapter, version, listed);
+    const auto had = requestableIn(features, listed, extensions);
+    Sparse sparse;
+    Features reported = featuresFrom(had, offered, properties, sparse);
+    addSparseProperties(properties, sparse);
     // VK_EXT_debug_utils labels command buffers and queues, and names objects.
     reported.debugLabels = debugUtils;
     reported.queueDebugLabels = debugUtils;
@@ -1153,17 +1008,17 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t v
     VkQueueFlags rendering = 0;
     Caps caps{
         .info = infoFrom(properties),
-        .limits = limitsFrom(properties, features),
-        .bindless = bindlessFrom(properties, features),
+        .limits = limitsFrom(properties, reported),
+        .bindless = bindlessFrom(properties, features, reported),
         .compute = computeFrom(properties),
         .mesh = meshFrom(properties, reported),
         .rayTracing = rayTracingFrom(properties, reported),
         .features = reported,
         .memory = memoryFrom(vk, adapter, properties.core.properties.deviceType),
-        .queueFamilies = queueFamiliesFrom(vk, adapter, version, extensions, reported, rendering),
+        .queueFamilies = queueFamiliesFrom(vk, adapter, version, listed, reported, rendering),
         .queueRanks = properties.core.properties.limits.discreteQueuePriorities,
         .timestamps = {},
-        .sparse = sparseFrom(features, properties),
+        .sparse = sparse,
         .resolve = resolveFrom(properties),
     };
     caps.timestamps = timestampsFrom(vk, adapter, extensions, rendering, reported);
@@ -1174,6 +1029,20 @@ Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t v
         caps.limits.maxShadingRateTile = {largest.width, largest.height};
     }
     return caps;
+}
+
+} // namespace
+
+Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
+              std::span<const VkExtensionProperties> extensions, bool debugUtils) {
+    DeviceFeatures features(vk, adapter, version, extensions);
+    return capsFrom(vk, adapter, extensions, features, features, extensions, debugUtils);
+}
+
+Caps readDeviceCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::span<const VkExtensionProperties> listed,
+                    const DeviceFeatures& supported, DeviceFeatures& enabled,
+                    std::span<const VkExtensionProperties> extensions, const FeatureRequest& request, bool debugUtils) {
+    return requestedOnly(capsFrom(vk, adapter, listed, enabled, supported, extensions, debugUtils), request);
 }
 
 Formats13 formats13Of(std::uint32_t version, std::span<const VkExtensionProperties> extensions) {

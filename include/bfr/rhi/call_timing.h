@@ -8,7 +8,7 @@
 namespace bfr::rhi {
 
 /// How many values Call has.
-inline constexpr std::size_t kCallCount = 123;
+inline constexpr std::size_t kCallCount = 124;
 
 /// The CPU time one kind of call has taken, read from std::chrono::steady_clock
 /// around each call: how many there were, their nanoseconds in all, and the

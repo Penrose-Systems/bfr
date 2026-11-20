@@ -259,8 +259,15 @@ Features featuresOf(ID3D12Device* device, const SamplerFeatures& sampler) {
     addBasicFeatures(device, features);
     addAdvancedFeatures(device, features);
     addSamplerFeatures(device, sampler, features);
-    // D3D12_TEX3D_RTV names a 3D texture's slices.
+    // D3D12_TEX3D_RTV names a 3D texture's slices, D3D12_TEXCUBE_ARRAY_SRV a
+    // cube array's cubes, and D3D12_RASTERIZER_DESC takes a DepthBiasClamp,
+    // with no caps bit for any.
     features.volumeColorTargets = true;
+    features.imageCubeArray = true;
+    features.depthBiasClamp = true;
+    // BFR presents through a DXGI swapchain (d3d12_swapchain.cpp), which
+    // takes any device's direct queue, with no caps bit.
+    features.swapchain = true;
     // d3d12.h has no caps bit for a storage texture indexed by a value that
     // varies within a wave, so storageTextureNonUniformIndexing stays false.
     addMinimumFeatures(features);

@@ -37,7 +37,8 @@ TEST_CASE("Vulkan device fails with RhiWindowFailed when the API refuses a swapc
     const auto rhi = Instance::create(vulkanDesc());
     INFO(failureOf(rhi));
     REQUIRE(rhi.has_value());
-    const auto device = rhi->createDevice(testDeviceOn(*rhi, kFirstAdapter, kNoWindow));
+    const auto device = rhi->createDevice(
+        testDeviceWith(*rhi, kFirstAdapter, kNoWindow, [](DeviceDesc& desc) { desc.features.swapchain = true; }));
     INFO(failureOf(device));
     REQUIRE(device.has_value());
 

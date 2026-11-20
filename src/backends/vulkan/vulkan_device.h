@@ -58,30 +58,20 @@ struct VulkanDeviceSetup {
     /// The formats added by 1.3 the device has.
     Formats13 formats13{};
     bool hasBudget = false;
-    bool hasSwapchain = false;
-    std::uint32_t pushConstantsSize = 0;
-    /// The adapter's queue families, as its caps list them; the instance
-    /// that holds them outlives the device.
-    std::span<const QueueFamily> queueFamilies;
     /// VkPhysicalDeviceLimits::timestampPeriod.
     float timestampPeriod = 0;
-    /// The stages a timestamp in rendering takes, and what
-    /// vkGetCalibratedTimestampsKHR reads, none when the device has no
-    /// calibrated timestamps extension enabled.
-    Timestamps timestamps;
-    /// The features createGraphicsPipeline checks a desc against, and how
-    /// depth-stencil attachments resolve.
-    Features features{};
-    ResolveCaps resolve{};
-    /// The limits builds and instance records keep to.
-    RayTracingLimits rayTracing{};
+    /// What the device has (readDeviceCaps), which its calls check against:
+    /// its features, the queue families and their timestamp stages, what
+    /// vkGetCalibratedTimestampsKHR reads, how depth-stencil attachments
+    /// resolve, and the limits builds and instance records keep to.
+    Caps caps;
     /// The device enabled bufferDeviceAddress, so its buffers have addresses.
     bool deviceAddresses = false;
-    /// The device has an acceleration structure table: the adapter's
+    /// The device has an acceleration structure table: its
     /// BindlessLimits::maxAccelerationStructures is not 0.
     bool accelerationStructureTable = false;
-    /// BindlessLimits::maxUniformBuffers is not 0: the device has a uniform
-    /// buffer table.
+    /// Its BindlessLimits::maxUniformBuffers is not 0: the device has a
+    /// uniform buffer table.
     bool uniformBufferTable = false;
 };
 
@@ -164,10 +154,8 @@ class VulkanDevice final : public Device {
 public:
     /// A device over device, which rhi made on adapter with desc.queues, each
     /// on the family it names, opened in desc's order; rhi outlives it.
-    /// hasBudget says whether adapter has VK_EXT_memory_budget; hasSwapchain
-    /// whether device enabled VK_KHR_swapchain;
-    /// pushConstantsSize is the adapter's maxPushConstantsSize; desc's
-    /// maximums size everything the device holds. Fails with RhiDeviceFailed,
+    /// setup says what adapter and device have; desc's maximums size
+    /// everything the device holds. Fails with RhiDeviceFailed,
     /// destroying device, when the API refuses a queue's timeline or the
     /// bindless layout, and RhiLimitReached when it cannot hold the layout.
     [[nodiscard]] static core::Result<std::unique_ptr<VulkanDevice>> create(VulkanInstance& rhi,
@@ -285,6 +273,7 @@ public:
                                                                      std::span<std::byte> data) override;
     [[nodiscard]] core::Result<void> destroyPipelineCache(PipelineCacheHandle cache) override;
     [[nodiscard]] core::Result<MemoryBudget> budget() const override;
+    [[nodiscard]] const Caps& caps() const override;
     [[nodiscard]] core::Result<TimestampPoolHandle> createTimestampPool(const TimestampPoolDesc& desc) override;
     [[nodiscard]] core::Result<void> destroyTimestampPool(TimestampPoolHandle pool) override;
     [[nodiscard]] core::Result<void> resetTimestamps(CommandListHandle commandList, TimestampPoolHandle pool,
@@ -496,11 +485,10 @@ private:
     // device's functions, and two adapters can have different drivers.
     VolkDeviceTable table_{};
     bool hasBudget_;
-    bool hasSwapchain_;
+    // What the device has; queueFamilies_ points into it.
+    Caps caps_;
     // The bytes of push constants the pipeline layout holds.
     std::uint32_t pushConstantsSize_;
-    // The adapter's queue families, held by the instance, which outlives the
-    // device.
     std::span<const QueueFamily> queueFamilies_;
     float timestampPeriod_;
     Timestamps timestamps_;

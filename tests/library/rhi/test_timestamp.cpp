@@ -65,6 +65,17 @@ std::vector<std::uint64_t> ticksIn(std::span<const std::byte> bytes, std::uint32
     return ticks;
 }
 
+// Asks desc for the features the stages caps list take: task and mesh
+// shaders, ray tracing pipelines and acceleration structure builds, each where
+// the adapter has it.
+void askStageFeatures(DeviceDesc& desc, const Caps& caps) {
+    desc.features.taskShader = caps.features.taskShader;
+    desc.features.meshShader = caps.features.meshShader;
+    desc.features.rayTracingPipeline = caps.features.rayTracingPipeline;
+    desc.features.accelerationStructure = caps.features.accelerationStructure;
+    desc.features.bufferAddress = caps.features.accelerationStructure;
+}
+
 } // namespace
 
 TEST_CASE("Device writes a timestamp at each stage the caps list, in rendering and out, and resolves them as ticks",
@@ -72,7 +83,7 @@ TEST_CASE("Device writes a timestamp at each stage the caps list, in rendering a
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{recordingInto(backend, messages), askStageFeatures};
         const Device& device = made.device;
         const CapsTimestamps caps = timestampCaps(made);
         const QueueFamily family = queueFamily(made);
@@ -184,7 +195,12 @@ TEST_CASE("Device reads each host clock the caps list beside a GPU timestamp, an
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc, const Caps& caps) {
+                                          const HostClocks& clocks = caps.timestamps.hostClocks;
+                                          desc.features.timestampCalibration = clocks.monotonic ||
+                                                                               clocks.monotonicRaw ||
+                                                                               clocks.performanceCounter;
+                                      }};
         const HostClocks clocks = timestampCaps(made).hostClocks;
         for (const auto& [has, clock] : {std::pair{clocks.monotonic, HostClock::Monotonic},
                                          std::pair{clocks.monotonicRaw, HostClock::MonotonicRaw},
@@ -301,8 +317,12 @@ TEST_CASE("Device writes a timestamp at each stage the family of a queue without
         constexpr std::uint32_t kCopy = 2;
         const std::array queues{testQueues(testFamily(*instance, kFirstAdapter, kNoWindow)).front(),
                                 testQueues(*computeFamily).front(), testQueues(*copyFamily).front()};
+        const Caps caps = capsOf(*instance, kFirstAdapter);
         auto opened = instance->createDevice(
-            testDeviceWith(*instance, kFirstAdapter, kNoWindow, [&queues](DeviceDesc& desc) { desc.queues = queues; }));
+            testDeviceWith(*instance, kFirstAdapter, kNoWindow, [&queues, &caps](DeviceDesc& desc) {
+                desc.queues = queues;
+                askStageFeatures(desc, caps);
+            }));
         INFO(failureOf(opened));
         REQUIRE(opened.has_value());
         const Device& device = *opened;

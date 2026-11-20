@@ -39,10 +39,10 @@ public:
     /// and its handle is set; the C entry point refuses either. Fails with
     /// RhiWindowFailed when its window system's surface extension is
     /// unavailable or when the API refuses the window,
-    /// RhiPresentUnsupported when the device has no swapchain extension or
-    /// desc.queue's family doesn't present to the window, as
-    /// Instance::queueFamilyPresents answers, RhiUnsupported when the backend
-    /// can't be asked, RhiInvalidCall when the device has no queue desc.queue
+    /// RhiPresentUnsupported when desc.queue's family doesn't present to the
+    /// window, as Instance::queueFamilyPresents answers, RhiUnsupported when
+    /// the device was created without FeatureRequest::swapchain or the
+    /// backend can't be asked, RhiInvalidCall when the device has no queue desc.queue
     /// or an enum
     /// in desc is not one BFR has, and RhiLimitReached when the device holds
     /// maxSwapchains already.
@@ -475,6 +475,12 @@ public:
     /// How much of each heap the process may use and uses now. Fails with
     /// RhiUnsupported when the driver can't say.
     [[nodiscard]] virtual core::Result<MemoryBudget> budget() const = 0;
+
+    /// What the device has: its adapter's caps with each FeatureRequest
+    /// feature true only where the device was created with it, and the
+    /// limits, timestamp stages and host clocks that follow those features
+    /// as the device has them. Lives as long as the device.
+    [[nodiscard]] virtual const Caps& caps() const = 0;
 
     /// A pool of desc.count GPU timestamps, written by lists on desc.queue.
     /// Cold. Fails with RhiInvalidCall when the device has no queue

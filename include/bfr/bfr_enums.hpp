@@ -749,6 +749,7 @@ enum class Call : std::int32_t {
     EndQueueDebugLabel = BFR_CALL_END_QUEUE_DEBUG_LABEL,
     InsertQueueDebugLabel = BFR_CALL_INSERT_QUEUE_DEBUG_LABEL,
     InstanceQueueFamilyPresents = BFR_CALL_INSTANCE_QUEUE_FAMILY_PRESENTS,
+    Caps = BFR_CALL_CAPS,
 };
 
 /// value's name in bfr.yaml; empty for a value Call doesn't have.
@@ -877,6 +878,7 @@ enum class Call : std::int32_t {
     case Call::EndQueueDebugLabel: return "end_queue_debug_label";
     case Call::InsertQueueDebugLabel: return "insert_queue_debug_label";
     case Call::InstanceQueueFamilyPresents: return "instance_queue_family_presents";
+    case Call::Caps: return "caps";
     }
     return {};
 }

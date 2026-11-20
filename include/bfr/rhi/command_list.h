@@ -4,6 +4,7 @@
 #include "bfr/bfr_enums.hpp" // IWYU pragma: export
 #include "bfr/core/handle.h"
 #include "bfr/rhi/buffer.h"
+#include "bfr/rhi/caps.h"
 #include "bfr/rhi/pipeline.h"
 #include "bfr/rhi/query.h"
 #include "bfr/rhi/texture.h"
@@ -68,6 +69,9 @@ struct QueueDesc {
 /// texture between.
 struct DeviceDesc {
     std::span<const QueueDesc> queues;
+    /// What the device enables; all false enables nothing optional.
+    /// Device::caps says what it has.
+    FeatureRequest features;
     std::uint32_t maxCommandLists = 0;
     std::uint32_t maxCommandPools = 0;
     std::uint32_t maxSwapchains = 0;

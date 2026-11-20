@@ -216,6 +216,7 @@ inline int show(bfr::Backend backend, const bfr::Window& window, const std::func
     {
         auto opened = instance->createDevice({.adapter = adapter,
                                               .queues = queue,
+                                              .features = {.swapchain = true},
                                               .maxCommandLists = kFramesInFlight * kListsPerFrame,
                                               .maxCommandPools = kFramesInFlight,
                                               .maxSwapchains = kSwapchains,

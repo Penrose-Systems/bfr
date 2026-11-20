@@ -77,6 +77,10 @@ struct bfr_device {
     // bfr_write_motion_instances, writes takes.
     std::uint32_t instanceSize = 0;
     std::uint32_t motionInstanceSize = 0;
+    // The adapter the device is on, and its instance's backend, which
+    // bfr_get_device_caps' info names.
+    std::uint32_t adapter = 0;
+    bfr_backend backend{};
 };
 
 namespace {
@@ -436,7 +440,7 @@ static_assert(sizeof(bfr_buffer_tile_region) == sizeof(bfr::rhi::BufferTileRegio
               offsetof(bfr_buffer_tile_region, tiles) == offsetof(bfr::rhi::BufferTileRegion, tiles) &&
               offsetof(bfr_buffer_tile_region, memory_tile) == offsetof(bfr::rhi::BufferTileRegion, memoryTile));
 
-static_assert(bfr::rhi::kCallCount == BFR_CALL_INSTANCE_QUEUE_FAMILY_PRESENTS + 1);
+static_assert(bfr::rhi::kCallCount == BFR_CALL_CAPS + 1);
 static_assert(bfr::rhi::kPipelineStatistics == BFR_PIPELINE_STATISTIC_MESH_INVOCATIONS + 1);
 
 bfr_sampler toC(bfr::rhi::SamplerHandle handle) {
@@ -1309,6 +1313,69 @@ bfr_caps_features toC(const bfr::rhi::Features& features) {
         .queries = toC(features.queries),
         .pipeline_statistics = toC(features.pipelineStatistics),
         .occlusion_query_precise = toC(features.occlusionQueryPrecise),
+        .swapchain = toC(features.swapchain),
+        .robust_buffer_access = toC(features.robustBufferAccess),
+        .robust_image_access = toC(features.robustImageAccess),
+        .mesh_shading_rate = toC(features.meshShadingRate),
+        .atomic_int64_shared = toC(features.atomicInt64Shared),
+        .sparse_atomic_int64_texture = toC(features.sparseAtomicInt64Texture),
+        .atomic_float32 = toC(features.atomicFloat32),
+        .atomic_float64 = toC(features.atomicFloat64),
+        .atomic_float64_add = toC(features.atomicFloat64Add),
+        .atomic_float32_shared = toC(features.atomicFloat32Shared),
+        .atomic_float32_add_shared = toC(features.atomicFloat32AddShared),
+        .atomic_float64_shared = toC(features.atomicFloat64Shared),
+        .atomic_float64_add_shared = toC(features.atomicFloat64AddShared),
+        .atomic_float32_texture = toC(features.atomicFloat32Texture),
+        .atomic_float32_add_texture = toC(features.atomicFloat32AddTexture),
+        .sparse_atomic_float32_texture = toC(features.sparseAtomicFloat32Texture),
+        .sparse_atomic_float32_add_texture = toC(features.sparseAtomicFloat32AddTexture),
+        .multiview_geometry_shader = toC(features.multiviewGeometryShader),
+        .multiview_tessellation_shader = toC(features.multiviewTessellationShader),
+        .depth_bias_clamp = toC(features.depthBiasClamp),
+        .image_cube_array = toC(features.imageCubeArray),
+        .format_bgra4_unorm = toC(features.formatBgra4Unorm),
+        .full_draw_index_uint32 = toC(features.fullDrawIndexUint32),
+        .storage_texture_multisample = toC(features.storageTextureMultisample),
+        .texture_dynamic_indexing = toC(features.textureDynamicIndexing),
+        .storage_texture_dynamic_indexing = toC(features.storageTextureDynamicIndexing),
+        .storage_buffer_dynamic_indexing = toC(features.storageBufferDynamicIndexing),
+        .uniform_buffer_dynamic_indexing = toC(features.uniformBufferDynamicIndexing),
+        .vertex_stores_and_atomics = toC(features.vertexStoresAndAtomics),
+        .fragment_stores_and_atomics = toC(features.fragmentStoresAndAtomics),
+        .tessellation_geometry_point_size = toC(features.tessellationGeometryPointSize),
+        .texture_gather_extended = toC(features.textureGatherExtended),
+        .clip_distance = toC(features.clipDistance),
+        .cull_distance = toC(features.cullDistance),
+        .shader_min_lod = toC(features.shaderMinLod),
+        .storage_buffer_16bit_access = toC(features.storageBuffer16bitAccess),
+        .uniform_and_storage_buffer_16bit_access = toC(features.uniformAndStorageBuffer16bitAccess),
+        .push_constant_16bit = toC(features.pushConstant16bit),
+        .input_output_16bit = toC(features.inputOutput16bit),
+        .storage_buffer_8bit_access = toC(features.storageBuffer8bitAccess),
+        .uniform_and_storage_buffer_8bit_access = toC(features.uniformAndStorageBuffer8bitAccess),
+        .push_constant_8bit = toC(features.pushConstant8bit),
+        .variable_pointers_storage_buffer = toC(features.variablePointersStorageBuffer),
+        .variable_pointers = toC(features.variablePointers),
+        .draw_parameters = toC(features.drawParameters),
+        .scalar_block_layout = toC(features.scalarBlockLayout),
+        .uniform_buffer_standard_layout = toC(features.uniformBufferStandardLayout),
+        .subgroup_extended_types = toC(features.subgroupExtendedTypes),
+        .memory_model = toC(features.memoryModel),
+        .memory_model_device_scope = toC(features.memoryModelDeviceScope),
+        .memory_model_visibility_chains = toC(features.memoryModelVisibilityChains),
+        .shader_output_layer = toC(features.shaderOutputLayer),
+        .subgroup_broadcast_dynamic_id = toC(features.subgroupBroadcastDynamicId),
+        .demote_to_helper_invocation = toC(features.demoteToHelperInvocation),
+        .terminate_invocation = toC(features.terminateInvocation),
+        .zero_initialize_workgroup_memory = toC(features.zeroInitializeWorkgroupMemory),
+        .integer_dot_product = toC(features.integerDotProduct),
+        .local_size_id = toC(features.localSizeId),
+        .subgroup_rotate = toC(features.subgroupRotate),
+        .subgroup_rotate_clustered = toC(features.subgroupRotateClustered),
+        .float_controls2 = toC(features.floatControls2),
+        .expect_assume = toC(features.expectAssume),
+        .non_semantic_info = toC(features.nonSemanticInfo),
         .debug_labels = toC(features.debugLabels),
         .queue_debug_labels = toC(features.queueDebugLabels),
         .object_names = toC(features.objectNames),
@@ -1446,6 +1513,24 @@ bfr_caps_resolve toC(const bfr::rhi::ResolveCaps& resolve) {
             .stencil_modes = resolve.stencilModes,
             .independent = toC(resolve.independent),
             .independent_none = toC(resolve.independentNone)};
+}
+
+// caps, those of adapter or of a device on it, named as the adapter is.
+bfr_caps toC(const bfr::rhi::Adapter& adapter, const bfr::rhi::Caps& caps, bfr_backend backend) {
+    return {
+        .info = toC(adapter, backend),
+        .limits = toC(caps.limits),
+        .bindless = toC(caps.bindless),
+        .compute = toC(caps.compute),
+        .mesh = toC(caps.mesh),
+        .ray_tracing = toC(caps.rayTracing),
+        .features = toC(caps.features),
+        .memory = toC(caps.memory),
+        .queue_ranks = caps.queueRanks,
+        .timestamps = toC(caps.timestamps),
+        .sparse = toC(caps.sparse),
+        .resolve = toC(caps.resolve),
+    };
 }
 
 bfr_format_caps toC(const bfr::rhi::FormatCaps& caps) {
@@ -1641,6 +1726,155 @@ bfr_result bfr_get_adapters(bfr_instance* instance, uint32_t* count, bfr_adapter
     });
 }
 
+namespace {
+
+bfr::rhi::FeatureRequest fromC(const bfr_features& features) {
+    return {
+        .swapchain = features.swapchain != 0,
+        .timestampCalibration = features.timestamp_calibration != 0,
+        .robustBufferAccess = features.robust_buffer_access != 0,
+        .robustImageAccess = features.robust_image_access != 0,
+        .rayQuery = features.ray_query != 0,
+        .rayQueryGraphics = features.ray_query_graphics != 0,
+        .rayTracingPipeline = features.ray_tracing_pipeline != 0,
+        .traceRaysIndirect = features.trace_rays_indirect != 0,
+        .rayPrimitiveCulling = features.ray_primitive_culling != 0,
+        .accelerationStructure = features.acceleration_structure != 0,
+        .bufferAddress = features.buffer_address != 0,
+        .rayPositionFetch = features.ray_position_fetch != 0,
+        .accelerationStructureCurrentSize = features.acceleration_structure_current_size != 0,
+        .serializedBottomCount = features.serialized_bottom_count != 0,
+        .rayInvocationReorder = features.ray_invocation_reorder != 0,
+        .rayTracingPipelineLibrary = features.ray_tracing_pipeline_library != 0,
+        .pipelineLibraryIdentifiers = features.pipeline_library_identifiers != 0,
+        .rayTracingCaptureReplay = features.ray_tracing_capture_replay != 0,
+        .rayTracingCaptureReplayMixed = features.ray_tracing_capture_replay_mixed != 0,
+        .accelerationStructureIndirectBuild = features.acceleration_structure_indirect_build != 0,
+        .opacityMicromap = features.opacity_micromap != 0,
+        .rayTracingMotion = features.ray_tracing_motion != 0,
+        .rayTracingMotionIndirect = features.ray_tracing_motion_indirect != 0,
+        .partitionedTop = features.partitioned_top != 0,
+        .clusterAccelerationStructure = features.cluster_acceleration_structure != 0,
+        .accelerationStructureCaptureReplay = features.acceleration_structure_capture_replay != 0,
+        .meshShader = features.mesh_shader != 0,
+        .taskShader = features.task_shader != 0,
+        .meshMultiview = features.mesh_multiview != 0,
+        .meshStatistics = features.mesh_statistics != 0,
+        .meshShadingRate = features.mesh_shading_rate != 0,
+        .shaderFloat16 = features.shader_float16 != 0,
+        .shaderFloat64 = features.shader_float64 != 0,
+        .shaderInt8 = features.shader_int8 != 0,
+        .shaderInt16 = features.shader_int16 != 0,
+        .shaderInt64 = features.shader_int64 != 0,
+        .atomicInt64 = features.atomic_int64 != 0,
+        .atomicInt64Shared = features.atomic_int64_shared != 0,
+        .atomicInt64Texture = features.atomic_int64_texture != 0,
+        .sparseAtomicInt64Texture = features.sparse_atomic_int64_texture != 0,
+        .atomicFloat32 = features.atomic_float32 != 0,
+        .atomicFloat32Add = features.atomic_float32_add != 0,
+        .atomicFloat64 = features.atomic_float64 != 0,
+        .atomicFloat64Add = features.atomic_float64_add != 0,
+        .atomicFloat32Shared = features.atomic_float32_shared != 0,
+        .atomicFloat32AddShared = features.atomic_float32_add_shared != 0,
+        .atomicFloat64Shared = features.atomic_float64_shared != 0,
+        .atomicFloat64AddShared = features.atomic_float64_add_shared != 0,
+        .atomicFloat32Texture = features.atomic_float32_texture != 0,
+        .atomicFloat32AddTexture = features.atomic_float32_add_texture != 0,
+        .sparseAtomicFloat32Texture = features.sparse_atomic_float32_texture != 0,
+        .sparseAtomicFloat32AddTexture = features.sparse_atomic_float32_add_texture != 0,
+        .barycentrics = features.barycentrics != 0,
+        .geometryShader = features.geometry_shader != 0,
+        .tessellation = features.tessellation != 0,
+        .multiview = features.multiview != 0,
+        .multiviewGeometryShader = features.multiview_geometry_shader != 0,
+        .multiviewTessellationShader = features.multiview_tessellation_shader != 0,
+        .sampleRateShading = features.sample_rate_shading != 0,
+        .dualSourceBlend = features.dual_source_blend != 0,
+        .independentBlend = features.independent_blend != 0,
+        .logicOp = features.logic_op != 0,
+        .depthClamp = features.depth_clamp != 0,
+        .depthBiasClamp = features.depth_bias_clamp != 0,
+        .depthBounds = features.depth_bounds != 0,
+        .wireframe = features.wireframe != 0,
+        .wideLines = features.wide_lines != 0,
+        .samplerAnisotropy = features.sampler_anisotropy != 0,
+        .samplerMinmax = features.sampler_minmax != 0,
+        .samplerMirrorClampToEdge = features.sampler_mirror_clamp_to_edge != 0,
+        .samplerCustomBorderColor = features.sampler_custom_border_color != 0,
+        .volumeColorTargets = features.volume_color_targets != 0,
+        .samplerLodBias = features.sampler_lod_bias != 0,
+        .imageCubeArray = features.image_cube_array != 0,
+        .compressionAstcHdr = features.compression_astc_hdr != 0,
+        .formatBgra4Unorm = features.format_bgra4_unorm != 0,
+        .multiDrawIndirect = features.multi_draw_indirect != 0,
+        .drawIndirectCount = features.draw_indirect_count != 0,
+        .drawIndirectFirstInstance = features.draw_indirect_first_instance != 0,
+        .fullDrawIndexUint32 = features.full_draw_index_uint32 != 0,
+        .triangleFans = features.triangle_fans != 0,
+        .listRestart = features.list_restart != 0,
+        .dynamicTopology = features.dynamic_topology != 0,
+        .alphaToOne = features.alpha_to_one != 0,
+        .storageReadWithoutFormat = features.storage_read_without_format != 0,
+        .storageWriteWithoutFormat = features.storage_write_without_format != 0,
+        .storageTextureMultisample = features.storage_texture_multisample != 0,
+        .textureDynamicIndexing = features.texture_dynamic_indexing != 0,
+        .storageTextureDynamicIndexing = features.storage_texture_dynamic_indexing != 0,
+        .storageBufferDynamicIndexing = features.storage_buffer_dynamic_indexing != 0,
+        .uniformBufferDynamicIndexing = features.uniform_buffer_dynamic_indexing != 0,
+        .storageTextureNonUniformIndexing = features.storage_texture_non_uniform_indexing != 0,
+        .uniformBufferNonUniformIndexing = features.uniform_buffer_non_uniform_indexing != 0,
+        .vertexStoresAndAtomics = features.vertex_stores_and_atomics != 0,
+        .fragmentStoresAndAtomics = features.fragment_stores_and_atomics != 0,
+        .tessellationGeometryPointSize = features.tessellation_geometry_point_size != 0,
+        .textureGatherExtended = features.texture_gather_extended != 0,
+        .clipDistance = features.clip_distance != 0,
+        .cullDistance = features.cull_distance != 0,
+        .shaderMinLod = features.shader_min_lod != 0,
+        .storageBuffer16bitAccess = features.storage_buffer_16bit_access != 0,
+        .uniformAndStorageBuffer16bitAccess = features.uniform_and_storage_buffer_16bit_access != 0,
+        .pushConstant16bit = features.push_constant_16bit != 0,
+        .inputOutput16bit = features.input_output_16bit != 0,
+        .storageBuffer8bitAccess = features.storage_buffer_8bit_access != 0,
+        .uniformAndStorageBuffer8bitAccess = features.uniform_and_storage_buffer_8bit_access != 0,
+        .pushConstant8bit = features.push_constant_8bit != 0,
+        .variablePointersStorageBuffer = features.variable_pointers_storage_buffer != 0,
+        .variablePointers = features.variable_pointers != 0,
+        .drawParameters = features.draw_parameters != 0,
+        .scalarBlockLayout = features.scalar_block_layout != 0,
+        .uniformBufferStandardLayout = features.uniform_buffer_standard_layout != 0,
+        .subgroupExtendedTypes = features.subgroup_extended_types != 0,
+        .memoryModel = features.memory_model != 0,
+        .memoryModelDeviceScope = features.memory_model_device_scope != 0,
+        .memoryModelVisibilityChains = features.memory_model_visibility_chains != 0,
+        .shaderOutputLayer = features.shader_output_layer != 0,
+        .subgroupBroadcastDynamicId = features.subgroup_broadcast_dynamic_id != 0,
+        .demoteToHelperInvocation = features.demote_to_helper_invocation != 0,
+        .terminateInvocation = features.terminate_invocation != 0,
+        .zeroInitializeWorkgroupMemory = features.zero_initialize_workgroup_memory != 0,
+        .integerDotProduct = features.integer_dot_product != 0,
+        .localSizeId = features.local_size_id != 0,
+        .subgroupRotate = features.subgroup_rotate != 0,
+        .subgroupRotateClustered = features.subgroup_rotate_clustered != 0,
+        .floatControls2 = features.float_controls2 != 0,
+        .expectAssume = features.expect_assume != 0,
+        .nonSemanticInfo = features.non_semantic_info != 0,
+        .pipelineStatistics = features.pipeline_statistics != 0,
+        .occlusionQueryPrecise = features.occlusion_query_precise != 0,
+        .sparseBinding = features.sparse_binding != 0,
+        .sparseBuffers = features.sparse_buffers != 0,
+        .sparseTextures2d = features.sparse_textures_2d != 0,
+        .sparseTextures3d = features.sparse_textures_3d != 0,
+        .sparseSamples2 = features.sparse_samples_2 != 0,
+        .sparseSamples4 = features.sparse_samples_4 != 0,
+        .sparseSamples8 = features.sparse_samples_8 != 0,
+        .sparseSamples16 = features.sparse_samples_16 != 0,
+        .sparseAliased = features.sparse_aliased != 0,
+        .sparseShaderResidency = features.sparse_shader_residency != 0,
+    };
+}
+
+} // namespace
+
 bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc, bfr_device** device) {
     return guarded([&] {
         if (instance == nullptr || desc == nullptr || device == nullptr) {
@@ -1661,6 +1895,7 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
         }
         auto created = instance->instance->createDevice(
             desc->adapter, {.queues = *queues,
+                            .features = fromC(desc->features),
                             .maxCommandLists = desc->max_command_lists,
                             .maxCommandPools = desc->max_command_pools,
                             .maxSwapchains = desc->max_swapchains,
@@ -1693,8 +1928,10 @@ bfr_result bfr_create_device(bfr_instance* instance, const bfr_device_desc* desc
         made->device = std::move(*created);
         made->triangles.resize(desc->max_build_geometries);
         made->boxes.resize(desc->max_build_geometries);
-        made->instanceSize = instance->instance->adapters()[desc->adapter].caps.rayTracing.instanceSize;
-        made->motionInstanceSize = instance->instance->adapters()[desc->adapter].caps.rayTracing.motionInstanceSize;
+        made->instanceSize = made->device->caps().rayTracing.instanceSize;
+        made->motionInstanceSize = made->device->caps().rayTracing.motionInstanceSize;
+        made->adapter = desc->adapter;
+        made->backend = instance->backend;
         // The caller owns it until bfr_destroy_device.
         *device = made.release();
         return BFR_RESULT_SUCCESS;
@@ -2301,21 +2538,17 @@ bfr_result bfr_get_caps(bfr_instance* instance, uint32_t adapter, bfr_caps* caps
             return *failed;
         }
         const bfr::rhi::Adapter& listed = instance->instance->adapters()[adapter];
-        const bfr::rhi::Caps& found = listed.caps;
-        *caps = {
-            .info = toC(listed, instance->backend),
-            .limits = toC(found.limits),
-            .bindless = toC(found.bindless),
-            .compute = toC(found.compute),
-            .mesh = toC(found.mesh),
-            .ray_tracing = toC(found.rayTracing),
-            .features = toC(found.features),
-            .memory = toC(found.memory),
-            .queue_ranks = found.queueRanks,
-            .timestamps = toC(found.timestamps),
-            .sparse = toC(found.sparse),
-            .resolve = toC(found.resolve),
-        };
+        *caps = toC(listed, listed.caps, instance->backend);
+        return BFR_RESULT_SUCCESS;
+    });
+}
+
+bfr_result bfr_get_device_caps(bfr_device* device, bfr_caps* caps) {
+    return guarded([&] {
+        if (device == nullptr || caps == nullptr) {
+            return fail(BFR_RESULT_ERROR_INVALID_ARGUMENT, "device and caps must not be null");
+        }
+        *caps = toC(device->instance->adapters()[device->adapter], device->device->caps(), device->backend);
         return BFR_RESULT_SUCCESS;
     });
 }

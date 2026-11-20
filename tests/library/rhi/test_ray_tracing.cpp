@@ -62,8 +62,9 @@ constexpr std::uint8_t kAllRays = 0xFF;
 // The queue every list here records on.
 constexpr std::uint32_t kQueue = 0;
 
-// An Instance and a device on its first adapter, presenting nowhere, with an
-// acceleration structure table where the adapter has one.
+// An Instance and a device on its first adapter, presenting nowhere, with the
+// ray tracing features and an acceleration structure table where the adapter
+// has them.
 struct RayDevice {
     explicit RayDevice(const InstanceDesc& desc, std::uint32_t tableSlots = kTableSlots,
                        bool validation = kValidation) {
@@ -74,6 +75,7 @@ struct RayDevice {
         caps = capsOf(instance, kFirstAdapter);
         const bool table = caps.bindless.maxAccelerationStructures != 0;
         auto opened = instance.createDevice(testDeviceWith(instance, kFirstAdapter, kNoWindow, [&](DeviceDesc& device) {
+            device.features = rayTracingFeaturesOf(caps);
             device.maxBindlessAccelerationStructures = table ? tableSlots : 0;
             device.maxBindlessPartitionedTops = caps.features.partitionedTop ? tableSlots : 0;
             device.maxBuildGeometries = kGeometries;

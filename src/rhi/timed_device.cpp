@@ -346,6 +346,10 @@ core::Result<MemoryBudget> TimedDevice::budget() const {
     return counters_.time(Call::Budget, [&] { return device_->budget(); });
 }
 
+const Caps& TimedDevice::caps() const {
+    return *counters_.time(Call::Caps, [&] { return &device_->caps(); });
+}
+
 core::Result<TimestampPoolHandle> TimedDevice::createTimestampPool(const TimestampPoolDesc& desc) {
     return counters_.time(Call::CreateTimestampPool, [&] { return device_->createTimestampPool(desc); });
 }

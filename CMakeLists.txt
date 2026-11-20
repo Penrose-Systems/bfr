@@ -128,6 +128,7 @@ if(BFR_BACKEND_VULKAN)
         src/backends/vulkan/swapchain_settings.cpp
         src/backends/vulkan/vulkan_buffer.cpp
         src/backends/vulkan/vulkan_caps.cpp
+        src/backends/vulkan/vulkan_features.cpp
         src/backends/vulkan/vulkan_device.cpp
         src/backends/vulkan/vulkan_loader.cpp
         src/backends/vulkan/vulkan_instance.cpp

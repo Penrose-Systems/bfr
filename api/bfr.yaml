@@ -447,6 +447,7 @@ enums:
       end_queue_debug_label: {value: 120}
       insert_queue_debug_label: {value: 121}
       instance_queue_family_presents: {value: 122}
+      caps: {value: 123}
 
   timestamp_stage:
     doc: >-
@@ -1110,6 +1111,160 @@ structs:
           setting for fails the device with error_unsupported. Vulkan sets one level for all the
           queues of a family, so there different levels in one family fail the same way.
 
+  features:
+    doc: >-
+      The optional features a device is opened with; all false enables none of
+      them. Each is the bfr_caps_features member of its name, the sparse_ ones
+      bfr_caps_sparse's without the prefix, and timestamp_calibration is
+      bfr_calibrate_timestamps, which the adapter has where
+      bfr_caps_timestamps.host_clocks names a clock. bfr_create_device fails
+      with error_unsupported, naming them, when the adapter lacks one asked
+      for or BFR has no call for it, and with error_invalid_argument, naming
+      them, when one is asked for without a feature it needs, as each says.
+      The message may be cut short; the full set the adapter lacks is what is
+      asked for and false in bfr_get_caps.
+    members:
+      - {name: swapchain, type: bool}
+      - {name: timestamp_calibration, type: bool, doc: "bfr_calibrate_timestamps."}
+      - {name: robust_buffer_access, type: bool}
+      - {name: robust_image_access, type: bool}
+      - {name: ray_query, type: bool, doc: "Needs acceleration_structure."}
+      - {name: ray_query_graphics, type: bool, doc: "Needs ray_query."}
+      - {name: ray_tracing_pipeline, type: bool, doc: "Needs acceleration_structure."}
+      - {name: trace_rays_indirect, type: bool, doc: "Needs ray_tracing_pipeline."}
+      - {name: ray_primitive_culling, type: bool, doc: "Needs acceleration_structure."}
+      - {name: acceleration_structure, type: bool, doc: "Needs buffer_address."}
+      - {name: buffer_address, type: bool}
+      - {name: ray_position_fetch, type: bool, doc: "Needs acceleration_structure."}
+      - {name: acceleration_structure_current_size, type: bool, doc: "Needs acceleration_structure."}
+      - {name: serialized_bottom_count, type: bool, doc: "Needs acceleration_structure."}
+      - {name: ray_invocation_reorder, type: bool, doc: "Needs ray_tracing_pipeline."}
+      - {name: ray_tracing_pipeline_library, type: bool, doc: "Needs ray_tracing_pipeline."}
+      - {name: pipeline_library_identifiers, type: bool, doc: "Needs ray_tracing_pipeline_library."}
+      - {name: ray_tracing_capture_replay, type: bool, doc: "Needs ray_tracing_pipeline."}
+      - {name: ray_tracing_capture_replay_mixed, type: bool, doc: "Needs ray_tracing_capture_replay."}
+      - {name: acceleration_structure_indirect_build, type: bool, doc: "Needs acceleration_structure."}
+      - {name: opacity_micromap, type: bool, doc: "Needs acceleration_structure."}
+      - {name: ray_tracing_motion, type: bool, doc: "Needs ray_tracing_pipeline."}
+      - {name: ray_tracing_motion_indirect, type: bool, doc: "Needs ray_tracing_motion."}
+      - {name: partitioned_top, type: bool, doc: "Needs acceleration_structure."}
+      - {name: cluster_acceleration_structure, type: bool, doc: "Needs acceleration_structure."}
+      - {name: acceleration_structure_capture_replay, type: bool, doc: "Needs acceleration_structure."}
+      - {name: mesh_shader, type: bool}
+      - {name: task_shader, type: bool}
+      - {name: mesh_multiview, type: bool, doc: "Needs multiview."}
+      - {name: mesh_statistics, type: bool}
+      - {name: mesh_shading_rate, type: bool}
+      - {name: shader_float16, type: bool}
+      - {name: shader_float64, type: bool}
+      - {name: shader_int8, type: bool}
+      - {name: shader_int16, type: bool}
+      - {name: shader_int64, type: bool}
+      - {name: atomic_int64, type: bool}
+      - {name: atomic_int64_shared, type: bool}
+      - {name: atomic_int64_texture, type: bool}
+      - {name: sparse_atomic_int64_texture, type: bool, doc: "Needs atomic_int64_texture."}
+      - {name: atomic_float32, type: bool}
+      - {name: atomic_float32_add, type: bool}
+      - {name: atomic_float64, type: bool}
+      - {name: atomic_float64_add, type: bool}
+      - {name: atomic_float32_shared, type: bool}
+      - {name: atomic_float32_add_shared, type: bool}
+      - {name: atomic_float64_shared, type: bool}
+      - {name: atomic_float64_add_shared, type: bool}
+      - {name: atomic_float32_texture, type: bool}
+      - {name: atomic_float32_add_texture, type: bool}
+      - {name: sparse_atomic_float32_texture, type: bool, doc: "Needs atomic_float32_texture."}
+      - {name: sparse_atomic_float32_add_texture, type: bool, doc: "Needs atomic_float32_add_texture."}
+      - {name: barycentrics, type: bool}
+      - {name: geometry_shader, type: bool}
+      - {name: tessellation, type: bool}
+      - {name: multiview, type: bool}
+      - {name: multiview_geometry_shader, type: bool, doc: "Needs multiview."}
+      - {name: multiview_tessellation_shader, type: bool, doc: "Needs multiview."}
+      - {name: sample_rate_shading, type: bool}
+      - {name: dual_source_blend, type: bool}
+      - {name: independent_blend, type: bool}
+      - {name: logic_op, type: bool}
+      - {name: depth_clamp, type: bool}
+      - {name: depth_bias_clamp, type: bool}
+      - {name: depth_bounds, type: bool}
+      - {name: wireframe, type: bool}
+      - {name: wide_lines, type: bool}
+      - {name: sampler_anisotropy, type: bool}
+      - {name: sampler_minmax, type: bool}
+      - {name: sampler_mirror_clamp_to_edge, type: bool}
+      - {name: sampler_custom_border_color, type: bool}
+      - {name: volume_color_targets, type: bool}
+      - {name: sampler_lod_bias, type: bool}
+      - {name: image_cube_array, type: bool}
+      - {name: compression_astc_hdr, type: bool}
+      - {name: format_bgra4_unorm, type: bool}
+      - {name: multi_draw_indirect, type: bool}
+      - {name: draw_indirect_count, type: bool}
+      - {name: draw_indirect_first_instance, type: bool}
+      - {name: full_draw_index_uint32, type: bool}
+      - {name: triangle_fans, type: bool}
+      - {name: list_restart, type: bool}
+      - {name: dynamic_topology, type: bool}
+      - {name: alpha_to_one, type: bool}
+      - {name: storage_read_without_format, type: bool}
+      - {name: storage_write_without_format, type: bool}
+      - {name: storage_texture_multisample, type: bool}
+      - {name: texture_dynamic_indexing, type: bool}
+      - {name: storage_texture_dynamic_indexing, type: bool}
+      - {name: storage_buffer_dynamic_indexing, type: bool}
+      - {name: uniform_buffer_dynamic_indexing, type: bool}
+      - {name: storage_texture_non_uniform_indexing, type: bool}
+      - {name: uniform_buffer_non_uniform_indexing, type: bool}
+      - {name: vertex_stores_and_atomics, type: bool}
+      - {name: fragment_stores_and_atomics, type: bool}
+      - {name: tessellation_geometry_point_size, type: bool}
+      - {name: texture_gather_extended, type: bool}
+      - {name: clip_distance, type: bool}
+      - {name: cull_distance, type: bool}
+      - {name: shader_min_lod, type: bool}
+      - {name: storage_buffer_16bit_access, type: bool}
+      - {name: uniform_and_storage_buffer_16bit_access, type: bool}
+      - {name: push_constant_16bit, type: bool}
+      - {name: input_output_16bit, type: bool}
+      - {name: storage_buffer_8bit_access, type: bool}
+      - {name: uniform_and_storage_buffer_8bit_access, type: bool}
+      - {name: push_constant_8bit, type: bool}
+      - {name: variable_pointers_storage_buffer, type: bool}
+      - {name: variable_pointers, type: bool, doc: "Needs variable_pointers_storage_buffer."}
+      - {name: draw_parameters, type: bool}
+      - {name: scalar_block_layout, type: bool}
+      - {name: uniform_buffer_standard_layout, type: bool}
+      - {name: subgroup_extended_types, type: bool}
+      - {name: memory_model, type: bool}
+      - {name: memory_model_device_scope, type: bool}
+      - {name: memory_model_visibility_chains, type: bool}
+      - {name: shader_output_layer, type: bool}
+      - {name: subgroup_broadcast_dynamic_id, type: bool}
+      - {name: demote_to_helper_invocation, type: bool}
+      - {name: terminate_invocation, type: bool}
+      - {name: zero_initialize_workgroup_memory, type: bool}
+      - {name: integer_dot_product, type: bool}
+      - {name: local_size_id, type: bool}
+      - {name: subgroup_rotate, type: bool}
+      - {name: subgroup_rotate_clustered, type: bool}
+      - {name: float_controls2, type: bool}
+      - {name: expect_assume, type: bool}
+      - {name: non_semantic_info, type: bool}
+      - {name: pipeline_statistics, type: bool}
+      - {name: occlusion_query_precise, type: bool}
+      - {name: sparse_binding, type: bool}
+      - {name: sparse_buffers, type: bool}
+      - {name: sparse_textures_2d, type: bool}
+      - {name: sparse_textures_3d, type: bool}
+      - {name: sparse_samples_2, type: bool}
+      - {name: sparse_samples_4, type: bool}
+      - {name: sparse_samples_8, type: bool}
+      - {name: sparse_samples_16, type: bool}
+      - {name: sparse_aliased, type: bool}
+      - {name: sparse_shader_residency, type: bool}
+
   device_desc:
     doc: >-
       How to open an adapter. The device's queues are numbered from 0 in the
@@ -1141,6 +1296,11 @@ structs:
           The queues to open, each of the family it names, read during the call only; none is
           none.
       - {name: queue_count, type: u32}
+      - name: features
+        type: features
+        doc: >-
+          What the device enables; all false enables nothing optional. bfr_get_device_caps
+          says what it has.
       - name: max_command_lists
         type: u32
         doc: >-
@@ -1172,7 +1332,7 @@ structs:
         doc: Slots in the sampler table, passed as max_bindless_textures is; bfr_caps_bindless.max_samplers says how many the adapter holds.
       - name: max_bindless_uniform_buffers
         type: u32
-        doc: Slots in the uniform buffer table, passed as max_bindless_textures is. Where bfr_caps_bindless.max_uniform_buffers is 0 the adapter has no such table, and more than 0 fails with error_limit_reached.
+        doc: Slots in the uniform buffer table, passed as max_bindless_textures is. Where bfr_caps_bindless.max_uniform_buffers is 0 the adapter has no such table, and more than 0 fails with error_limit_reached; the device's (bfr_get_device_caps) is 0 where this is.
       - name: max_timestamp_pools
         type: u32
         doc: Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool fails with error_limit_reached.
@@ -1199,14 +1359,15 @@ structs:
         doc: >-
           Slots in the acceleration structure table, of top structures, passed as max_bindless_textures
           is; bfr_caps_bindless.max_acceleration_structures says how many the adapter holds. Where that
-          is 0 the device has no such table, and more than 0 fails with error_limit_reached. With 0
-          slots, top structures are made with none.
+          is 0, or features.acceleration_structure is not asked for, the device has no such table, and
+          more than 0 fails with error_limit_reached. With 0 slots, top structures are made with none,
+          and the device's bfr_caps_bindless.max_acceleration_structures is 0.
       - name: max_bindless_partitioned_tops
         type: u32
         doc: >-
           Slots in the partitioned top table bfr_pipeline states, of partitioned top structures; with
           0, they are made with none. No limit names it: the backend says whether it holds the tables together.
-          Where bfr_caps_features.partitioned_top is false, more than 0 fails with
+          Where features.partitioned_top is not asked for, more than 0 fails with
           error_limit_reached.
       - name: max_build_geometries
         type: u32
@@ -2888,6 +3049,69 @@ structs:
       - {name: queries, type: bool, doc: "bfr_create_query_pool makes occlusion pools, and pipeline_statistics and mesh_primitives_generated ones where pipeline_statistics and mesh_statistics say."}
       - {name: pipeline_statistics, type: bool}
       - {name: occlusion_query_precise, type: bool}
+      - {name: swapchain, type: bool, doc: "bfr_create_swapchain."}
+      - {name: robust_buffer_access, type: bool, doc: "Out-of-bounds buffer accesses stay within the buffer: reads give values from it or 0, and writes are dropped or land in it. On Vulkan it also needs robustBufferAccessUpdateAfterBind, since BFR's tables update after bind."}
+      - {name: robust_image_access, type: bool, doc: "Out-of-bounds texture accesses stay within the texture: reads give 0 in each channel, alpha 0 or 1, and writes are dropped."}
+      - {name: mesh_shading_rate, type: bool, doc: "Mesh shaders set a primitive's shading rate. BFR has no shading rate call yet, so it is false on every backend."}
+      - {name: atomic_int64_shared, type: bool, doc: "64-bit integer atomics on workgroup memory."}
+      - {name: sparse_atomic_int64_texture, type: bool, doc: "64-bit integer atomics on sparse storage textures."}
+      - {name: atomic_float32, type: bool, doc: "32-bit float atomic load, store and exchange on buffers."}
+      - {name: atomic_float64, type: bool, doc: "64-bit float atomic load, store and exchange on buffers."}
+      - {name: atomic_float64_add, type: bool, doc: "64-bit float atomic add on buffers."}
+      - {name: atomic_float32_shared, type: bool, doc: "32-bit float atomic load, store and exchange on workgroup memory."}
+      - {name: atomic_float32_add_shared, type: bool, doc: "32-bit float atomic add on workgroup memory."}
+      - {name: atomic_float64_shared, type: bool, doc: "64-bit float atomic load, store and exchange on workgroup memory."}
+      - {name: atomic_float64_add_shared, type: bool, doc: "64-bit float atomic add on workgroup memory."}
+      - {name: atomic_float32_texture, type: bool, doc: "32-bit float atomic load, store and exchange on storage textures."}
+      - {name: atomic_float32_add_texture, type: bool, doc: "32-bit float atomic add on storage textures."}
+      - {name: sparse_atomic_float32_texture, type: bool, doc: "atomic_float32_texture on sparse storage textures."}
+      - {name: sparse_atomic_float32_add_texture, type: bool, doc: "atomic_float32_add_texture on sparse storage textures."}
+      - {name: multiview_geometry_shader, type: bool, doc: "Geometry shaders in multiview renderings."}
+      - {name: multiview_tessellation_shader, type: bool, doc: "Tessellation shaders in multiview renderings."}
+      - {name: depth_bias_clamp, type: bool, doc: "A bfr_raster_state.depth_bias_clamp other than 0."}
+      - {name: image_cube_array, type: bool, doc: "Cube textures with more than 6 layers."}
+      - {name: format_bgra4_unorm, type: bool, doc: "Textures of format_bgra4_unorm."}
+      - {name: full_draw_index_uint32, type: bool, doc: "Indexed draws with 32-bit indices take index values above 2^24 - 1."}
+      - {name: storage_texture_multisample, type: bool, doc: "Multisampled storage textures in shaders."}
+      - {name: texture_dynamic_indexing, type: bool, doc: "The texture table indexed by a value that is the same across a draw or dispatch but not a constant."}
+      - {name: storage_texture_dynamic_indexing, type: bool, doc: "The storage texture table, as texture_dynamic_indexing says."}
+      - {name: storage_buffer_dynamic_indexing, type: bool, doc: "The storage buffer table, as texture_dynamic_indexing says."}
+      - {name: uniform_buffer_dynamic_indexing, type: bool, doc: "The uniform buffer table, as texture_dynamic_indexing says."}
+      - {name: vertex_stores_and_atomics, type: bool, doc: "Vertex, tessellation and geometry shaders write to and run atomics on storage buffers and textures."}
+      - {name: fragment_stores_and_atomics, type: bool, doc: "Fragment shaders write to and run atomics on storage buffers and textures."}
+      - {name: tessellation_geometry_point_size, type: bool, doc: "Tessellation and geometry shaders write the point size."}
+      - {name: texture_gather_extended, type: bool, doc: "Texture gathers with offsets that are not constant, and with several offsets."}
+      - {name: clip_distance, type: bool, doc: "Shaders write clip distances."}
+      - {name: cull_distance, type: bool, doc: "Shaders write cull distances."}
+      - {name: shader_min_lod, type: bool, doc: "Shaders sample with a minimum level of detail."}
+      - {name: storage_buffer_16bit_access, type: bool, doc: "16-bit values in storage buffers."}
+      - {name: uniform_and_storage_buffer_16bit_access, type: bool, doc: "16-bit values in uniform and storage buffers."}
+      - {name: push_constant_16bit, type: bool, doc: "16-bit values in push constants."}
+      - {name: input_output_16bit, type: bool, doc: "16-bit values in shaders' inputs and outputs."}
+      - {name: storage_buffer_8bit_access, type: bool, doc: "8-bit integers in storage buffers."}
+      - {name: uniform_and_storage_buffer_8bit_access, type: bool, doc: "8-bit integers in uniform and storage buffers."}
+      - {name: push_constant_8bit, type: bool, doc: "8-bit integers in push constants."}
+      - {name: variable_pointers_storage_buffer, type: bool, doc: "Shaders select and pass pointers into storage buffers."}
+      - {name: variable_pointers, type: bool, doc: "Shaders select and pass pointers into storage buffers and workgroup memory."}
+      - {name: draw_parameters, type: bool, doc: "Shaders read a draw's base vertex, base instance and draw index."}
+      - {name: scalar_block_layout, type: bool, doc: "Buffers laid out with scalar alignment."}
+      - {name: uniform_buffer_standard_layout, type: bool, doc: "Uniform buffers laid out as storage buffers are."}
+      - {name: subgroup_extended_types, type: bool, doc: "Subgroup operations on 8-, 16- and 64-bit integers and 16-bit floats."}
+      - {name: memory_model, type: bool, doc: "Shaders use the memory model with availability and visibility operations."}
+      - {name: memory_model_device_scope, type: bool, doc: "memory_model at device scope."}
+      - {name: memory_model_visibility_chains, type: bool, doc: "memory_model with availability and visibility chains of more than one element."}
+      - {name: shader_output_layer, type: bool, doc: "Vertex and tessellation shaders write the layer a primitive goes to."}
+      - {name: subgroup_broadcast_dynamic_id, type: bool, doc: "Subgroup broadcasts from an invocation named by a value that is not constant."}
+      - {name: demote_to_helper_invocation, type: bool, doc: "Fragment shaders demote invocations to helpers."}
+      - {name: terminate_invocation, type: bool, doc: "Fragment shaders terminate invocations."}
+      - {name: zero_initialize_workgroup_memory, type: bool, doc: "Workgroup variables with initializers."}
+      - {name: integer_dot_product, type: bool, doc: "Integer dot product instructions."}
+      - {name: local_size_id, type: bool, doc: "Workgroup sizes given by specialization constant ids, and outputs with more components than the next stage's matching inputs."}
+      - {name: subgroup_rotate, type: bool, doc: "Subgroup rotate operations."}
+      - {name: subgroup_rotate_clustered, type: bool, doc: "Subgroup rotates within clusters."}
+      - {name: float_controls2, type: bool, doc: "Floating-point controls per instruction."}
+      - {name: expect_assume, type: bool, doc: "Shaders tell the compiler what a value is expected or assumed to be."}
+      - {name: non_semantic_info, type: bool, doc: "Shaders carry non-semantic instructions, such as debug information."}
       - {name: debug_labels, type: bool, doc: "bfr_begin_debug_label, bfr_end_debug_label and bfr_insert_debug_label."}
       - {name: queue_debug_labels, type: bool, doc: "bfr_begin_queue_debug_label, bfr_end_queue_debug_label and bfr_insert_queue_debug_label."}
       - {name: object_names, type: bool, doc: "The name member of the descs of buffers, textures, pipelines, pipeline caches, timestamp and query pools and acceleration structures."}
@@ -3270,6 +3494,17 @@ functions:
       - {name: query, type: queue_family_query, pointer: in}
       - {name: family, type: u32, pointer: out}
 
+  get_device_caps:
+    doc: >-
+      Writes what the device has: the adapter's caps, as bfr_get_caps gives them,
+      with each member of bfr_features true only where the device was created
+      with it, and the limits, timestamp stages and host clocks that follow
+      those features as the device has them.
+    returns: result
+    params:
+      - {name: device, type: device}
+      - {name: caps, type: caps, pointer: out}
+
   get_budget:
     doc: >-
       Writes how much memory the device's process may use and uses now. Fails
@@ -3300,7 +3535,9 @@ functions:
     doc: >-
       Creates a swapchain for the window in desc, which the family of the
       device's queue in desc must present to. It has no images until the
-      first bfr_resize_swapchain gives it a size.
+      first bfr_resize_swapchain gives it a size. Fails with
+      error_unsupported when the device was created without
+      bfr_features.swapchain.
     returns: result
     params:
       - {name: device, type: device}

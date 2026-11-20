@@ -14,6 +14,7 @@
 #include "d3d12/d3d12_result.h"
 #include "d3d12/d3d12_swapchain.h"
 #include "rhi/device_limits.h"
+#include "rhi/feature_request.h"
 #include "rhi/format_check.h"
 
 #include <d3d12.h>
@@ -236,20 +237,26 @@ core::Result<std::unique_ptr<Device>> D3D12Instance::createDevice(std::size_t ad
     if (auto checked = checkLimits(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    if (auto checked = checkTables(desc, adapters_[adapter].caps); !checked) {
+    const Adapter& listed = adapters_[adapter];
+    if (auto checked = checkFeatures(desc.features, listed.caps, listed.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    if (auto checked = checkQueueFamilies(desc, adapters_[adapter].caps.queueFamilies); !checked) {
+    // D3D12 enables nothing per feature: a device has what its adapter does,
+    // and its caps say only what desc asks for.
+    const Caps caps = requestedOnly(listed.caps, desc.features);
+    if (auto checked = checkTables(desc, caps); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkQueueFamilies(desc, caps.queueFamilies); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkUnranked(desc, "D3D12"); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     const D3D12Adapter& native = native_[adapter];
-    const Caps& caps = adapters_[adapter].caps;
     // The resource tables share one heap, which is each table's most.
-    return D3D12Device::create(*this, native.device, native.adapter, caps.features, caps.resolve,
-                               caps.memory.heaps.size(), caps.bindless.maxPerStage, desc);
+    return D3D12Device::create(*this, native.device, native.adapter, caps, caps.memory.heaps.size(),
+                               caps.bindless.maxPerStage, desc);
 }
 
 core::Result<FormatCaps> D3D12Instance::formatCaps(std::size_t adapter, Format format) const {

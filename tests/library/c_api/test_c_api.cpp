@@ -171,11 +171,14 @@ struct HeadlessDevice {
                 BFR_RESULT_ERROR_PRESENT_UNSUPPORTED) {
                 continue;
             }
+            bfr_features features{};
+            features.swapchain = BFR_TRUE;
             const bfr_queue_desc queue = queueOn(instance, adapter, &kHeadless);
             const bfr_device_desc desc{.next = nullptr,
                                        .adapter = adapter,
                                        .queues = &queue,
                                        .queue_count = 1,
+                                       .features = features,
                                        .max_command_lists = kDeviceLists,
                                        .max_command_pools = kDevicePools,
                                        .max_swapchains = kDeviceSwapchains,
@@ -371,10 +374,12 @@ TEST_CASE("C API rejects a struct chained to a device or swapchain desc", "[c_ap
     {
         const Instance instance{backend, messages};
         const bfr_queue_desc queue = queueOn(instance.instance, 0, nullptr);
+        const bfr_features features{};
         const bfr_device_desc deviceDesc{.next = &kStray,
                                          .adapter = 0,
                                          .queues = &queue,
                                          .queue_count = 1,
+                                         .features = features,
                                          .max_command_lists = kDeviceLists,
                                          .max_command_pools = kDevicePools,
                                          .max_swapchains = kDeviceSwapchains,
@@ -429,10 +434,12 @@ TEST_CASE("C API rejects a device desc's null queues with a count, and a queue l
     {
         const Instance instance{backend, messages};
         const bfr_queue_desc unknownLevel{.family = 0, .rank = 0, .level = static_cast<bfr_queue_level>(kNotAValue)};
+        const bfr_features features{};
         const bfr_device_desc nullQueues{.next = nullptr,
                                          .adapter = 0,
                                          .queues = nullptr,
                                          .queue_count = 1,
+                                         .features = features,
                                          .max_command_lists = 0,
                                          .max_command_pools = 0,
                                          .max_swapchains = 0,
@@ -1319,7 +1326,7 @@ TEST_CASE("C API makes a timestamp pool, gives the tick rate, and lists call tim
 
     std::uint32_t count = 0;
     REQUIRE(bfr_get_call_timings(device.device, &count, nullptr) == BFR_RESULT_SUCCESS);
-    CHECK(count == BFR_CALL_INSTANCE_QUEUE_FAMILY_PRESENTS + 1);
+    CHECK(count == BFR_CALL_CAPS + 1);
     std::vector<bfr_call_timing> timings(count);
     REQUIRE(bfr_get_call_timings(device.device, &count, timings.data()) == BFR_RESULT_SUCCESS);
     CHECK(timings.at(BFR_CALL_CREATE_TIMESTAMP_POOL).count == 2);
@@ -1950,10 +1957,15 @@ TEST_CASE("C API passes cluster inputs through, where the adapter has them", "[c
         bfr_caps caps{};
         REQUIRE(bfr_get_caps(instance.instance, 0, &caps) == BFR_RESULT_SUCCESS);
         const bfr_queue_desc queue = queueOn(instance.instance, 0, nullptr);
+        bfr_features features{};
+        features.buffer_address = caps.features.cluster_acceleration_structure;
+        features.acceleration_structure = caps.features.cluster_acceleration_structure;
+        features.cluster_acceleration_structure = caps.features.cluster_acceleration_structure;
         const bfr_device_desc desc{.next = nullptr,
                                    .adapter = 0,
                                    .queues = &queue,
                                    .queue_count = 1,
+                                   .features = features,
                                    .max_command_lists = kDeviceLists,
                                    .max_command_pools = kDevicePools,
                                    .max_swapchains = 0,
@@ -2024,10 +2036,15 @@ TEST_CASE("C API passes a structure's capture to a replay on another device, whe
         bfr_caps caps{};
         REQUIRE(bfr_get_caps(instance.instance, 0, &caps) == BFR_RESULT_SUCCESS);
         const bfr_queue_desc queue = queueOn(instance.instance, 0, nullptr);
+        bfr_features features{};
+        features.buffer_address = caps.features.acceleration_structure_capture_replay;
+        features.acceleration_structure = caps.features.acceleration_structure_capture_replay;
+        features.acceleration_structure_capture_replay = caps.features.acceleration_structure_capture_replay;
         const bfr_device_desc desc{.next = nullptr,
                                    .adapter = 0,
                                    .queues = &queue,
                                    .queue_count = 1,
+                                   .features = features,
                                    .max_command_lists = kDeviceLists,
                                    .max_command_pools = kDevicePools,
                                    .max_swapchains = 0,
@@ -2103,10 +2120,16 @@ TEST_CASE("C API passes acceleration structure inputs and instances through, whe
         REQUIRE(bfr_get_caps(instance.instance, 0, &caps) == BFR_RESULT_SUCCESS);
         const bool table = caps.bindless.max_acceleration_structures != 0;
         const bfr_queue_desc queue = queueOn(instance.instance, 0, nullptr);
+        bfr_features features{};
+        features.buffer_address = caps.features.acceleration_structure;
+        features.acceleration_structure = caps.features.acceleration_structure;
+        features.ray_tracing_pipeline = caps.features.ray_tracing_motion;
+        features.ray_tracing_motion = caps.features.ray_tracing_motion;
         const bfr_device_desc desc{.next = nullptr,
                                    .adapter = 0,
                                    .queues = &queue,
                                    .queue_count = 1,
+                                   .features = features,
                                    .max_command_lists = kDeviceLists,
                                    .max_command_pools = kDevicePools,
                                    .max_swapchains = 0,
@@ -2315,10 +2338,15 @@ TEST_CASE("C API makes shaders and a ray tracing pipeline from them, and gives i
         }
         // trace.rgen reads the acceleration structure table.
         const bfr_queue_desc queue = queueOn(instance.instance, 0, nullptr);
+        bfr_features features{};
+        features.buffer_address = BFR_TRUE;
+        features.acceleration_structure = BFR_TRUE;
+        features.ray_tracing_pipeline = BFR_TRUE;
         const bfr_device_desc deviceDesc{.next = nullptr,
                                          .adapter = 0,
                                          .queues = &queue,
                                          .queue_count = 1,
+                                         .features = features,
                                          .max_command_lists = kDeviceLists,
                                          .max_command_pools = kDevicePools,
                                          .max_swapchains = 0,

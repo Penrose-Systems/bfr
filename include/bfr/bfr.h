@@ -576,6 +576,7 @@ typedef enum bfr_call {
     BFR_CALL_END_QUEUE_DEBUG_LABEL = 120,
     BFR_CALL_INSERT_QUEUE_DEBUG_LABEL = 121,
     BFR_CALL_INSTANCE_QUEUE_FAMILY_PRESENTS = 122,
+    BFR_CALL_CAPS = 123,
     BFR_CALL_FORCE32 = 0x7FFFFFFF
 } bfr_call;
 
@@ -1357,6 +1358,186 @@ typedef struct bfr_queue_desc {
     bfr_queue_level level;
 } bfr_queue_desc;
 
+// The optional features a device is opened with; all false enables none of them. Each is the
+// bfr_caps_features member of its name, the sparse_ ones bfr_caps_sparse's without the prefix, and
+// timestamp_calibration is bfr_calibrate_timestamps, which the adapter has where
+// bfr_caps_timestamps.host_clocks names a clock. bfr_create_device fails with error_unsupported,
+// naming them, when the adapter lacks one asked for or BFR has no call for it, and with
+// error_invalid_argument, naming them, when one is asked for without a feature it needs, as each
+// says. The message may be cut short; the full set the adapter lacks is what is asked for and false
+// in bfr_get_caps.
+typedef struct bfr_features {
+    bfr_bool swapchain;
+    // bfr_calibrate_timestamps.
+    bfr_bool timestamp_calibration;
+    bfr_bool robust_buffer_access;
+    bfr_bool robust_image_access;
+    // Needs acceleration_structure.
+    bfr_bool ray_query;
+    // Needs ray_query.
+    bfr_bool ray_query_graphics;
+    // Needs acceleration_structure.
+    bfr_bool ray_tracing_pipeline;
+    // Needs ray_tracing_pipeline.
+    bfr_bool trace_rays_indirect;
+    // Needs acceleration_structure.
+    bfr_bool ray_primitive_culling;
+    // Needs buffer_address.
+    bfr_bool acceleration_structure;
+    bfr_bool buffer_address;
+    // Needs acceleration_structure.
+    bfr_bool ray_position_fetch;
+    // Needs acceleration_structure.
+    bfr_bool acceleration_structure_current_size;
+    // Needs acceleration_structure.
+    bfr_bool serialized_bottom_count;
+    // Needs ray_tracing_pipeline.
+    bfr_bool ray_invocation_reorder;
+    // Needs ray_tracing_pipeline.
+    bfr_bool ray_tracing_pipeline_library;
+    // Needs ray_tracing_pipeline_library.
+    bfr_bool pipeline_library_identifiers;
+    // Needs ray_tracing_pipeline.
+    bfr_bool ray_tracing_capture_replay;
+    // Needs ray_tracing_capture_replay.
+    bfr_bool ray_tracing_capture_replay_mixed;
+    // Needs acceleration_structure.
+    bfr_bool acceleration_structure_indirect_build;
+    // Needs acceleration_structure.
+    bfr_bool opacity_micromap;
+    // Needs ray_tracing_pipeline.
+    bfr_bool ray_tracing_motion;
+    // Needs ray_tracing_motion.
+    bfr_bool ray_tracing_motion_indirect;
+    // Needs acceleration_structure.
+    bfr_bool partitioned_top;
+    // Needs acceleration_structure.
+    bfr_bool cluster_acceleration_structure;
+    // Needs acceleration_structure.
+    bfr_bool acceleration_structure_capture_replay;
+    bfr_bool mesh_shader;
+    bfr_bool task_shader;
+    // Needs multiview.
+    bfr_bool mesh_multiview;
+    bfr_bool mesh_statistics;
+    bfr_bool mesh_shading_rate;
+    bfr_bool shader_float16;
+    bfr_bool shader_float64;
+    bfr_bool shader_int8;
+    bfr_bool shader_int16;
+    bfr_bool shader_int64;
+    bfr_bool atomic_int64;
+    bfr_bool atomic_int64_shared;
+    bfr_bool atomic_int64_texture;
+    // Needs atomic_int64_texture.
+    bfr_bool sparse_atomic_int64_texture;
+    bfr_bool atomic_float32;
+    bfr_bool atomic_float32_add;
+    bfr_bool atomic_float64;
+    bfr_bool atomic_float64_add;
+    bfr_bool atomic_float32_shared;
+    bfr_bool atomic_float32_add_shared;
+    bfr_bool atomic_float64_shared;
+    bfr_bool atomic_float64_add_shared;
+    bfr_bool atomic_float32_texture;
+    bfr_bool atomic_float32_add_texture;
+    // Needs atomic_float32_texture.
+    bfr_bool sparse_atomic_float32_texture;
+    // Needs atomic_float32_add_texture.
+    bfr_bool sparse_atomic_float32_add_texture;
+    bfr_bool barycentrics;
+    bfr_bool geometry_shader;
+    bfr_bool tessellation;
+    bfr_bool multiview;
+    // Needs multiview.
+    bfr_bool multiview_geometry_shader;
+    // Needs multiview.
+    bfr_bool multiview_tessellation_shader;
+    bfr_bool sample_rate_shading;
+    bfr_bool dual_source_blend;
+    bfr_bool independent_blend;
+    bfr_bool logic_op;
+    bfr_bool depth_clamp;
+    bfr_bool depth_bias_clamp;
+    bfr_bool depth_bounds;
+    bfr_bool wireframe;
+    bfr_bool wide_lines;
+    bfr_bool sampler_anisotropy;
+    bfr_bool sampler_minmax;
+    bfr_bool sampler_mirror_clamp_to_edge;
+    bfr_bool sampler_custom_border_color;
+    bfr_bool volume_color_targets;
+    bfr_bool sampler_lod_bias;
+    bfr_bool image_cube_array;
+    bfr_bool compression_astc_hdr;
+    bfr_bool format_bgra4_unorm;
+    bfr_bool multi_draw_indirect;
+    bfr_bool draw_indirect_count;
+    bfr_bool draw_indirect_first_instance;
+    bfr_bool full_draw_index_uint32;
+    bfr_bool triangle_fans;
+    bfr_bool list_restart;
+    bfr_bool dynamic_topology;
+    bfr_bool alpha_to_one;
+    bfr_bool storage_read_without_format;
+    bfr_bool storage_write_without_format;
+    bfr_bool storage_texture_multisample;
+    bfr_bool texture_dynamic_indexing;
+    bfr_bool storage_texture_dynamic_indexing;
+    bfr_bool storage_buffer_dynamic_indexing;
+    bfr_bool uniform_buffer_dynamic_indexing;
+    bfr_bool storage_texture_non_uniform_indexing;
+    bfr_bool uniform_buffer_non_uniform_indexing;
+    bfr_bool vertex_stores_and_atomics;
+    bfr_bool fragment_stores_and_atomics;
+    bfr_bool tessellation_geometry_point_size;
+    bfr_bool texture_gather_extended;
+    bfr_bool clip_distance;
+    bfr_bool cull_distance;
+    bfr_bool shader_min_lod;
+    bfr_bool storage_buffer_16bit_access;
+    bfr_bool uniform_and_storage_buffer_16bit_access;
+    bfr_bool push_constant_16bit;
+    bfr_bool input_output_16bit;
+    bfr_bool storage_buffer_8bit_access;
+    bfr_bool uniform_and_storage_buffer_8bit_access;
+    bfr_bool push_constant_8bit;
+    bfr_bool variable_pointers_storage_buffer;
+    // Needs variable_pointers_storage_buffer.
+    bfr_bool variable_pointers;
+    bfr_bool draw_parameters;
+    bfr_bool scalar_block_layout;
+    bfr_bool uniform_buffer_standard_layout;
+    bfr_bool subgroup_extended_types;
+    bfr_bool memory_model;
+    bfr_bool memory_model_device_scope;
+    bfr_bool memory_model_visibility_chains;
+    bfr_bool shader_output_layer;
+    bfr_bool subgroup_broadcast_dynamic_id;
+    bfr_bool demote_to_helper_invocation;
+    bfr_bool terminate_invocation;
+    bfr_bool zero_initialize_workgroup_memory;
+    bfr_bool integer_dot_product;
+    bfr_bool local_size_id;
+    bfr_bool subgroup_rotate;
+    bfr_bool subgroup_rotate_clustered;
+    bfr_bool float_controls2;
+    bfr_bool expect_assume;
+    bfr_bool non_semantic_info;
+    bfr_bool pipeline_statistics;
+    bfr_bool occlusion_query_precise;
+    bfr_bool sparse_binding;
+    bfr_bool sparse_buffers;
+    bfr_bool sparse_textures_2d;
+    bfr_bool sparse_textures_3d;
+    bfr_bool sparse_samples_2;
+    bfr_bool sparse_samples_4;
+    bfr_bool sparse_samples_8;
+    bfr_bool sparse_samples_16;
+    bfr_bool sparse_aliased;
+    bfr_bool sparse_shader_residency;
+} bfr_features;
+
 // How to open an adapter. The device's queues are numbered from 0 in the order queues asks for
 // them. The calls a queue's lists run follow its family's flags, as Vulkan's rules for each command
 // say. Where it runs graphics: rendering, draws, the calls that set their state or bind a graphics
@@ -1378,6 +1559,9 @@ typedef struct bfr_device_desc {
     // array of queue_count elements. May be null.
     const bfr_queue_desc* queues;
     uint32_t queue_count;
+    // What the device enables; all false enables nothing optional. bfr_get_device_caps says what it
+    // has.
+    bfr_features features;
     // Command lists the device holds at once, across all its pools, and the most swapchains its
     // recording lists render to at once; past it, calls fail with error_limit_reached. Room for
     // them is made with the device, so recording and submitting never allocate. A bfr_submit of
@@ -1406,7 +1590,7 @@ typedef struct bfr_device_desc {
     uint32_t max_bindless_samplers;
     // Slots in the uniform buffer table, passed as max_bindless_textures is. Where
     // bfr_caps_bindless.max_uniform_buffers is 0 the adapter has no such table, and more than 0
-    // fails with error_limit_reached.
+    // fails with error_limit_reached; the device's (bfr_get_device_caps) is 0 where this is.
     uint32_t max_bindless_uniform_buffers;
     // Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool
     // fails with error_limit_reached.
@@ -1426,12 +1610,13 @@ typedef struct bfr_device_desc {
     uint32_t max_tile_mappings;
     // Slots in the acceleration structure table, of top structures, passed as max_bindless_textures
     // is; bfr_caps_bindless.max_acceleration_structures says how many the adapter holds. Where that
-    // is 0 the device has no such table, and more than 0 fails with error_limit_reached. With 0
-    // slots, top structures are made with none.
+    // is 0, or features.acceleration_structure is not asked for, the device has no such table, and
+    // more than 0 fails with error_limit_reached. With 0 slots, top structures are made with none,
+    // and the device's bfr_caps_bindless.max_acceleration_structures is 0.
     uint32_t max_bindless_acceleration_structures;
     // Slots in the partitioned top table bfr_pipeline states, of partitioned top structures; with
     // 0, they are made with none. No limit names it: the backend says whether it holds the tables
-    // together. Where bfr_caps_features.partitioned_top is false, more than 0 fails with
+    // together. Where features.partitioned_top is not asked for, more than 0 fails with
     // error_limit_reached.
     uint32_t max_bindless_partitioned_tops;
     // The most geometries one build takes, in bfr_build_acceleration_structure and
@@ -3317,6 +3502,139 @@ typedef struct bfr_caps_features {
     bfr_bool queries;
     bfr_bool pipeline_statistics;
     bfr_bool occlusion_query_precise;
+    // bfr_create_swapchain.
+    bfr_bool swapchain;
+    // Out-of-bounds buffer accesses stay within the buffer: reads give values from it or 0, and
+    // writes are dropped or land in it. On Vulkan it also needs robustBufferAccessUpdateAfterBind,
+    // since BFR's tables update after bind.
+    bfr_bool robust_buffer_access;
+    // Out-of-bounds texture accesses stay within the texture: reads give 0 in each channel, alpha 0
+    // or 1, and writes are dropped.
+    bfr_bool robust_image_access;
+    // Mesh shaders set a primitive's shading rate. BFR has no shading rate call yet, so it is false
+    // on every backend.
+    bfr_bool mesh_shading_rate;
+    // 64-bit integer atomics on workgroup memory.
+    bfr_bool atomic_int64_shared;
+    // 64-bit integer atomics on sparse storage textures.
+    bfr_bool sparse_atomic_int64_texture;
+    // 32-bit float atomic load, store and exchange on buffers.
+    bfr_bool atomic_float32;
+    // 64-bit float atomic load, store and exchange on buffers.
+    bfr_bool atomic_float64;
+    // 64-bit float atomic add on buffers.
+    bfr_bool atomic_float64_add;
+    // 32-bit float atomic load, store and exchange on workgroup memory.
+    bfr_bool atomic_float32_shared;
+    // 32-bit float atomic add on workgroup memory.
+    bfr_bool atomic_float32_add_shared;
+    // 64-bit float atomic load, store and exchange on workgroup memory.
+    bfr_bool atomic_float64_shared;
+    // 64-bit float atomic add on workgroup memory.
+    bfr_bool atomic_float64_add_shared;
+    // 32-bit float atomic load, store and exchange on storage textures.
+    bfr_bool atomic_float32_texture;
+    // 32-bit float atomic add on storage textures.
+    bfr_bool atomic_float32_add_texture;
+    // atomic_float32_texture on sparse storage textures.
+    bfr_bool sparse_atomic_float32_texture;
+    // atomic_float32_add_texture on sparse storage textures.
+    bfr_bool sparse_atomic_float32_add_texture;
+    // Geometry shaders in multiview renderings.
+    bfr_bool multiview_geometry_shader;
+    // Tessellation shaders in multiview renderings.
+    bfr_bool multiview_tessellation_shader;
+    // A bfr_raster_state.depth_bias_clamp other than 0.
+    bfr_bool depth_bias_clamp;
+    // Cube textures with more than 6 layers.
+    bfr_bool image_cube_array;
+    // Textures of format_bgra4_unorm.
+    bfr_bool format_bgra4_unorm;
+    // Indexed draws with 32-bit indices take index values above 2^24 - 1.
+    bfr_bool full_draw_index_uint32;
+    // Multisampled storage textures in shaders.
+    bfr_bool storage_texture_multisample;
+    // The texture table indexed by a value that is the same across a draw or dispatch but not a
+    // constant.
+    bfr_bool texture_dynamic_indexing;
+    // The storage texture table, as texture_dynamic_indexing says.
+    bfr_bool storage_texture_dynamic_indexing;
+    // The storage buffer table, as texture_dynamic_indexing says.
+    bfr_bool storage_buffer_dynamic_indexing;
+    // The uniform buffer table, as texture_dynamic_indexing says.
+    bfr_bool uniform_buffer_dynamic_indexing;
+    // Vertex, tessellation and geometry shaders write to and run atomics on storage buffers and
+    // textures.
+    bfr_bool vertex_stores_and_atomics;
+    // Fragment shaders write to and run atomics on storage buffers and textures.
+    bfr_bool fragment_stores_and_atomics;
+    // Tessellation and geometry shaders write the point size.
+    bfr_bool tessellation_geometry_point_size;
+    // Texture gathers with offsets that are not constant, and with several offsets.
+    bfr_bool texture_gather_extended;
+    // Shaders write clip distances.
+    bfr_bool clip_distance;
+    // Shaders write cull distances.
+    bfr_bool cull_distance;
+    // Shaders sample with a minimum level of detail.
+    bfr_bool shader_min_lod;
+    // 16-bit values in storage buffers.
+    bfr_bool storage_buffer_16bit_access;
+    // 16-bit values in uniform and storage buffers.
+    bfr_bool uniform_and_storage_buffer_16bit_access;
+    // 16-bit values in push constants.
+    bfr_bool push_constant_16bit;
+    // 16-bit values in shaders' inputs and outputs.
+    bfr_bool input_output_16bit;
+    // 8-bit integers in storage buffers.
+    bfr_bool storage_buffer_8bit_access;
+    // 8-bit integers in uniform and storage buffers.
+    bfr_bool uniform_and_storage_buffer_8bit_access;
+    // 8-bit integers in push constants.
+    bfr_bool push_constant_8bit;
+    // Shaders select and pass pointers into storage buffers.
+    bfr_bool variable_pointers_storage_buffer;
+    // Shaders select and pass pointers into storage buffers and workgroup memory.
+    bfr_bool variable_pointers;
+    // Shaders read a draw's base vertex, base instance and draw index.
+    bfr_bool draw_parameters;
+    // Buffers laid out with scalar alignment.
+    bfr_bool scalar_block_layout;
+    // Uniform buffers laid out as storage buffers are.
+    bfr_bool uniform_buffer_standard_layout;
+    // Subgroup operations on 8-, 16- and 64-bit integers and 16-bit floats.
+    bfr_bool subgroup_extended_types;
+    // Shaders use the memory model with availability and visibility operations.
+    bfr_bool memory_model;
+    // memory_model at device scope.
+    bfr_bool memory_model_device_scope;
+    // memory_model with availability and visibility chains of more than one element.
+    bfr_bool memory_model_visibility_chains;
+    // Vertex and tessellation shaders write the layer a primitive goes to.
+    bfr_bool shader_output_layer;
+    // Subgroup broadcasts from an invocation named by a value that is not constant.
+    bfr_bool subgroup_broadcast_dynamic_id;
+    // Fragment shaders demote invocations to helpers.
+    bfr_bool demote_to_helper_invocation;
+    // Fragment shaders terminate invocations.
+    bfr_bool terminate_invocation;
+    // Workgroup variables with initializers.
+    bfr_bool zero_initialize_workgroup_memory;
+    // Integer dot product instructions.
+    bfr_bool integer_dot_product;
+    // Workgroup sizes given by specialization constant ids, and outputs with more components than
+    // the next stage's matching inputs.
+    bfr_bool local_size_id;
+    // Subgroup rotate operations.
+    bfr_bool subgroup_rotate;
+    // Subgroup rotates within clusters.
+    bfr_bool subgroup_rotate_clustered;
+    // Floating-point controls per instruction.
+    bfr_bool float_controls2;
+    // Shaders tell the compiler what a value is expected or assumed to be.
+    bfr_bool expect_assume;
+    // Shaders carry non-semantic instructions, such as debug information.
+    bfr_bool non_semantic_info;
     // bfr_begin_debug_label, bfr_end_debug_label and bfr_insert_debug_label.
     bfr_bool debug_labels;
     // bfr_begin_queue_debug_label, bfr_end_queue_debug_label and bfr_insert_queue_debug_label.
@@ -3716,6 +4034,11 @@ BFR_API bfr_result bfr_find_queue_family(
     const bfr_queue_family_query* query,
     uint32_t* family);
 
+// Writes what the device has: the adapter's caps, as bfr_get_caps gives them, with each member of
+// bfr_features true only where the device was created with it, and the limits, timestamp stages and
+// host clocks that follow those features as the device has them.
+BFR_API bfr_result bfr_get_device_caps(bfr_device* device, bfr_caps* caps);
+
 // Writes how much memory the device's process may use and uses now. Fails with unsupported when the
 // driver cannot say.
 BFR_API bfr_result bfr_get_budget(bfr_device* device, bfr_memory_budget* budget);
@@ -3732,7 +4055,8 @@ BFR_API bfr_result bfr_create_device(
 BFR_API void bfr_destroy_device(bfr_device* device);
 
 // Creates a swapchain for the window in desc, which the family of the device's queue in desc must
-// present to. It has no images until the first bfr_resize_swapchain gives it a size.
+// present to. It has no images until the first bfr_resize_swapchain gives it a size. Fails with
+// error_unsupported when the device was created without bfr_features.swapchain.
 BFR_API bfr_result bfr_create_swapchain(
     bfr_device* device,
     const bfr_swapchain_desc* desc,

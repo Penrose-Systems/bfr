@@ -171,6 +171,12 @@ Features featuresOf(MTL::Device* device) {
     features.atomicInt64Texture = has64BitAtomics(device);
     // A render pass attachment's depthPlane names a 3D texture's slice.
     features.volumeColorTargets = true;
+    // MTL::RenderCommandEncoder::setDepthBias takes a clamp
+    // (MTLRenderCommandEncoder.hpp:199), with no caps bit.
+    features.depthBiasClamp = true;
+    // BFR presents through a CAMetalLayer (metal_swapchain.cpp), which takes
+    // any device, with no caps bit.
+    features.swapchain = true;
     addCompressionFeatures(device, features);
     addRenderFeatures(features);
     addDrawFeatures(features);

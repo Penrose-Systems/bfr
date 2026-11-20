@@ -38,14 +38,19 @@ inline constexpr std::uint32_t kVulkanMotionInstanceStride = 160;
 /// VK_KHR_global_priority where the adapter lists it.
 [[nodiscard]] bool hasQueueLevels(std::uint32_t version, std::span<const VkExtensionProperties> extensions);
 
-/// The features a device turns on, as adapter reports them: every one in the
-/// structs of each core version up to version, and every one of each extension
-/// below that it lists, which the device then enables. Below 1.3, the
-/// extensions 1.3 made core stand in for its struct. The caps read the same
-/// structs, so they say what the device has. core heads the chain a create
-/// info's pNext takes; the chain points into itself, so it stays where it is
-/// made.
+/// A chain of Vulkan's feature structs: those of each core version up to
+/// version, and below that the struct of each extension in extensions,
+/// linked only where its extension is there, since chaining one a device
+/// lacks is invalid. Below 1.3, the extensions 1.3 made core stand in for its
+/// struct, and below 1.4 global priority's does. Queried, it says what an
+/// adapter has (extensions being those it lists); filled from a request
+/// (EnabledFeatures), what a device enables. core heads the chain a query's
+/// or a create info's pNext takes; the chain points into itself, so it stays
+/// where it is made.
 struct DeviceFeatures {
+    /// Every member false.
+    DeviceFeatures(std::uint32_t version, std::span<const VkExtensionProperties> extensions);
+    /// What adapter has.
     DeviceFeatures(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
                    std::span<const VkExtensionProperties> extensions);
     ~DeviceFeatures() = default;
@@ -59,27 +64,18 @@ struct DeviceFeatures {
     VkPhysicalDeviceVulkan12Features vulkan12{};
     VkPhysicalDeviceVulkan13Features vulkan13{};
     VkPhysicalDeviceVulkan14Features vulkan14{};
-    /// Below 1.3, what 1.3 made core, where adapter lists the extension.
+    /// Below 1.3, what 1.3 made core.
     VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRendering{};
     VkPhysicalDeviceSynchronization2FeaturesKHR synchronization2{};
     VkPhysicalDeviceExtendedDynamicStateFeaturesEXT extendedDynamicState{};
     VkPhysicalDeviceTextureCompressionASTCHDRFeaturesEXT astcHdr{};
     VkPhysicalDevice4444FormatsFeaturesEXT formats4444{};
-    /// Its limits are maxBufferSize and the subgroup size range in the caps.
     VkPhysicalDeviceMaintenance4FeaturesKHR maintenance4{};
-    VkPhysicalDeviceSubgroupSizeControlFeaturesEXT subgroupSizeControl{};
     VkPhysicalDeviceShaderIntegerDotProductFeaturesKHR integerDotProduct{};
     VkPhysicalDeviceShaderTerminateInvocationFeaturesKHR terminateInvocation{};
     VkPhysicalDeviceZeroInitializeWorkgroupMemoryFeaturesKHR zeroInitializeWorkgroupMemory{};
-    VkPhysicalDeviceExtendedDynamicState2FeaturesEXT extendedDynamicState2{};
-    /// The device turns its robustImageAccess off, as it does vulkan13's.
     VkPhysicalDeviceImageRobustnessFeaturesEXT imageRobustness{};
-    VkPhysicalDeviceInlineUniformBlockFeaturesEXT inlineUniformBlock{};
-    VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT pipelineCreationCacheControl{};
-    VkPhysicalDevicePrivateDataFeaturesEXT privateData{};
     VkPhysicalDeviceShaderDemoteToHelperInvocationFeaturesEXT demoteToHelperInvocation{};
-    VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT texelBufferAlignment{};
-    VkPhysicalDeviceYcbcr2Plane444FormatsFeaturesEXT ycbcr2Plane444Formats{};
     VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFloat{};
     VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT imageAtomicInt64{};
     VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR barycentric{};
@@ -95,9 +91,10 @@ struct DeviceFeatures {
     VkPhysicalDeviceMaintenance9FeaturesKHR maintenance9{};
     /// Primitive restart on list topologies.
     VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT listRestart{};
-    /// Mesh and task shaders. The device clears its
-    /// primitiveFragmentShadingRateMeshShader, which needs fragment shading
-    /// rate turned on (VUID-VkPhysicalDeviceMeshShaderFeaturesEXT-primitiveFragmentShadingRateMeshShader-07033).
+    /// Mesh and task shaders. Its primitiveFragmentShadingRateMeshShader
+    /// needs fragment shading rate turned on
+    /// (VUID-VkPhysicalDeviceMeshShaderFeaturesEXT-primitiveFragmentShadingRateMeshShader-07033),
+    /// which BFR has no call for.
     VkPhysicalDeviceMeshShaderFeaturesEXT mesh{};
     /// Acceleration structures, with VK_KHR_deferred_host_operations, which
     /// the extension needs and which has no struct.
@@ -115,20 +112,12 @@ struct DeviceFeatures {
     VkPhysicalDeviceRayTracingMotionBlurFeaturesNV motionBlur{};
     VkPhysicalDevicePartitionedAccelerationStructureFeaturesNV partitioned{};
     VkPhysicalDeviceClusterAccelerationStructureFeaturesNV clusters{};
-    /// VK_KHR_pipeline_library, which has no features struct, is enabled.
-    bool pipelineLibrary = false;
-    /// The extensions whose structs are chained, which the device enables.
-    std::vector<const char*> enabledExtensions;
     std::uint32_t version = 0;
 
-    /// What the device has of what 1.3 made core: its struct from 1.3, else
+    /// What the chain has of what 1.3 made core: its struct from 1.3, else
     /// the extension's.
     [[nodiscard]] bool hasDynamicRendering() const;
     [[nodiscard]] bool hasSynchronization2() const;
-    /// vkCmdSetPrimitiveTopology: core from 1.3, else the extendedDynamicState
-    /// feature (VUID-VkGraphicsPipelineCreateInfo-pDynamicStates-03378).
-    [[nodiscard]] bool hasDynamicTopology() const;
-    [[nodiscard]] bool hasAstcHdr() const;
 };
 
 /// What BFR needs that features lack, by their Vulkan names: bindless takes
@@ -137,11 +126,24 @@ struct DeviceFeatures {
 /// takes dynamic rendering.
 [[nodiscard]] std::vector<std::string> missingRequirements(const DeviceFeatures& features);
 
+/// Turns on in features what missingRequirements asks of it.
+void enableRequirements(DeviceFeatures& features);
+
 /// Everything about adapter that stays the same while it runs; debugUtils
 /// says whether the instance enabled VK_EXT_debug_utils. These queries can't
 /// fail.
 [[nodiscard]] Caps readCaps(const InstanceTable& vk, VkPhysicalDevice adapter, std::uint32_t version,
                             std::span<const VkExtensionProperties> extensions, bool debugUtils);
+
+/// What a device on adapter has that enables the features in enabled and the
+/// extensions in extensions for request, where supported is what adapter has
+/// and listed what it lists: readCaps' caps, read from what the device
+/// enables, with each FeatureRequest feature true only where request asks for
+/// it (requestedOnly).
+[[nodiscard]] Caps readDeviceCaps(const InstanceTable& vk, VkPhysicalDevice adapter,
+                                  std::span<const VkExtensionProperties> listed, const DeviceFeatures& supported,
+                                  DeviceFeatures& enabled, std::span<const VkExtensionProperties> extensions,
+                                  const FeatureRequest& request, bool debugUtils);
 
 /// Which formats added by 1.3 a device on adapter has: all of them from 1.3,
 /// else those of the extensions adapter lists, which the device enables.

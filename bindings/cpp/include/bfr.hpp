@@ -358,6 +358,186 @@ static_assert(offsetof(QueueDesc, family) == offsetof(bfr_queue_desc, family));
 static_assert(offsetof(QueueDesc, rank) == offsetof(bfr_queue_desc, rank));
 static_assert(offsetof(QueueDesc, level) == offsetof(bfr_queue_desc, level));
 
+/// The optional features a device is opened with; all false enables none of them. Each is the
+/// bfr_caps_features member of its name, the sparse_ ones bfr_caps_sparse's without the prefix, and
+/// timestamp_calibration is bfr_calibrate_timestamps, which the adapter has where
+/// bfr_caps_timestamps.host_clocks names a clock. bfr_create_device fails with error_unsupported,
+/// naming them, when the adapter lacks one asked for or BFR has no call for it, and with
+/// error_invalid_argument, naming them, when one is asked for without a feature it needs, as each
+/// says. The message may be cut short; the full set the adapter lacks is what is asked for and
+/// false in bfr_get_caps.
+struct Features {
+    bool swapchain{};
+    /// bfr_calibrate_timestamps.
+    bool timestampCalibration{};
+    bool robustBufferAccess{};
+    bool robustImageAccess{};
+    /// Needs acceleration_structure.
+    bool rayQuery{};
+    /// Needs ray_query.
+    bool rayQueryGraphics{};
+    /// Needs acceleration_structure.
+    bool rayTracingPipeline{};
+    /// Needs ray_tracing_pipeline.
+    bool traceRaysIndirect{};
+    /// Needs acceleration_structure.
+    bool rayPrimitiveCulling{};
+    /// Needs buffer_address.
+    bool accelerationStructure{};
+    bool bufferAddress{};
+    /// Needs acceleration_structure.
+    bool rayPositionFetch{};
+    /// Needs acceleration_structure.
+    bool accelerationStructureCurrentSize{};
+    /// Needs acceleration_structure.
+    bool serializedBottomCount{};
+    /// Needs ray_tracing_pipeline.
+    bool rayInvocationReorder{};
+    /// Needs ray_tracing_pipeline.
+    bool rayTracingPipelineLibrary{};
+    /// Needs ray_tracing_pipeline_library.
+    bool pipelineLibraryIdentifiers{};
+    /// Needs ray_tracing_pipeline.
+    bool rayTracingCaptureReplay{};
+    /// Needs ray_tracing_capture_replay.
+    bool rayTracingCaptureReplayMixed{};
+    /// Needs acceleration_structure.
+    bool accelerationStructureIndirectBuild{};
+    /// Needs acceleration_structure.
+    bool opacityMicromap{};
+    /// Needs ray_tracing_pipeline.
+    bool rayTracingMotion{};
+    /// Needs ray_tracing_motion.
+    bool rayTracingMotionIndirect{};
+    /// Needs acceleration_structure.
+    bool partitionedTop{};
+    /// Needs acceleration_structure.
+    bool clusterAccelerationStructure{};
+    /// Needs acceleration_structure.
+    bool accelerationStructureCaptureReplay{};
+    bool meshShader{};
+    bool taskShader{};
+    /// Needs multiview.
+    bool meshMultiview{};
+    bool meshStatistics{};
+    bool meshShadingRate{};
+    bool shaderFloat16{};
+    bool shaderFloat64{};
+    bool shaderInt8{};
+    bool shaderInt16{};
+    bool shaderInt64{};
+    bool atomicInt64{};
+    bool atomicInt64Shared{};
+    bool atomicInt64Texture{};
+    /// Needs atomic_int64_texture.
+    bool sparseAtomicInt64Texture{};
+    bool atomicFloat32{};
+    bool atomicFloat32Add{};
+    bool atomicFloat64{};
+    bool atomicFloat64Add{};
+    bool atomicFloat32Shared{};
+    bool atomicFloat32AddShared{};
+    bool atomicFloat64Shared{};
+    bool atomicFloat64AddShared{};
+    bool atomicFloat32Texture{};
+    bool atomicFloat32AddTexture{};
+    /// Needs atomic_float32_texture.
+    bool sparseAtomicFloat32Texture{};
+    /// Needs atomic_float32_add_texture.
+    bool sparseAtomicFloat32AddTexture{};
+    bool barycentrics{};
+    bool geometryShader{};
+    bool tessellation{};
+    bool multiview{};
+    /// Needs multiview.
+    bool multiviewGeometryShader{};
+    /// Needs multiview.
+    bool multiviewTessellationShader{};
+    bool sampleRateShading{};
+    bool dualSourceBlend{};
+    bool independentBlend{};
+    bool logicOp{};
+    bool depthClamp{};
+    bool depthBiasClamp{};
+    bool depthBounds{};
+    bool wireframe{};
+    bool wideLines{};
+    bool samplerAnisotropy{};
+    bool samplerMinmax{};
+    bool samplerMirrorClampToEdge{};
+    bool samplerCustomBorderColor{};
+    bool volumeColorTargets{};
+    bool samplerLodBias{};
+    bool imageCubeArray{};
+    bool compressionAstcHdr{};
+    bool formatBgra4Unorm{};
+    bool multiDrawIndirect{};
+    bool drawIndirectCount{};
+    bool drawIndirectFirstInstance{};
+    bool fullDrawIndexUint32{};
+    bool triangleFans{};
+    bool listRestart{};
+    bool dynamicTopology{};
+    bool alphaToOne{};
+    bool storageReadWithoutFormat{};
+    bool storageWriteWithoutFormat{};
+    bool storageTextureMultisample{};
+    bool textureDynamicIndexing{};
+    bool storageTextureDynamicIndexing{};
+    bool storageBufferDynamicIndexing{};
+    bool uniformBufferDynamicIndexing{};
+    bool storageTextureNonUniformIndexing{};
+    bool uniformBufferNonUniformIndexing{};
+    bool vertexStoresAndAtomics{};
+    bool fragmentStoresAndAtomics{};
+    bool tessellationGeometryPointSize{};
+    bool textureGatherExtended{};
+    bool clipDistance{};
+    bool cullDistance{};
+    bool shaderMinLod{};
+    bool storageBuffer16bitAccess{};
+    bool uniformAndStorageBuffer16bitAccess{};
+    bool pushConstant16bit{};
+    bool inputOutput16bit{};
+    bool storageBuffer8bitAccess{};
+    bool uniformAndStorageBuffer8bitAccess{};
+    bool pushConstant8bit{};
+    bool variablePointersStorageBuffer{};
+    /// Needs variable_pointers_storage_buffer.
+    bool variablePointers{};
+    bool drawParameters{};
+    bool scalarBlockLayout{};
+    bool uniformBufferStandardLayout{};
+    bool subgroupExtendedTypes{};
+    bool memoryModel{};
+    bool memoryModelDeviceScope{};
+    bool memoryModelVisibilityChains{};
+    bool shaderOutputLayer{};
+    bool subgroupBroadcastDynamicId{};
+    bool demoteToHelperInvocation{};
+    bool terminateInvocation{};
+    bool zeroInitializeWorkgroupMemory{};
+    bool integerDotProduct{};
+    bool localSizeId{};
+    bool subgroupRotate{};
+    bool subgroupRotateClustered{};
+    bool floatControls2{};
+    bool expectAssume{};
+    bool nonSemanticInfo{};
+    bool pipelineStatistics{};
+    bool occlusionQueryPrecise{};
+    bool sparseBinding{};
+    bool sparseBuffers{};
+    bool sparseTextures2d{};
+    bool sparseTextures3d{};
+    bool sparseSamples2{};
+    bool sparseSamples4{};
+    bool sparseSamples8{};
+    bool sparseSamples16{};
+    bool sparseAliased{};
+    bool sparseShaderResidency{};
+};
+
 /// How to open an adapter. The device's queues are numbered from 0 in the order queues asks for
 /// them. The calls a queue's lists run follow its family's flags, as Vulkan's rules for each
 /// command say. Where it runs graphics: rendering, draws, the calls that set their state or bind a
@@ -376,6 +556,9 @@ struct DeviceDesc {
     std::uint32_t adapter{};
     /// The queues to open, each of the family it names, read during the call only; none is none.
     std::span<const QueueDesc> queues{};
+    /// What the device enables; all false enables nothing optional. bfr_get_device_caps says what
+    /// it has.
+    Features features{};
     /// Command lists the device holds at once, across all its pools, and the most swapchains its
     /// recording lists render to at once; past it, calls fail with error_limit_reached. Room for
     /// them is made with the device, so recording and submitting never allocate. A bfr_submit of
@@ -404,7 +587,7 @@ struct DeviceDesc {
     std::uint32_t maxBindlessSamplers{};
     /// Slots in the uniform buffer table, passed as max_bindless_textures is. Where
     /// bfr_caps_bindless.max_uniform_buffers is 0 the adapter has no such table, and more than 0
-    /// fails with error_limit_reached.
+    /// fails with error_limit_reached; the device's (bfr_get_device_caps) is 0 where this is.
     std::uint32_t maxBindlessUniformBuffers{};
     /// Timestamp pools the device holds at once, 0 for none; past it, bfr_create_timestamp_pool
     /// fails with error_limit_reached.
@@ -424,12 +607,14 @@ struct DeviceDesc {
     std::uint32_t maxTileMappings{};
     /// Slots in the acceleration structure table, of top structures, passed as
     /// max_bindless_textures is; bfr_caps_bindless.max_acceleration_structures says how many the
-    /// adapter holds. Where that is 0 the device has no such table, and more than 0 fails with
-    /// error_limit_reached. With 0 slots, top structures are made with none.
+    /// adapter holds. Where that is 0, or features.acceleration_structure is not asked for, the
+    /// device has no such table, and more than 0 fails with error_limit_reached. With 0 slots, top
+    /// structures are made with none, and the device's
+    /// bfr_caps_bindless.max_acceleration_structures is 0.
     std::uint32_t maxBindlessAccelerationStructures{};
     /// Slots in the partitioned top table bfr_pipeline states, of partitioned top structures; with
     /// 0, they are made with none. No limit names it: the backend says whether it holds the tables
-    /// together. Where bfr_caps_features.partitioned_top is false, more than 0 fails with
+    /// together. Where features.partitioned_top is not asked for, more than 0 fails with
     /// error_limit_reached.
     std::uint32_t maxBindlessPartitionedTops{};
     /// The most geometries one build takes, in bfr_build_acceleration_structure and
@@ -2219,6 +2404,139 @@ struct CapsFeatures {
     bool queries{};
     bool pipelineStatistics{};
     bool occlusionQueryPrecise{};
+    /// bfr_create_swapchain.
+    bool swapchain{};
+    /// Out-of-bounds buffer accesses stay within the buffer: reads give values from it or 0, and
+    /// writes are dropped or land in it. On Vulkan it also needs robustBufferAccessUpdateAfterBind,
+    /// since BFR's tables update after bind.
+    bool robustBufferAccess{};
+    /// Out-of-bounds texture accesses stay within the texture: reads give 0 in each channel, alpha
+    /// 0 or 1, and writes are dropped.
+    bool robustImageAccess{};
+    /// Mesh shaders set a primitive's shading rate. BFR has no shading rate call yet, so it is
+    /// false on every backend.
+    bool meshShadingRate{};
+    /// 64-bit integer atomics on workgroup memory.
+    bool atomicInt64Shared{};
+    /// 64-bit integer atomics on sparse storage textures.
+    bool sparseAtomicInt64Texture{};
+    /// 32-bit float atomic load, store and exchange on buffers.
+    bool atomicFloat32{};
+    /// 64-bit float atomic load, store and exchange on buffers.
+    bool atomicFloat64{};
+    /// 64-bit float atomic add on buffers.
+    bool atomicFloat64Add{};
+    /// 32-bit float atomic load, store and exchange on workgroup memory.
+    bool atomicFloat32Shared{};
+    /// 32-bit float atomic add on workgroup memory.
+    bool atomicFloat32AddShared{};
+    /// 64-bit float atomic load, store and exchange on workgroup memory.
+    bool atomicFloat64Shared{};
+    /// 64-bit float atomic add on workgroup memory.
+    bool atomicFloat64AddShared{};
+    /// 32-bit float atomic load, store and exchange on storage textures.
+    bool atomicFloat32Texture{};
+    /// 32-bit float atomic add on storage textures.
+    bool atomicFloat32AddTexture{};
+    /// atomic_float32_texture on sparse storage textures.
+    bool sparseAtomicFloat32Texture{};
+    /// atomic_float32_add_texture on sparse storage textures.
+    bool sparseAtomicFloat32AddTexture{};
+    /// Geometry shaders in multiview renderings.
+    bool multiviewGeometryShader{};
+    /// Tessellation shaders in multiview renderings.
+    bool multiviewTessellationShader{};
+    /// A bfr_raster_state.depth_bias_clamp other than 0.
+    bool depthBiasClamp{};
+    /// Cube textures with more than 6 layers.
+    bool imageCubeArray{};
+    /// Textures of format_bgra4_unorm.
+    bool formatBgra4Unorm{};
+    /// Indexed draws with 32-bit indices take index values above 2^24 - 1.
+    bool fullDrawIndexUint32{};
+    /// Multisampled storage textures in shaders.
+    bool storageTextureMultisample{};
+    /// The texture table indexed by a value that is the same across a draw or dispatch but not a
+    /// constant.
+    bool textureDynamicIndexing{};
+    /// The storage texture table, as texture_dynamic_indexing says.
+    bool storageTextureDynamicIndexing{};
+    /// The storage buffer table, as texture_dynamic_indexing says.
+    bool storageBufferDynamicIndexing{};
+    /// The uniform buffer table, as texture_dynamic_indexing says.
+    bool uniformBufferDynamicIndexing{};
+    /// Vertex, tessellation and geometry shaders write to and run atomics on storage buffers and
+    /// textures.
+    bool vertexStoresAndAtomics{};
+    /// Fragment shaders write to and run atomics on storage buffers and textures.
+    bool fragmentStoresAndAtomics{};
+    /// Tessellation and geometry shaders write the point size.
+    bool tessellationGeometryPointSize{};
+    /// Texture gathers with offsets that are not constant, and with several offsets.
+    bool textureGatherExtended{};
+    /// Shaders write clip distances.
+    bool clipDistance{};
+    /// Shaders write cull distances.
+    bool cullDistance{};
+    /// Shaders sample with a minimum level of detail.
+    bool shaderMinLod{};
+    /// 16-bit values in storage buffers.
+    bool storageBuffer16bitAccess{};
+    /// 16-bit values in uniform and storage buffers.
+    bool uniformAndStorageBuffer16bitAccess{};
+    /// 16-bit values in push constants.
+    bool pushConstant16bit{};
+    /// 16-bit values in shaders' inputs and outputs.
+    bool inputOutput16bit{};
+    /// 8-bit integers in storage buffers.
+    bool storageBuffer8bitAccess{};
+    /// 8-bit integers in uniform and storage buffers.
+    bool uniformAndStorageBuffer8bitAccess{};
+    /// 8-bit integers in push constants.
+    bool pushConstant8bit{};
+    /// Shaders select and pass pointers into storage buffers.
+    bool variablePointersStorageBuffer{};
+    /// Shaders select and pass pointers into storage buffers and workgroup memory.
+    bool variablePointers{};
+    /// Shaders read a draw's base vertex, base instance and draw index.
+    bool drawParameters{};
+    /// Buffers laid out with scalar alignment.
+    bool scalarBlockLayout{};
+    /// Uniform buffers laid out as storage buffers are.
+    bool uniformBufferStandardLayout{};
+    /// Subgroup operations on 8-, 16- and 64-bit integers and 16-bit floats.
+    bool subgroupExtendedTypes{};
+    /// Shaders use the memory model with availability and visibility operations.
+    bool memoryModel{};
+    /// memory_model at device scope.
+    bool memoryModelDeviceScope{};
+    /// memory_model with availability and visibility chains of more than one element.
+    bool memoryModelVisibilityChains{};
+    /// Vertex and tessellation shaders write the layer a primitive goes to.
+    bool shaderOutputLayer{};
+    /// Subgroup broadcasts from an invocation named by a value that is not constant.
+    bool subgroupBroadcastDynamicId{};
+    /// Fragment shaders demote invocations to helpers.
+    bool demoteToHelperInvocation{};
+    /// Fragment shaders terminate invocations.
+    bool terminateInvocation{};
+    /// Workgroup variables with initializers.
+    bool zeroInitializeWorkgroupMemory{};
+    /// Integer dot product instructions.
+    bool integerDotProduct{};
+    /// Workgroup sizes given by specialization constant ids, and outputs with more components than
+    /// the next stage's matching inputs.
+    bool localSizeId{};
+    /// Subgroup rotate operations.
+    bool subgroupRotate{};
+    /// Subgroup rotates within clusters.
+    bool subgroupRotateClustered{};
+    /// Floating-point controls per instruction.
+    bool floatControls2{};
+    /// Shaders tell the compiler what a value is expected or assumed to be.
+    bool expectAssume{};
+    /// Shaders carry non-semantic instructions, such as debug information.
+    bool nonSemanticInfo{};
     /// bfr_begin_debug_label, bfr_end_debug_label and bfr_insert_debug_label.
     bool debugLabels{};
     /// bfr_begin_queue_debug_label, bfr_end_queue_debug_label and bfr_insert_queue_debug_label.
@@ -2583,12 +2901,158 @@ inline bfr_queue_desc toC(const QueueDesc& value) {
     };
 }
 
+inline bfr_features toC(const Features& value) {
+    return {
+        .swapchain = static_cast<bfr_bool>(value.swapchain),
+        .timestamp_calibration = static_cast<bfr_bool>(value.timestampCalibration),
+        .robust_buffer_access = static_cast<bfr_bool>(value.robustBufferAccess),
+        .robust_image_access = static_cast<bfr_bool>(value.robustImageAccess),
+        .ray_query = static_cast<bfr_bool>(value.rayQuery),
+        .ray_query_graphics = static_cast<bfr_bool>(value.rayQueryGraphics),
+        .ray_tracing_pipeline = static_cast<bfr_bool>(value.rayTracingPipeline),
+        .trace_rays_indirect = static_cast<bfr_bool>(value.traceRaysIndirect),
+        .ray_primitive_culling = static_cast<bfr_bool>(value.rayPrimitiveCulling),
+        .acceleration_structure = static_cast<bfr_bool>(value.accelerationStructure),
+        .buffer_address = static_cast<bfr_bool>(value.bufferAddress),
+        .ray_position_fetch = static_cast<bfr_bool>(value.rayPositionFetch),
+        .acceleration_structure_current_size = static_cast<bfr_bool>(value.accelerationStructureCurrentSize),
+        .serialized_bottom_count = static_cast<bfr_bool>(value.serializedBottomCount),
+        .ray_invocation_reorder = static_cast<bfr_bool>(value.rayInvocationReorder),
+        .ray_tracing_pipeline_library = static_cast<bfr_bool>(value.rayTracingPipelineLibrary),
+        .pipeline_library_identifiers = static_cast<bfr_bool>(value.pipelineLibraryIdentifiers),
+        .ray_tracing_capture_replay = static_cast<bfr_bool>(value.rayTracingCaptureReplay),
+        .ray_tracing_capture_replay_mixed = static_cast<bfr_bool>(value.rayTracingCaptureReplayMixed),
+        .acceleration_structure_indirect_build = static_cast<bfr_bool>(value.accelerationStructureIndirectBuild),
+        .opacity_micromap = static_cast<bfr_bool>(value.opacityMicromap),
+        .ray_tracing_motion = static_cast<bfr_bool>(value.rayTracingMotion),
+        .ray_tracing_motion_indirect = static_cast<bfr_bool>(value.rayTracingMotionIndirect),
+        .partitioned_top = static_cast<bfr_bool>(value.partitionedTop),
+        .cluster_acceleration_structure = static_cast<bfr_bool>(value.clusterAccelerationStructure),
+        .acceleration_structure_capture_replay = static_cast<bfr_bool>(value.accelerationStructureCaptureReplay),
+        .mesh_shader = static_cast<bfr_bool>(value.meshShader),
+        .task_shader = static_cast<bfr_bool>(value.taskShader),
+        .mesh_multiview = static_cast<bfr_bool>(value.meshMultiview),
+        .mesh_statistics = static_cast<bfr_bool>(value.meshStatistics),
+        .mesh_shading_rate = static_cast<bfr_bool>(value.meshShadingRate),
+        .shader_float16 = static_cast<bfr_bool>(value.shaderFloat16),
+        .shader_float64 = static_cast<bfr_bool>(value.shaderFloat64),
+        .shader_int8 = static_cast<bfr_bool>(value.shaderInt8),
+        .shader_int16 = static_cast<bfr_bool>(value.shaderInt16),
+        .shader_int64 = static_cast<bfr_bool>(value.shaderInt64),
+        .atomic_int64 = static_cast<bfr_bool>(value.atomicInt64),
+        .atomic_int64_shared = static_cast<bfr_bool>(value.atomicInt64Shared),
+        .atomic_int64_texture = static_cast<bfr_bool>(value.atomicInt64Texture),
+        .sparse_atomic_int64_texture = static_cast<bfr_bool>(value.sparseAtomicInt64Texture),
+        .atomic_float32 = static_cast<bfr_bool>(value.atomicFloat32),
+        .atomic_float32_add = static_cast<bfr_bool>(value.atomicFloat32Add),
+        .atomic_float64 = static_cast<bfr_bool>(value.atomicFloat64),
+        .atomic_float64_add = static_cast<bfr_bool>(value.atomicFloat64Add),
+        .atomic_float32_shared = static_cast<bfr_bool>(value.atomicFloat32Shared),
+        .atomic_float32_add_shared = static_cast<bfr_bool>(value.atomicFloat32AddShared),
+        .atomic_float64_shared = static_cast<bfr_bool>(value.atomicFloat64Shared),
+        .atomic_float64_add_shared = static_cast<bfr_bool>(value.atomicFloat64AddShared),
+        .atomic_float32_texture = static_cast<bfr_bool>(value.atomicFloat32Texture),
+        .atomic_float32_add_texture = static_cast<bfr_bool>(value.atomicFloat32AddTexture),
+        .sparse_atomic_float32_texture = static_cast<bfr_bool>(value.sparseAtomicFloat32Texture),
+        .sparse_atomic_float32_add_texture = static_cast<bfr_bool>(value.sparseAtomicFloat32AddTexture),
+        .barycentrics = static_cast<bfr_bool>(value.barycentrics),
+        .geometry_shader = static_cast<bfr_bool>(value.geometryShader),
+        .tessellation = static_cast<bfr_bool>(value.tessellation),
+        .multiview = static_cast<bfr_bool>(value.multiview),
+        .multiview_geometry_shader = static_cast<bfr_bool>(value.multiviewGeometryShader),
+        .multiview_tessellation_shader = static_cast<bfr_bool>(value.multiviewTessellationShader),
+        .sample_rate_shading = static_cast<bfr_bool>(value.sampleRateShading),
+        .dual_source_blend = static_cast<bfr_bool>(value.dualSourceBlend),
+        .independent_blend = static_cast<bfr_bool>(value.independentBlend),
+        .logic_op = static_cast<bfr_bool>(value.logicOp),
+        .depth_clamp = static_cast<bfr_bool>(value.depthClamp),
+        .depth_bias_clamp = static_cast<bfr_bool>(value.depthBiasClamp),
+        .depth_bounds = static_cast<bfr_bool>(value.depthBounds),
+        .wireframe = static_cast<bfr_bool>(value.wireframe),
+        .wide_lines = static_cast<bfr_bool>(value.wideLines),
+        .sampler_anisotropy = static_cast<bfr_bool>(value.samplerAnisotropy),
+        .sampler_minmax = static_cast<bfr_bool>(value.samplerMinmax),
+        .sampler_mirror_clamp_to_edge = static_cast<bfr_bool>(value.samplerMirrorClampToEdge),
+        .sampler_custom_border_color = static_cast<bfr_bool>(value.samplerCustomBorderColor),
+        .volume_color_targets = static_cast<bfr_bool>(value.volumeColorTargets),
+        .sampler_lod_bias = static_cast<bfr_bool>(value.samplerLodBias),
+        .image_cube_array = static_cast<bfr_bool>(value.imageCubeArray),
+        .compression_astc_hdr = static_cast<bfr_bool>(value.compressionAstcHdr),
+        .format_bgra4_unorm = static_cast<bfr_bool>(value.formatBgra4Unorm),
+        .multi_draw_indirect = static_cast<bfr_bool>(value.multiDrawIndirect),
+        .draw_indirect_count = static_cast<bfr_bool>(value.drawIndirectCount),
+        .draw_indirect_first_instance = static_cast<bfr_bool>(value.drawIndirectFirstInstance),
+        .full_draw_index_uint32 = static_cast<bfr_bool>(value.fullDrawIndexUint32),
+        .triangle_fans = static_cast<bfr_bool>(value.triangleFans),
+        .list_restart = static_cast<bfr_bool>(value.listRestart),
+        .dynamic_topology = static_cast<bfr_bool>(value.dynamicTopology),
+        .alpha_to_one = static_cast<bfr_bool>(value.alphaToOne),
+        .storage_read_without_format = static_cast<bfr_bool>(value.storageReadWithoutFormat),
+        .storage_write_without_format = static_cast<bfr_bool>(value.storageWriteWithoutFormat),
+        .storage_texture_multisample = static_cast<bfr_bool>(value.storageTextureMultisample),
+        .texture_dynamic_indexing = static_cast<bfr_bool>(value.textureDynamicIndexing),
+        .storage_texture_dynamic_indexing = static_cast<bfr_bool>(value.storageTextureDynamicIndexing),
+        .storage_buffer_dynamic_indexing = static_cast<bfr_bool>(value.storageBufferDynamicIndexing),
+        .uniform_buffer_dynamic_indexing = static_cast<bfr_bool>(value.uniformBufferDynamicIndexing),
+        .storage_texture_non_uniform_indexing = static_cast<bfr_bool>(value.storageTextureNonUniformIndexing),
+        .uniform_buffer_non_uniform_indexing = static_cast<bfr_bool>(value.uniformBufferNonUniformIndexing),
+        .vertex_stores_and_atomics = static_cast<bfr_bool>(value.vertexStoresAndAtomics),
+        .fragment_stores_and_atomics = static_cast<bfr_bool>(value.fragmentStoresAndAtomics),
+        .tessellation_geometry_point_size = static_cast<bfr_bool>(value.tessellationGeometryPointSize),
+        .texture_gather_extended = static_cast<bfr_bool>(value.textureGatherExtended),
+        .clip_distance = static_cast<bfr_bool>(value.clipDistance),
+        .cull_distance = static_cast<bfr_bool>(value.cullDistance),
+        .shader_min_lod = static_cast<bfr_bool>(value.shaderMinLod),
+        .storage_buffer_16bit_access = static_cast<bfr_bool>(value.storageBuffer16bitAccess),
+        .uniform_and_storage_buffer_16bit_access = static_cast<bfr_bool>(value.uniformAndStorageBuffer16bitAccess),
+        .push_constant_16bit = static_cast<bfr_bool>(value.pushConstant16bit),
+        .input_output_16bit = static_cast<bfr_bool>(value.inputOutput16bit),
+        .storage_buffer_8bit_access = static_cast<bfr_bool>(value.storageBuffer8bitAccess),
+        .uniform_and_storage_buffer_8bit_access = static_cast<bfr_bool>(value.uniformAndStorageBuffer8bitAccess),
+        .push_constant_8bit = static_cast<bfr_bool>(value.pushConstant8bit),
+        .variable_pointers_storage_buffer = static_cast<bfr_bool>(value.variablePointersStorageBuffer),
+        .variable_pointers = static_cast<bfr_bool>(value.variablePointers),
+        .draw_parameters = static_cast<bfr_bool>(value.drawParameters),
+        .scalar_block_layout = static_cast<bfr_bool>(value.scalarBlockLayout),
+        .uniform_buffer_standard_layout = static_cast<bfr_bool>(value.uniformBufferStandardLayout),
+        .subgroup_extended_types = static_cast<bfr_bool>(value.subgroupExtendedTypes),
+        .memory_model = static_cast<bfr_bool>(value.memoryModel),
+        .memory_model_device_scope = static_cast<bfr_bool>(value.memoryModelDeviceScope),
+        .memory_model_visibility_chains = static_cast<bfr_bool>(value.memoryModelVisibilityChains),
+        .shader_output_layer = static_cast<bfr_bool>(value.shaderOutputLayer),
+        .subgroup_broadcast_dynamic_id = static_cast<bfr_bool>(value.subgroupBroadcastDynamicId),
+        .demote_to_helper_invocation = static_cast<bfr_bool>(value.demoteToHelperInvocation),
+        .terminate_invocation = static_cast<bfr_bool>(value.terminateInvocation),
+        .zero_initialize_workgroup_memory = static_cast<bfr_bool>(value.zeroInitializeWorkgroupMemory),
+        .integer_dot_product = static_cast<bfr_bool>(value.integerDotProduct),
+        .local_size_id = static_cast<bfr_bool>(value.localSizeId),
+        .subgroup_rotate = static_cast<bfr_bool>(value.subgroupRotate),
+        .subgroup_rotate_clustered = static_cast<bfr_bool>(value.subgroupRotateClustered),
+        .float_controls2 = static_cast<bfr_bool>(value.floatControls2),
+        .expect_assume = static_cast<bfr_bool>(value.expectAssume),
+        .non_semantic_info = static_cast<bfr_bool>(value.nonSemanticInfo),
+        .pipeline_statistics = static_cast<bfr_bool>(value.pipelineStatistics),
+        .occlusion_query_precise = static_cast<bfr_bool>(value.occlusionQueryPrecise),
+        .sparse_binding = static_cast<bfr_bool>(value.sparseBinding),
+        .sparse_buffers = static_cast<bfr_bool>(value.sparseBuffers),
+        .sparse_textures_2d = static_cast<bfr_bool>(value.sparseTextures2d),
+        .sparse_textures_3d = static_cast<bfr_bool>(value.sparseTextures3d),
+        .sparse_samples_2 = static_cast<bfr_bool>(value.sparseSamples2),
+        .sparse_samples_4 = static_cast<bfr_bool>(value.sparseSamples4),
+        .sparse_samples_8 = static_cast<bfr_bool>(value.sparseSamples8),
+        .sparse_samples_16 = static_cast<bfr_bool>(value.sparseSamples16),
+        .sparse_aliased = static_cast<bfr_bool>(value.sparseAliased),
+        .sparse_shader_residency = static_cast<bfr_bool>(value.sparseShaderResidency),
+    };
+}
+
 inline bfr_device_desc toC(const DeviceDesc& value, const bfr_chain* next) {
     return {
         .next = next,
         .adapter = value.adapter,
         .queues = reinterpret_cast<const bfr_queue_desc*>(value.queues.data()),
         .queue_count = static_cast<uint32_t>(value.queues.size()),
+        .features = toC(value.features),
         .max_command_lists = value.maxCommandLists,
         .max_command_pools = value.maxCommandPools,
         .max_swapchains = value.maxSwapchains,
@@ -3404,6 +3868,69 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .queries = value.queries != BFR_FALSE,
         .pipelineStatistics = value.pipeline_statistics != BFR_FALSE,
         .occlusionQueryPrecise = value.occlusion_query_precise != BFR_FALSE,
+        .swapchain = value.swapchain != BFR_FALSE,
+        .robustBufferAccess = value.robust_buffer_access != BFR_FALSE,
+        .robustImageAccess = value.robust_image_access != BFR_FALSE,
+        .meshShadingRate = value.mesh_shading_rate != BFR_FALSE,
+        .atomicInt64Shared = value.atomic_int64_shared != BFR_FALSE,
+        .sparseAtomicInt64Texture = value.sparse_atomic_int64_texture != BFR_FALSE,
+        .atomicFloat32 = value.atomic_float32 != BFR_FALSE,
+        .atomicFloat64 = value.atomic_float64 != BFR_FALSE,
+        .atomicFloat64Add = value.atomic_float64_add != BFR_FALSE,
+        .atomicFloat32Shared = value.atomic_float32_shared != BFR_FALSE,
+        .atomicFloat32AddShared = value.atomic_float32_add_shared != BFR_FALSE,
+        .atomicFloat64Shared = value.atomic_float64_shared != BFR_FALSE,
+        .atomicFloat64AddShared = value.atomic_float64_add_shared != BFR_FALSE,
+        .atomicFloat32Texture = value.atomic_float32_texture != BFR_FALSE,
+        .atomicFloat32AddTexture = value.atomic_float32_add_texture != BFR_FALSE,
+        .sparseAtomicFloat32Texture = value.sparse_atomic_float32_texture != BFR_FALSE,
+        .sparseAtomicFloat32AddTexture = value.sparse_atomic_float32_add_texture != BFR_FALSE,
+        .multiviewGeometryShader = value.multiview_geometry_shader != BFR_FALSE,
+        .multiviewTessellationShader = value.multiview_tessellation_shader != BFR_FALSE,
+        .depthBiasClamp = value.depth_bias_clamp != BFR_FALSE,
+        .imageCubeArray = value.image_cube_array != BFR_FALSE,
+        .formatBgra4Unorm = value.format_bgra4_unorm != BFR_FALSE,
+        .fullDrawIndexUint32 = value.full_draw_index_uint32 != BFR_FALSE,
+        .storageTextureMultisample = value.storage_texture_multisample != BFR_FALSE,
+        .textureDynamicIndexing = value.texture_dynamic_indexing != BFR_FALSE,
+        .storageTextureDynamicIndexing = value.storage_texture_dynamic_indexing != BFR_FALSE,
+        .storageBufferDynamicIndexing = value.storage_buffer_dynamic_indexing != BFR_FALSE,
+        .uniformBufferDynamicIndexing = value.uniform_buffer_dynamic_indexing != BFR_FALSE,
+        .vertexStoresAndAtomics = value.vertex_stores_and_atomics != BFR_FALSE,
+        .fragmentStoresAndAtomics = value.fragment_stores_and_atomics != BFR_FALSE,
+        .tessellationGeometryPointSize = value.tessellation_geometry_point_size != BFR_FALSE,
+        .textureGatherExtended = value.texture_gather_extended != BFR_FALSE,
+        .clipDistance = value.clip_distance != BFR_FALSE,
+        .cullDistance = value.cull_distance != BFR_FALSE,
+        .shaderMinLod = value.shader_min_lod != BFR_FALSE,
+        .storageBuffer16bitAccess = value.storage_buffer_16bit_access != BFR_FALSE,
+        .uniformAndStorageBuffer16bitAccess = value.uniform_and_storage_buffer_16bit_access != BFR_FALSE,
+        .pushConstant16bit = value.push_constant_16bit != BFR_FALSE,
+        .inputOutput16bit = value.input_output_16bit != BFR_FALSE,
+        .storageBuffer8bitAccess = value.storage_buffer_8bit_access != BFR_FALSE,
+        .uniformAndStorageBuffer8bitAccess = value.uniform_and_storage_buffer_8bit_access != BFR_FALSE,
+        .pushConstant8bit = value.push_constant_8bit != BFR_FALSE,
+        .variablePointersStorageBuffer = value.variable_pointers_storage_buffer != BFR_FALSE,
+        .variablePointers = value.variable_pointers != BFR_FALSE,
+        .drawParameters = value.draw_parameters != BFR_FALSE,
+        .scalarBlockLayout = value.scalar_block_layout != BFR_FALSE,
+        .uniformBufferStandardLayout = value.uniform_buffer_standard_layout != BFR_FALSE,
+        .subgroupExtendedTypes = value.subgroup_extended_types != BFR_FALSE,
+        .memoryModel = value.memory_model != BFR_FALSE,
+        .memoryModelDeviceScope = value.memory_model_device_scope != BFR_FALSE,
+        .memoryModelVisibilityChains = value.memory_model_visibility_chains != BFR_FALSE,
+        .shaderOutputLayer = value.shader_output_layer != BFR_FALSE,
+        .subgroupBroadcastDynamicId = value.subgroup_broadcast_dynamic_id != BFR_FALSE,
+        .demoteToHelperInvocation = value.demote_to_helper_invocation != BFR_FALSE,
+        .terminateInvocation = value.terminate_invocation != BFR_FALSE,
+        .zeroInitializeWorkgroupMemory = value.zero_initialize_workgroup_memory != BFR_FALSE,
+        .integerDotProduct = value.integer_dot_product != BFR_FALSE,
+        .localSizeId = value.local_size_id != BFR_FALSE,
+        .subgroupRotate = value.subgroup_rotate != BFR_FALSE,
+        .subgroupRotateClustered = value.subgroup_rotate_clustered != BFR_FALSE,
+        .floatControls2 = value.float_controls2 != BFR_FALSE,
+        .expectAssume = value.expect_assume != BFR_FALSE,
+        .nonSemanticInfo = value.non_semantic_info != BFR_FALSE,
         .debugLabels = value.debug_labels != BFR_FALSE,
         .queueDebugLabels = value.queue_debug_labels != BFR_FALSE,
         .objectNames = value.object_names != BFR_FALSE,
@@ -3732,12 +4259,18 @@ public:
     [[nodiscard]] bfr_device* get() const { return device_; }
     [[nodiscard]] explicit operator bool() const { return device_ != nullptr; }
 
+    /// Writes what the device has: the adapter's caps, as bfr_get_caps gives them, with each member
+    /// of bfr_features true only where the device was created with it, and the limits, timestamp
+    /// stages and host clocks that follow those features as the device has them.
+    [[nodiscard]] Expected<Caps> deviceCaps() const;
+
     /// Writes how much memory the device's process may use and uses now. Fails with unsupported
     /// when the driver cannot say.
     [[nodiscard]] Expected<MemoryBudget> budget() const;
 
     /// Creates a swapchain for the window in desc, which the family of the device's queue in desc
     /// must present to. It has no images until the first bfr_resize_swapchain gives it a size.
+    /// Fails with error_unsupported when the device was created without bfr_features.swapchain.
     [[nodiscard]] Expected<Swapchain> createSwapchain(const SwapchainDesc& desc) const;
 
     /// Creates a command pool, as desc says, with its lists made. Fails with error_limit_reached at
@@ -5436,6 +5969,14 @@ inline Expected<std::vector<CallTiming>> Instance::instanceCallTimings() const {
         timings.push_back(detail::fromC(timingsC[i]));
     }
     return timings;
+}
+
+inline Expected<Caps> Device::deviceCaps() const {
+    bfr_caps caps{};
+    if (const bfr_result result = bfr_get_device_caps(device_, &caps); result < 0) {
+        return std::unexpected(detail::failure(result));
+    }
+    return detail::fromC(caps);
 }
 
 inline Expected<MemoryBudget> Device::budget() const {

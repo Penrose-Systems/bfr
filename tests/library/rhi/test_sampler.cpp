@@ -258,7 +258,14 @@ TEST_CASE("Device makes a sampler with each setting its features have, and refus
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{
+            recordingInto(backend, messages), [](DeviceDesc& desc, const Caps& caps) {
+                desc.features.samplerAnisotropy = caps.features.samplerAnisotropy;
+                desc.features.samplerMinmax = caps.features.samplerMinmax;
+                desc.features.samplerMirrorClampToEdge = caps.features.samplerMirrorClampToEdge;
+                desc.features.samplerCustomBorderColor = caps.features.samplerCustomBorderColor;
+                desc.features.samplerLodBias = caps.features.samplerLodBias;
+            }};
         const CapsFeatures features = capsOf(made.instance, kFirstAdapter).features;
         constexpr std::uint32_t kAnisotropy = 4;
         constexpr float kLodBias = 0.5F;

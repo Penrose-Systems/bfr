@@ -92,7 +92,8 @@ TEST_CASE("Vulkan reports LOD bias on a portability driver as the driver answers
 
     CHECK(capsOf(*rhi, adapter).features.samplerLodBias == answer);
     if (answer) {
-        const auto device = rhi->createDevice(testDeviceOn(*rhi, adapter, kNoWindow));
+        const auto device = rhi->createDevice(
+            testDeviceWith(*rhi, adapter, kNoWindow, [](DeviceDesc& desc) { desc.features.samplerLodBias = true; }));
         INFO(failureOf(device));
         REQUIRE(device.has_value());
         constexpr float kLodBias = 1;

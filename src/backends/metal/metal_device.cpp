@@ -17,6 +17,7 @@
 #include "rhi/command_check.h"
 #include "rhi/device_limits.h"
 #include "rhi/enum_check.h"
+#include "rhi/feature_request.h"
 #include "rhi/format_blocks.h"
 #include "rhi/timeout.h"
 
@@ -107,21 +108,20 @@ core::Result<void> deviceFailed(const char* what) {
 } // namespace
 
 core::Result<std::unique_ptr<MetalDevice>> MetalDevice::create(MetalInstance& rhi, Ref<MTL::Device> device,
-                                                               const Features& features, const ResolveCaps& resolve,
-                                                               const DeviceDesc& desc) {
-    auto made = std::make_unique<MetalDevice>(rhi, std::move(device), features, resolve, desc);
+                                                               const Caps& caps, const DeviceDesc& desc) {
+    auto made = std::make_unique<MetalDevice>(rhi, std::move(device), caps, desc);
     if (auto opened = made->open(desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
     return made;
 }
 
-MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Features& features,
-                         const ResolveCaps& resolve, const DeviceDesc& desc)
+MetalDevice::MetalDevice(MetalInstance& rhi, Ref<MTL::Device> device, const Caps& caps, const DeviceDesc& desc)
     : instance_(&rhi),
       device_(std::move(device)),
-      features_(features),
-      resolve_(resolve),
+      caps_(caps),
+      features_(caps.features),
+      resolve_(caps.resolve),
       desc_(heldPart(desc)),
       swapchains_("swapchains", desc.maxSwapchains, desc.maxSwapchains, rhi.logger()),
       commandPools_("command pools", desc.maxCommandPools, desc.maxCommandPools, rhi.logger()),
@@ -328,6 +328,9 @@ core::Result<MetalCommandList*> MetalDevice::commandListFor(CommandListHandle co
 core::Result<SwapchainHandle> MetalDevice::createSwapchain(const core::window::NativeWindow& window,
                                                            const SwapchainDesc& desc) {
     if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkSwapchainFeature(features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     auto layer = layerFor(window);
@@ -948,6 +951,10 @@ void MetalDevice::end(CommandListHandle commandList) {
 core::Result<MemoryBudget> MetalDevice::budget() const {
     return MemoryBudget{
         .heaps = {{.budget = device_->recommendedMaxWorkingSetSize(), .usage = device_->currentAllocatedSize()}}};
+}
+
+const Caps& MetalDevice::caps() const {
+    return caps_;
 }
 
 } // namespace bfr::rhi::metal

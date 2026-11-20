@@ -11,10 +11,12 @@
 #include "bfr/rhi/instance.h"
 #include "bfr/rhi/rhi_config.h"
 #include "rhi/device_limits.h"
+#include "rhi/feature_request.h"
 #include "rhi/format_check.h"
 #include "vulkan/instance_table.h"
 #include "vulkan/vulkan_caps.h"
 #include "vulkan/vulkan_device.h"
+#include "vulkan/vulkan_features.h"
 #include "vulkan/vulkan_list.h"
 #include "vulkan/vulkan_loader.h"
 #include "vulkan/vulkan_pipeline.h"
@@ -407,44 +409,35 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
     if (auto checked = checkLimits(wanted); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    if (auto checked = checkTables(wanted, adapters_[adapter].caps); !checked) {
+    const Adapter& listed = adapters_[adapter];
+    if (auto checked = checkFeatures(wanted.features, listed.caps, listed.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    const Adapter& listed = adapters_[adapter];
     if (auto checked = checkQueueFamilies(wanted, listed.caps.queueFamilies); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     VkPhysicalDevice physicalDevice = physicalDevices_[adapter];
-    const std::vector<VkExtensionProperties>* available = &adapterExtensions_[adapter];
-    // Presenting needs it; a device without it computes and renders offscreen.
-    const bool swapchains = lists(*available, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-    std::vector<const char*> extensions;
-    if (swapchains) {
-        extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    const std::vector<VkExtensionProperties>& available = adapterExtensions_[adapter];
+    const std::uint32_t version = versions_[adapter];
+    // Only what BFR needs and what wanted asks for, so the device's caps are
+    // what it enabled.
+    const DeviceFeatures supported(vk_, physicalDevice, version, available);
+    EnabledFeatures enabled(supported, available, wanted.features, wanted);
+    Caps caps = readDeviceCaps(vk_, physicalDevice, available, supported, enabled.chain, enabled.extensions,
+                               wanted.features, listed.caps.features.debugLabels);
+    if (auto checked = checkTables(wanted, caps); !checked) {
+        return std::unexpected(std::move(checked.error()));
     }
-    // calibrateTimestamps needs it; the caps list no host clock without it.
-    if (const char* calibration = calibrationExtension(*available); calibration != nullptr) {
-        extensions.push_back(calibration);
-    }
-
-    // Every feature the adapter reports, read as its caps were, so the caps
-    // say what the device has; but robust access, which changes what an
-    // out-of-bounds access does and costs speed, stays off.
-    DeviceFeatures features(vk_, physicalDevice, versions_[adapter], *available);
-    features.core.features.robustBufferAccess = VK_FALSE;
-    features.vulkan13.robustImageAccess = VK_FALSE;
-    features.imageRobustness.robustImageAccess = VK_FALSE;
-    features.mesh.primitiveFragmentShadingRateMeshShader = VK_FALSE;
-    extensions.insert(extensions.end(), features.enabledExtensions.begin(), features.enabledExtensions.end());
+    const std::vector<const char*>& extensions = enabled.names;
 
     const auto queues = queueCreateInfos(wanted, static_cast<std::uint32_t>(listed.caps.queueFamilies.size()),
-                                         hasQueueLevels(versions_[adapter], *available));
+                                         hasQueueLevels(version, available));
     if (!queues) {
         return std::unexpected(queues.error());
     }
     VkDeviceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    info.pNext = &features.core;
+    info.pNext = &enabled.chain.core;
     info.queueCreateInfoCount = static_cast<std::uint32_t>(queues->infos.size());
     info.pQueueCreateInfos = queues->infos.data();
     info.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
@@ -460,21 +453,21 @@ core::Result<std::unique_ptr<Device>> VulkanInstance::createDevice(std::size_t a
                  core::text::join(extensions, ", "));
     VkPhysicalDeviceProperties adapterProperties{};
     vk_.vkGetPhysicalDeviceProperties(physicalDevice, &adapterProperties);
+    // From 1.3 its formats are core (VkFormat), so a device has them asked
+    // for or not.
+    const Formats13 formats13{.a4r4g4b4 = hasCore13(version) || wanted.features.formatBgra4Unorm,
+                              .astcHdr = hasCore13(version) || wanted.features.compressionAstcHdr};
+    const bool structureTable = caps.bindless.maxAccelerationStructures != 0;
+    const bool uniformTable = caps.bindless.maxUniformBuffers != 0;
     auto made = VulkanDevice::create(*this, physicalDevice, device, wanted,
-                                     {.apiVersion = versions_[adapter],
-                                      .formats13 = formats13Of(versions_[adapter], *available),
+                                     {.apiVersion = version,
+                                      .formats13 = formats13,
                                       .hasBudget = hasBudget_[adapter],
-                                      .hasSwapchain = swapchains,
-                                      .pushConstantsSize = listed.caps.limits.maxPushConstantsSize,
-                                      .queueFamilies = listed.caps.queueFamilies,
                                       .timestampPeriod = adapterProperties.limits.timestampPeriod,
-                                      .timestamps = listed.caps.timestamps,
-                                      .features = listed.caps.features,
-                                      .resolve = listed.caps.resolve,
-                                      .rayTracing = listed.caps.rayTracing,
-                                      .deviceAddresses = features.vulkan12.bufferDeviceAddress == VK_TRUE,
-                                      .accelerationStructureTable = listed.caps.bindless.maxAccelerationStructures != 0,
-                                      .uniformBufferTable = listed.caps.bindless.maxUniformBuffers != 0});
+                                      .caps = std::move(caps),
+                                      .deviceAddresses = enabled.chain.vulkan12.bufferDeviceAddress == VK_TRUE,
+                                      .accelerationStructureTable = structureTable,
+                                      .uniformBufferTable = uniformTable});
     if (!made) {
         return std::unexpected(std::move(made.error()));
     }

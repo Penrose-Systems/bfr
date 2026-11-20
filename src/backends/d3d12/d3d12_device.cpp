@@ -19,6 +19,7 @@
 #include "rhi/command_check.h"
 #include "rhi/device_limits.h"
 #include "rhi/enum_check.h"
+#include "rhi/feature_request.h"
 #include "rhi/format_blocks.h"
 #include "rhi/timeout.h"
 
@@ -265,16 +266,17 @@ static_assert(sizeof(DispatchIndirectArgs) == sizeof(D3D12_DISPATCH_ARGUMENTS));
 } // namespace
 
 core::Result<std::unique_ptr<D3D12Device>> D3D12Device::create(D3D12Instance& rhi, ComPtr<ID3D12Device> device,
-                                                               ComPtr<IDXGIAdapter3> adapter, const Features& features,
-                                                               const ResolveCaps& resolve, std::size_t heapCount,
-                                                               std::uint32_t viewHeapSize, const DeviceDesc& desc) {
+                                                               ComPtr<IDXGIAdapter3> adapter, const Caps& caps,
+                                                               std::size_t heapCount, std::uint32_t viewHeapSize,
+                                                               const DeviceDesc& desc) {
     auto made = std::make_unique<D3D12Device>(rhi, std::move(device), std::move(adapter), heapCount, desc);
     // A runtime without it answers E_NOINTERFACE and leaves device11_ null.
     static_cast<void>(made->device_.As(&made->device11_));
     static_cast<void>(made->device_.As(&made->device1_));
     made->sparse_ = sparseOf(made->device_.Get());
-    made->features_ = features;
-    made->resolve_ = resolve;
+    made->caps_ = caps;
+    made->features_ = caps.features;
+    made->resolve_ = caps.resolve;
     if (auto opened = made->open(desc); !opened) {
         return std::unexpected(std::move(opened.error()));
     }
@@ -576,6 +578,9 @@ core::Result<D3D12CommandList*> D3D12Device::commandListFor(CommandListHandle co
 core::Result<SwapchainHandle> D3D12Device::createSwapchain(const core::window::NativeWindow& window,
                                                            const SwapchainDesc& desc) {
     if (auto checked = checkEnums(desc); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkSwapchainFeature(features_); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkWindow(window); !checked) {
@@ -1375,6 +1380,10 @@ void D3D12Device::end(CommandListHandle commandList) {
     renderSlots_.give(list->rendered);
     lists_[list->slot].live = {};
     commandLists_.erase(commandList);
+}
+
+const Caps& D3D12Device::caps() const {
+    return caps_;
 }
 
 core::Result<MemoryBudget> D3D12Device::budget() const {

@@ -1153,7 +1153,9 @@ TEST_CASE("Device renders to the depth slices of a 3D texture an attachment name
     constexpr std::uint32_t kCleared = 7;
     std::vector<std::string> messages;
     {
-        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc, const Caps& caps) {
+                                          desc.features.volumeColorTargets = caps.features.volumeColorTargets;
+                                      }};
         const Device& device = made.device;
         const Caps caps = capsOf(made.instance, kFirstAdapter);
         if (!caps.features.volumeColorTargets) {
@@ -1475,7 +1477,11 @@ TEST_CASE("Device draws indirectly the arguments a buffer holds, many at a strid
     static constexpr std::array kStrides{kStride};
     std::vector<std::string> messages;
     {
-        const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc) {
+        const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc, const Caps& caps) {
+                                          desc.features.multiDrawIndirect = caps.features.multiDrawIndirect;
+                                          desc.features.drawIndirectCount = caps.features.drawIndirectCount;
+                                          desc.features.drawIndirectFirstInstance =
+                                              caps.features.drawIndirectFirstInstance;
                                           desc.indirectStrides = kStrides;
                                       }};
         const Device& device = made.device;
@@ -1618,7 +1624,10 @@ TEST_CASE("Device assembles the exact topology a pipeline or setTopology names, 
     }
     std::vector<std::string> messages;
     {
-        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc, const Caps& caps) {
+                                          desc.features.dynamicTopology = caps.features.dynamicTopology;
+                                          desc.features.triangleFans = caps.features.triangleFans;
+                                      }};
         const Device& device = made.device;
         const Caps caps = capsOf(made.instance, kFirstAdapter);
         // The corners of clip space: bottom left, bottom right, top left, top
@@ -2052,7 +2061,12 @@ TEST_CASE("Device draws with mesh shaders, directly and indirectly, and with a t
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc, const Caps& caps) {
+                                          desc.features.meshShader = caps.features.meshShader;
+                                          desc.features.taskShader = caps.features.taskShader;
+                                          desc.features.multiDrawIndirect = caps.features.multiDrawIndirect;
+                                          desc.features.drawIndirectCount = caps.features.drawIndirectCount;
+                                      }};
         const Device& device = made.device;
         const Caps caps = capsOf(made.instance, kFirstAdapter);
         GraphicsPipelineDesc meshDesc = colorPipeline();
@@ -2184,7 +2198,9 @@ TEST_CASE("Device counts the samples a draw passes in an occlusion query, exactl
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc, const Caps& caps) {
+                                          desc.features.occlusionQueryPrecise = caps.features.occlusionQueryPrecise;
+                                      }};
         const Device& device = made.device;
         const Caps caps = capsOf(made.instance, kFirstAdapter);
         constexpr std::uint32_t kQueries = 2;
@@ -2365,7 +2381,9 @@ TEST_CASE("Device counts the pipeline statistics a pool selects, a dispatch's an
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc, const Caps& caps) {
+                                          desc.features.pipelineStatistics = caps.features.pipelineStatistics;
+                                      }};
         const Device& device = made.device;
         const Caps caps = capsOf(made.instance, kFirstAdapter);
         if (!caps.features.queries || !caps.features.pipelineStatistics) {
@@ -2482,7 +2500,12 @@ TEST_CASE("Device counts the primitives and invocations of a mesh draw, where it
     const TestBackend backend = GENERATE(eachBackend());
     std::vector<std::string> messages;
     {
-        const FirstAdapterDevice made{recordingInto(backend, messages)};
+        const FirstAdapterDevice made{recordingInto(backend, messages), [](DeviceDesc& desc, const Caps& caps) {
+                                          desc.features.meshShader = caps.features.meshShader;
+                                          desc.features.taskShader = caps.features.taskShader;
+                                          desc.features.meshStatistics = caps.features.meshStatistics;
+                                          desc.features.pipelineStatistics = caps.features.pipelineStatistics;
+                                      }};
         const Device& device = made.device;
         const Caps caps = capsOf(made.instance, kFirstAdapter);
         if (!caps.features.queries || !caps.features.meshShader || !caps.features.meshStatistics ||

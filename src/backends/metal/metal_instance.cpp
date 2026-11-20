@@ -14,6 +14,7 @@
 #include "metal/metal_swapchain.h"
 #include "metal/metal_util.h"
 #include "rhi/device_limits.h"
+#include "rhi/feature_request.h"
 #include "rhi/format_check.h"
 
 #include <Foundation/NSArray.hpp>
@@ -103,10 +104,17 @@ core::Result<std::unique_ptr<Device>> MetalInstance::createDevice(std::size_t ad
     if (auto checked = checkLimits(desc); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    if (auto checked = checkTables(desc, adapters_[adapter].caps); !checked) {
+    const Adapter& listed = adapters_[adapter];
+    if (auto checked = checkFeatures(desc.features, listed.caps, listed.name); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    if (auto checked = checkQueueFamilies(desc, adapters_[adapter].caps.queueFamilies); !checked) {
+    // Metal enables nothing per feature: a device has what its adapter does,
+    // and its caps say only what desc asks for.
+    const Caps caps = requestedOnly(listed.caps, desc.features);
+    if (auto checked = checkTables(desc, caps); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    if (auto checked = checkQueueFamilies(desc, caps.queueFamilies); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
     if (auto checked = checkUnranked(desc, "Metal"); !checked) {
@@ -115,8 +123,7 @@ core::Result<std::unique_ptr<Device>> MetalInstance::createDevice(std::size_t ad
     if (auto checked = checkNormalLevels(desc, "Metal has no queue levels"); !checked) {
         return std::unexpected(std::move(checked.error()));
     }
-    const Caps& caps = adapters_[adapter].caps;
-    return MetalDevice::create(*this, devices_[adapter], caps.features, caps.resolve, desc);
+    return MetalDevice::create(*this, devices_[adapter], caps, desc);
 }
 
 core::Result<FormatCaps> MetalInstance::formatCaps(std::size_t adapter, Format format) const {
