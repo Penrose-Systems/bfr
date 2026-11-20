@@ -513,6 +513,9 @@ struct Features {
     bool memoryModelDeviceScope{};
     bool memoryModelVisibilityChains{};
     bool shaderOutputLayer{};
+    bool shaderOutputViewportIndex{};
+    bool multiViewport{};
+    bool largePoints{};
     bool subgroupBroadcastDynamicId{};
     bool demoteToHelperInvocation{};
     bool terminateInvocation{};
@@ -2522,6 +2525,12 @@ struct CapsFeatures {
     bool memoryModelVisibilityChains{};
     /// Vertex and tessellation shaders write the layer a primitive goes to.
     bool shaderOutputLayer{};
+    /// Vertex and tessellation shaders write the viewport index (SPIR-V ShaderViewportIndex).
+    bool shaderOutputViewportIndex{};
+    /// Shaders declare SPIR-V MultiViewport; a BFR pipeline has one viewport.
+    bool multiViewport{};
+    /// Shaders write a point size other than 1.
+    bool largePoints{};
     /// Subgroup broadcasts from an invocation named by a value that is not constant.
     bool subgroupBroadcastDynamicId{};
     /// Fragment shaders demote invocations to helpers.
@@ -3028,6 +3037,9 @@ inline bfr_features toC(const Features& value) {
         .memory_model_device_scope = static_cast<bfr_bool>(value.memoryModelDeviceScope),
         .memory_model_visibility_chains = static_cast<bfr_bool>(value.memoryModelVisibilityChains),
         .shader_output_layer = static_cast<bfr_bool>(value.shaderOutputLayer),
+        .shader_output_viewport_index = static_cast<bfr_bool>(value.shaderOutputViewportIndex),
+        .multi_viewport = static_cast<bfr_bool>(value.multiViewport),
+        .large_points = static_cast<bfr_bool>(value.largePoints),
         .subgroup_broadcast_dynamic_id = static_cast<bfr_bool>(value.subgroupBroadcastDynamicId),
         .demote_to_helper_invocation = static_cast<bfr_bool>(value.demoteToHelperInvocation),
         .terminate_invocation = static_cast<bfr_bool>(value.terminateInvocation),
@@ -3928,6 +3940,9 @@ inline CapsFeatures fromC(const bfr_caps_features& value) {
         .memoryModelDeviceScope = value.memory_model_device_scope != BFR_FALSE,
         .memoryModelVisibilityChains = value.memory_model_visibility_chains != BFR_FALSE,
         .shaderOutputLayer = value.shader_output_layer != BFR_FALSE,
+        .shaderOutputViewportIndex = value.shader_output_viewport_index != BFR_FALSE,
+        .multiViewport = value.multi_viewport != BFR_FALSE,
+        .largePoints = value.large_points != BFR_FALSE,
         .subgroupBroadcastDynamicId = value.subgroup_broadcast_dynamic_id != BFR_FALSE,
         .demoteToHelperInvocation = value.demote_to_helper_invocation != BFR_FALSE,
         .terminateInvocation = value.terminate_invocation != BFR_FALSE,

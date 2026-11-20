@@ -366,6 +366,9 @@ struct Features {
     bool memoryModelDeviceScope = false;
     bool memoryModelVisibilityChains = false;
     bool shaderOutputLayer = false;
+    bool shaderOutputViewportIndex = false;
+    bool multiViewport = false;
+    bool largePoints = false;
     bool subgroupBroadcastDynamicId = false;
     bool demoteToHelperInvocation = false;
     bool terminateInvocation = false;
@@ -510,6 +513,9 @@ struct FeatureRequest {
     bool memoryModelDeviceScope = false;
     bool memoryModelVisibilityChains = false;
     bool shaderOutputLayer = false;
+    bool shaderOutputViewportIndex = false;
+    bool multiViewport = false;
+    bool largePoints = false;
     bool subgroupBroadcastDynamicId = false;
     bool demoteToHelperInvocation = false;
     bool terminateInvocation = false;

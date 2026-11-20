@@ -1241,6 +1241,9 @@ structs:
       - {name: memory_model_device_scope, type: bool}
       - {name: memory_model_visibility_chains, type: bool}
       - {name: shader_output_layer, type: bool}
+      - {name: shader_output_viewport_index, type: bool}
+      - {name: multi_viewport, type: bool}
+      - {name: large_points, type: bool}
       - {name: subgroup_broadcast_dynamic_id, type: bool}
       - {name: demote_to_helper_invocation, type: bool}
       - {name: terminate_invocation, type: bool}
@@ -3101,6 +3104,9 @@ structs:
       - {name: memory_model_device_scope, type: bool, doc: "memory_model at device scope."}
       - {name: memory_model_visibility_chains, type: bool, doc: "memory_model with availability and visibility chains of more than one element."}
       - {name: shader_output_layer, type: bool, doc: "Vertex and tessellation shaders write the layer a primitive goes to."}
+      - {name: shader_output_viewport_index, type: bool, doc: "Vertex and tessellation shaders write the viewport index (SPIR-V ShaderViewportIndex)."}
+      - {name: multi_viewport, type: bool, doc: "Shaders declare SPIR-V MultiViewport; a BFR pipeline has one viewport."}
+      - {name: large_points, type: bool, doc: "Shaders write a point size other than 1."}
       - {name: subgroup_broadcast_dynamic_id, type: bool, doc: "Subgroup broadcasts from an invocation named by a value that is not constant."}
       - {name: demote_to_helper_invocation, type: bool, doc: "Fragment shaders demote invocations to helpers."}
       - {name: terminate_invocation, type: bool, doc: "Fragment shaders terminate invocations."}

@@ -1513,6 +1513,9 @@ typedef struct bfr_features {
     bfr_bool memory_model_device_scope;
     bfr_bool memory_model_visibility_chains;
     bfr_bool shader_output_layer;
+    bfr_bool shader_output_viewport_index;
+    bfr_bool multi_viewport;
+    bfr_bool large_points;
     bfr_bool subgroup_broadcast_dynamic_id;
     bfr_bool demote_to_helper_invocation;
     bfr_bool terminate_invocation;
@@ -3620,6 +3623,12 @@ typedef struct bfr_caps_features {
     bfr_bool memory_model_visibility_chains;
     // Vertex and tessellation shaders write the layer a primitive goes to.
     bfr_bool shader_output_layer;
+    // Vertex and tessellation shaders write the viewport index (SPIR-V ShaderViewportIndex).
+    bfr_bool shader_output_viewport_index;
+    // Shaders declare SPIR-V MultiViewport; a BFR pipeline has one viewport.
+    bfr_bool multi_viewport;
+    // Shaders write a point size other than 1.
+    bfr_bool large_points;
     // Subgroup broadcasts from an invocation named by a value that is not constant.
     bfr_bool subgroup_broadcast_dynamic_id;
     // Fragment shaders demote invocations to helpers.
